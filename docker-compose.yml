@@ -1,0 +1,62 @@
+version: "3.9"
+
+services:
+  onebase:
+    build:
+      context: .
+      dockerfile: Dockerfile.aio
+      args:
+        - NEXT_PUBLIC_API_URL=http://127.0.0.1:3000
+    container_name: onebase
+    ports:
+      - "3000:3000"   # Rust API
+      - "3001:3001"   # Next.js 前端
+      # 调试时取消注释以暴露数据库端口：
+      # - "5432:5432"
+      # - "6379:6379"
+    environment:
+      # ── 数据库 ──
+      - POSTGRES_USER=onebase
+      - POSTGRES_PASSWORD=onebase123
+      - POSTGRES_DB=onebase
+      - DATABASE_URL=postgresql://onebase:onebase123@127.0.0.1:5432/onebase
+      # ── Redis ──
+      - REDIS_URL=redis://127.0.0.1:6379
+      # ── 认证 / 加密（生产环境务必由 docker-compose.override.yml + .env 提供真值）──
+      # 默认值仅占位用，应用启动时会拒绝默认值并 panic
+      - JWT_SECRET=change-me-in-production
+      # 对称加密主密钥（base64 编码 32 字节）；缺失会启动失败
+      # 生成：openssl rand -base64 32
+      - ENCRYPTION_KEY=
+      # ── 服务 ──
+      - HOST=0.0.0.0
+      - PORT=3000
+      - NEXT_PUBLIC_API_URL=http://127.0.0.1:3000
+      - RUST_LOG=info
+      # ── 高可用 ──
+      - REQUEST_TIMEOUT_SECS=30
+      - GRACEFUL_SHUTDOWN_SECS=30
+      - CIRCUIT_BREAKER_FAILURE_THRESHOLD=5
+      - CIRCUIT_BREAKER_TIMEOUT_SECS=30
+      - RATE_LIMIT_PER_MINUTE=100
+      # CORS 允许域名（逗号分隔，* 表示全部允许，仅限开发环境）
+      - CORS_ORIGINS=*
+    volumes:
+      - pgdata:/var/lib/postgresql/15/main
+      - redisdata:/var/lib/redis
+      - logs:/var/log/onebase
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:3000/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+  logs:
+    driver: local

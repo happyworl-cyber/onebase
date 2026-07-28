@@ -1,0 +1,110 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 全局字体配置 */
+@layer base {
+  html {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", 
+      "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  }
+}
+
+/* React Flow 样式 */
+@import 'reactflow/dist/style.css';
+
+/* 确保 React Flow 箭头标记能正确显示 */
+.react-flow__edge-path {
+  stroke: #3b82f6;
+  stroke-width: 2.5px;
+}
+
+.react-flow__arrowhead {
+  fill: #3b82f6 !important;
+}
+
+.react-flow__edge.animated path {
+  stroke-dasharray: 5;
+  animation: dashdraw 0.5s linear infinite;
+}
+
+@keyframes dashdraw {
+  from {
+    stroke-dashoffset: 10;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* 箭头标记样式 */
+.react-flow svg defs marker path {
+  fill: #3b82f6 !important;
+  stroke: #3b82f6 !important;
+}
+
+/* 企业级表格样式 */
+.enterprise-table th {
+  @apply px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider bg-gray-50;
+}
+
+.enterprise-table td {
+  @apply px-4 py-3 text-sm text-gray-900 border-b border-gray-100;
+}
+
+.enterprise-table tbody tr:hover {
+  @apply bg-gray-50;
+}
+
+/* 按钮样式 */
+.btn-primary {
+  @apply inline-flex items-center px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-lg
+         hover:bg-primary-600 active:bg-primary-700
+         transition-colors duration-200;
+}
+
+.btn-success {
+  @apply inline-flex items-center px-4 py-2 bg-green-500 text-white text-sm font-medium rounded-lg
+         hover:bg-green-600 active:bg-green-700
+         transition-colors duration-200;
+}
+
+.btn-danger {
+  @apply inline-flex items-center px-4 py-2 bg-red-500 text-white text-sm font-medium rounded-lg
+         hover:bg-red-600 active:bg-red-700
+         transition-colors duration-200;
+}
+
+.btn-default {
+  @apply inline-flex items-center px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg
+         hover:bg-gray-50 hover:border-primary-400
+         transition-colors duration-200;
+}
+
+/* 输入框样式 */
+.input-base {
+  @apply px-3 py-2 text-sm border border-gray-300 rounded-lg
+         hover:border-primary-400
+         focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500 focus:ring-opacity-20
+         transition-all duration-200;
+}
+
+/* 带图标的输入框样式 */
+.input-with-icon {
+  @apply py-2 pr-3 text-sm border border-gray-300 rounded-lg
+         hover:border-primary-400
+         focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500 focus:ring-opacity-20
+         transition-all duration-200;
+}
+
+/* 卡片样式 */
+.card {
+  @apply bg-white rounded-lg border border-gray-100 shadow-card
+         hover:shadow-hover transition-shadow duration-200;
+}
+
+/* 代码块样式 */
+.code-block {
+  @apply bg-gray-50 border border-gray-200 rounded-lg p-4 font-mono text-sm overflow-x-auto;
+}
+

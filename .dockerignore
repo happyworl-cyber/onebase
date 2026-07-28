@@ -1,0 +1,16 @@
+target/
+node_modules/
+.git/
+.gitignore
+*.md
+!README.md
+.env
+.env.*
+.cursor/
+agent-transcripts/
+mcps/
+terminals/
+assets/
+.next/
+frontend-nextjs/.next/
+frontend-nextjs/node_modules/

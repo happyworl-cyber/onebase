@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OneBase 前端示例</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            padding: 30px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+        }
+
+        .section {
+            margin-bottom: 30px;
+        }
+
+        h2 {
+            color: #444;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 5px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 500;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+        }
+
+        button:hover {
+            background: #0056b3;
+        }
+
+        button.danger {
+            background: #dc3545;
+        }
+
+        button.danger:hover {
+            background: #c82333;
+        }
+
+        .users-list {
+            margin-top: 20px;
+        }
+
+        .user-card {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .user-info {
+            flex: 1;
+        }
+
+        .user-actions button {
+            margin-left: 5px;
+        }
+
+        .loading {
+            text-align: center;
+            color: #666;
+            padding: 20px;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+
+        .success {
+            background: #d4edda;
+            color: #155724;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+
+        .filters {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        code {
+            background: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 OneBase API 前端示例</h1>
+        <p class="subtitle">演示如何使用 Fetch API 调用 OneBase 后端</p>
+
+        <!-- 配置 -->
+        <div class="section">
+            <h2>⚙️ API 配置</h2>
+            <div class="form-group">
+                <label>API Base URL</label>
+                <input type="text" id="apiBase" value="http://localhost:3000/api">
+            </div>
+            <div class="form-group">
+                <label>Schema</label>
+                <input type="text" id="schema" value="public">
+            </div>
+            <div class="form-group">
+                <label>Table</label>
+                <input type="text" id="table" value="users">
+            </div>
+        </div>
+
+        <!-- 消息显示 -->
+        <div id="message"></div>
+
+        <!-- 创建用户 -->
+        <div class="section">
+            <h2>➕ 创建用户</h2>
+            <div class="form-group">
+                <label>姓名</label>
+                <input type="text" id="newName" placeholder="张三">
+            </div>
+            <div class="form-group">
+                <label>邮箱</label>
+                <input type="email" id="newEmail" placeholder="zhangsan@example.com">
+            </div>
+            <div class="form-group">
+                <label>年龄</label>
+                <input type="number" id="newAge" placeholder="25">
+            </div>
+            <button onclick="createUser()">创建用户</button>
+        </div>
+
+        <!-- 查询过滤 -->
+        <div class="section">
+            <h2>🔍 查询过滤</h2>
+            <div class="filters">
+                <div class="form-group">
+                    <label>状态</label>
+                    <select id="filterStatus">
+                        <option value="">全部</option>
+                        <option value="active">Active</option>
+                        <option value="pending">Pending</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>最小年龄</label>
+                    <input type="number" id="filterMinAge" placeholder="18">
+                </div>
+                <div class="form-group">
+                    <label>排序字段</label>
+                    <select id="orderField">
+                        <option value="created_at">创建时间</option>
+                        <option value="name">姓名</option>
+                        <option value="age">年龄</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>排序方向</label>
+                    <select id="orderDir">
+                        <option value="desc">降序</option>
+                        <option value="asc">升序</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>限制数量</label>
+                    <input type="number" id="limit" value="10" placeholder="10">
+                </div>
+            </div>
+            <button onclick="fetchUsers()">查询用户</button>
+            <button onclick="fetchUsers(true)" style="background: #28a745;">刷新</button>
+        </div>
+
+        <!-- 用户列表 -->
+        <div class="section">
+            <h2>👥 用户列表</h2>
+            <div id="usersList" class="users-list">
+                <div class="loading">点击"查询用户"加载数据...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 获取 API 配置
+        function getApiConfig() {
+            const base = document.getElementById('apiBase').value;
+            const schema = document.getElementById('schema').value;
+            const table = document.getElementById('table').value;
+            return { base, schema, table };
+        }
+
+        // 显示消息
+        function showMessage(message, type = 'success') {
+            const messageDiv = document.getElementById('message');
+            messageDiv.className = type;
+            messageDiv.textContent = message;
+            setTimeout(() => {
+                messageDiv.className = '';
+                messageDiv.textContent = '';
+            }, 3000);
+        }
+
+        // 查询用户
+        async function fetchUsers(showMsg = false) {
+            const { base, schema, table } = getApiConfig();
+            const usersList = document.getElementById('usersList');
+            
+            try {
+                usersList.innerHTML = '<div class="loading">加载中...</div>';
+
+                // 构建查询参数
+                const params = new URLSearchParams();
+                
+                const status = document.getElementById('filterStatus').value;
+                if (status) params.append('status', status);
+                
+                const minAge = document.getElementById('filterMinAge').value;
+                if (minAge) params.append('age.gte', minAge);
+                
+                const orderField = document.getElementById('orderField').value;
+                const orderDir = document.getElementById('orderDir').value;
+                params.append('order', `${orderField}.${orderDir}`);
+                
+                const limit = document.getElementById('limit').value;
+                if (limit) params.append('limit', limit);
+
+                const url = `${base}/${schema}/${table}?${params.toString()}`;
+                console.log('请求 URL:', url);
+
+                const response = await fetch(url);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const users = await response.json();
+                console.log('获取到的用户:', users);
+
+                if (users.length === 0) {
+                    usersList.innerHTML = '<div class="loading">没有找到用户</div>';
+                } else {
+                    displayUsers(users);
+                    if (showMsg) showMessage(`成功加载 ${users.length} 个用户`);
+                }
+            } catch (error) {
+                console.error('获取用户失败:', error);
+                usersList.innerHTML = `<div class="error">获取用户失败: ${error.message}</div>`;
+                showMessage(`获取用户失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 显示用户列表
+        function displayUsers(users) {
+            const usersList = document.getElementById('usersList');
+            usersList.innerHTML = users.map(user => `
+                <div class="user-card" id="user-${user.id}">
+                    <div class="user-info">
+                        <strong>${user.name || '未知'}</strong> 
+                        (${user.email || '无邮箱'})
+                        <br>
+                        <small>
+                            年龄: ${user.age || 'N/A'} | 
+                            状态: ${user.status || 'N/A'} | 
+                            ID: ${user.id}
+                        </small>
+                    </div>
+                    <div class="user-actions">
+                        <button onclick="updateUser(${user.id})">更新</button>
+                        <button class="danger" onclick="deleteUser(${user.id})">删除</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // 创建用户
+        async function createUser() {
+            const { base, schema, table } = getApiConfig();
+            const name = document.getElementById('newName').value;
+            const email = document.getElementById('newEmail').value;
+            const age = document.getElementById('newAge').value;
+
+            if (!name || !email) {
+                showMessage('请填写姓名和邮箱', 'error');
+                return;
+            }
+
+            try {
+                const userData = { name, email };
+                if (age) userData.age = parseInt(age);
+
+                const url = `${base}/${schema}/${table}`;
+                console.log('创建用户:', url, userData);
+
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(userData),
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || '创建失败');
+                }
+
+                const newUser = await response.json();
+                console.log('创建成功:', newUser);
+
+                showMessage('用户创建成功！');
+                
+                // 清空表单
+                document.getElementById('newName').value = '';
+                document.getElementById('newEmail').value = '';
+                document.getElementById('newAge').value = '';
+
+                // 刷新列表
+                fetchUsers();
+            } catch (error) {
+                console.error('创建用户失败:', error);
+                showMessage(`创建用户失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 更新用户
+        async function updateUser(id) {
+            const { base, schema, table } = getApiConfig();
+            const newName = prompt('输入新名字:');
+            
+            if (!newName) return;
+
+            try {
+                const url = `${base}/${schema}/${table}?id=${id}`;
+                console.log('更新用户:', url);
+
+                const response = await fetch(url, {
+                    method: 'PATCH',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ name: newName }),
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || '更新失败');
+                }
+
+                const updatedUser = await response.json();
+                console.log('更新成功:', updatedUser);
+
+                showMessage('用户更新成功！');
+                fetchUsers();
+            } catch (error) {
+                console.error('更新用户失败:', error);
+                showMessage(`更新用户失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 删除用户
+        async function deleteUser(id) {
+            if (!confirm('确定要删除这个用户吗？')) return;
+
+            const { base, schema, table } = getApiConfig();
+
+            try {
+                const url = `${base}/${schema}/${table}?id=${id}`;
+                console.log('删除用户:', url);
+
+                const response = await fetch(url, {
+                    method: 'DELETE',
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || '删除失败');
+                }
+
+                console.log('删除成功');
+                showMessage('用户删除成功！');
+                
+                // 移除 UI 中的用户卡片
+                const userCard = document.getElementById(`user-${id}`);
+                if (userCard) {
+                    userCard.style.transition = 'opacity 0.3s';
+                    userCard.style.opacity = '0';
+                    setTimeout(() => userCard.remove(), 300);
+                }
+            } catch (error) {
+                console.error('删除用户失败:', error);
+                showMessage(`删除用户失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 页面加载时自动查询
+        window.addEventListener('load', () => {
+            console.log('页面已加载');
+        });
+    </script>
+</body>
+</html>
+

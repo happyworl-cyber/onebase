@@ -1,0 +1,141 @@
+# ============================================
+# Stage 1: Rust 后端编译
+# ============================================
+FROM rust:1.88-bookworm AS rust-builder
+
+WORKDIR /build
+
+# 先复制依赖清单，利用 Docker 缓存
+COPY Cargo.toml Cargo.lock* ./
+RUN mkdir src && echo "fn main() {}" > src/main.rs && \
+    mkdir -p src/bin && \
+    echo "fn main() {}" > src/bin/migrate.rs && \
+    echo "fn main() {}" > src/bin/migrate_examples.rs && \
+    echo "fn main() {}" > src/bin/migrate_management.rs && \
+    echo "fn main() {}" > src/bin/migrate_api_keys.rs && \
+    echo "fn main() {}" > src/bin/migrate_rbac.rs && \
+    echo "fn main() {}" > src/bin/migrate_sso.rs && \
+    echo "fn main() {}" > src/bin/migrate_all.rs && \
+    echo "fn main() {}" > src/bin/migrate_passwords.rs && \
+    echo "fn main() {}" > src/bin/create_admin.rs && \
+    echo "fn main() {}" > src/bin/fix_users.rs && \
+    echo "fn main() {}" > src/bin/setup_multi_tenant.rs && \
+    cargo build --release 2>/dev/null || true && \
+    rm -rf src
+
+# 复制完整源码并编译
+COPY src/ src/
+COPY migrations/ migrations/
+# 清掉 stub 阶段编译出来的同名 crate 产物，避免 cargo 误以为已构建（保留 deps 缓存以加速）
+RUN cargo clean -p onebase --release || true
+RUN cargo build --release
+
+# ============================================
+# Stage 2: Next.js 前端构建
+# ============================================
+FROM node:20-bookworm-slim AS frontend-builder
+
+WORKDIR /build/frontend
+
+COPY frontend-nextjs/package.json frontend-nextjs/package-lock.json* ./
+RUN npm install --frozen-lockfile 2>/dev/null || npm install
+
+COPY frontend-nextjs/ ./
+
+# 构建时 API URL；运行时可通过环境变量覆盖
+ARG NEXT_PUBLIC_API_URL=http://127.0.0.1:3000
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+# ============================================
+# Stage 3: 运行时镜像
+# ============================================
+FROM debian:bookworm-slim AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+
+# 安装 PostgreSQL 15 + Redis + Node.js 20 + supervisord
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-15 \
+    postgresql-client-15 \
+    redis-server \
+    supervisor \
+    curl \
+    ca-certificates \
+    gnupg \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update && apt-get install -y --no-install-recommends nodejs \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# 创建应用目录
+RUN mkdir -p /app/bin /app/frontend /app/migrations /app/docker \
+    /var/log/onebase /run/postgresql /var/lib/redis
+
+# 复制 Rust 二进制 —— 主服务 + 所有迁移工具
+COPY --from=rust-builder /build/target/release/onebase /app/bin/
+COPY --from=rust-builder /build/target/release/migrate_all /app/bin/
+COPY --from=rust-builder /build/target/release/migrate /app/bin/
+COPY --from=rust-builder /build/target/release/migrate_management /app/bin/
+COPY --from=rust-builder /build/target/release/migrate_api_keys /app/bin/
+COPY --from=rust-builder /build/target/release/migrate_rbac /app/bin/
+COPY --from=rust-builder /build/target/release/migrate_sso /app/bin/
+COPY --from=rust-builder /build/target/release/migrate_passwords /app/bin/
+COPY --from=rust-builder /build/target/release/create_admin /app/bin/
+COPY --from=rust-builder /build/target/release/setup_multi_tenant /app/bin/
+
+# 复制迁移脚本（migrate_all 用 include_str! 内嵌，但保留副本用于调试）
+COPY migrations/ /app/migrations/
+COPY init_multitenant.sql /app/
+
+# 复制 Next.js 生产包
+COPY --from=frontend-builder /build/frontend/.next /app/frontend/.next
+COPY --from=frontend-builder /build/frontend/node_modules /app/frontend/node_modules
+COPY --from=frontend-builder /build/frontend/package.json /app/frontend/
+COPY --from=frontend-builder /build/frontend/next.config.js /app/frontend/
+
+# public 目录可能不存在，单独创建
+RUN mkdir -p /app/frontend/public
+
+# 复制 Docker 配置
+COPY docker/supervisord.conf /etc/supervisor/conf.d/onebase.conf
+COPY docker/entrypoint.sh /app/docker/entrypoint.sh
+RUN chmod +x /app/docker/entrypoint.sh
+
+# 清空 Debian 包安装时自动创建的默认 PG 集群，让 entrypoint 走全新 initdb
+RUN rm -rf /var/lib/postgresql/15/main && mkdir -p /var/lib/postgresql/15/main
+
+# PostgreSQL / Redis 数据目录权限
+RUN chown -R postgres:postgres /run/postgresql /var/lib/postgresql
+RUN chown -R redis:redis /var/lib/redis
+# 日志目录需要 postgres / redis / root 三方均可写
+RUN chmod 777 /var/log/onebase
+
+# 环境变量默认值（生产部署时必须通过 -e 或 .env 覆盖）
+ENV DATABASE_URL=postgresql://onebase:onebase123@127.0.0.1:5432/onebase
+ENV REDIS_URL=redis://127.0.0.1:6379
+ENV JWT_SECRET=change-me-in-production
+ENV HOST=0.0.0.0
+ENV PORT=3000
+ENV POSTGRES_USER=onebase
+ENV POSTGRES_PASSWORD=onebase123
+ENV POSTGRES_DB=onebase
+ENV NEXT_PUBLIC_API_URL=http://127.0.0.1:3000
+
+# 高可用配置默认值
+ENV REQUEST_TIMEOUT_SECS=30
+ENV GRACEFUL_SHUTDOWN_SECS=30
+ENV CIRCUIT_BREAKER_FAILURE_THRESHOLD=5
+ENV CIRCUIT_BREAKER_TIMEOUT_SECS=30
+ENV RATE_LIMIT_PER_MINUTE=100
+ENV CORS_ORIGINS=*
+ENV RUST_ENV=production
+
+# 对外暴露端口：API(3000) + 前端(3001)
+# 生产环境不建议暴露 5432/6379，仅调试时通过 docker-compose ports 映射
+EXPOSE 3000 3001
+
+ENTRYPOINT ["/app/docker/entrypoint.sh"]

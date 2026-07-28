@@ -1,0 +1,28 @@
+# 本地开发 / 单机部署 override
+#
+# 关键 secret（JWT_SECRET / ENCRYPTION_KEY 等）通过 .env 注入，
+# 而不是硬编码在 git 跟踪文件里。请先复制 .env.example 为 .env 并填入真实值：
+#
+#     cp .env.example .env
+#     # 然后用 `openssl rand -base64 32` 替换占位
+#
+# `.env` 已在 .gitignore 中，不会被提交。
+services:
+  onebase:
+    build:
+      args:
+        # 留空 -> 前端 axios baseURL 使用相对路径，
+        # next.config.js 在容器内反代到 http://localhost:3000，
+        # 这样从任何 IP/域名访问 :3011 都能正常工作。
+        - NEXT_PUBLIC_API_URL=
+    ports: !override
+      - "0.0.0.0:3010:3000"   # Rust API（如不需要从外部直连后端，可只暴露 3011）
+      - "0.0.0.0:3011:3001"   # Next.js 前端（推荐入口）
+    environment:
+      - NEXT_PUBLIC_API_URL=
+      # JWT 签名密钥（必须 16+ 字符，建议 32+）。从 .env 注入，未设置会启动失败
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET 未设置，请先复制 .env.example 为 .env 并填入}
+      # 数据库密码 / OAuth token 等敏感字段对称加密密钥（base64 编码 32 字节）
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?ENCRYPTION_KEY 未设置，请先复制 .env.example 为 .env 并填入}
+      # 跨域：保持 * 以便外部直连 :3010；如果只用 :3011 入口可以收紧
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
