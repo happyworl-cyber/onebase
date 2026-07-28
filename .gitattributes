@@ -1,0 +1,24 @@
+# 与上游同步时，对文本源码套用自定义合并驱动 `brandify`：
+# 先做标准 3-way 合并，再把结果里残留的品牌 token 统一改成本项目品牌。
+# 驱动实现放在仓库之外（见 onebase-tooling/brandify-merge.ps1），此处只引用名字，
+# 不泄露映射关系。未配置该驱动时 git 会自动回退到默认合并，不影响正常使用。
+#
+# 一次性启用（各协作者本地各跑一次；路径按实际调整）：
+#   git config merge.brandify.name "brandify de-brand merge"
+#   git config merge.brandify.driver "powershell -NoProfile -ExecutionPolicy Bypass -File D:/code/onebase-tooling/brandify-merge.ps1 %O %A %B"
+
+*.rs        merge=brandify
+*.toml      merge=brandify
+*.ts        merge=brandify
+*.tsx       merge=brandify
+*.js        merge=brandify
+*.jsx       merge=brandify
+*.json      merge=brandify
+*.md        merge=brandify
+*.sql       merge=brandify
+*.sh        merge=brandify
+*.yml       merge=brandify
+*.yaml      merge=brandify
+*.conf      merge=brandify
+*.html      merge=brandify
+Dockerfile* merge=brandify

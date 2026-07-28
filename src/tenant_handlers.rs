@@ -1416,7 +1416,7 @@ async fn probe_replica_health(
         .database(db)
         .username(user)
         .password(password)
-        .application_name("onebase-replica-health")
+        .application_name(&crate::brand::replica_health_app_name())
         .disable_statement_logging();
 
     let conn_fut = sqlx::PgConnection::connect_with(&opts);

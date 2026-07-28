@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { clearAuthToken } from '@/lib/auth'
+import { BRAND } from '@/lib/brand'
 
 interface NavItem {
   name: string
@@ -66,7 +67,7 @@ export default function PlatformSidebar() {
             <i className="fas fa-database text-white text-sm"></i>
           </div>
           <div>
-            <h1 className="text-sm font-semibold text-gray-900">OneBase</h1>
+            <h1 className="text-sm font-semibold text-gray-900">{BRAND}</h1>
             <p className="text-[11px] text-gray-500">平台管理</p>
           </div>
         </div>

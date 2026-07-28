@@ -5,7 +5,7 @@
 //!    [`looks_like_request_id`]），直接复用——便于网关 / 调用方在多服务间传链路；
 //! 2. 否则现场生成一个 UUID v4；
 //! 3. 用 [`crate::logging::REQUEST_ID`] task_local 把 ID 注入到本请求 future 上下文，
-//!    内部所有 `tracing::info!` / `error!` 经 `OnebaseJsonFormatter` 都会自动带上；
+//!    内部所有 `tracing::info!` / `error!` 经 `JsonLogFormatter` 都会自动带上；
 //! 4. 在响应头里**回写**这个 ID，方便前端 / 网关回收到错误时贴给后端定位问题。
 //!
 //! 安装位置：在 axum router 的**最外层**包一层 `axum::middleware::from_fn(...)`，

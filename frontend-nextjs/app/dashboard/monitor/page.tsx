@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import api from '@/lib/api'
+import { BRAND } from '@/lib/brand'
 
 interface DbStats {
   database_size: string
@@ -351,7 +352,7 @@ export default function MonitorPage() {
 
           {/* 应用层慢查询 */}
           <div>
-            <h3 className="text-sm font-semibold text-gray-700 mb-3"><i className="fas fa-code mr-2 text-purple-500"></i>OneBase Auto API 慢查询 (&gt;500ms)</h3>
+            <h3 className="text-sm font-semibold text-gray-700 mb-3"><i className="fas fa-code mr-2 text-purple-500"></i>{BRAND} Auto API 慢查询 (&gt;500ms)</h3>
             <div className="card overflow-hidden">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50">

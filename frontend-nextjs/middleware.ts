@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
+import { TOKEN_COOKIE } from '@/lib/brand'
 
 /**
  * 受保护路由前缀：未登录用户访问会被 302 到 /login。
@@ -16,8 +17,6 @@ import type { NextRequest } from 'next/server'
  * 会话有效性（jti 是否被吊销、是否过期）仍由后端 `auth_middleware` 完成。
  */
 const PROTECTED_PREFIXES = ['/dashboard', '/platform'] as const
-
-const TOKEN_COOKIE = 'onebase_token'
 
 function isProtected(pathname: string): boolean {
   return PROTECTED_PREFIXES.some(

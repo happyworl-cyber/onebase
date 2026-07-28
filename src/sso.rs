@@ -197,7 +197,7 @@ pub async fn fetch_user_profile(
     let response = client
         .get(&userinfo_url)
         .bearer_auth(access_token)
-        .header("User-Agent", "OneBase/1.0")
+        .header("User-Agent", crate::brand::user_agent())
         .send()
         .await
         .map_err(|e| format!("UserInfo 请求失败: {}", e))?;
@@ -231,7 +231,7 @@ async fn fetch_github_email(access_token: &str) -> Result<String, String> {
     let response = client
         .get("https://api.github.com/user/emails")
         .bearer_auth(access_token)
-        .header("User-Agent", "OneBase/1.0")
+        .header("User-Agent", crate::brand::user_agent())
         .send()
         .await
         .map_err(|e| format!("GitHub email 请求失败: {}", e))?;

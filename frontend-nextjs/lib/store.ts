@@ -1,7 +1,8 @@
 import { create } from 'zustand'
+import { BRAND_SLUG } from '@/lib/brand'
 
 /** 浏览器标签页会话内，通过 /query 成功执行 SQL 的次数（与 sessionStorage 同步） */
-const SESSION_QUERY_EXEC_KEY = 'onebase_session_query_exec_count'
+const SESSION_QUERY_EXEC_KEY = `${BRAND_SLUG}_session_query_exec_count`
 
 function readStoredSessionQueryCount(): number {
   if (typeof window === 'undefined') return 0
@@ -159,7 +160,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         name: 'Default Project',
         host: 'localhost',
         port: 5432,
-        database: 'onebase',
+        database: BRAND_SLUG,
         description: '默认数据库连接',
       },
   setCurrentDatabase: (db) => {
@@ -187,7 +188,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
           name: 'Default Project',
           host: 'localhost',
           port: 5432,
-          database: 'onebase',
+          database: BRAND_SLUG,
           description: '默认数据库连接',
         },
       ],

@@ -28,8 +28,10 @@
  * - 生产环境（HTTPS）自动加 `Secure`：根据 `location.protocol` 判定。
  */
 
+import { TOKEN_COOKIE } from '@/lib/brand'
+
 export const TOKEN_KEY = 'token'
-export const TOKEN_COOKIE = 'onebase_token'
+export { TOKEN_COOKIE }
 
 const COOKIE_MAX_AGE_SECS = 24 * 60 * 60
 

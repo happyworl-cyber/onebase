@@ -135,7 +135,7 @@ impl IntoResponse for AppError {
 /// - **不向客户端泄露表名 / 列名 / SQL**：响应只回固定文案 + 稳定 code，
 ///   schema 信息只在服务端日志里出现。
 /// - **结构化字段优先**：`error.kind` / `sqlstate` / `table` / `constraint` 走
-///   `tracing` 的 structured field，被 `OnebaseJsonFormatter` 平铺到 JSON
+///   `tracing` 的 structured field，被 `JsonLogFormatter` 平铺到 JSON
 ///   根字段，ELK 上能直接 `error.kind:db_error AND sqlstate:23505`。
 fn classify_db_error(e: &sqlx::Error) -> (StatusCode, String, &'static str) {
     match e {

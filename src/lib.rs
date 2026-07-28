@@ -20,6 +20,7 @@
 //! 容易踩 once_cell static 重复初始化等坑。
 
 pub mod auth;
+pub mod brand;
 pub mod crypto;
 pub mod error;
 pub mod lua_builtins;

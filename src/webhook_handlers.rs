@@ -233,7 +233,7 @@ pub async fn test_webhook(
         "event": "TEST",
         "schema": "test",
         "table": "test",
-        "data": { "message": "OneBase Webhook 测试" },
+        "data": { "message": format!("{} Webhook 测试", crate::brand::NAME) },
         "timestamp": chrono::Utc::now().to_rfc3339(),
     });
 

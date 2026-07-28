@@ -1,5 +1,6 @@
 mod admin_handlers;
 mod audit_handlers;
+mod brand;
 mod es;
 mod postgrest_compat;
 mod audit_middleware;
@@ -872,7 +873,7 @@ async fn root_handler() -> Result<Json<Value>, AppError> {
     use serde_json::json;
     
     Ok(Json(json!({
-        "name": "OneBase API",
+        "name": format!("{} API", crate::brand::NAME),
         "version": env!("CARGO_PKG_VERSION"),
         "status": "running",
         "endpoints": {
@@ -898,7 +899,7 @@ async fn root_handler() -> Result<Json<Value>, AppError> {
             },
             "transaction": "/transaction"
         },
-        "documentation": "https://github.com/yourusername/onebase"
+        "documentation": crate::brand::repo_url()
     })))
 }
 

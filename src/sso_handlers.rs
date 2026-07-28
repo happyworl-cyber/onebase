@@ -572,7 +572,7 @@ async fn find_or_create_user(
     // 创建新用户
     let user_email = email
         .clone()
-        .unwrap_or_else(|| format!("{}@sso.onebase", external_id));
+        .unwrap_or_else(|| format!("{}@{}", external_id, crate::brand::sso_email_domain()));
     let display_name = name.clone().unwrap_or_else(|| "SSO User".to_string());
     let random_password = uuid::Uuid::new_v4().to_string();
     let password_hash = auth::hash_password(&random_password)?;

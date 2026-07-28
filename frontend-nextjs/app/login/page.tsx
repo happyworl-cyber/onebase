@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useAppStore } from '@/lib/store'
 import { ssoAPI } from '@/lib/api'
 import { setAuthToken, ensureCookieSyncedFromLocalStorage } from '@/lib/auth'
+import { BRAND } from '@/lib/brand'
 import axios from 'axios'
 
 interface SsoProviderInfo {
@@ -139,7 +140,7 @@ function LoginPageInner() {
                 <i className="fas fa-database text-3xl text-white"></i>
               </div>
               <div>
-                <h1 className="text-4xl font-bold tracking-tight">OneBase</h1>
+                <h1 className="text-4xl font-bold tracking-tight">{BRAND}</h1>
                 <p className="text-sm opacity-90 font-light">Zero-Code Data Gateway</p>
               </div>
             </div>

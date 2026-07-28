@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { schemaAPI, tenantAPI } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
+import { BRAND } from '@/lib/brand'
 
 interface SchemaRow {
   schema_name: string
@@ -79,7 +80,7 @@ export default function DashboardPage() {
     <div className="space-y-6">
       <div className="card p-6">
         <h2 className="text-2xl font-semibold text-gray-800 mb-4">
-          欢迎使用 OneBase
+          欢迎使用 {BRAND}
         </h2>
         <p className="text-gray-600">PostgreSQL 企业级数据库管理平台</p>
       </div>

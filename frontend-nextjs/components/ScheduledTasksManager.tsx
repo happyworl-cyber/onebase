@@ -33,6 +33,7 @@ import {
 import { useNotification } from '@/hooks/useNotification'
 import { useAppStore } from '@/lib/store'
 import { useEffectiveRole } from '@/lib/permissions'
+import { SIGNATURE_HEADER } from '@/lib/brand'
 
 interface ScheduledTasksManagerProps {
   /**
@@ -1134,7 +1135,7 @@ export default function ScheduledTasksManager({
                   />
                 </FormField>
                 <FormField
-                  label="HMAC 签名密钥（X-OneBase-Signature）"
+                  label={`HMAC 签名密钥（${SIGNATURE_HEADER}）`}
                   hint={
                     editing
                       ? '留空保留原值；填入新值会覆盖；明文密钥不会回显'

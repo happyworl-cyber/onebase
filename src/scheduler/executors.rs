@@ -261,7 +261,7 @@ impl HttpExecutor {
                 hasher.update(secret.as_bytes());
                 hasher.update(&body_bytes);
                 let sig = hex::encode(hasher.finalize());
-                req = req.header("X-OneBase-Signature", sig);
+                req = req.header(crate::brand::signature_header(), sig);
             }
         }
 

@@ -53,7 +53,7 @@ tokio::task_local! {
     ///
     /// 由 [`crate::request_id::request_id_middleware`] 在每个请求最外层用
     /// `task_local!::scope` 注入；该 future 内的所有 `tracing::info!` 等都会
-    /// 经 [`OnebaseJsonFormatter`] 自动带上对应 ID。
+    /// 经 [`JsonLogFormatter`] 自动带上对应 ID。
     ///
     /// 非请求路径（启动日志 / `tokio::spawn` 出去的后台任务）读不到 → 输出 `null`。
     pub static REQUEST_ID: String;
@@ -69,18 +69,18 @@ tokio::task_local! {
 #[must_use = "持有返回的 WorkerGuard 直到进程结束，否则文件日志会被静默丢弃"]
 pub fn init() -> Option<WorkerGuard> {
     let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "info,onebase=debug,sqlx=info".into());
+        .unwrap_or_else(|_| EnvFilter::new(crate::brand::default_log_filter()));
 
     // stdout 永远开。容器里 supervisord / docker / k8s 的标准日志收集都依赖这条。
     let stdout_layer = tracing_subscriber::fmt::layer()
-        .event_format(OnebaseJsonFormatter)
+        .event_format(JsonLogFormatter)
         .with_writer(std::io::stdout);
 
     // 文件可选：LOG_DIR 优先（按天滚动），其次 LOG_FILE（单文件），都不设 → 跳过。
     let (file_layer, guard) = match build_file_writer() {
         Some((non_blocking, guard)) => {
             let layer = tracing_subscriber::fmt::layer()
-                .event_format(OnebaseJsonFormatter)
+                .event_format(JsonLogFormatter)
                 .with_ansi(false) // 文件里别留 ANSI 颜色码，cat / grep 才干净
                 .with_writer(non_blocking);
             (Some(layer), Some(guard))
@@ -115,7 +115,7 @@ fn build_file_writer() -> Option<(tracing_appender::non_blocking::NonBlocking, W
                 eprintln!("[logging] LOG_DIR={} 建目录失败，回退到纯 stdout: {}", dir, e);
                 return None;
             }
-            let appender = tracing_appender::rolling::daily(dir, "onebase.log");
+            let appender = tracing_appender::rolling::daily(dir, crate::brand::log_file_name());
             let (nb, guard) = tracing_appender::non_blocking(appender);
             return Some((nb, guard));
         }
@@ -164,9 +164,9 @@ fn build_file_writer() -> Option<(tracing_appender::non_blocking::NonBlocking, W
 ///   不再是 `target` / `span.name`
 /// - `timestamp` 6 位微秒，避免不同环境的小数位数不一致让日志比对乱掉
 /// - `message` 提到根字段，其它 structured field 平铺到根（不再嵌 `fields: {...}`）
-pub struct OnebaseJsonFormatter;
+pub struct JsonLogFormatter;
 
-impl<S, N> FormatEvent<S, N> for OnebaseJsonFormatter
+impl<S, N> FormatEvent<S, N> for JsonLogFormatter
 where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
     N: for<'writer> FormatFields<'writer> + 'static,

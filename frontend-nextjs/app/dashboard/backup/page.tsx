@@ -6,6 +6,7 @@ import { useAppStore } from '@/lib/store'
 import { formatDateTime } from '@/lib/utils'
 import { useNotification } from '@/hooks/useNotification'
 import Drawer from '@/components/Drawer'
+import { BRAND } from '@/lib/brand'
 
 interface BackupInfo {
   id: string
@@ -96,7 +97,7 @@ export default function BackupPage() {
           `)
           
           const tables = tablesResult.data.data || []
-          sql += `-- OneBase Database Backup\n`
+          sql += `-- ${BRAND} Database Backup\n`
           sql += `-- Schema: ${currentSchema}\n`
           sql += `-- Date: ${new Date().toISOString()}\n`
           sql += `-- Tables: ${tables.length}\n\n`
@@ -169,7 +170,7 @@ export default function BackupPage() {
         }
       } else if (backupOptions.type === 'table' && backupOptions.tableName) {
         // 单表备份
-        sql += `-- OneBase Table Backup\n`
+        sql += `-- ${BRAND} Table Backup\n`
         sql += `-- Table: ${currentSchema}.${backupOptions.tableName}\n`
         sql += `-- Date: ${new Date().toISOString()}\n\n`
         

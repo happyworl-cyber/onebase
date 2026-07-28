@@ -1,8 +1,9 @@
 import type { Metadata } from 'next'
 import './globals.css'
+import { BRAND } from '@/lib/brand'
 
 export const metadata: Metadata = {
-  title: 'OneBase - PostgreSQL 管理平台',
+  title: `${BRAND} - PostgreSQL 管理平台`,
   description: 'Enterprise Database Management Platform',
 }
 
