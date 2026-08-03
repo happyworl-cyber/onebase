@@ -4,14 +4,15 @@ import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAppStore } from '@/lib/store'
 import { ssoAPI } from '@/lib/api'
-import { setAuthToken, ensureCookieSyncedFromLocalStorage } from '@/lib/auth'
-import { BRAND } from '@/lib/brand'
+import { setAuthToken, clearAuthToken, ensureCookieSyncedFromLocalStorage } from '@/lib/auth'
 import axios from 'axios'
 
 interface SsoProviderInfo {
   provider_type: string
   display_name: string
   authorize_url: string
+  tenant_id: number
+  tenant_name: string
 }
 
 const providerIcons: Record<string, { icon: string; color: string; bg: string }> = {
@@ -19,6 +20,7 @@ const providerIcons: Record<string, { icon: string; color: string; bg: string }>
   facebook: { icon: 'fab fa-facebook-f', color: 'text-white', bg: 'bg-blue-600 hover:bg-blue-700' },
   github: { icon: 'fab fa-github', color: 'text-white', bg: 'bg-gray-800 hover:bg-gray-900' },
   oidc: { icon: 'fas fa-key', color: 'text-white', bg: 'bg-indigo-500 hover:bg-indigo-600' },
+  mind: { icon: 'fas fa-brain', color: 'text-white', bg: 'bg-emerald-600 hover:bg-emerald-700' },
 }
 
 export default function LoginPage() {
@@ -47,39 +49,79 @@ function LoginPageInner() {
     nextParam && nextParam.startsWith('/') && !nextParam.startsWith('//')
       ? nextParam
       : null
+  const isExpiredSession = searchParams.get('session') === 'expired'
 
   // 跳转目标：优先 next（用户原本想去哪）；否则按角色分发
+  // 注意：非超管的默认值现在是 /workspace（W1 spec §3.2.1），由 /workspace 页面
+  //      再按项目数派 /workspace/<id> | /workspace | /workspace/no-projects。
+  //      handleLogin 里如果拿到了 token 会主动做一次 /api/projects 直跳，省一次
+  //      渲染 flash；这里只作为最后兜底（auto-redirect 路径不便发请求）。
   const targetAfterLogin = (isSuperadmin: boolean) =>
-    safeNext ?? (isSuperadmin ? '/platform' : '/dashboard')
+    safeNext ?? (isSuperadmin ? '/platform' : '/workspace')
+
+  /**
+   * 登录成功后统一走"浏览器级导航"而不是 App Router SPA push。
+   *
+   * 原因：受保护路由由 Next middleware 在服务端读 cookie 判定，若在 setAuthToken()
+   * 后立刻 router.push，偶发会出现这次客户端导航仍沿用旧的未登录状态（表现为登录
+   * 成功但停在 /login，刷新后才进去）。
+   *
+   * 用 window.location.assign/replace 触发整页导航，确保 cookie 已参与下一次请求。
+   */
+  const navigateAfterLogin = (target: string, mode: 'assign' | 'replace' = 'assign') => {
+    if (typeof window === 'undefined') {
+      router.push(target)
+      return
+    }
+    if (mode === 'replace') {
+      window.location.replace(target)
+    } else {
+      window.location.assign(target)
+    }
+  }
 
   // middleware 携带的"会话过期"提示
   useEffect(() => {
-    if (searchParams.get('session') === 'expired') {
+    if (isExpiredSession) {
+      clearAuthToken()
       setError('登录已过期，请重新登录')
     }
-  }, [searchParams])
+  }, [isExpiredSession])
 
   // 老会话迁移：localStorage 有 token 但没 cookie 的用户，自动补 cookie
   // 并把他们送回原本要去的页面，避免上线本次改动后强制重新登录。
   useEffect(() => {
+    if (isExpiredSession) return
     ensureCookieSyncedFromLocalStorage()
     if (typeof window !== 'undefined' && localStorage.getItem('token')) {
       const userStr = localStorage.getItem('current_user')
       let isSuperadmin = false
+      let mustChangePassword = false
       try {
-        if (userStr) isSuperadmin = !!JSON.parse(userStr).is_superadmin
+        if (userStr) {
+          const parsed = JSON.parse(userStr)
+          isSuperadmin = !!parsed.is_superadmin
+          mustChangePassword = !!parsed.must_change_password
+        }
       } catch {}
-      router.replace(targetAfterLogin(isSuperadmin))
+      if (mustChangePassword) {
+        navigateAfterLogin('/change-password', 'replace')
+        return
+      }
+      navigateAfterLogin(targetAfterLogin(isSuperadmin), 'replace')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [isExpiredSession])
 
   // SSO 回调处理：如果 URL 带 token 参数则自动登录
+  // SSO 回来时还不知道 is_superadmin（没经过 /auth/login 拿 user 字段），
+  // 简单兜底走 /workspace；超管会被 /workspace picker 直接发回 /platform
+  // （picker 拿到空列表后会在 superadmin 分支显示"前往 /platform"的引导）。
   useEffect(() => {
     const token = searchParams.get('token')
     if (token) {
       setAuthToken(token)
-      router.push(safeNext ?? '/dashboard')
+      navigateAfterLogin(safeNext ?? '/workspace')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, router])
@@ -103,7 +145,36 @@ function LoginPageInner() {
       setAuthToken(token)
       setCurrentUser(user)
 
-      router.push(targetAfterLogin(!!user.is_superadmin))
+      // 内置默认账号首登：必须先改密，否则后端网关会 403 拦截所有业务端点。
+      if (user.must_change_password) {
+        navigateAfterLogin('/change-password')
+        return
+      }
+
+      // 超管 / safeNext 路径维持原行为
+      if (user.is_superadmin || safeNext) {
+        navigateAfterLogin(targetAfterLogin(!!user.is_superadmin))
+        return
+      }
+
+      // 非超管：用新 token 立刻查一下项目数，直接派最终页面，避免先去 /workspace
+      // 再 replace 一跳的视觉 flash（spec §3.2.1）。失败兜底回 /workspace 让
+      // picker 自己再试一遍。
+      try {
+        const projectsResp = await axios.get('/api/projects', {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        const list: Array<{ id: number }> = projectsResp.data?.projects ?? []
+        if (list.length === 0) {
+          navigateAfterLogin('/workspace/no-projects')
+        } else if (list.length === 1) {
+          navigateAfterLogin(`/workspace/${list[0].id}`)
+        } else {
+          navigateAfterLogin('/workspace')
+        }
+      } catch {
+        navigateAfterLogin('/workspace')
+      }
     } catch (err: any) {
       setError(err.response?.data?.error || '登录失败')
     } finally {
@@ -111,18 +182,27 @@ function LoginPageInner() {
     }
   }
 
-  const handleSsoLogin = async (providerType: string) => {
-    setSsoLoading(providerType)
+  // 带上 provider 所属项目的 tenant_id 发起授权；登录后落地 /workspace，
+  // 由 picker 按用户权限决定进入哪个项目。
+  const handleSsoLogin = async (provider: SsoProviderInfo) => {
+    const key = provider.provider_type
+    setSsoLoading(key)
     setError('')
 
     try {
-      const res = await ssoAPI.authorize(providerType, undefined, window.location.origin + '/login')
+      // OAuth redirect_uri 指向前端回调页 /sso/callback；它拿到 code+state 后
+      // 回 POST /auth/sso/exchange 完成换取（前端业务接入 + 后端 PKCE）。
+      const res = await ssoAPI.authorize(
+        provider.provider_type,
+        provider.tenant_id,
+        window.location.origin + '/sso/callback'
+      )
       const { authorization_url } = res.data
       if (authorization_url) {
         window.location.href = authorization_url
       }
     } catch (err: any) {
-      setError(err.response?.data?.error || `${providerType} 登录失败`)
+      setError(err.response?.data?.error || `${provider.display_name} 登录失败`)
       setSsoLoading(null)
     }
   }
@@ -140,7 +220,7 @@ function LoginPageInner() {
                 <i className="fas fa-database text-3xl text-white"></i>
               </div>
               <div>
-                <h1 className="text-4xl font-bold tracking-tight">{BRAND}</h1>
+                <h1 className="text-4xl font-bold tracking-tight">OneBase</h1>
                 <p className="text-sm opacity-90 font-light">Zero-Code Data Gateway</p>
               </div>
             </div>
@@ -185,16 +265,19 @@ function LoginPageInner() {
             <div className="space-y-3">
               {ssoProviders.map((provider) => {
                 const style = providerIcons[provider.provider_type] || providerIcons.oidc
+                // 每种 SSO 只有一个统一入口（后端按 provider_type 去重）。
+                // 登录后进入哪个项目由用户权限决定（/workspace picker），入口不区分项目。
+                const key = provider.provider_type
                 return (
                   <button
-                    key={provider.provider_type}
-                    onClick={() => handleSsoLogin(provider.provider_type)}
+                    key={key}
+                    onClick={() => handleSsoLogin(provider)}
                     disabled={ssoLoading !== null}
                     className={`w-full h-10 ${style.bg} ${style.color} font-medium rounded-lg 
                               flex items-center justify-center space-x-2 transition-all duration-200
                               disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md`}
                   >
-                    {ssoLoading === provider.provider_type ? (
+                    {ssoLoading === key ? (
                       <i className="fas fa-spinner fa-spin"></i>
                     ) : (
                       <i className={style.icon}></i>

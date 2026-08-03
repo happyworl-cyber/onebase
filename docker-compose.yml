@@ -20,6 +20,7 @@ services:
       - POSTGRES_PASSWORD=onebase123
       - POSTGRES_DB=onebase
       - DATABASE_URL=postgresql://onebase:onebase123@127.0.0.1:5432/onebase
+      - PROVISION_PG_URL=postgresql://onebase:onebase123@127.0.0.1:5432/postgres
       # ── Redis ──
       - REDIS_URL=redis://127.0.0.1:6379
       # ── 认证 / 加密（生产环境务必由 docker-compose.override.yml + .env 提供真值）──
@@ -33,6 +34,8 @@ services:
       - PORT=3000
       - NEXT_PUBLIC_API_URL=http://127.0.0.1:3000
       - RUST_LOG=info
+      # 启动期自动跑管理库迁移（与 src/migrate.rs 同序列；缺省即为 on）
+      - AUTO_MIGRATE=on
       # ── 高可用 ──
       - REQUEST_TIMEOUT_SECS=30
       - GRACEFUL_SHUTDOWN_SECS=30
@@ -46,8 +49,11 @@ services:
       - redisdata:/var/lib/redis
       - logs:/var/log/onebase
     restart: unless-stopped
+    # 自愈探针只看进程存活（/health/live，不碰 DB）。用 /health/ready 会在连接池
+    # 短时打满时误判 unhealthy 触发重启，重启反而加剧耗尽。摘流交给外部 LB / k8s
+    # readinessProbe 打 /health/ready。
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:3000/health/ready"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:3000/health/live"]
       interval: 30s
       timeout: 10s
       retries: 3

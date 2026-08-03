@@ -25,6 +25,7 @@ use std::sync::Arc;
 use crate::audit_handlers;
 use crate::auth::Claims;
 use crate::error::AppError;
+use crate::middleware::ApiKeyContext;
 use crate::scheduler::cron_parser;
 use crate::scheduler::models::ScheduledTask;
 use crate::scheduler::runner::SchedulerRunner;
@@ -55,6 +56,9 @@ pub struct CreateTaskReq {
     pub timeout_secs: Option<i32>,
     pub max_retries: Option<i32>,
     pub overlap_policy: Option<String>,
+    pub alert_webhook_url: Option<String>,
+    pub alert_webhook_template: Option<Value>,
+    pub alert_throttle_hours: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +68,10 @@ pub struct UpdateTaskReq {
     pub cron_expr: Option<String>,
     pub timezone: Option<String>,
     pub rpc_args: Option<Value>,
+    // http_url 允许在编辑时修改（上游服务搬家/换路径的场景很常见）。
+    // http_method 仍视为不可变：GET → POST 这种语义变化基本等于另一个任务，
+    // 想换 method 请新建任务，避免运维误改后历史 run 的"含义"被偷偷改写。
+    pub http_url: Option<String>,
     pub http_headers: Option<Value>,
     pub http_body: Option<Value>,
     pub http_secret: Option<String>,
@@ -77,6 +85,11 @@ pub struct UpdateTaskReq {
     pub max_retries: Option<i32>,
     pub overlap_policy: Option<String>,
     pub is_active: Option<bool>,
+    #[serde(default)]
+    pub alert_webhook_url: Option<Option<String>>,
+    #[serde(default)]
+    pub alert_webhook_template: Option<Option<Value>>,
+    pub alert_throttle_hours: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,6 +110,44 @@ pub struct ValidateCronReq {
 #[derive(Debug, Deserialize)]
 pub struct CleanupZombiesReq {
     pub older_than_hours: Option<i64>,
+}
+
+fn normalize_alert_webhook_url(url: Option<&str>) -> Result<Option<String>, AppError> {
+    let Some(url) = url else {
+        return Ok(None);
+    };
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+        return Err(AppError::InvalidQuery(
+            "告警 Webhook URL 必须以 http:// 或 https:// 开头".to_string(),
+        ));
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+fn validate_alert_webhook_template(template: Option<&Value>) -> Result<(), AppError> {
+    if let Some(v) = template {
+        if !v.is_object() {
+            return Err(AppError::InvalidQuery(
+                "告警 Webhook 模板必须是 JSON object".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_alert_throttle_hours(hours: Option<i32>) -> Result<(), AppError> {
+    if let Some(h) = hours {
+        if !(0..=720).contains(&h) {
+            return Err(AppError::InvalidQuery(
+                "告警限流小时数必须在 0 到 720 之间".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// 试运行：把表单里的"未保存任务"直接喂给 executor 跑一遍，不写 DB（不入 scheduled_tasks，
@@ -140,9 +191,8 @@ async fn validate_can_manage(
         return Ok(());
     }
     match task_tenant_id {
-        None => Err(AppError::Forbidden(
-            "平台级任务仅超管可管理".to_string(),
-        )),
+        // 平台超管限制已移除：平台级任务对任何已认证用户开放（租户级仍按 owner/admin 校验）。
+        None => Ok(()),
         Some(t) => {
             let admins = audit_handlers::admin_tenant_ids(pool, claims).await?;
             if admins.contains(&t) {
@@ -187,11 +237,34 @@ async fn validate_database_belongs_to_tenant(
 
 // ─── Handlers ────────────────────────────────
 
+/// `cr_` API Key 调用时：body 未指定则回填密钥绑定的租户/数据库。
+fn fill_from_api_key_context(
+    tenant_id: &mut Option<i32>,
+    database_id: &mut Option<i32>,
+    api_key_ctx: Option<&ApiKeyContext>,
+) {
+    if let Some(ctx) = api_key_ctx {
+        if tenant_id.is_none() {
+            *tenant_id = Some(ctx.tenant_id);
+        }
+        if database_id.is_none() {
+            *database_id = Some(ctx.database_id);
+        }
+    }
+}
+
 pub async fn create_task(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
-    Json(req): Json<CreateTaskReq>,
+    api_key_ctx: Option<Extension<ApiKeyContext>>,
+    Json(mut req): Json<CreateTaskReq>,
 ) -> Result<Json<ScheduledTask>, AppError> {
+    fill_from_api_key_context(
+        &mut req.tenant_id,
+        &mut req.database_id,
+        api_key_ctx.as_ref().map(|e| &e.0),
+    );
+
     validate_can_manage(&claims, req.tenant_id, &pool).await?;
 
     let kind = req.kind.as_str();
@@ -205,10 +278,7 @@ pub async fn create_task(
     //   - 租户级（tenant_id = X）   → 该租户的 owner/admin 可创建（迁移 017 之后放开）
     // 沙盒（bwrap/nsjail）、解释器白名单、env_clear 等运行时防护是 shell 任务真正
     // 的安全边界，不依赖"只准超管建"这个早期保守限制；详见 015 → 017 的演进。
-    let timezone = req
-        .timezone
-        .clone()
-        .unwrap_or_else(|| "UTC".to_string());
+    let timezone = req.timezone.clone().unwrap_or_else(|| "UTC".to_string());
     // 一次解析：既是校验，也是 next_run_at 的初值。
     let next_run_at = cron_parser::next_after(&req.cron_expr, &timezone, Utc::now())?;
 
@@ -249,6 +319,9 @@ pub async fn create_task(
         Some(s) if !s.is_empty() => Some(crate::crypto::encrypt_secret(s)?),
         _ => None,
     };
+    validate_alert_webhook_template(req.alert_webhook_template.as_ref())?;
+    validate_alert_throttle_hours(req.alert_throttle_hours)?;
+    let alert_webhook_url = normalize_alert_webhook_url(req.alert_webhook_url.as_deref())?;
 
     let row = sqlx::query_as::<_, ScheduledTask>(
         "INSERT INTO management.scheduled_tasks ( \
@@ -256,8 +329,9 @@ pub async fn create_task(
             database_id, rpc_schema, rpc_fn_name, rpc_args, \
             http_method, http_url, http_headers, http_body, http_secret_enc, \
             shell_interpreter, shell_script, shell_env, shell_cwd, \
-            timeout_secs, max_retries, overlap_policy, next_run_at, created_by) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) \
+            timeout_secs, max_retries, overlap_policy, alert_webhook_url, \
+            alert_webhook_template, alert_throttle_hours, next_run_at, created_by) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27) \
          RETURNING *",
     )
     .bind(req.tenant_id)
@@ -284,11 +358,24 @@ pub async fn create_task(
     .bind(req.timeout_secs.unwrap_or(60))
     .bind(req.max_retries.unwrap_or(0))
     .bind(req.overlap_policy.as_deref().unwrap_or("skip"))
+    .bind(alert_webhook_url)
+    .bind(req.alert_webhook_template)
+    .bind(req.alert_throttle_hours.unwrap_or(24))
     .bind(next_run_at)
     .bind(claims.sub)
     .fetch_one(&pool)
     .await
     .map_err(|e| AppError::Internal(format!("创建任务失败: {e}")))?;
+
+    tracing::info!(
+        target: "scheduler",
+        task_id = row.id,
+        tenant_id = ?req.tenant_id,
+        kind = %kind,
+        name = %req.name,
+        operator = claims.sub,
+        "创建定时任务"
+    );
 
     Ok(Json(redact_secret(row)))
 }
@@ -316,16 +403,25 @@ pub async fn list_tasks(
         if admins.is_empty() {
             return Ok(Json(Vec::new()));
         }
-        let placeholders = admins
-            .iter()
-            .map(|_| {
-                bind_idx += 1;
-                format!("${}", bind_idx)
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        where_parts.push(format!("tenant_id IN ({placeholders})"));
-        int_binds.extend(admins);
+        if let Some(t) = q.tenant_id {
+            if !admins.contains(&t) {
+                return Err(AppError::Forbidden("无权查看该租户的定时任务".to_string()));
+            }
+            bind_idx += 1;
+            where_parts.push(format!("tenant_id = ${}", bind_idx));
+            int_binds.push(t);
+        } else {
+            let placeholders = admins
+                .iter()
+                .map(|_| {
+                    bind_idx += 1;
+                    format!("${}", bind_idx)
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            where_parts.push(format!("tenant_id IN ({placeholders})"));
+            int_binds.extend(admins);
+        }
     } else if let Some(t) = q.tenant_id {
         bind_idx += 1;
         where_parts.push(format!("tenant_id = ${}", bind_idx));
@@ -431,6 +527,30 @@ pub async fn update_task(
         _ => task.http_secret_enc.clone(),
     };
 
+    // http_url 允许修改，但传空串视为无效（不允许把已有任务的 URL 清空）。
+    // 显式传值才覆盖；不传（None）走 COALESCE 保留原值。
+    if let Some(u) = req.http_url.as_deref() {
+        if u.trim().is_empty() {
+            return Err(AppError::InvalidQuery(
+                "http_url 不能为空字符串".to_string(),
+            ));
+        }
+    }
+    let alert_webhook_url = match req.alert_webhook_url.as_ref() {
+        Some(Some(url)) => normalize_alert_webhook_url(Some(url))?,
+        Some(None) => None,
+        None => task.alert_webhook_url.clone(),
+    };
+    let alert_webhook_template = match req.alert_webhook_template.clone() {
+        Some(template) => template,
+        None => task.alert_webhook_template.clone(),
+    };
+    validate_alert_webhook_template(alert_webhook_template.as_ref())?;
+    let alert_throttle_hours = req
+        .alert_throttle_hours
+        .unwrap_or(task.alert_throttle_hours);
+    validate_alert_throttle_hours(Some(alert_throttle_hours))?;
+
     // shell_* 字段仅对 shell kind 有意义。这里仍走 COALESCE 语义（None → 保留原值）
     // 而不是无条件覆盖，避免 patch http 任务时把 shell_* 当成"清空"误传。
     // 即使有人给 http 任务传了 shell_script，DB 的 chk_st_kind_shell 等约束也只在
@@ -442,19 +562,23 @@ pub async fn update_task(
             description = COALESCE($2, description), \
             cron_expr = $3, timezone = $4, next_run_at = $5, \
             rpc_args = COALESCE($6, rpc_args), \
-            http_headers = COALESCE($7, http_headers), \
-            http_body = COALESCE($8, http_body), \
-            http_secret_enc = $9, \
-            shell_interpreter = COALESCE($10, shell_interpreter), \
-            shell_script = COALESCE($11, shell_script), \
-            shell_env = COALESCE($12, shell_env), \
-            shell_cwd = COALESCE($13, shell_cwd), \
-            timeout_secs = COALESCE($14, timeout_secs), \
-            max_retries = COALESCE($15, max_retries), \
-            overlap_policy = COALESCE($16, overlap_policy), \
-            is_active = COALESCE($17, is_active), \
+            http_url = COALESCE($7, http_url), \
+            http_headers = COALESCE($8, http_headers), \
+            http_body = COALESCE($9, http_body), \
+            http_secret_enc = $10, \
+            shell_interpreter = COALESCE($11, shell_interpreter), \
+            shell_script = COALESCE($12, shell_script), \
+            shell_env = COALESCE($13, shell_env), \
+            shell_cwd = COALESCE($14, shell_cwd), \
+            timeout_secs = COALESCE($15, timeout_secs), \
+            max_retries = COALESCE($16, max_retries), \
+            overlap_policy = COALESCE($17, overlap_policy), \
+            is_active = COALESCE($18, is_active), \
+            alert_webhook_url = $19, \
+            alert_webhook_template = $20, \
+            alert_throttle_hours = $21, \
             updated_at = NOW() \
-         WHERE id = $18 RETURNING *",
+         WHERE id = $22 RETURNING *",
     )
     .bind(req.name)
     .bind(req.description)
@@ -462,6 +586,7 @@ pub async fn update_task(
     .bind(tz)
     .bind(next)
     .bind(req.rpc_args)
+    .bind(req.http_url)
     .bind(req.http_headers)
     .bind(req.http_body)
     .bind(http_secret_enc)
@@ -473,10 +598,20 @@ pub async fn update_task(
     .bind(req.max_retries)
     .bind(req.overlap_policy)
     .bind(req.is_active)
+    .bind(alert_webhook_url)
+    .bind(alert_webhook_template)
+    .bind(alert_throttle_hours)
     .bind(id)
     .fetch_one(&pool)
     .await
     .map_err(|e| AppError::Internal(format!("更新失败: {e}")))?;
+
+    tracing::info!(
+        target: "scheduler",
+        task_id = id,
+        operator = claims.sub,
+        "更新定时任务"
+    );
 
     Ok(Json(redact_secret(row)))
 }
@@ -493,6 +628,13 @@ pub async fn delete_task(
         .execute(&pool)
         .await
         .map_err(|e| AppError::Internal(format!("删除失败: {e}")))?;
+    tracing::info!(
+        target: "scheduler",
+        task_id = id,
+        tenant_id = ?task.tenant_id,
+        operator = claims.sub,
+        "删除定时任务"
+    );
     Ok(Json(json!({"deleted": true, "id": id})))
 }
 
@@ -527,7 +669,11 @@ async fn set_active(
     // 会让 next_run_at = NULL，任务被标"激活"却永不触发（silent dormancy）。
     // 用 `?` 把 AppError 抛到调用方，前端拿到 400 后能引导用户走 PATCH 修 cron。
     let next_run_at = if active {
-        Some(cron_parser::next_after(&task.cron_expr, &task.timezone, Utc::now())?)
+        Some(cron_parser::next_after(
+            &task.cron_expr,
+            &task.timezone,
+            Utc::now(),
+        )?)
     } else {
         task.next_run_at
     };
@@ -541,6 +687,14 @@ async fn set_active(
     .execute(pool)
     .await
     .map_err(|e| AppError::Internal(format!("切换状态失败: {e}")))?;
+    tracing::info!(
+        target: "scheduler",
+        task_id = id,
+        is_active = active,
+        operator = claims.sub,
+        "{}定时任务",
+        if active { "恢复" } else { "暂停" }
+    );
     Ok(Json(json!({"id": id, "is_active": active})))
 }
 
@@ -561,6 +715,13 @@ pub async fn run_now(
             "任务已停用；请先恢复（resume）后再触发，或在恢复后立即停用".to_string(),
         ));
     }
+    tracing::info!(
+        target: "scheduler",
+        task_id = id,
+        kind = %task.kind,
+        operator = claims.sub,
+        "手动触发定时任务（run-now）"
+    );
     // trigger_now 签名是 `pub async fn trigger_now(self: Arc<Self>, task)`——
     // 这里 clone Arc 出来传所有权；不要直接 `runner.trigger_now(...)`。
     runner.clone().trigger_now(task).await;
@@ -614,11 +775,8 @@ pub async fn stats(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<Value>, AppError> {
-    if !claims.is_superadmin {
-        return Err(AppError::Forbidden(
-            "仅超管可查看全局统计".to_string(),
-        ));
-    }
+    // 平台超管限制已移除：任何已认证用户均可查看全局统计。
+    let _ = &claims;
     let total: (i64,) = sqlx::query_as("SELECT COUNT(*)::bigint FROM management.scheduled_tasks")
         .fetch_one(&pool)
         .await
@@ -669,11 +827,8 @@ pub async fn cleanup_zombies(
     Extension(claims): Extension<Claims>,
     Json(req): Json<CleanupZombiesReq>,
 ) -> Result<Json<Value>, AppError> {
-    if !claims.is_superadmin {
-        return Err(AppError::Forbidden(
-            "仅超管可清理僵尸 run".to_string(),
-        ));
-    }
+    // 平台超管限制已移除：任何已认证用户均可清理僵尸 run。
+    let _ = &claims;
     // 上限一年，防止误传 i64::MAX 触发 `INTERVAL` 溢出（Postgres `interval` 字段
     // 上限实际更宽，但语义上 cleanup 看一年外的 zombie 没意义，反倒掩盖运维问题）。
     let hours = req.older_than_hours.unwrap_or(24).clamp(1, 24 * 365);
@@ -708,8 +863,15 @@ pub async fn dry_run(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
     Extension(runner): Extension<Arc<SchedulerRunner>>,
-    Json(req): Json<DryRunReq>,
+    api_key_ctx: Option<Extension<ApiKeyContext>>,
+    Json(mut req): Json<DryRunReq>,
 ) -> Result<Json<Value>, AppError> {
+    fill_from_api_key_context(
+        &mut req.tenant_id,
+        &mut req.database_id,
+        api_key_ctx.as_ref().map(|e| &e.0),
+    );
+
     let kind = req.kind.as_str();
     if kind != "rpc" && kind != "http" && kind != "shell" {
         return Err(AppError::InvalidQuery(
@@ -749,8 +911,7 @@ pub async fn dry_run(
                 "rpc 任务必须提供 database_id / rpc_schema / rpc_fn_name".to_string(),
             ));
         }
-        validate_database_belongs_to_tenant(&pool, req.database_id.unwrap(), req.tenant_id)
-            .await?;
+        validate_database_belongs_to_tenant(&pool, req.database_id.unwrap(), req.tenant_id).await?;
     } else if kind == "http" {
         if req.http_method.is_none() || req.http_url.is_none() {
             return Err(AppError::InvalidQuery(
@@ -759,8 +920,8 @@ pub async fn dry_run(
         }
     }
 
-    // 试运行单次超时：上限沿用 schema 的 1..=3600；前端不传时默认 60。
-    let timeout_secs = req.timeout_secs.unwrap_or(60).clamp(1, 3600);
+    // 试运行单次超时：上限沿用 schema 的 1..=86400（24h）；前端不传时默认 60。
+    let timeout_secs = req.timeout_secs.unwrap_or(60).clamp(1, 86400);
 
     // HTTP secret 在正式路径里以 encrypted 形式存 DB，executor 读后解密；试运行没有
     // DB 写入，但为了让 HMAC 签名路径与正式路径一致，这里 in-memory 加密一遍再丢给
@@ -799,6 +960,10 @@ pub async fn dry_run(
         timeout_secs: timeout_secs,
         max_retries: 0,
         overlap_policy: "skip".to_string(),
+        alert_webhook_url: None,
+        alert_webhook_template: None,
+        alert_throttle_hours: 24,
+        last_alert_sent_at: None,
         next_run_at: None,
         last_run_at: None,
         last_run_status: None,
@@ -828,9 +993,11 @@ pub async fn dry_run(
         _ => unreachable!("kind 已在上面 match 过"),
     };
 
-    let outcome =
-        tokio::time::timeout(std::time::Duration::from_secs(timeout_secs as u64), exec_future)
-            .await;
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs as u64),
+        exec_future,
+    )
+    .await;
     let duration_ms = (Utc::now() - started_at).num_milliseconds().max(0) as i32;
     let (status, output, err_msg) = match outcome {
         Ok(Ok(v)) => ("success", Some(v), None),
@@ -850,14 +1017,12 @@ pub async fn dry_run(
 // ─── 内部 helper ─────────────────────────────
 
 async fn fetch_task_or_404(pool: &PgPool, id: i64) -> Result<ScheduledTask, AppError> {
-    sqlx::query_as::<_, ScheduledTask>(
-        "SELECT * FROM management.scheduled_tasks WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| AppError::Internal(format!("查询任务失败: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("scheduled_task {id} 不存在")))
+    sqlx::query_as::<_, ScheduledTask>("SELECT * FROM management.scheduled_tasks WHERE id = $1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("查询任务失败: {e}")))?
+        .ok_or_else(|| AppError::NotFound(format!("scheduled_task {id} 不存在")))
 }
 
 /// 永远不要把 `http_secret_enc` 密文回给客户端。

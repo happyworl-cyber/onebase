@@ -5,15 +5,17 @@
 //!    [`looks_like_request_id`]），直接复用——便于网关 / 调用方在多服务间传链路；
 //! 2. 否则现场生成一个 UUID v4；
 //! 3. 用 [`crate::logging::REQUEST_ID`] task_local 把 ID 注入到本请求 future 上下文，
-//!    内部所有 `tracing::info!` / `error!` 经 `JsonLogFormatter` 都会自动带上；
+//!    内部所有 `tracing::info!` / `error!` 经 `OnebaseJsonFormatter` 都会自动带上；
 //! 4. 在响应头里**回写**这个 ID，方便前端 / 网关回收到错误时贴给后端定位问题。
 //!
 //! 安装位置：在 axum router 的**最外层**包一层 `axum::middleware::from_fn(...)`，
 //! 让所有下游 handler / 中间件都跑在 REQUEST_ID 的 scope 里。
 
+use std::time::Instant;
+
 use axum::{
     extract::Request,
-    http::{HeaderName, HeaderValue},
+    http::{HeaderName, HeaderValue, Method},
     middleware::Next,
     response::Response,
 };
@@ -21,12 +23,25 @@ use uuid::Uuid;
 
 use crate::logging::REQUEST_ID;
 
+/// 认证中间件把当前请求的用户 ID 通过响应扩展回传给最外层 access log 用。
+///
+/// 为什么走响应扩展而不是请求扩展：`request_id_middleware` 是最外层 layer，
+/// `Claims` 由内层 `auth_middleware` 注入到 **请求** 扩展里，而请求在
+/// `next.run(req)` 时已被消费，外层拿不到。让内层把用户 ID 塞到 **响应** 扩展，
+/// 响应对象会原样向外层冒泡，access log 即可读到。未认证 / 公开路由下不存在该扩展，
+/// 此时 user_id 记为 `-1` 哨兵值，保证字段始终存在且为数字，方便日志系统建索引。
+#[derive(Clone, Copy, Debug)]
+pub struct AccessLogUser(pub i32);
+
 /// 拿当前请求的 `x-request-id`；没有就 `None`（启动 / 非请求上下文）。
 ///
 /// 主要用法：在 handler 把 ID 复制到 spawn future 之前先 capture 出来，
 /// 因为 `tokio::task_local` 不会自动跨 `tokio::spawn`。
 pub fn current() -> Option<String> {
-    REQUEST_ID.try_with(|s| s.clone()).ok().filter(|s| !s.is_empty())
+    REQUEST_ID
+        .try_with(|s| s.clone())
+        .ok()
+        .filter(|s| !s.is_empty())
 }
 
 /// 把一个 future 在指定 `request_id` 下跑（或没 ID 时直接 await）。
@@ -57,8 +72,27 @@ pub async fn request_id_middleware(req: Request, next: Next) -> Response {
     // 2) clone 一份给响应头用（下面把原值 move 给 task_local scope）。
     let echo = req_id.clone();
 
+    // 这两个在 next.run(req) 消费 req 之前先取出来，供 access log 用。
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let start = Instant::now();
+
     // 3) scope 包 future：scope 内所有 tracing event 都能从 task_local 拿到 ID。
-    let mut response = REQUEST_ID.scope(req_id, next.run(req)).await;
+    //    access log 必须在 scope **内部** 打，否则 task_local 已退栈，x_request_id 会是 null。
+    let mut response = REQUEST_ID
+        .scope(req_id, async move {
+            let response = next.run(req).await;
+            let status = response.status().as_u16();
+            let elapsed_ms = start.elapsed().as_millis() as u64;
+            let user_id = response
+                .extensions()
+                .get::<AccessLogUser>()
+                .map(|u| u.0)
+                .unwrap_or(-1);
+            emit_access_log(&method, &path, status, elapsed_ms, user_id);
+            response
+        })
+        .await;
 
     // 4) 回写响应头。理论上 from_str 失败需要 ID 含非法 char，UUID v4 不可能；
     //    上游传的我们用 looks_like_request_id 限制了字符集，也安全。万一失败就跳过。
@@ -66,6 +100,35 @@ pub async fn request_id_middleware(req: Request, next: Next) -> Response {
         response.headers_mut().insert(REQUEST_ID_HEADER, v);
     }
     response
+}
+
+/// 统一 access log：每个 HTTP 请求记录一条「完成」事件。
+///
+/// - `OPTIONS` 预检请求量大且无业务价值，降到 debug，避免污染 info 主日志；
+/// - 其余请求走 info，字段平铺到 JSON 根（见 `crate::logging`），方便按
+///   `status` / `elapsed_ms` / `path` / `user_id` 检索与告警。
+fn emit_access_log(method: &Method, path: &str, status: u16, elapsed_ms: u64, user_id: i32) {
+    if *method == Method::OPTIONS {
+        tracing::debug!(
+            target: "access_log",
+            method = %method,
+            path = %path,
+            status = status,
+            elapsed_ms = elapsed_ms,
+            user_id = user_id,
+            "HTTP request completed"
+        );
+    } else {
+        tracing::info!(
+            target: "access_log",
+            method = %method,
+            path = %path,
+            status = status,
+            elapsed_ms = elapsed_ms,
+            user_id = user_id,
+            "HTTP request completed"
+        );
+    }
 }
 
 /// 简单校验：长度 8~128，仅允许 ASCII 字母数字 + `-` / `_`。
@@ -86,7 +149,9 @@ mod tests {
 
     #[test]
     fn accepts_uuid_v4() {
-        assert!(looks_like_request_id("98753d7e-3bdb-4c00-bcf7-4a697606b88b"));
+        assert!(looks_like_request_id(
+            "98753d7e-3bdb-4c00-bcf7-4a697606b88b"
+        ));
     }
 
     #[test]

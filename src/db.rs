@@ -1,5 +1,8 @@
-use sqlx::{postgres::PgPoolOptions, PgPool};
-use std::time::Duration;
+use sqlx::{
+    postgres::{PgConnectOptions, PgPoolOptions},
+    PgPool,
+};
+use std::{str::FromStr, time::Duration};
 
 /// 创建数据库连接池（优化配置）
 pub async fn create_pool(database_url: &str) -> anyhow::Result<PgPool> {
@@ -31,8 +34,16 @@ pub async fn create_pool(database_url: &str) -> anyhow::Result<PgPool> {
 
     tracing::info!(
         "配置数据库连接池: max={}, min={}, acquire_timeout={}s, idle_timeout={}s, max_lifetime={}s",
-        max_connections, min_connections, acquire_timeout, idle_timeout, max_lifetime
+        max_connections,
+        min_connections,
+        acquire_timeout,
+        idle_timeout,
+        max_lifetime
     );
+
+    // 关闭预处理语句缓存，与租户池一致。主库 migration / DDL 后若复用旧 plan，
+    // 会触发 `cached plan must not change result type`（scheduler / NOTIFY 等长驻任务会持续失败）。
+    let opts = PgConnectOptions::from_str(database_url)?.statement_cache_capacity(0);
 
     let pool = PgPoolOptions::new()
         .max_connections(max_connections)
@@ -42,11 +53,11 @@ pub async fn create_pool(database_url: &str) -> anyhow::Result<PgPool> {
         .max_lifetime(Some(Duration::from_secs(max_lifetime)))
         // 连接前测试
         .test_before_acquire(true)
-        .connect(database_url)
+        .connect_with(opts)
         .await?;
 
     tracing::info!("✅ 数据库连接池创建成功");
-    
+
     // 测试连接
     let conn_test = sqlx::query("SELECT 1").execute(&pool).await;
     match conn_test {
@@ -59,4 +70,3 @@ pub async fn create_pool(database_url: &str) -> anyhow::Result<PgPool> {
 
     Ok(pool)
 }
-

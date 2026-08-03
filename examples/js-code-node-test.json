@@ -1,0 +1,52 @@
+{
+  "name": "JS 节点测试",
+  "slug": "js-code-node-test",
+  "department": "共享",
+  "category": "测试",
+  "trigger_type": "endpoint",
+  "trigger_config": {},
+  "timeout_ms": 60000,
+  "max_retries": 0,
+  "database_id": 2,
+  "tenant_id": 4,
+  "description": "测试 code 节点 language=javascript：读 ctx.body(触发入参) 与 ctx.nodes(上游输出)，并调用宿主桥 env/crypto/time，返回结果。需 WORKFLOW_JS_CODE_ENABLED=true。",
+  "nodes": [
+    {
+      "id": "seed",
+      "type": "transform",
+      "label": "透传触发入参",
+      "config": {
+        "_position": { "x": 60, "y": 40 },
+        "output": {
+          "a": "{{trigger.a}}",
+          "b": "{{trigger.b}}",
+          "name": "{{trigger.name}}"
+        }
+      }
+    },
+    {
+      "id": "js",
+      "type": "code",
+      "label": "JavaScript 处理逻辑",
+      "config": {
+        "_position": { "x": 60, "y": 200 },
+        "language": "javascript",
+        "code": "async function execute(ctx) {\n  const body = ctx.body || {};\n  const seed = (ctx.nodes && ctx.nodes.seed) || {};\n  const name = body.name || seed.name || 'onebase';\n  const a = Number(body.a != null ? body.a : seed.a) || 0;\n  const b = Number(body.b != null ? body.b : seed.b) || 0;\n  return {\n    result: {\n      engine: 'javascript',\n      sum: a + b,\n      greeting: 'hello ' + name,\n      sha256_of_name: crypto.sha256(String(name)),\n      has_api_token: !!env.get('API_TOKEN'),\n      server_ts_ms: time.now_ms(),\n      echo_body: body\n    }\n  };\n}\n"
+      }
+    },
+    {
+      "id": "resp",
+      "type": "response",
+      "label": "返回结果",
+      "config": {
+        "_position": { "x": 60, "y": 360 },
+        "body": "{{js.result}}",
+        "status_code": 200
+      }
+    }
+  ],
+  "edges": [
+    { "from": "seed", "to": "js" },
+    { "from": "js", "to": "resp" }
+  ]
+}

@@ -110,3 +110,76 @@ export function deriveUiCapabilities(role: EffectiveRole): UiCapabilities {
 export function useUiCapabilities(): UiCapabilities {
   return deriveUiCapabilities(useEffectiveRole())
 }
+
+// ============================================================
+// W1 工作空间：基于 user_tenants.role 的 UI 能力门槛
+// ============================================================
+//
+// 这一套与上面 deriveUiCapabilities 平行存在，原因是：
+//   - 上面那套绑定 currentConnection（旧的 dashboard / platform 路径）；
+//   - 工作空间走 currentProject.user_role（W1 spec §3.2.5/§3.2.6），
+//     输入源不一样，不该塞到一个函数里。
+//
+// 仍是 UI 提示，不是真值。真值在后端 permissions 表。
+
+export type WorkspaceRole =
+  | 'superadmin'
+  | 'owner'
+  | 'admin'
+  | 'member'
+  | 'viewer'
+  | string // 兜底：未知 role 当 viewer 处理
+
+export interface WorkspaceCapabilities {
+  /** 「项目信息」编辑（PATCH /api/projects/:id）→ 仅 owner+ */
+  canManageProjectSettings: boolean
+  /** 「成员管理」（PROJECT_ID/members CRUD）→ admin+ —— W4 新加。
+   *  比 canManageProjectSettings 宽一档：admin 也能加人 / 改角色 / 移除，
+   *  与后端 require_tenant_admin 对齐。改项目名 / contact_email 仍只能 owner。*/
+  canManageMembers: boolean
+  /** 整组「安全（RLS / Roles / RPC-ACL / API Key）」→ admin+ */
+  canManageSecurity: boolean
+  /** 整组「事件（Webhook / 定时任务）」→ admin+ */
+  canManageEvents: boolean
+  /** 数据库写入（建表 / 改 schema / CREATE FUNCTION 等）→ member+ */
+  canWriteDatabase: boolean
+  /** 调用 RPC / 读 API → 任意成员（含 viewer） */
+  canCallApi: boolean
+}
+
+const WORKSPACE_ROLE_ORDER: Record<string, number> = {
+  superadmin: 100,
+  owner: 80,
+  admin: 60,
+  member: 40,
+  viewer: 20,
+}
+
+function workspaceRank(role: WorkspaceRole): number {
+  return WORKSPACE_ROLE_ORDER[role] ?? 0
+}
+
+export function deriveWorkspaceCapabilities(role: WorkspaceRole): WorkspaceCapabilities {
+  const r = workspaceRank(role)
+  return {
+    canManageProjectSettings: r >= WORKSPACE_ROLE_ORDER.owner,
+    canManageMembers: r >= WORKSPACE_ROLE_ORDER.admin,
+    canManageSecurity: r >= WORKSPACE_ROLE_ORDER.admin,
+    canManageEvents: r >= WORKSPACE_ROLE_ORDER.admin,
+    canWriteDatabase: r >= WORKSPACE_ROLE_ORDER.member,
+    canCallApi: r >= WORKSPACE_ROLE_ORDER.viewer,
+  }
+}
+
+/**
+ * React hook：基于 store 中的 currentProject.user_role 派生当前能力。
+ * 用法：const caps = useCurrentProjectCapabilities()
+ *      if (caps.canManageSecurity) { ... }
+ *
+ * currentProject 为 null 时按 viewer 处理（最保守），等 layout 拉到项目
+ * 元数据后会自动重派生，触发 React 重渲染显示更多入口。
+ */
+export function useCurrentProjectCapabilities(): WorkspaceCapabilities {
+  const role = useAppStore((s) => s.currentProject?.user_role ?? 'viewer')
+  return deriveWorkspaceCapabilities(role)
+}

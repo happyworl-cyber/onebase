@@ -78,7 +78,9 @@ pub async fn list_tenants(
             contact_email: row.get("contact_email"),
             user_count: row.get("user_count"),
             database_count: row.get("database_count"),
-            created_at: row.get::<chrono::NaiveDateTime, _>("created_at").to_string(),
+            created_at: crate::models::naive_to_utc_string(
+                row.get::<chrono::NaiveDateTime, _>("created_at"),
+            ),
         })
         .collect();
 
@@ -102,9 +104,7 @@ pub async fn create_tenant(
     .await?;
 
     if existing {
-        return Err(AppError::InvalidQuery(
-            "租户标识 (slug) 已存在".to_string(),
-        ));
+        return Err(AppError::InvalidQuery("租户标识 (slug) 已存在".to_string()));
     }
 
     let tenant = sqlx::query_as::<_, Tenant>(
@@ -155,9 +155,7 @@ pub async fn update_tenant_status(
 
     // 验证 status 值
     if !["active", "suspended", "deleted"].contains(&req.status.as_str()) {
-        return Err(AppError::InvalidQuery(
-            "无效的状态值".to_string(),
-        ));
+        return Err(AppError::InvalidQuery("无效的状态值".to_string()));
     }
 
     let tenant = sqlx::query_as::<_, Tenant>(
@@ -225,7 +223,9 @@ pub async fn list_users(
             email: row.get("email"),
             role: row.get("role"),
             tenant_count: row.get("tenant_count"),
-            created_at: row.get::<chrono::NaiveDateTime, _>("created_at").to_string(),
+            created_at: crate::models::naive_to_utc_string(
+                row.get::<chrono::NaiveDateTime, _>("created_at"),
+            ),
         })
         .collect();
 
@@ -255,12 +255,11 @@ pub async fn add_user_to_tenant(
     }
 
     // 检查用户是否存在
-    let user_exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)",
-    )
-    .bind(req.user_id)
-    .fetch_one(&pool)
-    .await?;
+    let user_exists =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)")
+            .bind(req.user_id)
+            .fetch_one(&pool)
+            .await?;
 
     if !user_exists {
         return Err(AppError::NotFound("用户不存在".to_string()));
@@ -355,7 +354,7 @@ pub async fn list_tenant_users(
                 "user_role": row.get::<String, _>("user_role"),
                 "tenant_role": row.get::<String, _>("tenant_role"),
                 "is_active": row.get::<bool, _>("is_active"),
-                "created_at": row.get::<chrono::NaiveDateTime, _>("created_at").to_string(),
+                "created_at": crate::models::naive_to_utc_string(row.get::<chrono::NaiveDateTime, _>("created_at")),
             })
         })
         .collect();
@@ -382,13 +381,11 @@ pub async fn remove_user_from_tenant(
 
     // 同时把该用户在该租户挂的 RBAC 角色清掉——否则下次重新把人加回租户时，
     // 旧 role 仍然有效，等于"软删除"过的人重新激活就自动恢复全部权限。
-    sqlx::query(
-        "DELETE FROM management.user_roles WHERE user_id = $1 AND tenant_id = $2",
-    )
-    .bind(user_id)
-    .bind(tenant_id)
-    .execute(&pool)
-    .await?;
+    sqlx::query("DELETE FROM management.user_roles WHERE user_id = $1 AND tenant_id = $2")
+        .bind(user_id)
+        .bind(tenant_id)
+        .execute(&pool)
+        .await?;
 
     // 失效该用户在该租户的权限缓存（防止"已踢出仍能访问"）。
     permissions::invalidate_user_permissions(redis_ref(&redis), tenant_id, user_id).await;
@@ -628,7 +625,9 @@ pub async fn admin_create_user(
         email: row.get("email"),
         role: row.get("role"),
         tenant_count: 0,
-        created_at: row.get::<chrono::NaiveDateTime, _>("created_at").to_string(),
+        created_at: crate::models::naive_to_utc_string(
+            row.get::<chrono::NaiveDateTime, _>("created_at"),
+        ),
     }))
 }
 
@@ -801,12 +800,10 @@ pub async fn admin_delete_user(
     // 但 user_id 可空，所以把它置空保留审计痕迹，最后再删 users。
     let mut tx = pool.begin().await?;
 
-    sqlx::query(
-        "UPDATE management.connection_access_logs SET user_id = NULL WHERE user_id = $1",
-    )
-    .bind(user_id)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("UPDATE management.connection_access_logs SET user_id = NULL WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
 
     let res = sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(user_id)
@@ -819,12 +816,7 @@ pub async fn admin_delete_user(
 
     tx.commit().await?;
 
-    tracing::info!(
-        "超管 {} 删除了用户 #{} ({})",
-        claims.email,
-        user_id,
-        email
-    );
+    tracing::info!("超管 {} 删除了用户 #{} ({})", claims.email, user_id, email);
 
     Ok(Json(serde_json::json!({
         "ok": true,

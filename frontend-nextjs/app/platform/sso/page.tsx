@@ -1,10 +1,17 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { ssoAPI } from '@/lib/api'
+import { ssoAPI, adminAPI } from '@/lib/api'
+
+interface TenantOption {
+  id: number
+  name: string
+  slug: string
+}
 
 interface SsoProvider {
   id: number
+  tenant_id: number
   provider_type: string
   display_name: string
   client_id: string
@@ -12,6 +19,11 @@ interface SsoProvider {
   token_url: string | null
   userinfo_url: string | null
   scopes: string | null
+  user_id_field?: string | null
+  email_field?: string | null
+  name_field?: string | null
+  avatar_field?: string | null
+  auto_role?: string | null
   is_active: boolean
   linked_users: number
   created_at: string
@@ -43,18 +55,40 @@ const PROVIDER_PRESETS: Record<string, { label: string; icon: string; color: str
     color: 'text-indigo-500',
     defaults: { display_name: 'OIDC Provider', scopes: 'openid email profile' },
   },
+  mind: {
+    label: 'Mind SSO',
+    icon: 'fas fa-brain',
+    color: 'text-emerald-600',
+    defaults: { display_name: 'Mind', scopes: 'openid' },
+  },
 }
 
 export default function SsoManagementPage() {
   const [providers, setProviders] = useState<SsoProvider[]>([])
+  const [tenants, setTenants] = useState<TenantOption[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
-  // 表单状态
-  const [formData, setFormData] = useState({
+  // 表单状态。tenant_id = 适用项目（通过该 Provider 登录后授予权限的项目）。
+  const [formData, setFormData] = useState<{
+    provider_type: string
+    display_name: string
+    client_id: string
+    client_secret: string
+    authorization_url: string
+    token_url: string
+    userinfo_url: string
+    scopes: string
+    user_id_field: string
+    email_field: string
+    name_field: string
+    avatar_field: string
+    auto_role: string
+    tenant_id: number | null
+  }>({
     provider_type: 'google',
     display_name: 'Google',
     client_id: '',
@@ -63,12 +97,34 @@ export default function SsoManagementPage() {
     token_url: '',
     userinfo_url: '',
     scopes: '',
+    user_id_field: '',
+    email_field: '',
+    name_field: '',
+    avatar_field: '',
+    auto_role: 'member',
+    tenant_id: null,
   })
 
-  const fetchProviders = async () => {
+  // 列出所有项目下的 Provider（超管视角），每条带自己的 tenant_id。
+  const fetchAllProviders = async (tenantList: TenantOption[]) => {
+    if (tenantList.length === 0) {
+      setProviders([])
+      setLoading(false)
+      return
+    }
     try {
-      const res = await ssoAPI.listProviders()
-      setProviders(res.data || [])
+      const results = await Promise.all(
+        tenantList.map((t) =>
+          ssoAPI
+            .listProviders(t.id)
+            .then((r) => (r.data || []) as SsoProvider[])
+            .catch(() => [] as SsoProvider[])
+        )
+      )
+      // 按 provider id 去重，防御上游租户列表重复导致的同一 Provider 多次出现。
+      const byId = new Map<number, SsoProvider>()
+      for (const p of results.flat()) byId.set(p.id, p)
+      setProviders(Array.from(byId.values()))
     } catch {
       setMessage({ type: 'error', text: '加载 SSO Provider 列表失败' })
     } finally {
@@ -76,7 +132,32 @@ export default function SsoManagementPage() {
     }
   }
 
-  useEffect(() => { fetchProviders() }, [])
+  // SSO 配置按项目（租户）隔离，超管可在表单里为每个 Provider 指定适用项目
+  const loadTenants = async () => {
+    try {
+      const res = await adminAPI.listAllTenants()
+      // /api/admin/all-tenants 对每个主库做 LEFT JOIN，租户有多条主库时会重复，
+      // 这里按 id 去重，避免项目下拉与 Provider 列表出现重复项。
+      const seen = new Set<number>()
+      const opts: TenantOption[] = (res.data || [])
+        .map((t: any) => ({ id: t.id, name: t.name, slug: t.slug }))
+        .filter((t: TenantOption) => {
+          if (seen.has(t.id)) return false
+          seen.add(t.id)
+          return true
+        })
+      setTenants(opts)
+      await fetchAllProviders(opts)
+    } catch {
+      setMessage({ type: 'error', text: '加载项目列表失败' })
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { loadTenants() }, [])
+
+  const tenantName = (id: number | null | undefined) =>
+    tenants.find((t) => t.id === id)?.name ?? '未知项目'
 
   const resetForm = () => {
     setFormData({
@@ -88,6 +169,12 @@ export default function SsoManagementPage() {
       token_url: '',
       userinfo_url: '',
       scopes: '',
+      user_id_field: '',
+      email_field: '',
+      name_field: '',
+      avatar_field: '',
+      auto_role: 'member',
+      tenant_id: tenants[0]?.id ?? null,
     })
     setEditingId(null)
     setShowForm(false)
@@ -111,6 +198,10 @@ export default function SsoManagementPage() {
       setMessage({ type: 'error', text: '请填写 Client ID 和 Client Secret' })
       return
     }
+    if (!formData.tenant_id) {
+      setMessage({ type: 'error', text: '请选择适用项目' })
+      return
+    }
     setSaving(true)
     try {
       await ssoAPI.createProvider({
@@ -122,10 +213,15 @@ export default function SsoManagementPage() {
         token_url: formData.token_url || undefined,
         userinfo_url: formData.userinfo_url || undefined,
         scopes: formData.scopes || undefined,
-      })
+        user_id_field: formData.user_id_field || undefined,
+        email_field: formData.email_field || undefined,
+        name_field: formData.name_field || undefined,
+        avatar_field: formData.avatar_field || undefined,
+        auto_role: formData.auto_role || undefined,
+      }, formData.tenant_id)
       setMessage({ type: 'success', text: `${formData.display_name} SSO Provider 创建成功` })
       resetForm()
-      fetchProviders()
+      fetchAllProviders(tenants)
     } catch (err: any) {
       setMessage({ type: 'error', text: err.response?.data?.error || '创建失败' })
     } finally {
@@ -145,10 +241,15 @@ export default function SsoManagementPage() {
         token_url: formData.token_url || undefined,
         userinfo_url: formData.userinfo_url || undefined,
         scopes: formData.scopes || undefined,
-      })
+        user_id_field: formData.user_id_field || undefined,
+        email_field: formData.email_field || undefined,
+        name_field: formData.name_field || undefined,
+        avatar_field: formData.avatar_field || undefined,
+        auto_role: formData.auto_role || undefined,
+      }, formData.tenant_id ?? undefined)
       setMessage({ type: 'success', text: 'SSO Provider 已更新' })
       resetForm()
-      fetchProviders()
+      fetchAllProviders(tenants)
     } catch (err: any) {
       setMessage({ type: 'error', text: err.response?.data?.error || '更新失败' })
     } finally {
@@ -167,14 +268,20 @@ export default function SsoManagementPage() {
       token_url: provider.token_url || '',
       userinfo_url: provider.userinfo_url || '',
       scopes: provider.scopes || '',
+      user_id_field: provider.user_id_field || '',
+      email_field: provider.email_field || '',
+      name_field: provider.name_field || '',
+      avatar_field: provider.avatar_field || '',
+      auto_role: provider.auto_role || 'member',
+      tenant_id: provider.tenant_id,
     })
     setShowForm(true)
   }
 
   const handleToggle = async (provider: SsoProvider) => {
     try {
-      await ssoAPI.updateProvider(provider.id, { is_active: !provider.is_active })
-      fetchProviders()
+      await ssoAPI.updateProvider(provider.id, { is_active: !provider.is_active }, provider.tenant_id)
+      fetchAllProviders(tenants)
       setMessage({
         type: 'success',
         text: `${provider.display_name} 已${provider.is_active ? '禁用' : '启用'}`,
@@ -187,9 +294,9 @@ export default function SsoManagementPage() {
   const handleDelete = async (provider: SsoProvider) => {
     if (!confirm(`确定删除 ${provider.display_name} SSO 配置？关联用户的 SSO 登录将失效。`)) return
     try {
-      await ssoAPI.deleteProvider(provider.id)
+      await ssoAPI.deleteProvider(provider.id, provider.tenant_id)
       setMessage({ type: 'success', text: `${provider.display_name} 已删除` })
-      fetchProviders()
+      fetchAllProviders(tenants)
     } catch {
       setMessage({ type: 'error', text: '删除失败' })
     }
@@ -213,16 +320,20 @@ export default function SsoManagementPage() {
             SSO 社交登录管理
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            配置 Google、Facebook、GitHub 等第三方登录，各 Provider 的 App ID / Secret 在此集中管理
+            配置 Google、Facebook、GitHub、Mind 等第三方登录;每个 Provider 在表单里
+            选择「适用项目」——用户通过它登录后即获得该项目的权限。
           </p>
         </div>
-        <button
-          onClick={() => { resetForm(); setShowForm(true) }}
-          className="px-4 py-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition-colors flex items-center gap-2"
-        >
-          <i className="fas fa-plus"></i>
-          添加 SSO Provider
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => { resetForm(); setShowForm(true) }}
+            disabled={tenants.length === 0}
+            className="px-4 py-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+          >
+            <i className="fas fa-plus"></i>
+            添加 SSO Provider
+          </button>
+        </div>
       </div>
 
       {/* 消息提示 */}
@@ -267,6 +378,9 @@ export default function SsoManagementPage() {
                     <div>
                       <div className="flex items-center gap-2">
                         <h3 className="font-semibold text-gray-800">{p.display_name}</h3>
+                        <span className="px-2 py-0.5 text-xs rounded-full font-medium bg-indigo-100 text-indigo-700">
+                          <i className="fas fa-folder mr-1"></i>{tenantName(p.tenant_id)}
+                        </span>
                         <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${
                           p.is_active
                             ? 'bg-green-100 text-green-700'
@@ -278,6 +392,7 @@ export default function SsoManagementPage() {
                       <div className="text-sm text-gray-500 mt-0.5 space-x-4">
                         <span>Client ID: <code className="text-xs bg-gray-100 px-1 rounded">{p.client_id.substring(0, 20)}...</code></span>
                         <span>关联用户: {p.linked_users}</span>
+                        <span>授予角色: <code className="text-xs bg-indigo-50 text-indigo-700 px-1 rounded">{p.auto_role || 'member'}</code></span>
                       </div>
                     </div>
                   </div>
@@ -329,7 +444,7 @@ export default function SsoManagementPage() {
           {!editingId && (
             <div className="space-y-2">
               <label className="block text-sm font-medium text-gray-700">Provider 类型</label>
-              <div className="grid grid-cols-4 gap-3">
+              <div className="grid grid-cols-5 gap-3">
                 {Object.entries(PROVIDER_PRESETS).map(([type, preset]) => (
                   <button
                     key={type}
@@ -372,6 +487,58 @@ export default function SsoManagementPage() {
             </div>
           </div>
 
+          {/* 适用范围 / 自动授予角色 */}
+          <div className="p-4 bg-indigo-50 border border-indigo-200 rounded-lg space-y-3">
+            <h4 className="text-sm font-medium text-indigo-800 flex items-center gap-2">
+              <i className="fas fa-users-cog"></i>
+              适用范围 / 登录后授予的角色
+            </h4>
+            <p className="text-xs text-indigo-700">
+              通过本 SSO 登录的用户，会自动加入下面选择的<span className="font-semibold">「适用项目」</span>
+              并被授予所选角色（每次登录都会对齐为该角色，SSO 作为该项目权限的来源）。
+            </p>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700">
+                  适用项目 <span className="text-red-500">*</span>
+                </label>
+                {editingId ? (
+                  // 已存在的 Provider 不支持改所属项目（会影响已关联用户）；只读展示。
+                  <input
+                    type="text"
+                    value={`${tenantName(formData.tenant_id)}`}
+                    disabled
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-100 text-gray-500"
+                  />
+                ) : (
+                  <select
+                    value={formData.tenant_id ?? ''}
+                    onChange={(e) => setFormData(prev => ({ ...prev, tenant_id: e.target.value ? Number(e.target.value) : null }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm bg-white"
+                  >
+                    {tenants.length === 0 && <option value="">暂无项目</option>}
+                    {tenants.map((t) => (
+                      <option key={t.id} value={t.id}>{t.name}（{t.slug}）</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700">授予角色</label>
+                <select
+                  value={formData.auto_role}
+                  onChange={(e) => setFormData(prev => ({ ...prev, auto_role: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm bg-white"
+                >
+                  <option value="admin">管理员（admin · 可管理项目 + RBAC admin）</option>
+                  <option value="member">成员（member · RBAC editor，读写数据）</option>
+                  <option value="viewer">只读（viewer · RBAC viewer，仅读）</option>
+                  <option value="owner">拥有者（owner · 项目所有者）</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
           {/* OAuth2 凭证 */}
           <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
             <h4 className="text-sm font-medium text-yellow-800 mb-3 flex items-center gap-2">
@@ -406,12 +573,14 @@ export default function SsoManagementPage() {
             </div>
           </div>
 
-          {/* 自定义端点（OIDC 必填） */}
-          {formData.provider_type === 'oidc' && (
+          {/* 自定义端点（OIDC / Mind 必填或可覆盖） */}
+          {(formData.provider_type === 'oidc' || formData.provider_type === 'mind') && (
             <div className="space-y-3">
               <h4 className="text-sm font-medium text-gray-700 flex items-center gap-2">
                 <i className="fas fa-link"></i>
-                OIDC 端点（自定义 Provider 必填）
+                {formData.provider_type === 'mind'
+                  ? 'OAuth2 端点（不同环境的认证中心地址；留空用线上默认）'
+                  : 'OIDC 端点（自定义 Provider 必填）'}
               </h4>
               <div className="grid grid-cols-1 gap-3">
                 <div className="space-y-1">
@@ -448,8 +617,70 @@ export default function SsoManagementPage() {
             </div>
           )}
 
+          {/* userinfo 字段映射（OIDC / Mind 可覆盖，留空用默认 sub/email/name/picture） */}
+          {(formData.provider_type === 'oidc' || formData.provider_type === 'mind') && (
+            <div className="space-y-3">
+              <h4 className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                <i className="fas fa-user-tag"></i>
+                用户信息字段映射（留空用默认；按 SSO 的 userinfo 实际返回字段填写）
+              </h4>
+              <div className="grid grid-cols-4 gap-3">
+                <div className="space-y-1">
+                  <label className="block text-xs text-gray-500">用户ID字段</label>
+                  <input
+                    type="text"
+                    value={formData.user_id_field}
+                    onChange={(e) => setFormData(prev => ({ ...prev, user_id_field: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
+                    placeholder="sub"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-xs text-gray-500">邮箱字段</label>
+                  <input
+                    type="text"
+                    value={formData.email_field}
+                    onChange={(e) => setFormData(prev => ({ ...prev, email_field: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
+                    placeholder="email"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-xs text-gray-500">姓名字段</label>
+                  <input
+                    type="text"
+                    value={formData.name_field}
+                    onChange={(e) => setFormData(prev => ({ ...prev, name_field: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
+                    placeholder="name"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-xs text-gray-500">头像字段</label>
+                  <input
+                    type="text"
+                    value={formData.avatar_field}
+                    onChange={(e) => setFormData(prev => ({ ...prev, avatar_field: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
+                    placeholder={formData.provider_type === 'mind' ? 'icon' : 'picture'}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Mind 专属提示 */}
+          {formData.provider_type === 'mind' && (
+            <div className="text-xs text-gray-500 bg-emerald-50 border border-emerald-200 rounded-lg p-3 space-y-1">
+              <p><i className="fas fa-info-circle mr-1"></i>走「前端业务接入」（授权码 + PKCE）。在 Mind SSO 注册应用获取 client_id / client_secret，回调地址（redirect_uri）填**前端**回调页：<code className="bg-white px-1 rounded">{'{前端地址}'}/sso/callback</code></p>
+              <p>Authorization URL 填认证中心**根登录页**（末尾带 <code className="bg-white px-1 rounded">/</code>）：测试 <code className="bg-white px-1 rounded">http://login.mindoffice.lan:8888/</code>，预发 <code className="bg-white px-1 rounded">https://prelogin.mindoffice.cn/</code>，线上 <code className="bg-white px-1 rounded">https://login.im30.cn/</code>。code_challenge/S256 由后端自动追加，无需手填。</p>
+              <p>Token / UserInfo 路径以 Mind 接入文档（内网 yapi）为准，如与默认不符请在此覆盖。Mind access_token 是 JWT，登录后会用它调 userinfo 补全资料。</p>
+              <p>推荐字段映射（按 userinfo 的 <code className="bg-white px-1 rounded">data</code> 字段）：用户ID字段 <code className="bg-white px-1 rounded">user_center_id</code>、邮箱字段 <code className="bg-white px-1 rounded">email</code>、姓名字段 <code className="bg-white px-1 rounded">name</code>、头像字段 <code className="bg-white px-1 rounded">icon</code>。<b>切勿用 sub</b>（Mind 无此字段，会导致所有用户撞成同一账号）。</p>
+            </div>
+          )}
+
           {/* 帮助提示 */}
-          {formData.provider_type !== 'oidc' && (
+          {['google', 'facebook', 'github'].includes(formData.provider_type) && (
             <div className="text-xs text-gray-500 bg-gray-50 rounded-lg p-3">
               <i className="fas fa-info-circle mr-1"></i>
               {formData.provider_type === 'google' && (

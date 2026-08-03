@@ -15,7 +15,10 @@ pub struct PermissionCache;
 
 impl PermissionCache {
     fn cache_key(tenant_id: i32, user_id: i32, resource: &str, action: &str) -> String {
-        format!("{}:{}:{}:{}:{}", PERM_KEY_PREFIX, tenant_id, user_id, resource, action)
+        format!(
+            "{}:{}:{}:{}:{}",
+            PERM_KEY_PREFIX, tenant_id, user_id, resource, action
+        )
     }
 
     /// 从缓存获取权限列表
@@ -28,8 +31,14 @@ impl PermissionCache {
     ) -> Option<Vec<Permission>> {
         let key = Self::cache_key(tenant_id, user_id, resource, action);
         match redis.get(&key).await {
-            Ok(Some(data)) => serde_json::from_str(&data).ok(),
-            _ => None,
+            Ok(Some(data)) => {
+                tracing::debug!(target: "perm_cache", key = %key, "权限缓存命中");
+                serde_json::from_str(&data).ok()
+            }
+            _ => {
+                tracing::debug!(target: "perm_cache", key = %key, "权限缓存未命中");
+                None
+            }
         }
     }
 
@@ -45,6 +54,7 @@ impl PermissionCache {
         let key = Self::cache_key(tenant_id, user_id, resource, action);
         if let Ok(data) = serde_json::to_string(permissions) {
             let _ = redis.set_ex(&key, &data, PERM_CACHE_TTL).await;
+            tracing::debug!(target: "perm_cache", key = %key, ttl = PERM_CACHE_TTL, "权限缓存写入");
         }
     }
 
@@ -52,12 +62,23 @@ impl PermissionCache {
     pub async fn invalidate_user(redis: &RedisManager, tenant_id: i32, user_id: i32) {
         let pattern = format!("{}:{}:{}:*", PERM_KEY_PREFIX, tenant_id, user_id);
         let _ = redis.del_pattern(&pattern).await;
+        tracing::debug!(
+            target: "perm_cache",
+            tenant_id = tenant_id,
+            user_id = user_id,
+            "权限缓存失效（按用户）"
+        );
     }
 
     /// 失效某租户下所有用户的权限缓存（角色/权限定义变更时使用）
     pub async fn invalidate_tenant(redis: &RedisManager, tenant_id: i32) {
         let pattern = format!("{}:{}:*", PERM_KEY_PREFIX, tenant_id);
         let _ = redis.del_pattern(&pattern).await;
+        tracing::debug!(
+            target: "perm_cache",
+            tenant_id = tenant_id,
+            "权限缓存失效（按租户）"
+        );
     }
 }
 

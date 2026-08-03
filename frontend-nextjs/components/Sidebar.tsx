@@ -2,7 +2,6 @@
 
 import { usePathname, useRouter } from 'next/navigation'
 import { clearAuthToken } from '@/lib/auth'
-import { BRAND } from '@/lib/brand'
 
 interface MenuItem {
   name: string
@@ -39,7 +38,7 @@ export default function Sidebar() {
                         transform transition-all duration-300 hover:scale-110 hover:rotate-3">
             <i className="fas fa-database text-white text-sm"></i>
           </div>
-          <h1 className="text-base font-semibold text-white tracking-wide">{BRAND}</h1>
+          <h1 className="text-base font-semibold text-white tracking-wide">OneBase</h1>
         </div>
         <div className="flex items-center space-x-2 px-2 py-1.5 bg-white/5 rounded">
           <i className="fas fa-user-circle text-xs text-white/60"></i>

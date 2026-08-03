@@ -11,6 +11,34 @@ echo "========================================="
 echo "  OneBase All-in-One Container"
 echo "========================================="
 
+# ─── 0. 幂等写入 AIO Postgres 调优参数（每次启动，含已有数据目录）───
+# 默认对齐 docs/superpowers/specs/2026-07-27-pg-crash-hardening-design.md
+apply_aio_pg_conf() {
+    local conf="$1"
+    [ -f "$conf" ] || return 0
+
+    local max_conn="${AIO_PG_MAX_CONNECTIONS:-120}"
+    local shared_buffers="${AIO_PG_SHARED_BUFFERS:-256MB}"
+    local work_mem="${AIO_PG_WORK_MEM:-4MB}"
+
+    set_pg_conf_kv() {
+        local key="$1"
+        local val="$2"
+        if grep -qE "^[#[:space:]]*${key}[[:space:]]*=" "$conf"; then
+            # 覆盖已有（含注释掉的）同名配置行，只保留一行生效值
+            sed -i -E "s|^[#[:space:]]*${key}[[:space:]]*=.*|${key} = ${val}|" "$conf"
+        else
+            echo "${key} = ${val}" >> "$conf"
+        fi
+    }
+
+    set_pg_conf_kv "listen_addresses" "'*'"
+    set_pg_conf_kv "max_connections" "$max_conn"
+    set_pg_conf_kv "shared_buffers" "$shared_buffers"
+    set_pg_conf_kv "work_mem" "$work_mem"
+    echo "[0/5] 已应用 AIO PG 调优: max_connections=${max_conn}, shared_buffers=${shared_buffers}, work_mem=${work_mem}"
+}
+
 # ─── 1. 初始化 PostgreSQL（首次运行）───
 if [ ! -f "$PGDATA/PG_VERSION" ]; then
     echo "[1/5] 初始化 PostgreSQL 数据目录..."
@@ -22,12 +50,12 @@ if [ ! -f "$PGDATA/PG_VERSION" ]; then
     echo "host all all 127.0.0.1/32 md5" >> "$PGDATA/pg_hba.conf"
     # 如果需要从宿主机访问 PG（调试），取消下面一行的注释：
     # echo "host all all 0.0.0.0/0 md5" >> "$PGDATA/pg_hba.conf"
-
-    # 监听所有地址（supervisord 内部管理需要）
-    sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/" "$PGDATA/postgresql.conf"
 else
     echo "[1/5] PostgreSQL 数据目录已存在，跳过初始化"
 fi
+
+# 无论首次还是已有 volume，都幂等写入 listen_addresses + 调优参数
+apply_aio_pg_conf "$PGDATA/postgresql.conf"
 
 # ─── 2. 启动 PostgreSQL（临时，用于迁移）───
 echo "[2/5] 启动 PostgreSQL..."
@@ -50,38 +78,28 @@ su - postgres -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname='$PG_DB'\" 
     su - postgres -c "psql -c \"CREATE DATABASE $PG_DB OWNER $PG_USER;\""
 
 export DATABASE_URL="postgresql://$PG_USER:$PG_PASS@127.0.0.1:5432/$PG_DB"
+# 主进程 supervisord 会读 AUTO_MIGRATE；缺省 on（与 app 镜像一致）
+export AUTO_MIGRATE="${AUTO_MIGRATE:-on}"
 
 # ─── 3. 运行数据库迁移（统一入口）───
-echo "[3/5] 运行数据库迁移..."
+echo "[3/5] 运行数据库迁移 (AUTO_MIGRATE=${AUTO_MIGRATE})..."
 
 cd /app
 
-# 通过 psql 顺序执行迁移文件，可正确处理 dollar-quoted 函数体与中文注释。
-# `ON_ERROR_STOP=0` 下任何语句失败都不会阻断后续迁移；幂等语句已使用 IF NOT EXISTS。
-for f in /app/migrations/001_create_users_table.sql \
-         /app/migrations/003_create_management_schema.sql \
-         /app/migrations/004_add_superadmin_role.sql \
-         /app/migrations/005_rbac_tables.sql \
-         /app/migrations/006_sso_providers.sql \
-         /app/migrations/007_read_replicas.sql \
-         /app/migrations/008_webhooks.sql \
-         /app/migrations/009_audit_logs.sql \
-         /app/migrations/010_gateway_config.sql \
-         /app/migrations/011_seed_default_permissions.sql \
-         /app/migrations/012_jwt_sessions.sql; do
-    [ -f "$f" ] || continue
-    name=$(basename "$f")
-    echo "  -> 应用 $name"
-    PGPASSWORD="$PG_PASS" psql -h 127.0.0.1 -U "$PG_USER" -d "$PG_DB" \
-        -v ON_ERROR_STOP=0 -q -f "$f" >/var/log/onebase/migrate_${name}.log 2>&1 || \
-        echo "     (部分语句可能已存在，已忽略)"
-done
-
-# 兼容旧表结构：补 role / is_superadmin 字段
-PGPASSWORD="$PG_PASS" psql -h 127.0.0.1 -U "$PG_USER" -d "$PG_DB" -q -c \
-    "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user';" \
-    -c "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_superadmin BOOLEAN DEFAULT false;" \
-    >/dev/null 2>&1 || true
+# 与主进程 AUTO_MIGRATE / `cargo run --bin migrate_all` 共用同一序列（src/migrate.rs）。
+# 不要再手写 001..012 的 psql 列表——会漏掉后续 migration（如 054 dependencies）。
+if [ -x /app/bin/migrate_all ]; then
+    echo "  -> /app/bin/migrate_all"
+    if DATABASE_URL="$DATABASE_URL" /app/bin/migrate_all \
+        >/var/log/onebase/migrate_all.log 2>&1; then
+        echo "  -> migrate_all 完成"
+    else
+        echo "  !! migrate_all 失败，详见 /var/log/onebase/migrate_all.log（继续启动，主进程 AUTO_MIGRATE 会再试）"
+        tail -n 40 /var/log/onebase/migrate_all.log || true
+    fi
+else
+    echo "  !! /app/bin/migrate_all 不存在，跳过入口迁移（依赖主进程 AUTO_MIGRATE）"
+fi
 
 # ─── 4. 种子数据 ───
 echo "[4/5] 初始化种子数据..."

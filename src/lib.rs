@@ -20,23 +20,53 @@
 //! 容易踩 once_cell static 重复初始化等坑。
 
 pub mod auth;
-pub mod brand;
+pub mod alert_webhook;
 pub mod crypto;
+pub mod crypto_primitives;
 pub mod error;
+/// 统一执行日志（执行索引层 + 保留清理）。被 lib crate 的 `scheduler` 与 bin crate 的
+/// handler 共用，故放在 lib；刻意不依赖 bin-only 的 `request_id` / `logging`。
+pub mod execution_log;
 pub mod lua_builtins;
 pub mod lua_engine;
 pub mod migrate;
-pub mod workflow_engine;
+pub mod pg_row_json;
 pub mod pool_manager;
+/// 连接池 acquire 超时计数。`workflow_engine` 的 Postgres 节点埋点要用，故随其编进
+/// lib crate；只依赖 sqlx/chrono/serde/dashmap，保持 lib-safe。
+pub mod pool_metrics;
+/// 工作流 Postgres 节点复用其 `apply_session_guards` / `reset_session_guards`；
+/// 与 bin 侧超管 raw SQL 通道同源文件，lib 只依赖 error/sqlx，保持 lib-safe。
+pub mod raw_sql_guard;
+/// Redis 数据源：连接注册表 + 客户端缓存 + 精选命令。随 `workflow_engine` 编进 lib
+/// crate（`redis` 节点要用），刻意只依赖 crypto/error/redis/sqlx，保持 lib-safe。
+pub mod kafka_ds;
+pub mod redis_ds;
 pub mod redis_manager;
 pub mod rpc;
 pub mod scheduler;
+pub mod session_hooks;
+pub mod sse_batch_config;
+pub mod sse_publisher;
+pub mod http_async_poll;
+pub mod js_deps;
+pub mod js_host_bridge;
+pub mod js_runner;
+pub mod py_deps;
+pub mod py_runner;
+pub mod workflow_engine;
 
 // `rpc` 的传递依赖——本身不暴露给集成测试用，只是让 lib 能完整编译。
+// 真正的调用方（tenant_handlers / main 路由等）只在 bin crate；lib 侧会误报 dead_code。
+#[allow(dead_code)]
 mod permission_cache;
 // `rbac_handlers` 经 optimize 分支重构后调用了 `crate::permissions::...`，lib 编译
 // 必须也带上 permissions 模块；只是 mod，不需要 pub。
+#[allow(dead_code)]
 mod permissions;
+#[allow(dead_code)]
 mod query_builder;
+#[allow(dead_code)]
 mod rbac_handlers;
+#[allow(dead_code)]
 mod rbac_models;

@@ -25,6 +25,75 @@ use crate::error::AppError;
 use crate::es::auth as es_auth;
 use crate::es::models::EsConnection;
 
+/// `/api/v1/:database_slug/es*` 路由注入：校验 ES token 所属租户与 slug 对应项目一致。
+#[derive(Clone, Debug)]
+pub struct EsTenantScope {
+    pub tenant_id: i32,
+}
+
+/// 仅按 key 取 `database_slug` 的路径参数容器。
+///
+/// 中间件挂在 `/api/v1/:database_slug/es*` 这类嵌套路由上，运行时拿得到的不止
+/// `database_slug` 一个参数（还有内层的 `:index` / `*es_path`）。用具名结构体按
+/// key 解析可忽略多余参数，避免 `Path<String>` 因参数个数不匹配报
+/// "Wrong number of path arguments"。
+#[derive(Debug, serde::Deserialize)]
+pub struct DatabaseSlugPath {
+    pub database_slug: String,
+}
+
+/// 挂在 slug 前缀 ES 路由上的中间件：解析 `database_slug` → tenant_id 写入 extensions。
+pub async fn es_tenant_scope_middleware(
+    axum::extract::State(pool): axum::extract::State<PgPool>,
+    axum::extract::Path(DatabaseSlugPath { database_slug }): axum::extract::Path<DatabaseSlugPath>,
+    mut req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, AppError> {
+    let tenant_id = resolve_tenant_id_by_database_slug(&pool, &database_slug).await?;
+    req.extensions_mut().insert(EsTenantScope { tenant_id });
+    Ok(next.run(req).await)
+}
+
+async fn resolve_tenant_id_by_database_slug(
+    pool: &PgPool,
+    database_slug: &str,
+) -> Result<i32, AppError> {
+    if let Ok(id) = database_slug.parse::<i32>() {
+        let tenant_id: Option<i32> = sqlx::query_scalar(
+            "SELECT tenant_id FROM management.tenant_databases WHERE id = $1 AND is_active = true",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("查询 database 失败: {e}")))?;
+        return tenant_id.ok_or_else(|| {
+            AppError::NotFound(format!("数据库 '{}' 不存在或未启用", database_slug))
+        });
+    }
+
+    let tenant_ids: Vec<i32> = sqlx::query_scalar(
+        "SELECT tenant_id FROM management.tenant_databases \
+         WHERE slug = $1 AND is_active = true \
+         ORDER BY tenant_id ASC LIMIT 2",
+    )
+    .bind(database_slug)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::Internal(format!("查询 database slug 失败: {e}")))?;
+
+    match tenant_ids.len() {
+        0 => Err(AppError::NotFound(format!(
+            "项目 slug '{}' 不存在或未启用",
+            database_slug
+        ))),
+        1 => Ok(tenant_ids[0]),
+        _ => Err(AppError::InvalidQuery(format!(
+            "项目 slug '{}' 存在歧义",
+            database_slug
+        ))),
+    }
+}
+
 // ── reqwest client 缓存 ─────────────────────────────────────────────────
 
 /// 全局 `reqwest::Client`（TLS 严格 / TLS 宽松 两份），初始化一次。
@@ -147,7 +216,27 @@ pub(crate) async fn resolve_token(
     .fetch_optional(pool)
     .await
     .map_err(|e| AppError::Internal(format!("查询 ES token 失败: {e}")))?
-    .ok_or_else(|| AppError::Unauthorized("ES token 无效".to_string()))?;
+    .ok_or_else(|| {
+        // 故障定位用：DB 里没匹配上意味着以下其一发生：
+        //   - 调用方拿的明文 token 已不在表里（被删除 / 撤销 / 整体回滚）
+        //   - 持有 token 的连接被删了——FK ON DELETE CASCADE 会带掉所有 token
+        //   - 表/库被还原到了不包含该 token_hash 的快照
+        // 只记 token_hash 的前 12 位（防止整段 hash 进日志被滥用），加上明文前缀
+        // 段（与 UI 列表里展示的 token_prefix 同款），运维直接能对上 UI 的哪一行
+        // 是"曾经存在但现在已没了"。
+        let hash_head: String = token_hash.chars().take(12).collect();
+        let token_head = es_auth::token_prefix(&token_plain);
+        tracing::warn!(
+            "ES proxy: token_hash 在 management.es_access_tokens 无匹配 \
+             (prefix={}, hash_head={}…)。可能原因：token 已撤销 / 重建，或所属连接被删（FK CASCADE）。\
+             排查：SELECT id, name, token_prefix, is_active, revoked_at, last_used_at, use_count \
+             FROM management.es_access_tokens WHERE token_prefix = '{}';",
+            token_head,
+            hash_head,
+            token_head,
+        );
+        AppError::Unauthorized("ES token 无效".to_string())
+    })?;
 
     if !row.is_active || row.revoked_at.is_some() {
         return Err(AppError::Unauthorized("ES token 已停用或撤销".to_string()));
@@ -184,6 +273,23 @@ pub(crate) async fn resolve_token(
         connection,
         timeout_secs,
     })
+}
+
+/// 解析 ES token；若请求来自 `/api/v1/:database_slug/es*`，额外校验 token 租户与 slug 一致。
+pub(crate) async fn resolve_token_for_request(
+    pool: &PgPool,
+    headers: &HeaderMap,
+    scope: Option<axum::Extension<EsTenantScope>>,
+) -> Result<ResolvedToken, AppError> {
+    let token = resolve_token(pool, headers).await?;
+    if let Some(axum::Extension(scope)) = scope {
+        if token.connection.tenant_id != scope.tenant_id {
+            return Err(AppError::Forbidden(
+                "ES 代理 token 与 URL 中的项目 slug 不匹配".to_string(),
+            ));
+        }
+    }
+    Ok(token)
 }
 
 /// 对透传场景做三层校验（method / path_denylist / index_allowlist）。
@@ -290,7 +396,11 @@ pub(crate) fn spawn_usage_update(pool: PgPool, token_id: i64) {
         .execute(&pool)
         .await
         {
-            tracing::warn!("更新 es_access_token 统计失败 (token_id={}): {}", token_id, e);
+            tracing::warn!(
+                "更新 es_access_token 统计失败 (token_id={}): {}",
+                token_id,
+                e
+            );
         }
     }));
 }

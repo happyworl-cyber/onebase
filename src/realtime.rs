@@ -54,6 +54,7 @@ impl RealtimeManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn connection_count(&self) -> usize {
         self.connections.len()
     }
@@ -87,9 +88,15 @@ pub async fn ws_handler(
     ws: WebSocketUpgrade,
     Query(query): Query<WsQuery>,
     axum::extract::Extension(manager): axum::extract::Extension<RealtimeManager>,
-    axum::extract::Extension(broadcaster): axum::extract::Extension<broadcast::Sender<DataChangeEvent>>,
+    axum::extract::Extension(broadcaster): axum::extract::Extension<
+        broadcast::Sender<DataChangeEvent>,
+    >,
 ) -> Response {
-    let user_id = query.token.as_deref().and_then(|t| verify_token(t).ok()).map(|c| c.sub);
+    let user_id = query
+        .token
+        .as_deref()
+        .and_then(|t| verify_token(t).ok())
+        .map(|c| c.sub);
 
     ws.on_upgrade(move |socket| handle_ws(socket, user_id, manager, broadcaster))
 }
@@ -150,7 +157,10 @@ async fn handle_ws(
                     let msg = ServerMessage {
                         event: event.action.to_string(),
                         channel,
-                        data: event.new_data.or(event.old_data).unwrap_or(serde_json::Value::Null),
+                        data: event
+                            .new_data
+                            .or(event.old_data)
+                            .unwrap_or(serde_json::Value::Null),
                         timestamp: event.timestamp.to_rfc3339(),
                     };
 

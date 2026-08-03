@@ -90,26 +90,46 @@
 - **权限**：复用 RBAC，新增内置角色 `project_owner` / `project_developer` / `project_viewer`
 - **不做**：跨项目共享、项目模板市场（v2+）
 
-#### M2. 自助开通向导
+#### M2. 自助开通向导 — ✅ 已完成（见 `plans/2026-05-19-m2-onboarding-wizard.md`）
 
 - 5 步：选场景 → 命名项目 → 挂载 PG（管理员预先池化的 PG 列表中选一个）→ 选模板（空白 / 博客 / 任务管理 / 社区）→ 完成
 - 后端单一端点 `POST /api/projects/provision`，幂等，返回 project_id
 - "管理员预先池化的 PG"：超管在控制台维护"可分配的 PG 连接池"列表
 - **不做**：自动新建 PG 实例（这是子系统 B—自动部署的事，不在 v1 范围）
+- **v1 实施备注**：模板只 seed 了"空白"一种可用，"博客/任务/社区"3 项作为 stub（`is_coming_soon=true`）灰显在 wizard 里——这 3 个模板的 DDL 等 M3 ER 编辑器落地后再补
 
-#### M3. 可视化建表
+#### M3. 可视化建表  ✅ 已完成
 
 - 复用 `schema_handlers` 提供的 schema 元数据 API
 - 前端引入开源 ER 编辑器（如 `dbml-renderer` / 自研轻量版）
 - 改动写入流程：可视化操作 → 生成 DDL → 用户确认 → 调 `schema_handlers` 执行
 - **安全**：所有 DDL 走现有的 SQL 安全校验，不允许 raw SQL 直执行
+- **v1 实施备注**（详见 `2026-05-19-m3-visual-schema.md`）：
+  - 新增 `src/ddl_handlers.rs` 提供项目级 DDL endpoint（`POST/DELETE/PATCH /api/ddl/tables`）——**不放宽 `/query`**，后者继续仅超管 raw SQL 通道
+  - 鉴权 = member+（owner/admin/member 可建表 / 改表；viewer 只读）。新增 `permissions::require_database_member` helper
+  - **结构化 body + 服务端拼 SQL**：前端永远不传 raw SQL；数据类型 / FK 动作 / 默认表达式 / schema 全部走白名单 + ident 校验
+  - ALTER 极简集：加列 / 删列 / 改 NOT NULL / 改 DEFAULT。改列名 / 改列类型 / 重排序列留 v1.x（要配迁移预览）
+  - ER 图 v1 保持只读；点击节点 → designer 跳转是 v2 ER 编辑器范畴
+  - 入口：sidebar 加"表设计器" + tables/visualizer 空状态 CTA 双重保险
 
-#### M4. RBAC 可视化配置
+#### M4. RBAC 可视化配置  ✅ Beta v1 已完成
 
 - 4 个核心界面：角色管理 / 权限矩阵（资源 × 动作）/ 行级条件构建器 / 列级可见性
 - 行级条件构建器输出现有 `permissions.conditions` 的结构化 DSL，**不是 SQL 字符串**
 - 提供 5 个开箱即用模板：仅自己 / 同部门 / 同租户 / 公开只读 / 禁止
 - **不做**：基于 ABAC 的复杂表达式（保留为 v2 扩展点）
+- **v1 实施备注**（详见 `2026-05-19-m4-rbac-visualization.md`）：
+  - 后端零改动 —— `parse_row_conditions` / `RowCondition` / 占位符替换 自 W4 起已就绪；
+    M4 v1 = 纯前端工程，把 UI 从"字符串裸 SQL"切到"结构化"
+  - `lib/api.ts` 导出 `RowCondition` / `Permission` / `PermissionWritePayload`；`rbacAPI`
+    的 conditions 类型从 `string[]` 改为 `RowCondition[]`，与后端 1:1
+  - 矩阵在 `/security/roles`：per-role tab + resource × action grid + cell badge（条件 / 列限制），
+    点 cell 直接打开编辑 drawer
+  - `ConditionBuilder` + `ColumnControl` 两个共享组件，rls 页和矩阵 cell drawer 都复用
+  - 5 个模板按下后**填进 builder**（不直接 POST），允许用户调整 `department_id` 等业务字段
+  - 旧字符串条件 → 显式 legacy chip + 删除线，提醒"运行时已被后端拒绝"，引导重建
+  - 列控制 UI = deny-first 默认 + allow 白名单可切换；从表 schema 自动拉列名作为候选
+  - ABAC / 字段 mask / 跨 schema 一览 / 模拟用户视图 都明确留 v2
 
 #### M5. Webhook / Realtime 配置
 
@@ -117,12 +137,18 @@
 - Realtime：项目维度生成 WebSocket endpoint，订阅协议复用 `realtime.rs` 已实现的部分
 - **不做**：消息转换 DSL、目的地适配器（v2 逆向 ETL 的范畴）
 
-#### M6. 项目级大盘
+#### M6. 项目级大盘  ✅ MVP 简化版已完成（异常访问告警留 Beta）
 
 - 6 个核心卡片：QPS / P95 延迟 / 错误率 / 慢查询数 / 活跃 API Key / 每日 API 调用量
 - 异常访问告警：基于 `audit_logs` 检测"非工作时间访问 / 跨项目访问尝试 / API Key 滥用"
 - 数据源：`monitor_handlers` `query_perf_handlers` `audit_handlers` 的现有 API
 - **不做**：自定义大盘 / 自定义告警规则（保留 v2）
+- **v1 实施备注**（详见 `2026-05-19-m6-simplified-dashboard.md`）：
+  - 新增 `src/dashboard_handlers.rs`：`GET /api/dashboard/overview` 单 CTE 一次拿全 6 指标 + 24 个 hourly bucket；`GET /api/dashboard/recent-activity` 返回 sanitized audit feed（去掉 IP / user_agent / request_body）
+  - 鉴权 = `require_tenant_membership_any`（**含 viewer**）——大盘是纯聚合数字 + 路径前缀，无行级业务数据
+  - 大盘落在**项目首页**而非新页面；MVP 出口"登录后看大盘"一气呵成
+  - 趋势线用内嵌 SVG sparkline；**不引第三方图表库**——保持 frontend bundle 体积
+  - 异常访问告警 / 自定义指标 / 错误率 P95 多线叠加 都明确留 Beta M6 完整版
 
 #### M7. AI 助手
 

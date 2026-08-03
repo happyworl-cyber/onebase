@@ -3,24 +3,28 @@
 import { useEffect, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { clearAuthToken } from '@/lib/auth'
-import { BRAND } from '@/lib/brand'
 
 interface NavItem {
   name: string
   path: string
   icon: string
-  badge?: string
 }
 
 const NAV_ITEMS: NavItem[] = [
   { name: '项目管理', path: '/platform', icon: 'fa-folder-tree' },
   { name: '用户管理', path: '/platform/users', icon: 'fa-users' },
-  { name: '审计日志', path: '/platform/audit', icon: 'fa-clipboard-list', badge: 'New' },
+  { name: '审计日志', path: '/platform/audit', icon: 'fa-clipboard-list' },
+  { name: '执行日志', path: '/platform/logs', icon: 'fa-stream' },
   { name: 'SSO 登录管理', path: '/platform/sso', icon: 'fa-key' },
   // RPC 授权已下放回 dashboard 工作区（/dashboard/rpc-acl）。本质是 tenant 内部
   // 的"角色 × 函数"绑定，后端 require_tenant_admin_for_db 同时放行租户管理员，
   // 平台超管在切到具体项目后照样能操作，不需要单独的全局视图。
-  { name: '定时任务', path: '/platform/scheduled-tasks', icon: 'fa-clock', badge: 'New' },
+  { name: '定时任务', path: '/platform/scheduled-tasks', icon: 'fa-clock' },
+  // 跨租户应用层慢查询日志 + 全局熔断器状态（W3 Task 3 从 workspace monitor 拆出）
+  { name: '平台监控', path: '/platform/monitor', icon: 'fa-chart-line' },
+  // M2 自助开通向导：超管维护 PG 服务器池，普通用户走 wizard 时从中选一台
+  { name: 'PG 池', path: '/platform/pg-pools', icon: 'fa-server' },
+  { name: '网关域名', path: '/platform/settings', icon: 'fa-globe' },
 ]
 
 export default function PlatformSidebar() {
@@ -67,7 +71,7 @@ export default function PlatformSidebar() {
             <i className="fas fa-database text-white text-sm"></i>
           </div>
           <div>
-            <h1 className="text-sm font-semibold text-gray-900">{BRAND}</h1>
+            <h1 className="text-sm font-semibold text-gray-900">OneBase</h1>
             <p className="text-[11px] text-gray-500">平台管理</p>
           </div>
         </div>
@@ -107,11 +111,6 @@ export default function PlatformSidebar() {
                 }`}
               ></i>
               <span className="flex-1 text-left">{item.name}</span>
-              {item.badge && (
-                <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded font-medium">
-                  {item.badge}
-                </span>
-              )}
             </button>
           ))}
         </div>

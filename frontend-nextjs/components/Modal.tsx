@@ -76,7 +76,12 @@ export default function Modal({
   if (!isVisible) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    // right 预留 AI 助手面板宽度（--ai-panel-offset，关闭时为 0），让弹窗在面板左侧的
+    // 可见区域内居中，避免被面板遮挡。
+    <div
+      className="fixed z-50 flex items-center justify-center"
+      style={{ top: 0, left: 0, right: 'var(--ai-panel-offset, 0px)', bottom: 0 }}
+    >
       {/* 遮罩层 */}
       <div
         className={`absolute inset-0 bg-black transition-opacity duration-200 ${

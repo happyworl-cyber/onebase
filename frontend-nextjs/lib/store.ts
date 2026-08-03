@@ -1,8 +1,7 @@
 import { create } from 'zustand'
-import { BRAND_SLUG } from '@/lib/brand'
 
 /** 浏览器标签页会话内，通过 /query 成功执行 SQL 的次数（与 sessionStorage 同步） */
-const SESSION_QUERY_EXEC_KEY = `${BRAND_SLUG}_session_query_exec_count`
+const SESSION_QUERY_EXEC_KEY = 'onebase_session_query_exec_count'
 
 function readStoredSessionQueryCount(): number {
   if (typeof window === 'undefined') return 0
@@ -23,6 +22,7 @@ interface UserConnection {
   tenant_id: number
   tenant_name: string
   database_id: number
+  database_slug?: string | null
   connection_name: string
   db_host: string
   db_port: number
@@ -46,6 +46,7 @@ interface UserInfo {
   email: string
   role: string  // user, admin 等
   is_superadmin?: boolean  // 超级管理员标识
+  must_change_password?: boolean  // 需先修改初始密码才能继续使用
   created_at: string
 }
 
@@ -62,6 +63,45 @@ interface Tenant {
   created_at: string
 }
 
+/**
+ * W1 工作空间项目元数据（对应后端 GET /api/projects/:id 返回结构）。
+ *
+ * 与 Tenant 的区别：Tenant 是 admin 视角下"用户加入的租户"（带 db 连接字段）；
+ * Project 是普通用户视角下"我能进入的项目"（带 user_role / workspace_config，
+ * 不包含 db 连接字段——那个属于后端鉴权细节，前端不需要也不该知道）。
+ *
+ * 这里 export 是因为 ProjectTopbar / WorkspacePicker 等组件需要直接用类型。
+ */
+export interface Project {
+  id: number
+  name: string
+  slug?: string | null
+  status: string
+  kind: string
+  contact_email?: string | null
+  workspace_config?: Record<string, unknown> | null
+  /**
+   * 当前登录用户在该项目里的角色：
+   *   'superadmin' | 'owner' | 'admin' | 'member' | 'viewer'
+   * 仅作为前端 UI 能力门槛的 hint；真值在后端 RBAC 表里。
+   */
+  user_role: string
+  /**
+   * 项目主连接（W2）。工作空间 layout 拿到后立刻 setCurrentConnection，
+   * 让所有现有 schemaAPI / queryAPI / rpcAPI 在不改业务代码的情况下直接
+   * 走对的 X-Database-Id。null 表示项目尚未绑定 db 连接，子页面需自己
+   * 兜底（"暂无连接"）。
+   */
+  primary_connection?: {
+    database_id: number
+    database_slug?: string | null
+    db_name: string
+    db_host: string
+    db_port: number
+    is_primary: boolean
+  } | null
+}
+
 interface AppState {
   // 用户信息
   currentUser: UserInfo | null
@@ -70,7 +110,11 @@ interface AppState {
   // 当前租户（工作区模式）
   currentTenant: Tenant | null
   setCurrentTenant: (tenant: Tenant | null) => void
-  
+
+  // W1 工作空间：当前进入的项目
+  currentProject: Project | null
+  setCurrentProject: (project: Project | null) => void
+
   // 新的多租户连接管理
   currentConnection: UserConnection | null
   setCurrentConnection: (conn: UserConnection | any | null) => void
@@ -124,7 +168,30 @@ export const useAppStore = create<AppState>()((set, get) => ({
       }
     }
   },
-  
+
+  // W1 工作空间：当前项目
+  currentProject:
+    typeof window !== 'undefined'
+      ? (() => {
+          try {
+            const raw = localStorage.getItem('current_project')
+            return raw ? (JSON.parse(raw) as Project) : null
+          } catch {
+            return null
+          }
+        })()
+      : null,
+  setCurrentProject: (project) => {
+    set({ currentProject: project })
+    if (typeof window !== 'undefined') {
+      if (project) {
+        localStorage.setItem('current_project', JSON.stringify(project))
+      } else {
+        localStorage.removeItem('current_project')
+      }
+    }
+  },
+
   // 新的多租户支持
   currentConnection: typeof window !== 'undefined' && localStorage.getItem('current_connection')
     ? JSON.parse(localStorage.getItem('current_connection')!)
@@ -160,7 +227,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         name: 'Default Project',
         host: 'localhost',
         port: 5432,
-        database: BRAND_SLUG,
+        database: 'onebase',
         description: '默认数据库连接',
       },
   setCurrentDatabase: (db) => {
@@ -188,7 +255,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
           name: 'Default Project',
           host: 'localhost',
           port: 5432,
-          database: BRAND_SLUG,
+          database: 'onebase',
           description: '默认数据库连接',
         },
       ],

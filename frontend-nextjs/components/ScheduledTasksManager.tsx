@@ -33,7 +33,6 @@ import {
 import { useNotification } from '@/hooks/useNotification'
 import { useAppStore } from '@/lib/store'
 import { useEffectiveRole } from '@/lib/permissions'
-import { SIGNATURE_HEADER } from '@/lib/brand'
 
 interface ScheduledTasksManagerProps {
   /**
@@ -88,7 +87,20 @@ type FormState = {
   timeout_secs: number
   max_retries: number
   overlap_policy: 'skip' | 'allow'
+  alert_webhook_url: string
+  alert_webhook_template: string
+  alert_throttle_hours: number
 }
+
+const DEFAULT_ALERT_WEBHOOK_TEMPLATE = JSON.stringify(
+  {
+    msg_type: 'markdown',
+    content:
+      '### 🚨 报警\n- **类型**: {{source}}\n- **名称**: {{name}}\n- **状态**: {{status}}\n- **错误**: {{error}}\n- **时间**: {{time}}\n- **Run ID**: {{run_id}}',
+  },
+  null,
+  2,
+)
 
 const EMPTY_FORM: FormState = {
   tenant_id: '',
@@ -113,6 +125,9 @@ const EMPTY_FORM: FormState = {
   timeout_secs: 60,
   max_retries: 0,
   overlap_policy: 'skip',
+  alert_webhook_url: '',
+  alert_webhook_template: DEFAULT_ALERT_WEBHOOK_TEMPLATE,
+  alert_throttle_hours: 24,
 }
 
 /** 后端 ShellExecutor 接受的解释器白名单（与 src/scheduler/executors.rs 同步）。 */
@@ -183,6 +198,7 @@ export default function ScheduledTasksManager({
   const [stats, setStats] = useState<ScheduledTaskStats | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<ScheduledTask | null>(null)
+  const [alertOpen, setAlertOpen] = useState(false)
   const [form, setForm] = useState<FormState>(() => ({
     ...EMPTY_FORM,
     tenant_id: tenantMode ? String(lockedTenantId) : '',
@@ -245,15 +261,16 @@ export default function ScheduledTasksManager({
   }, [])
 
   // 一次性把可见的连接列表拉过来：表单要用、列表的展示名也要用。
+  // tenantMode（项目内）只取本租户连接；platform 模式（超管）取全部可见。
   const loadConnections = useCallback(async () => {
     try {
-      const res = await tenantAPI.getMyConnections()
+      const res = await tenantAPI.getMyConnections(tenantMode ? lockedTenantId : undefined)
       const rows = (res.data || []) as ConnRow[]
       setConnections(rows)
     } catch {
       setConnections([])
     }
-  }, [])
+  }, [tenantMode, lockedTenantId])
 
   useEffect(() => {
     load()
@@ -427,6 +444,7 @@ export default function ScheduledTasksManager({
       tenant_id: tenantMode ? String(lockedTenantId) : '',
     })
     setEditing(null)
+    setAlertOpen(false)
     setCronPreview(null)
     setCronError(null)
     setDryRunResult(null)
@@ -434,6 +452,7 @@ export default function ScheduledTasksManager({
 
   const startEdit = (task: ScheduledTask) => {
     setEditing(task)
+    setAlertOpen(!!(task.alert_webhook_url ?? '').trim())
     setForm({
       tenant_id: task.tenant_id?.toString() ?? '',
       name: task.name,
@@ -457,6 +476,13 @@ export default function ScheduledTasksManager({
       timeout_secs: task.timeout_secs,
       max_retries: task.max_retries,
       overlap_policy: (task.overlap_policy as 'skip' | 'allow') ?? 'skip',
+      alert_webhook_url: task.alert_webhook_url ?? '',
+      alert_webhook_template: JSON.stringify(
+        task.alert_webhook_template ?? JSON.parse(DEFAULT_ALERT_WEBHOOK_TEMPLATE),
+        null,
+        2,
+      ),
+      alert_throttle_hours: task.alert_throttle_hours ?? 24,
     })
     setShowForm(true)
   }
@@ -502,6 +528,7 @@ export default function ScheduledTasksManager({
     let httpHeaders: Record<string, unknown> | null = {}
     let httpBody: unknown = {}
     let shellEnv: Record<string, unknown> | null = {}
+    let alertTemplate: Record<string, unknown> | null = null
     if (form.kind === 'rpc') {
       rpcArgs = parseJsonField(form.rpc_args, 'rpc_args')
       if (rpcArgs === null) return null
@@ -527,6 +554,10 @@ export default function ScheduledTasksManager({
       shellEnv = parseJsonField(form.shell_env, 'shell_env')
       if (shellEnv === null) return null
     }
+    if (form.alert_webhook_url.trim()) {
+      alertTemplate = parseJsonField(form.alert_webhook_template, '告警 Webhook 模板')
+      if (alertTemplate === null) return null
+    }
 
     const tenantIdNum = form.tenant_id.trim() ? parseInt(form.tenant_id, 10) : null
     const databaseIdNum = form.database_id.trim() ? parseInt(form.database_id, 10) : undefined
@@ -546,6 +577,9 @@ export default function ScheduledTasksManager({
       timeout_secs: form.timeout_secs,
       max_retries: form.max_retries,
       overlap_policy: form.overlap_policy,
+      alert_webhook_url: form.alert_webhook_url.trim() || null,
+      alert_webhook_template: form.alert_webhook_url.trim() ? alertTemplate : null,
+      alert_throttle_hours: form.alert_throttle_hours,
     }
     if (form.kind === 'rpc') {
       payload.database_id = databaseIdNum
@@ -575,13 +609,15 @@ export default function ScheduledTasksManager({
     try {
       if (editing) {
         // update 不接受 tenant_id / kind / database_id / rpc_schema / rpc_fn_name
-        // / http_method / http_url（这些字段在创建后视为不可变），所以只挑可改的下发。
+        // / http_method（这些字段在创建后视为不可变），所以只挑可改的下发。
+        // http_url 允许修改（上游服务搬家场景）。
         await scheduledTaskAPI.update(editing.id, {
           name: payload.name,
           description: payload.description,
           cron_expr: payload.cron_expr,
           timezone: payload.timezone,
           rpc_args: payload.rpc_args,
+          http_url: payload.http_url,
           http_headers: payload.http_headers,
           http_body: payload.http_body,
           http_secret: payload.http_secret,
@@ -592,6 +628,9 @@ export default function ScheduledTasksManager({
           timeout_secs: payload.timeout_secs,
           max_retries: payload.max_retries,
           overlap_policy: payload.overlap_policy,
+          alert_webhook_url: payload.alert_webhook_url,
+          alert_webhook_template: payload.alert_webhook_template,
+          alert_throttle_hours: payload.alert_throttle_hours,
         })
         notify.success('任务已更新')
       } else {
@@ -727,7 +766,10 @@ export default function ScheduledTasksManager({
     }
   }
 
-  const filteredTasks = useMemo(() => tasks, [tasks])
+  const filteredTasks = useMemo(
+    () => (tenantMode ? tasks.filter((t) => t.tenant_id === lockedTenantId) : tasks),
+    [tasks, tenantMode, lockedTenantId],
+  )
 
   return (
     <div className="space-y-6">
@@ -1114,7 +1156,6 @@ export default function ScheduledTasksManager({
                       onChange={(e) => setForm({ ...form, http_url: e.target.value })}
                       className="input-base w-full font-mono"
                       placeholder="https://example.com/hook"
-                      disabled={!!editing}
                     />
                   </FormField>
                 </div>
@@ -1135,7 +1176,7 @@ export default function ScheduledTasksManager({
                   />
                 </FormField>
                 <FormField
-                  label={`HMAC 签名密钥（${SIGNATURE_HEADER}）`}
+                  label="HMAC 签名密钥（X-Onebase-Signature）"
                   hint={
                     editing
                       ? '留空保留原值；填入新值会覆盖；明文密钥不会回显'
@@ -1249,7 +1290,7 @@ export default function ScheduledTasksManager({
             )}
 
             <div className="grid grid-cols-3 gap-4">
-              <FormField label="单次超时 (秒)" hint="1–3600">
+              <FormField label="单次超时 (秒)" hint="1–86400">
                 <input
                   type="number"
                   value={form.timeout_secs}
@@ -1258,7 +1299,7 @@ export default function ScheduledTasksManager({
                   }
                   className="input-base w-full"
                   min={1}
-                  max={3600}
+                  max={86400}
                 />
               </FormField>
               <FormField label="最大重试次数" hint="0–10">
@@ -1273,6 +1314,74 @@ export default function ScheduledTasksManager({
                   max={10}
                 />
               </FormField>
+            </div>
+
+            <div className="space-y-3 border-l-2 border-orange-200 pl-4">
+              <button
+                type="button"
+                onClick={() => setAlertOpen((v) => !v)}
+                className="w-full flex items-center justify-between gap-2 text-left"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <i
+                    className={`fas fa-chevron-right text-[10px] text-gray-400 transition-transform ${
+                      alertOpen ? 'rotate-90' : ''
+                    }`}
+                  />
+                  <span className="text-sm font-medium text-gray-800">失败告警 Webhook</span>
+                  {form.alert_webhook_url.trim() ? (
+                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-emerald-50 text-emerald-700">
+                      已配置
+                    </span>
+                  ) : (
+                    <span className="text-xs text-gray-400">点击展开设置</span>
+                  )}
+                </div>
+              </button>
+              {alertOpen && (
+                <>
+                  <div className="text-xs text-gray-500">
+                    仅最终失败后发送；同一任务按限流小时数最多发送一次。URL 留空即关闭告警。
+                  </div>
+                  <div className="grid grid-cols-3 gap-4">
+                    <FormField label="Webhook URL" className="col-span-2">
+                      <input
+                        type="url"
+                        value={form.alert_webhook_url}
+                        onChange={(e) => setForm({ ...form, alert_webhook_url: e.target.value })}
+                        className="input-base w-full font-mono"
+                        placeholder="https://example.com/webhook"
+                      />
+                    </FormField>
+                    <FormField label="限流小时数" hint="0 = 不限流；默认 24">
+                      <input
+                        type="number"
+                        value={form.alert_throttle_hours}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            alert_throttle_hours: parseInt(e.target.value || '24', 10),
+                          })
+                        }
+                        className="input-base w-full"
+                        min={0}
+                        max={720}
+                      />
+                    </FormField>
+                  </div>
+                  <FormField
+                    label="消息模板（JSON object）"
+                    hint="可用变量：{{source}} {{name}} {{status}} {{error}} {{time}} {{run_id}} {{object_id}} {{trigger_type}} {{trace_id}}"
+                  >
+                    <textarea
+                      value={form.alert_webhook_template}
+                      onChange={(e) => setForm({ ...form, alert_webhook_template: e.target.value })}
+                      className="input-base w-full font-mono text-xs"
+                      rows={6}
+                    />
+                  </FormField>
+                </>
+              )}
             </div>
 
             {/* 试运行结果面板：仅当用户点过"测试运行"才出现；放在按钮上方，更靠近 stdout 来源。 */}
@@ -1667,7 +1776,10 @@ function RunsDrawer({
 }) {
   const [expanded, setExpanded] = useState<number | null>(null)
   return (
-    <div className="fixed inset-0 z-50 flex">
+    <div
+      className="fixed z-50 flex"
+      style={{ top: 0, left: 0, right: 'var(--ai-panel-offset, 0px)', bottom: 0 }}
+    >
       <div className="flex-1 bg-black/30" onClick={onClose}></div>
       <div className="w-[640px] max-w-full bg-white shadow-2xl overflow-hidden flex flex-col">
         <div className="px-5 py-4 border-b flex items-center justify-between">

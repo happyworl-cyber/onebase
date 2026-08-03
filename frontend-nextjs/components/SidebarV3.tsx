@@ -6,7 +6,6 @@ import { useAppStore } from '@/lib/store'
 import { clearAuthToken } from '@/lib/auth'
 import { useUiCapabilities, type UiCapabilities } from '@/lib/permissions'
 import SchemaSelector from './SchemaSelector'
-import { BRAND } from '@/lib/brand'
 
 interface MenuItem {
   id: string
@@ -229,7 +228,7 @@ export default function SidebarV3() {
               <i className="fas fa-database text-white text-sm"></i>
             </div>
             <div>
-              <h1 className="text-sm font-semibold text-gray-900">{BRAND}</h1>
+              <h1 className="text-sm font-semibold text-gray-900">OneBase</h1>
               <p className="text-[11px] text-gray-500">Database Management</p>
             </div>
           </div>

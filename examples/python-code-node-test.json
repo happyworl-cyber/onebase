@@ -1,0 +1,52 @@
+{
+  "name": "Python 节点测试",
+  "slug": "py-code-node-test",
+  "department": "共享",
+  "category": "测试",
+  "trigger_type": "endpoint",
+  "trigger_config": {},
+  "timeout_ms": 60000,
+  "max_retries": 0,
+  "database_id": 2,
+  "tenant_id": 4,
+  "description": "测试 code 节点 language=python：读 ctx.body(触发入参) 与 ctx.nodes(上游输出)，并调用宿主桥 env/crypto/time，返回结果。",
+  "nodes": [
+    {
+      "id": "seed",
+      "type": "transform",
+      "label": "透传触发入参",
+      "config": {
+        "_position": { "x": 60, "y": 40 },
+        "output": {
+          "a": "{{trigger.a}}",
+          "b": "{{trigger.b}}",
+          "name": "{{trigger.name}}"
+        }
+      }
+    },
+    {
+      "id": "py",
+      "type": "code",
+      "label": "Python 处理逻辑",
+      "config": {
+        "_position": { "x": 60, "y": 200 },
+        "language": "python",
+        "code": "def execute(ctx):\n    body = ctx.body or {}\n    nodes = ctx.nodes or {}\n    seed = nodes.get('seed') or {}\n    # 触发入参既可从 ctx.body 读，也可从上游 seed 读\n    name = body.get('name') or seed.get('name') or 'onebase'\n    def as_num(v):\n        try:\n            return float(v)\n        except (TypeError, ValueError):\n            return 0.0\n    a = as_num(body.get('a', seed.get('a')))\n    b = as_num(body.get('b', seed.get('b')))\n    total = a + b\n    if total == int(total):\n        total = int(total)\n    return {\n        'result': {\n            'engine': 'python',\n            'sum': total,\n            'greeting': 'hello ' + str(name),\n            'sha256_of_name': crypto.sha256(str(name)),\n            'has_api_token': bool(env.get('API_TOKEN')),\n            'server_ts_ms': time.now_ms(),\n            'echo_body': body\n        }\n    }\n"
+      }
+    },
+    {
+      "id": "resp",
+      "type": "response",
+      "label": "返回结果",
+      "config": {
+        "_position": { "x": 60, "y": 360 },
+        "body": "{{py.result}}",
+        "status_code": 200
+      }
+    }
+  ],
+  "edges": [
+    { "from": "seed", "to": "py" },
+    { "from": "py", "to": "resp" }
+  ]
+}

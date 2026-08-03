@@ -29,11 +29,10 @@ const ACTION_WRITE: &str = "ALL";
 
 /// 从扩展中拿到 `database_id`，没有则报错（说明前端忘记带 `X-Database-Id` 头）。
 fn require_database_id(opt: Option<Extension<CurrentDatabaseId>>) -> Result<i32> {
-    opt.map(|Extension(CurrentDatabaseId(id))| id).ok_or_else(|| {
-        AppError::InvalidQuery(
-            "缺少 X-Database-Id 请求头，无法定位目标数据库".to_string(),
-        )
-    })
+    opt.map(|Extension(CurrentDatabaseId(id))| id)
+        .ok_or_else(|| {
+            AppError::InvalidQuery("缺少 X-Database-Id 请求头，无法定位目标数据库".to_string())
+        })
 }
 
 // ---------- 标识符校验与转义 ----------
@@ -477,10 +476,10 @@ pub async fn drop_index(
     let sql = format!(
         "DROP INDEX {concurrent}{ie}{schema}.{name}{cascade}",
         concurrent = if concurrent { "CONCURRENTLY " } else { "" },
-        ie         = if if_exists { "IF EXISTS " } else { "" },
-        schema     = quote_ident(&schema),
-        name       = quote_ident(&index_name),
-        cascade    = if cascade { " CASCADE" } else { "" },
+        ie = if if_exists { "IF EXISTS " } else { "" },
+        schema = quote_ident(&schema),
+        name = quote_ident(&index_name),
+        cascade = if cascade { " CASCADE" } else { "" },
     );
 
     tracing::info!("删除索引: {}", sql);

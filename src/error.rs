@@ -23,6 +23,9 @@ pub enum AppError {
     #[error("禁止访问: {0}")]
     Forbidden(String),
 
+    #[error("需要修改密码: {0}")]
+    PasswordChangeRequired(String),
+
     #[error("资源未找到: {0}")]
     NotFound(String),
 
@@ -45,6 +48,7 @@ const CODE_VALIDATION: &str = "validation_error";
 const CODE_INVALID_JSON: &str = "invalid_json";
 const CODE_UNAUTHORIZED: &str = "unauthorized";
 const CODE_FORBIDDEN: &str = "forbidden";
+const CODE_PASSWORD_CHANGE_REQUIRED: &str = "password_change_required";
 const CODE_NOT_FOUND: &str = "not_found";
 const CODE_INTERNAL: &str = "internal_error";
 const CODE_TOO_MANY_REQUESTS: &str = "too_many_requests";
@@ -60,6 +64,7 @@ const CODE_DB_RAISE: &str = "function_raised";
 const CODE_DB_SCHEMA_MISSING: &str = "schema_missing";
 const CODE_DB_POOL_TIMEOUT: &str = "pool_timeout";
 const CODE_DB_POOL_CLOSED: &str = "pool_closed";
+const CODE_DB_STALE_PLAN: &str = "stale_cached_plan";
 const CODE_DB_GENERIC: &str = "database_error";
 
 /// 数据库函数 `RAISE EXCEPTION` 的消息回传给客户端时的最大字符数。
@@ -87,12 +92,13 @@ impl IntoResponse for AppError {
             AppError::Unauthorized(ref msg) => {
                 (StatusCode::UNAUTHORIZED, msg.clone(), CODE_UNAUTHORIZED)
             }
-            AppError::Forbidden(ref msg) => {
-                (StatusCode::FORBIDDEN, msg.clone(), CODE_FORBIDDEN)
-            }
-            AppError::NotFound(ref msg) => {
-                (StatusCode::NOT_FOUND, msg.clone(), CODE_NOT_FOUND)
-            }
+            AppError::Forbidden(ref msg) => (StatusCode::FORBIDDEN, msg.clone(), CODE_FORBIDDEN),
+            AppError::PasswordChangeRequired(ref msg) => (
+                StatusCode::FORBIDDEN,
+                msg.clone(),
+                CODE_PASSWORD_CHANGE_REQUIRED,
+            ),
+            AppError::NotFound(ref msg) => (StatusCode::NOT_FOUND, msg.clone(), CODE_NOT_FOUND),
             AppError::Internal(ref msg) => {
                 tracing::error!(error.kind = "internal", "内部错误: {}", msg);
                 (
@@ -135,7 +141,7 @@ impl IntoResponse for AppError {
 /// - **不向客户端泄露表名 / 列名 / SQL**：响应只回固定文案 + 稳定 code，
 ///   schema 信息只在服务端日志里出现。
 /// - **结构化字段优先**：`error.kind` / `sqlstate` / `table` / `constraint` 走
-///   `tracing` 的 structured field，被 `JsonLogFormatter` 平铺到 JSON
+///   `tracing` 的 structured field，被 `OnebaseJsonFormatter` 平铺到 JSON
 ///   根字段，ELK 上能直接 `error.kind:db_error AND sqlstate:23505`。
 fn classify_db_error(e: &sqlx::Error) -> (StatusCode, String, &'static str) {
     match e {
@@ -252,6 +258,29 @@ fn classify_db_error(e: &sqlx::Error) -> (StatusCode, String, &'static str) {
                         CODE_DB_RAISE,
                     )
                 }
+                // 0A000 feature_not_supported —— PostgreSQL 在「预处理计划的结果类型
+                // 与表当前结构不一致」时抛此码，message 为 "cached plan must not change
+                // result type"。成因：租户库 DDL 改表后，连接上残留的旧 plan 被复用。
+                // 我们已在 pool_manager 关掉 sqlx 的 statement cache，正常不再触发；但
+                // PL/pgSQL 函数自身的计划缓存不受该开关控制，仍可能偶发。此时**换条连接
+                // 重试即可自愈**，故映射为可重试的 503（而非不透明的 500）。
+                //
+                // 只认带 "cached plan" 的 0A000；其它 0A000（真正的功能不支持）继续走
+                // 下面的通用 500 分支。
+                "0A000" if db_err.message().contains("cached plan") => {
+                    tracing::warn!(
+                        error.kind = "db_stale_plan",
+                        sqlstate = %sqlstate,
+                        table = %table,
+                        "预处理计划过期（表结构变更后残留旧 plan），建议重试: {}",
+                        db_err.message()
+                    );
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "数据库结构刚发生变更，请重试".to_string(),
+                        CODE_DB_STALE_PLAN,
+                    )
+                }
                 // undefined_table / undefined_column / undefined_object —— 几乎一定是
                 // 部署 / 迁移漏跑的产物，业务里不应该出现。打到 ERROR 让告警捞出来。
                 "42P01" | "42703" | "42704" => {
@@ -286,6 +315,10 @@ fn classify_db_error(e: &sqlx::Error) -> (StatusCode, String, &'static str) {
             }
         }
         sqlx::Error::PoolTimedOut => {
+            // 兜底埋点：这里拿不到具体是哪个池，但能保证「池超时」这个信号一定出现在
+            // /api/monitor/pool-health 上，而不是只躺在日志里。带 database_id 的精确
+            // 归因由 workflow_engine 的 acquire_traced 负责。
+            crate::pool_metrics::record_timeout(None, "http");
             tracing::error!(error.kind = "pool_timeout", "数据库连接池超时");
             (
                 StatusCode::SERVICE_UNAVAILABLE,

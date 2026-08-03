@@ -36,9 +36,10 @@ export default function Notification({ message, type, onClose }: NotificationPro
 
   return (
     <div
-      className={`fixed top-4 right-4 z-50 transition-all duration-300 ${
+      className={`fixed top-4 z-50 transition-all duration-300 ${
         isVisible ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0'
       }`}
+      style={{ right: 'calc(1rem + var(--ai-panel-offset, 0px))' }}
     >
       <div className={`card ${bgMap[type]} border shadow-lg max-w-md`}>
         <div className="p-4 flex items-start space-x-3">

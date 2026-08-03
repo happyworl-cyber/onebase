@@ -27,20 +27,30 @@ export default function DashboardLayout({
     // 检查用户和项目
     const userStr = localStorage.getItem('current_user')
     const tenantStr = localStorage.getItem('current_tenant')
-    
+
     if (userStr) {
-      const user = JSON.parse(userStr)
-      
+      let user: any
+      try {
+        user = JSON.parse(userStr)
+      } catch {
+        user = null
+      }
+
       // 超级管理员未选择项目时，跳转到平台管理页面
-      if (user.is_superadmin && !tenantStr) {
+      if (user?.is_superadmin && !tenantStr) {
         router.push('/platform')
         return
       }
-      
-      // 普通用户如果没有项目信息，可能需要后端分配默认项目
-      // 这里暂时允许访问
+
+      // W1 spec §3.2.8：非超管不再允许停留在 /dashboard，统一进 /workspace 让
+      // picker 派发。/dashboard/* 在 W1 保留作为兼容层（旧链接仍能工作），但入口
+      // 一律走 /workspace。等 W2 物理迁移完后，本守卫升级为彻底 404。
+      if (user && !user.is_superadmin) {
+        router.push('/workspace')
+        return
+      }
     }
-    
+
     setAuthorized(true)
   }, [router])
 

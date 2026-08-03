@@ -120,18 +120,21 @@ pub async fn list_rules(State(pool): State<PgPool>) -> Result<Json<serde_json::V
     .fetch_all(&pool)
     .await?;
 
-    let rules: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "id": r.get::<i32, _>("id"),
-            "tenant_id": r.get::<Option<i32>, _>("tenant_id"),
-            "name": r.get::<String, _>("name"),
-            "rule_type": r.get::<String, _>("rule_type"),
-            "match_pattern": r.get::<Option<String>, _>("match_pattern"),
-            "max_requests": r.get::<i32, _>("max_requests"),
-            "window_seconds": r.get::<i32, _>("window_seconds"),
-            "is_active": r.get::<bool, _>("is_active"),
+    let rules: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<i32, _>("id"),
+                "tenant_id": r.get::<Option<i32>, _>("tenant_id"),
+                "name": r.get::<String, _>("name"),
+                "rule_type": r.get::<String, _>("rule_type"),
+                "match_pattern": r.get::<Option<String>, _>("match_pattern"),
+                "max_requests": r.get::<i32, _>("max_requests"),
+                "window_seconds": r.get::<i32, _>("window_seconds"),
+                "is_active": r.get::<bool, _>("is_active"),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({ "data": rules })))
 }
@@ -146,7 +149,11 @@ pub async fn create_rule(
     validate_max_requests(body.max_requests)?;
     let window = body.window_seconds.unwrap_or(60);
     validate_window_seconds(window)?;
-    validate_rule_shape(&body.rule_type, body.tenant_id, body.match_pattern.as_deref())?;
+    validate_rule_shape(
+        &body.rule_type,
+        body.tenant_id,
+        body.match_pattern.as_deref(),
+    )?;
 
     let row = sqlx::query(
         "INSERT INTO management.rate_limit_rules (tenant_id, name, rule_type, match_pattern, max_requests, window_seconds) \
@@ -163,7 +170,9 @@ pub async fn create_rule(
 
     notify_limiter(limiter.as_ref().map(|Extension(l)| l)).await;
 
-    Ok(Json(json!({ "data": { "id": row.get::<i32, _>("id") }, "message": "创建成功" })))
+    Ok(Json(
+        json!({ "data": { "id": row.get::<i32, _>("id") }, "message": "创建成功" }),
+    ))
 }
 
 /// PATCH /api/admin/rate-limit-rules/:id
@@ -187,7 +196,7 @@ pub async fn update_rule(
             max_requests = COALESCE($4, max_requests), \
             window_seconds = COALESCE($5, window_seconds), \
             is_active = COALESCE($6, is_active) \
-         WHERE id = $1"
+         WHERE id = $1",
     )
     .bind(id)
     .bind(&body.name)

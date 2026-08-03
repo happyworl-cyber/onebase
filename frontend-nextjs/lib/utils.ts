@@ -91,7 +91,12 @@ export async function copyToClipboard(text: string): Promise<boolean> {
 export function pgFunctionIdentity(fn: {
   schema_name: string
   function_name: string
-  argument_types: string
+  /**
+   * `pg_get_function_arguments` 在无参函数上返回空串；后端把它建模成
+   * `Option<String>` 之后传到前端可能是 null。这里用宽松类型 + `?? ''`
+   * 兜底，避免重载页面调用方因为 null 值塞不进 string 而报 TS 错。
+   */
+  argument_types: string | null | undefined
 }): string {
   return `${fn.schema_name}.${fn.function_name}(${fn.argument_types ?? ''})`
 }

@@ -4,8 +4,8 @@
 //! 行为对齐 Supabase / PostgREST 的 `rpc/<function_name>` 语义；与本平台
 //! Auto API 保持同款 URL 形态——项目 ID 直接出现在路径里：
 //!
-//!   `POST  /api/v1/:database_id/rpc/:fn_name`
-//!   `GET   /api/v1/:database_id/rpc/:fn_name`
+//!   `POST  /api/v1/:database_slug/rpc/:fn_name`
+//!   `GET   /api/v1/:database_slug/rpc/:fn_name`
 //!
 //! 这样调用方组路径只需要一套规则（`/api/v1/{project_id}/...`），不再像旧版
 //! `/rest/v1/rpc/...` 那样需要额外读 `X-Database-Id` 头。
@@ -19,8 +19,8 @@
 //!     GET : `Accept-Profile`  header > `?schema=` > 默认 `public`
 //! - `Prefer: params=single-object` → 把整段 body 作为单个 jsonb 实参传入（仅 POST）
 //!
-//! 数据隔离：路径中的 `database_id` 是**唯一权威源**——`rpc_auth_middleware` 会
-//! 据此覆盖 `X-Database-Id` 头，再交给 `dynamic_db_middleware` 切池。即使调用方
+//! 数据隔离：路径中的 `database_slug` 是**唯一权威源**——`rpc_auth_middleware` 会
+//! 先解析成内部 `database_id` 并覆盖 `X-Database-Id` 头，再交给 `dynamic_db_middleware` 切池。即使调用方
 //! 自带了不一致的 `X-Database-Id`，也以 URL 路径为准（API Key 与路径不匹配会
 //! 直接 401，避免跨项目越权）。
 
@@ -32,8 +32,8 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use sqlx::{Column, PgPool, Postgres, Row, Transaction};
+use serde_json::Value;
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::HashMap;
 
 use crate::auth::{verify_token, Claims};
@@ -77,18 +77,25 @@ struct FunctionOverload {
     arg_types: Vec<String>,
 }
 
-/// `POST /api/v1/:database_id/rpc/:fn_name` —— 主要入口，最贴合 supabase-js 默认行为。
+/// `POST /api/v1/:database_slug/rpc/:fn_name` —— 主要入口，最贴合 supabase-js 默认行为。
 pub async fn execute_rpc(
     State(main_pool): State<PgPool>,
     dynamic_pool: Option<Extension<PgPool>>,
     redis: Option<Extension<RedisManager>>,
     Extension(subject): Extension<RpcAuthSubject>,
-    Path((database_id, fn_name)): Path<(i32, String)>,
+    Path((_database_slug, fn_name)): Path<(String, String)>,
     Query(rpc_query): Query<RpcQuery>,
     headers: HeaderMap,
     body: Option<Json<Value>>,
 ) -> Result<(StatusCode, Json<Value>), AppError> {
-    let body_value = body.map(|Json(v)| v).unwrap_or(Value::Object(Default::default()));
+    let database_id = headers
+        .get("X-Database-Id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<i32>().ok())
+        .ok_or_else(|| AppError::InvalidQuery("缺少 X-Database-Id 请求头".to_string()))?;
+    let body_value = body
+        .map(|Json(v)| v)
+        .unwrap_or(Value::Object(Default::default()));
     let body_obj: serde_json::Map<String, Value> = match body_value {
         Value::Object(map) => map,
         Value::Null => serde_json::Map::new(),
@@ -114,6 +121,7 @@ pub async fn execute_rpc(
         dynamic_pool.as_ref().map(|ext| &ext.0),
         redis.as_ref().map(|ext| &ext.0),
         &subject,
+        Some(&headers),
         database_id,
         &fn_name,
         schema,
@@ -124,7 +132,7 @@ pub async fn execute_rpc(
     .await
 }
 
-/// `GET /api/v1/:database_id/rpc/:fn_name` —— 用于 IMMUTABLE / STABLE 函数 / CDN 缓存场景。
+/// `GET /api/v1/:database_slug/rpc/:fn_name` —— 用于 IMMUTABLE / STABLE 函数 / CDN 缓存场景。
 ///
 /// 形参从 query string 拿；保留键（`schema`/`select`/...）不进入实参列表。
 /// 每个 value 先尝试当 JSON 解析（数字、bool、null、数组/对象都自然识别），
@@ -134,14 +142,22 @@ pub async fn execute_rpc_get(
     dynamic_pool: Option<Extension<PgPool>>,
     redis: Option<Extension<RedisManager>>,
     Extension(subject): Extension<RpcAuthSubject>,
-    Path((database_id, fn_name)): Path<(i32, String)>,
+    Path((_database_slug, fn_name)): Path<(String, String)>,
     Query(raw_query): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<Value>), AppError> {
+    let database_id = headers
+        .get("X-Database-Id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<i32>().ok())
+        .ok_or_else(|| AppError::InvalidQuery("缺少 X-Database-Id 请求头".to_string()))?;
     let schema_override = raw_query.get("schema").cloned();
     let mut args = serde_json::Map::new();
     for (key, raw_value) in raw_query.into_iter() {
-        if RESERVED_QUERY_KEYS.iter().any(|r| r.eq_ignore_ascii_case(&key)) {
+        if RESERVED_QUERY_KEYS
+            .iter()
+            .any(|r| r.eq_ignore_ascii_case(&key))
+        {
             continue;
         }
         args.insert(key, parse_query_value(&raw_value));
@@ -159,6 +175,7 @@ pub async fn execute_rpc_get(
         dynamic_pool.as_ref().map(|ext| &ext.0),
         redis.as_ref().map(|ext| &ext.0),
         &subject,
+        Some(&headers),
         database_id,
         &fn_name,
         schema,
@@ -196,6 +213,7 @@ pub async fn execute_rpc_inner(
         dynamic_pool,
         redis,
         &subject,
+        None,
         database_id,
         fn_name,
         schema.to_string(),
@@ -208,11 +226,16 @@ pub async fn execute_rpc_inner(
 }
 
 /// 共享执行核心：标识符校验 → ACL 校验 → 函数形态查询 → 构 SQL → 执行 → 形态拆包。
+///
+/// `headers` 仅用于喂给 [`resolve_rpc_session_gucs`] 决定是否走 session hook（API Key
+/// opt-in），不会被这里的鉴权 / 形态查询路径使用。scheduler 等无 HTTP 上下文的调用方
+/// 直接传 `None`。
 async fn run_rpc(
     main_pool: &PgPool,
     dynamic_pool: Option<&PgPool>,
     redis: Option<&RedisManager>,
     subject: &RpcAuthSubject,
+    headers: Option<&HeaderMap>,
     database_id: i32,
     fn_name: &str,
     schema: String,
@@ -224,15 +247,7 @@ async fn run_rpc(
     let fn_ident = QueryParams::sanitize_identifier(fn_name)?;
 
     // ACL 校验必须在最早期执行：避免函数存在性 / 形态信息被无权限的调用方探测出来。
-    enforce_rpc_permission(
-        main_pool,
-        redis,
-        subject,
-        database_id,
-        &schema,
-        &fn_ident,
-    )
-    .await?;
+    enforce_rpc_permission(main_pool, redis, subject, database_id, &schema, &fn_ident).await?;
 
     // 优先用租户库，没注入时落到管理库——与 /query、/transaction 同策略。
     let pool: &PgPool = dynamic_pool.unwrap_or(main_pool);
@@ -341,8 +356,12 @@ async fn run_rpc(
     //
     // 设计要点：项目 ID 列表必须由**服务端**从 API Key 的 permissions 读取，
     // 严禁让客户端通过 header / body 自带——否则 `assert_project_access` 形同虚设。
+    // 先在管理库池上把 session GUC 解析完（含 session_rules 查询），再开租户事务。
+    // 顺序不能反：否则会在持有租户连接的同时去抢管理库连接，管理库打满时形成跨池连锁耗尽。
+    let session_gucs =
+        resolve_rpc_session_gucs(main_pool, database_id, subject, headers).await;
     let mut tx: Transaction<'_, Postgres> = pool.begin().await.map_err(AppError::Database)?;
-    inject_rpc_session_context(&mut tx, subject).await?;
+    apply_rpc_session_gucs(&mut tx, &session_gucs).await?;
 
     let mut q = sqlx::query(&sql);
     for (v, cast_type) in &bind_values {
@@ -703,8 +722,7 @@ fn build_response_payload(
         return Value::Null;
     }
 
-    let json_rows: Vec<serde_json::Map<String, Value>> =
-        rows.iter().map(row_to_map).collect();
+    let json_rows: Vec<serde_json::Map<String, Value>> = rows.iter().map(row_to_map).collect();
 
     if shape.returns_set {
         return Value::Array(json_rows.into_iter().map(Value::Object).collect());
@@ -729,40 +747,14 @@ fn build_response_payload(
 /// 把单行转换为 JSON map。延用项目内其他 handler 同款的"逐类型 try_get"
 /// 探测策略——sqlx 没有提供 row → JSON 的官方通道，逐类型尝试是最稳的兜底。
 fn row_to_map(row: &sqlx::postgres::PgRow) -> serde_json::Map<String, Value> {
-    let mut obj = serde_json::Map::new();
-    for column in row.columns() {
-        let key = column.name().to_string();
-        let idx = column.ordinal();
-
-        let value: Value = if let Ok(v) = row.try_get::<serde_json::Value, _>(idx) {
-            v
-        } else if let Ok(v) = row.try_get::<String, _>(idx) {
-            Value::String(v)
-        } else if let Ok(v) = row.try_get::<i32, _>(idx) {
-            json!(v)
-        } else if let Ok(v) = row.try_get::<i64, _>(idx) {
-            json!(v)
-        } else if let Ok(v) = row.try_get::<f64, _>(idx) {
-            json!(v)
-        } else if let Ok(v) = row.try_get::<bool, _>(idx) {
-            Value::Bool(v)
-        } else if let Ok(v) = row.try_get::<Option<String>, _>(idx) {
-            v.map(Value::String).unwrap_or(Value::Null)
-        } else if let Ok(v) = row.try_get::<Option<i32>, _>(idx) {
-            v.map(|n| json!(n)).unwrap_or(Value::Null)
-        } else if let Ok(v) = row.try_get::<Option<i64>, _>(idx) {
-            v.map(|n| json!(n)).unwrap_or(Value::Null)
-        } else if let Ok(v) = row.try_get::<Option<f64>, _>(idx) {
-            v.map(|n| json!(n)).unwrap_or(Value::Null)
-        } else if let Ok(v) = row.try_get::<Option<bool>, _>(idx) {
-            v.map(Value::Bool).unwrap_or(Value::Null)
-        } else {
-            Value::Null
-        };
-
-        obj.insert(key, value);
+    match crate::pg_row_json::pg_row_to_json(row) {
+        Value::Object(map) => map,
+        other => {
+            let mut map = serde_json::Map::new();
+            map.insert("_value".to_string(), other);
+            map
+        }
     }
-    obj
 }
 
 /// 把 JSON value 绑定到 sqlx Query。
@@ -846,7 +838,10 @@ fn bind_json_array<'q>(
             query.bind(v)
         }
         Some("float4[]") | Some("real[]") => {
-            let v: Vec<f32> = items.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect();
+            let v: Vec<f32> = items
+                .iter()
+                .map(|x| x.as_f64().unwrap_or(0.0) as f32)
+                .collect();
             query.bind(v)
         }
         Some("float8[]") | Some("double precision[]") => {
@@ -914,11 +909,11 @@ pub enum RpcAuthSubject {
     ApiKey(ApiKeyAuth),
 }
 
-/// 从 `/api/v1/{database_id}/rpc/{fn_name}` 形态的 URL 路径里抠出 database_id。
+/// 从 `/api/v1/{database_slug}/rpc/{fn_name}` 形态的 URL 路径里抠出 database 段。
 ///
 /// 与 `rbac_middleware::extract_auto_api_parts` 同款做法——按段切分，校验前缀
-/// 与 `rpc` 段固定位置，再 parse 数字。中间件用它做"路径权威"语义。
-fn extract_rpc_database_id(path: &str) -> Option<i32> {
+/// 与 `rpc` 段固定位置。中间件里再决定这是数字 id 还是 slug。
+fn extract_rpc_database_segment(path: &str) -> Option<String> {
     let mut iter = path.trim_start_matches('/').split('/');
     if iter.next()? != "api" {
         return None;
@@ -926,20 +921,69 @@ fn extract_rpc_database_id(path: &str) -> Option<i32> {
     if iter.next()? != "v1" {
         return None;
     }
-    let db_id_str = iter.next()?;
+    let db_seg = iter.next()?.to_string();
     if iter.next()? != "rpc" {
         return None;
     }
-    db_id_str.parse::<i32>().ok()
+    Some(db_seg)
+}
+
+async fn resolve_rpc_database_id_for_user(
+    pool: &PgPool,
+    claims: &Claims,
+    db_seg: &str,
+) -> Result<i32, AppError> {
+    if let Ok(id) = db_seg.parse::<i32>() {
+        return Ok(id);
+    }
+    let rows = if claims.is_superadmin {
+        sqlx::query(
+            "SELECT id FROM management.tenant_databases WHERE slug = $1 AND is_active = true ORDER BY id ASC LIMIT 2",
+        )
+        .bind(db_seg)
+        .fetch_all(pool)
+        .await
+        .map_err(AppError::Database)?
+    } else {
+        sqlx::query(
+            r#"
+            SELECT td.id
+            FROM management.tenant_databases td
+            JOIN management.user_tenants ut
+              ON ut.tenant_id = td.tenant_id
+             AND ut.user_id = $1
+             AND ut.is_active = true
+            WHERE td.slug = $2 AND td.is_active = true
+            ORDER BY td.id ASC
+            LIMIT 2
+            "#,
+        )
+        .bind(claims.sub)
+        .bind(db_seg)
+        .fetch_all(pool)
+        .await
+        .map_err(AppError::Database)?
+    };
+    match rows.len() {
+        0 => Err(AppError::NotFound(format!(
+            "database_slug '{}' 不存在或无权访问",
+            db_seg
+        ))),
+        1 => Ok(rows[0].get("id")),
+        _ => Err(AppError::InvalidQuery(format!(
+            "database_slug '{}' 存在歧义，请使用 API Key 或确保租户唯一",
+            db_seg
+        ))),
+    }
 }
 
 /// RPC 专属认证中间件：
-/// 1. 从 URL 路径抠出 `database_id`（`/api/v1/:database_id/rpc/:fn_name`），
+/// 1. 从 URL 路径抠出 `database_slug`（`/api/v1/:database_slug/rpc/:fn_name`），
 ///    并把它作为权威值覆盖到 `X-Database-Id` 请求头——后续的
 ///    `dynamic_db_middleware` 据此切池，调用方自带的同名头会被忽略。
 /// 2. 优先尝试 JWT（`Authorization: Bearer <jwt>`，`<jwt>` 不以 `cr_` 开头）。
 /// 3. 兜底 API Key：`Authorization: Bearer cr_*` 或 Supabase 风格的 `apikey: cr_*`；
-///    Key 绑定的 `database_id` 必须与路径一致，否则 401（防止用 A 库的 key 跨调到 B 库）。
+///    Key 绑定数据库必须与路径一致，否则 401（防止跨库调用）。
 /// 4. 把通过校验的主体注入 `RpcAuthSubject` request extension 供 handler 使用。
 ///
 /// 注意：本中间件必须挂在 `dynamic_db_middleware` 的外层（先于它执行），
@@ -949,16 +993,10 @@ pub async fn rpc_auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Result<Response, AppError> {
-    // 路径提取：路由在 main.rs 已限定为 i32，这里再校验一次只是防御（可挡住未来
-    // 路由形态变更后被错挂的情况）。提取失败直接 500，不暴露内部细节。
-    let path_db_id = extract_rpc_database_id(req.uri().path()).ok_or_else(|| {
-        AppError::Internal("RPC 路径未匹配 /api/v1/:database_id/rpc/:fn_name".to_string())
+    // 路径提取：统一拿第三段，后续再判断是数字 id 还是 slug。
+    let path_db_seg = extract_rpc_database_segment(req.uri().path()).ok_or_else(|| {
+        AppError::Internal("RPC 路径未匹配 /api/v1/:database_slug/rpc/:fn_name".to_string())
     })?;
-
-    // 路径权威：覆盖任何调用方自带的 X-Database-Id 头，避免出现"路径选 A 库 / 头选 B 库"的歧义。
-    if let Ok(v) = HeaderValue::from_str(&path_db_id.to_string()) {
-        req.headers_mut().insert("X-Database-Id", v);
-    }
 
     let auth_header_str = req
         .headers()
@@ -991,9 +1029,14 @@ pub async fn rpc_auth_middleware(
                     let revoked: bool = row.try_get("revoked").unwrap_or(false);
                     let expires_at: Option<chrono::DateTime<chrono::Utc>> =
                         row.try_get("expires_at").ok();
-                    let active = !revoked
-                        && expires_at.map(|t| t > chrono::Utc::now()).unwrap_or(false);
+                    let active =
+                        !revoked && expires_at.map(|t| t > chrono::Utc::now()).unwrap_or(false);
                     if active {
+                        let path_db_id =
+                            resolve_rpc_database_id_for_user(&pool, &claims, &path_db_seg).await?;
+                        if let Ok(v) = HeaderValue::from_str(&path_db_id.to_string()) {
+                            req.headers_mut().insert("X-Database-Id", v);
+                        }
                         req.extensions_mut().insert(claims.clone());
                         req.extensions_mut().insert(RpcAuthSubject::User(claims));
                         return Ok(next.run(req).await);
@@ -1030,16 +1073,27 @@ pub async fn rpc_auth_middleware(
         .await
         .map_err(|e| AppError::Internal(format!("校验 API Key 失败: {}", e)))?;
 
-        let row = row
-            .ok_or_else(|| AppError::Unauthorized("API Key 无效或已过期".to_string()))?;
+        let row = row.ok_or_else(|| AppError::Unauthorized("API Key 无效或已过期".to_string()))?;
         let key_database_id: i32 = row.get("database_id");
         let permissions: Value = row.get("permissions");
 
-        // 路径权威：URL 路径里的 database_id 必须与 key 绑定的库一致——否则就
-        // 是"用 A 库的 key 试图调用 B 库的 RPC"，直接 401，不给探测窗口。
-        if key_database_id != path_db_id {
+        // 路径权威：URL 路径必须与 key 绑定库一致（支持 id/slug 两种写法）。
+        let key_path_match = if let Ok(id) = path_db_seg.parse::<i32>() {
+            key_database_id == id
+        } else {
+            let row = sqlx::query(
+                "SELECT 1 FROM management.tenant_databases WHERE id = $1 AND slug = $2 AND is_active = true",
+            )
+            .bind(key_database_id)
+            .bind(&path_db_seg)
+            .fetch_optional(&pool)
+            .await
+            .map_err(AppError::Database)?;
+            row.is_some()
+        };
+        if !key_path_match {
             return Err(AppError::Unauthorized(
-                "URL 中的 database_id 与 API Key 绑定的数据库不一致".to_string(),
+                "URL 中的 database_slug 与 API Key 绑定的数据库不一致".to_string(),
             ));
         }
 
@@ -1058,6 +1112,9 @@ pub async fn rpc_auth_middleware(
                 database_id: key_database_id,
                 permissions,
             }));
+        if let Ok(v) = HeaderValue::from_str(&key_database_id.to_string()) {
+            req.headers_mut().insert("X-Database-Id", v);
+        }
         return Ok(next.run(req).await);
     }
 
@@ -1081,8 +1138,16 @@ async fn enforce_rpc_permission(
 
     match subject {
         RpcAuthSubject::User(claims) => {
-            enforce_rpc_user(main_pool, redis, claims, database_id, schema, fn_name, &resource)
-                .await
+            enforce_rpc_user(
+                main_pool,
+                redis,
+                claims,
+                database_id,
+                schema,
+                fn_name,
+                &resource,
+            )
+            .await
         }
         RpcAuthSubject::ApiKey(key) => enforce_rpc_api_key(key, schema, &resource).await,
     }
@@ -1167,7 +1232,7 @@ async fn enforce_rpc_user(
 
 /// 把调用方身份写到事务局部 GUC，供业务函数 / RLS POLICY 读取。
 ///
-/// 注入两个变量：
+/// 默认注入两个变量：
 ///
 /// - `app.current_user_id`：JWT 调用 = `claims.sub`；API Key 调用 = `"0"`。
 ///   语义与 `auto_api_handlers::inject_session_user_id` 一致，业务库里的
@@ -1180,38 +1245,130 @@ async fn enforce_rpc_user(
 ///   的实现思路）。值序列化为 `"4,7,12"` 形态，业务侧 `string_to_array(_, ',')::int[]`
 ///   即可使用。
 ///
-/// 安全约束：`project_ids` **必须**只来自服务端可信的 API Key permissions JSON——
-/// **绝不**接受请求 header / body 自带的项目列表，否则 caller 可以自我授权，
+/// 安全基线：**绝不**从客户端 header / body 自取项目列表或用户身份——除非该 API Key
+/// 自身在 `permissions.session_hooks` 显式 opt-in（见下）。否则 caller 可以自我授权，
 /// `assert_project_access` 风格的护栏完全失效。
-async fn inject_rpc_session_context(
-    tx: &mut Transaction<'_, Postgres>,
+///
+/// ── 可选：session hook 覆盖（API Key + 项目级 rules，opt-in）──
+///
+/// 两个来源合并写入 GUC，优先级如下（数字越大优先级越高，**后写覆盖前写**）：
+///
+/// 1. **默认 GUC**：`app.current_user_id` / `app.project_ids`（始终写）。
+/// 2. **项目级 session_rules**：`management.session_rules WHERE database_id=? AND is_active=true`
+///    按 `id ASC` 合并（同 GUC 时后规则覆盖前规则）。这是为"一个项目下多把 API Key
+///    共享同一套头映射"设计的：在前端"会话规则"页配置一次，所有该项目 API Key
+///    自动生效，无需挨个 key 改 permissions。
+/// 3. **API Key 级 hooks**：`api_keys.permissions.session_hooks`，最高优先级，
+///    覆盖 1 / 2。给"个别 key 需要例外行为"的场景留口子。
+///
+/// 触发条件：
+/// - 只在 ApiKey 主体下走 hook 路径（JWT 已是可信用户身份，不允许被头覆盖）。
+/// - 必须有 `headers`：所有 hook 都从 header 读值，没头自然没法 apply（scheduler
+///   等无 HTTP 上下文路径走 `headers=None`，只拿默认 GUC，行为不变）。
+///
+/// 安全设计：
+/// - 所有 hook 配置都在 server 端 JSON（permissions 或 session_rules.hooks）里，
+///   客户端无法修改；headers 只提供 _value_，不提供 _binding_。
+/// - GUC 名走 `is_valid_guc_name` 白名单，强制 `app.*` 前缀，杜绝把 `role` /
+///   `search_path` 这种敏感 GUC 写入。
+/// - 解析容错（坏条目静默丢弃）：管理界面侧已有严格校验把脏数据挡在录入时，
+///   这里 fail-open，避免一条管理面板手滑阻塞整个项目的业务调用。
+///
+/// ## 连接池：先解析、后开事务
+///
+/// 本步骤拆成两段，是为了**避免跨池占用**：解析 GUC 需要读**管理库池**
+/// （`session_rules`），而 set_config 写在**租户池的事务**里。如果在持有租户事务的
+/// 同时再去抢管理库连接，管理库被打满时租户连接会一直被挂住，形成连锁耗尽。
+/// 因此 [`resolve_rpc_session_gucs`] 只碰管理库池、在 `pool.begin()` **之前**跑完，
+/// [`apply_rpc_session_gucs`] 只碰租户事务、不再触碰管理库池。
+async fn resolve_rpc_session_gucs(
+    main_pool: &PgPool,
+    database_id: i32,
     subject: &RpcAuthSubject,
-) -> Result<(), AppError> {
-    let (user_id, project_ids_csv) = match subject {
+    headers: Option<&HeaderMap>,
+) -> Vec<(String, String)> {
+    let (default_user_id, default_project_ids_csv) = match subject {
         RpcAuthSubject::User(claims) => (claims.sub.to_string(), String::new()),
-        RpcAuthSubject::ApiKey(key) => (
-            "0".to_string(),
-            project_ids_from_api_key(&key.permissions),
-        ),
+        RpcAuthSubject::ApiKey(key) => {
+            ("0".to_string(), project_ids_from_api_key(&key.permissions))
+        }
     };
 
-    sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
-        .bind(&user_id)
-        .execute(&mut **tx)
-        .await
-        .map_err(AppError::Database)?;
+    // 默认两条 GUC；hook 命中的同名 GUC 会原地覆盖，未命中的新 GUC 追加在后面，
+    // 写入顺序对业务函数语义无影响（set_config 之间互不依赖），但保留稳定顺序便于
+    // 看 debug 日志时排查。
+    let mut gucs: Vec<(String, String)> = vec![
+        ("app.current_user_id".to_string(), default_user_id),
+        ("app.project_ids".to_string(), default_project_ids_csv),
+    ];
 
-    sqlx::query("SELECT set_config('app.project_ids', $1, true)")
-        .bind(&project_ids_csv)
-        .execute(&mut **tx)
+    // 仅 API Key 主体 + 有请求头时才合并 hooks——其它情况一律保持默认 GUC。
+    if let (RpcAuthSubject::ApiKey(key), Some(h)) = (subject, headers) {
+        // 项目级 rules：靠 idx_session_rules_active partial index 走索引扫，热路径
+        // 期望命中数 0~few，单查询足以；失败时降级到"只走 api_key.hooks + 默认"，
+        // 不让 session_rules 表的可用性问题阻塞 RPC（fail-open）。
+        let project_rule_hooks: Vec<Value> = match sqlx::query(
+            "SELECT hooks FROM management.session_rules \
+             WHERE database_id = $1 AND is_active = true \
+             ORDER BY id ASC",
+        )
+        .bind(database_id)
+        .fetch_all(main_pool)
         .await
-        .map_err(AppError::Database)?;
+        {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|row| row.try_get::<Value, _>("hooks").unwrap_or(Value::Null))
+                .collect(),
+            Err(e) => {
+                tracing::warn!(
+                    database_id,
+                    "session_rules 查询失败，仅回退到 API Key 级 hooks: {}",
+                    e
+                );
+                Vec::new()
+            }
+        };
 
-    tracing::debug!(
-        "RPC session 上下文注入：app.current_user_id={} app.project_ids='{}'",
-        user_id,
-        project_ids_csv
-    );
+        // 合并优先级在 `session_hooks::merge_hooks_for_inject` 里集中表达：
+        // [project_rule_hooks*, api_key_hooks]，列表靠后的覆盖靠前的。
+        let merged_hooks = crate::session_hooks::merge_hooks_for_inject(
+            &project_rule_hooks,
+            Some(&key.permissions),
+        );
+
+        if !merged_hooks.is_empty() {
+            for (guc, val) in crate::session_hooks::apply_hooks(&merged_hooks, h) {
+                if let Some(slot) = gucs.iter_mut().find(|(k, _)| *k == guc) {
+                    slot.1 = val;
+                } else {
+                    gucs.push((guc, val));
+                }
+            }
+        }
+    }
+
+    gucs
+}
+
+/// 把已解析好的 GUC 写进租户事务（`set_config(_, _, true)` = SET LOCAL）。
+/// 只碰传入的 `tx`，不再触碰管理库池（见 [`resolve_rpc_session_gucs`] 的连接池说明）。
+async fn apply_rpc_session_gucs(
+    tx: &mut Transaction<'_, Postgres>,
+    gucs: &[(String, String)],
+) -> Result<(), AppError> {
+    for (guc, val) in gucs {
+        // GUC 名一律来自服务端可信源（默认两条是字面值，hook 来源经过
+        // `is_valid_guc_name` 白名单），仍然走 prepared statement 参数化避免任何意外注入。
+        sqlx::query("SELECT set_config($1, $2, true)")
+            .bind(guc)
+            .bind(val)
+            .execute(&mut **tx)
+            .await
+            .map_err(AppError::Database)?;
+    }
+
+    tracing::debug!("RPC session 上下文注入：{:?}", gucs);
     Ok(())
 }
 
@@ -1250,8 +1407,8 @@ async fn enforce_rpc_api_key(
     );
     let perms = &key.permissions;
 
-    let new_format = perms.get("allowed_actions").is_some()
-        || perms.get("allowed_resources").is_some();
+    let new_format =
+        perms.get("allowed_actions").is_some() || perms.get("allowed_resources").is_some();
     if !new_format {
         return Err(AppError::Forbidden(
             "该 API Key 使用旧版 scope 格式，不支持 RPC 调用；请重建 key 并启用 allowed_resources/allowed_actions".to_string(),
@@ -1463,11 +1620,12 @@ pub async fn grant_rpc_acl(
     let resource = format!("{}.{}", schema, function_name);
 
     // 校验 role 必须属于当前 tenant，避免跨租户授权。
-    let role_row = sqlx::query("SELECT name FROM management.roles WHERE id = $1 AND tenant_id = $2")
-        .bind(req.role_id)
-        .bind(tenant_id)
-        .fetch_optional(&pool)
-        .await?;
+    let role_row =
+        sqlx::query("SELECT name FROM management.roles WHERE id = $1 AND tenant_id = $2")
+            .bind(req.role_id)
+            .bind(tenant_id)
+            .fetch_optional(&pool)
+            .await?;
     let role_name: String = role_row
         .ok_or_else(|| AppError::NotFound("角色不存在或不属于当前租户".to_string()))?
         .get("name");
@@ -1581,6 +1739,7 @@ pub async fn revoke_rpc_acl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn project_ids_from_api_key_handles_normal_array() {
@@ -1653,7 +1812,10 @@ mod tests {
     #[test]
     fn resolve_overload_superset_with_defaults() {
         // 函数有 3 个形参（其中 1 个有 DEFAULT），业务方只传 2 个 → 仍可匹配
-        let ovs = vec![ov(&["p_page", "p_size", "p_extra"], &["integer", "integer", "text"])];
+        let ovs = vec![ov(
+            &["p_page", "p_size", "p_extra"],
+            &["integer", "integer", "text"],
+        )];
         let vs = vals(&[("p_page", json!(1)), ("p_size", json!(20))]);
         let m = resolve_overload(&ovs, &["p_page", "p_size"], &vs).unwrap();
         assert_eq!(m.arg_types.len(), 3);
@@ -1682,14 +1844,7 @@ mod tests {
                 "p_alliance_filter",
             ],
             &[
-                "integer",
-                "integer",
-                "text",
-                "text",
-                "text",
-                "text[]",
-                "text[]",
-                "text",
+                "integer", "integer", "text", "text", "text", "text[]", "text[]", "text",
             ],
         )];
         let vs = vals(&[
@@ -1741,7 +1896,11 @@ mod tests {
         ];
         let vs = vals(&[("p_limit", json!(100))]);
         let m = resolve_overload(&ovs, &["p_limit"], &vs).unwrap();
-        assert_eq!(m.arg_types, vec!["integer"], "100 在 i32 范围内，应选 integer 重载");
+        assert_eq!(
+            m.arg_types,
+            vec!["integer"],
+            "100 在 i32 范围内，应选 integer 重载"
+        );
     }
 
     #[test]
@@ -1759,10 +1918,7 @@ mod tests {
     #[test]
     fn resolve_overload_picks_bigint_when_value_overflows_i32() {
         // 超 i32 范围的整数 → 应该选 bigint，integer 会失败
-        let ovs = vec![
-            ov(&["p_id"], &["integer"]),
-            ov(&["p_id"], &["bigint"]),
-        ];
+        let ovs = vec![ov(&["p_id"], &["integer"]), ov(&["p_id"], &["bigint"])];
         let vs = vals(&[("p_id", json!(5_000_000_000_i64))]);
         let m = resolve_overload(&ovs, &["p_id"], &vs).unwrap();
         assert_eq!(m.arg_types, vec!["bigint"]);
@@ -1771,10 +1927,7 @@ mod tests {
     #[test]
     fn resolve_overload_picks_text_for_string_value() {
         // string vs integer 重载 → JSON string 应选 text
-        let ovs = vec![
-            ov(&["p_q"], &["integer"]),
-            ov(&["p_q"], &["text"]),
-        ];
+        let ovs = vec![ov(&["p_q"], &["integer"]), ov(&["p_q"], &["text"])];
         let vs = vals(&[("p_q", json!("hello"))]);
         let m = resolve_overload(&ovs, &["p_q"], &vs).unwrap();
         assert_eq!(m.arg_types, vec!["text"]);
@@ -1795,10 +1948,7 @@ mod tests {
     #[test]
     fn resolve_overload_picks_array_type_for_json_array() {
         // text[] vs jsonb 重载 → JSON array 应选 text[]
-        let ovs = vec![
-            ov(&["p_keys"], &["jsonb"]),
-            ov(&["p_keys"], &["text[]"]),
-        ];
+        let ovs = vec![ov(&["p_keys"], &["jsonb"]), ov(&["p_keys"], &["text[]"])];
         let vs = vals(&[("p_keys", json!(["a", "b"]))]);
         let m = resolve_overload(&ovs, &["p_keys"], &vs).unwrap();
         assert_eq!(m.arg_types, vec!["text[]"]);
@@ -1806,10 +1956,7 @@ mod tests {
 
     #[test]
     fn resolve_overload_picks_bool_for_bool_value() {
-        let ovs = vec![
-            ov(&["p_flag"], &["integer"]),
-            ov(&["p_flag"], &["boolean"]),
-        ];
+        let ovs = vec![ov(&["p_flag"], &["integer"]), ov(&["p_flag"], &["boolean"])];
         let vs = vals(&[("p_flag", json!(true))]);
         let m = resolve_overload(&ovs, &["p_flag"], &vs).unwrap();
         assert_eq!(m.arg_types, vec!["boolean"]);
@@ -1829,10 +1976,7 @@ mod tests {
     #[test]
     fn resolve_overload_ties_broken_by_first_candidate() {
         // 两条候选类型上对同一个值打分完全一致 → 取 oid 顺序首条（与 PG 在歧义重载下的潜规则一致）
-        let ovs = vec![
-            ov(&["x"], &["integer"]),
-            ov(&["x"], &["integer"]),
-        ];
+        let ovs = vec![ov(&["x"], &["integer"]), ov(&["x"], &["integer"])];
         let vs = vals(&[("x", json!(1))]);
         let m = resolve_overload(&ovs, &["x"], &vs).unwrap();
         // 不验证具体哪个（两条等价），只验证返了 Some 而不是 None

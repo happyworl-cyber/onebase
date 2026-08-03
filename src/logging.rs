@@ -19,7 +19,27 @@
 //! 额外结构化字段（如 `tracing::info!(user_id = 42, "msg")` 里的 `user_id`）会被
 //! 平铺到 JSON 根对象，对接 ES 直接 mapping 成索引字段。
 //!
-//! 同时维持原有 EnvFilter 行为：`RUST_LOG` 不变；默认 `info,onebase=debug,sqlx=info`。
+//! `RUST_LOG` 行为不变；默认见 [`init`]。
+//!
+//! ### 自定义日志 target（`logger` 字段）
+//!
+//! 大部分日志的 `logger` 是模块路径（如 `onebase::auto_api_handlers`）。下列横切
+//! 关注点用了**人工 target**，方便日志系统按 `logger` 精确路由 / 建独立索引 / 配告警：
+//!
+//! | target        | 级别        | 内容 |
+//! |---------------|-------------|------|
+//! | `access_log`  | info        | 每个 HTTP 请求完成：method/path/status/elapsed_ms/user_id |
+//! | `auth`        | info/warn   | 登录/注册/登出/改密成功 + 失败（密码错/限流/会话失效） |
+//! | `authz`       | warn        | RBAC / 超管 权限拒绝（含越权探测线索） |
+//! | `workflow`    | info/debug  | 工作流执行开始/完成 + 逐节点执行/跳过/失败 |
+//! | `sso`         | info/debug/error | OAuth2 授权 URL / 换 token / 拉用户信息 |
+//! | `scheduler`   | info        | 定时任务 创建/更新/删除/暂停/恢复/run-now |
+//! | `webhook`     | info/warn   | Webhook CRUD + 测试调用结果 |
+//! | `auto_api`    | debug       | Auto API 各 CRUD handler 入口（db/schema/table/user） |
+//! | `perm_cache`  | debug       | 权限缓存 命中/未命中/写入/失效 |
+//!
+//! 注意：人工 target 不带 `onebase::` 前缀，`RUST_LOG=onebase=debug` 匹配不到它们；
+//! 默认 filter 已把跑 debug 的几个显式抬到 debug（见 [`init`]）。
 //!
 //! ### 输出目的地
 //!
@@ -39,10 +59,7 @@ use std::path::PathBuf;
 
 use tracing::{Event, Subscriber};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::fmt::{
-    format::Writer,
-    FmtContext, FormatEvent, FormatFields,
-};
+use tracing_subscriber::fmt::{format::Writer, FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -53,7 +70,7 @@ tokio::task_local! {
     ///
     /// 由 [`crate::request_id::request_id_middleware`] 在每个请求最外层用
     /// `task_local!::scope` 注入；该 future 内的所有 `tracing::info!` 等都会
-    /// 经 [`JsonLogFormatter`] 自动带上对应 ID。
+    /// 经 [`OnebaseJsonFormatter`] 自动带上对应 ID。
     ///
     /// 非请求路径（启动日志 / `tokio::spawn` 出去的后台任务）读不到 → 输出 `null`。
     pub static REQUEST_ID: String;
@@ -68,19 +85,30 @@ tokio::task_local! {
 /// - `None`：未启用文件日志（仅 stdout），可以直接忽略返回值。
 #[must_use = "持有返回的 WorkerGuard 直到进程结束，否则文件日志会被静默丢弃"]
 pub fn init() -> Option<WorkerGuard> {
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(crate::brand::default_log_filter()));
+    // 默认（未设 RUST_LOG）的过滤策略：
+    //   - 全局 info：含统一 access log + 认证 / 权限 / SSO / 调度 / webhook 等安全审计日志；
+    //   - onebase=debug：本 crate 各模块（按模块路径 target）的 debug；
+    //   - 自定义短 target：access log/auth 等用了人工 target（方便日志系统按 `logger`
+    //     字段路由），**不**带 `onebase::` 前缀，所以 `onebase=debug` 匹配不到它们。
+    //     这里显式把跑 debug 级的几个自定义 target 抬到 debug，否则工作流逐节点 /
+    //     权限缓存 / Auto API 入口这些 debug 日志在默认配置下会被全局 info 吞掉。
+    //   - sqlx=info：压住 sqlx 每条 SQL 的 debug 噪音。
+    // 生产可直接用 RUST_LOG 覆盖整串（例如只留 info：`RUST_LOG=info`）。
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        "info,onebase=debug,workflow=debug,auto_api=debug,perm_cache=debug,sso=debug,sqlx=info"
+            .into()
+    });
 
     // stdout 永远开。容器里 supervisord / docker / k8s 的标准日志收集都依赖这条。
     let stdout_layer = tracing_subscriber::fmt::layer()
-        .event_format(JsonLogFormatter)
+        .event_format(OnebaseJsonFormatter)
         .with_writer(std::io::stdout);
 
     // 文件可选：LOG_DIR 优先（按天滚动），其次 LOG_FILE（单文件），都不设 → 跳过。
     let (file_layer, guard) = match build_file_writer() {
         Some((non_blocking, guard)) => {
             let layer = tracing_subscriber::fmt::layer()
-                .event_format(JsonLogFormatter)
+                .event_format(OnebaseJsonFormatter)
                 .with_ansi(false) // 文件里别留 ANSI 颜色码，cat / grep 才干净
                 .with_writer(non_blocking);
             (Some(layer), Some(guard))
@@ -92,6 +120,7 @@ pub fn init() -> Option<WorkerGuard> {
         .with(env_filter)
         .with(stdout_layer)
         .with(file_layer)
+        .with(DbLogLayer)
         .init();
 
     guard
@@ -112,10 +141,13 @@ fn build_file_writer() -> Option<(tracing_appender::non_blocking::NonBlocking, W
         let dir = dir.trim();
         if !dir.is_empty() {
             if let Err(e) = std::fs::create_dir_all(dir) {
-                eprintln!("[logging] LOG_DIR={} 建目录失败，回退到纯 stdout: {}", dir, e);
+                eprintln!(
+                    "[logging] LOG_DIR={} 建目录失败，回退到纯 stdout: {}",
+                    dir, e
+                );
                 return None;
             }
-            let appender = tracing_appender::rolling::daily(dir, crate::brand::log_file_name());
+            let appender = tracing_appender::rolling::daily(dir, "onebase.log");
             let (nb, guard) = tracing_appender::non_blocking(appender);
             return Some((nb, guard));
         }
@@ -164,9 +196,9 @@ fn build_file_writer() -> Option<(tracing_appender::non_blocking::NonBlocking, W
 ///   不再是 `target` / `span.name`
 /// - `timestamp` 6 位微秒，避免不同环境的小数位数不一致让日志比对乱掉
 /// - `message` 提到根字段，其它 structured field 平铺到根（不再嵌 `fields: {...}`）
-pub struct JsonLogFormatter;
+pub struct OnebaseJsonFormatter;
 
-impl<S, N> FormatEvent<S, N> for JsonLogFormatter
+impl<S, N> FormatEvent<S, N> for OnebaseJsonFormatter
 where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
     N: for<'writer> FormatFields<'writer> + 'static,
@@ -192,7 +224,10 @@ where
             .format("%Y-%m-%dT%H:%M:%S%.6fZ")
             .to_string();
         obj.insert("timestamp".into(), Value::String(ts));
-        obj.insert("level".into(), Value::String(meta.level().as_str().to_string()));
+        obj.insert(
+            "level".into(),
+            Value::String(meta.level().as_str().to_string()),
+        );
         obj.insert("logger".into(), Value::String(meta.target().to_string()));
         obj.insert(
             "message".into(),
@@ -201,9 +236,7 @@ where
 
         // taskName：最里层 span 名（HTTP 路径上一般是中间件 / handler 注册的 span）。
         // 没有 span 上下文 = 后台任务 / 启动期 → null。
-        let task_name = ctx
-            .lookup_current()
-            .map(|span| span.name().to_string());
+        let task_name = ctx.lookup_current().map(|span| span.name().to_string());
         obj.insert(
             "taskName".into(),
             match task_name {
@@ -224,7 +257,14 @@ where
 
         // 把 event 自带的额外结构化字段也并到根对象。**不会**覆盖上面 6 个保留字段，
         // 避免业务方误用 `tracing::info!(level = "X")` 之类的把保留键冲掉。
-        const RESERVED: [&str; 6] = ["timestamp", "level", "logger", "message", "taskName", "x_request_id"];
+        const RESERVED: [&str; 6] = [
+            "timestamp",
+            "level",
+            "logger",
+            "message",
+            "taskName",
+            "x_request_id",
+        ];
         for (k, v) in visitor.extra {
             if RESERVED.contains(&k.as_str()) {
                 continue;
@@ -251,8 +291,10 @@ impl tracing::field::Visit for FieldCollector {
         if field.name() == "message" {
             self.message = Some(value.to_string());
         } else {
-            self.extra
-                .push((field.name().to_string(), serde_json::Value::String(value.to_string())));
+            self.extra.push((
+                field.name().to_string(),
+                serde_json::Value::String(value.to_string()),
+            ));
         }
     }
 
@@ -277,17 +319,194 @@ impl tracing::field::Visit for FieldCollector {
         // `tracing::info!("hello {x}", x = 1)` 的 message 走的是 record_debug 而不是
         // record_str —— 用 {:?} 拿到的字符串首尾带引号，去一下避免 message 套两层引号。
         let formatted = format!("{:?}", value);
-        let cleaned = if formatted.starts_with('"') && formatted.ends_with('"') && formatted.len() >= 2 {
-            formatted[1..formatted.len() - 1].to_string()
-        } else {
-            formatted
-        };
+        let cleaned =
+            if formatted.starts_with('"') && formatted.ends_with('"') && formatted.len() >= 2 {
+                formatted[1..formatted.len() - 1].to_string()
+            } else {
+                formatted
+            };
         if field.name() == "message" {
             self.message = Some(cleaned);
         } else {
             self.extra
                 .push((field.name().to_string(), serde_json::Value::String(cleaned)));
         }
+    }
+}
+
+// ============================================================================
+// 细节日志落库层（P1.2）：把请求范围内的执行细节异步批量写入 management.execution_logs
+// ============================================================================
+//
+// 设计要点：
+// - **关联**：只采集当前处于 `REQUEST_ID` scope（即带 trace_id）的事件——HTTP 触发的
+//   工作流 / API 路径天然在 scope 内；脱离请求的 cron 暂无 trace_id（受 lib/bin 双 crate
+//   task_local 不互通限制），其细节关联留作后续（runner 直写或 lib 侧 trace scope）。
+// - **采集范围**：级别 INFO/WARN/ERROR 且（是 WARN/ERROR 任意来源 或 来源是 workflow/
+//   scheduler 执行）。DEBUG/TRACE 不入库以控量；失败与里程碑一定捕获。
+// - **零阻塞**：`on_event` 同步 `try_send` 到有界 channel，满了直接丢弃（保业务优先）；
+//   真正落库在后台单 task 批量 flush（每 500ms 或攒满 500 条），与 audit 容错哲学一致。
+
+use std::sync::OnceLock;
+use tokio::sync::mpsc;
+use tracing::Level;
+use tracing_subscriber::layer::{Context, Layer};
+
+/// 一条待落库的细节日志。
+struct DbLogRecord {
+    trace_id: String,
+    ts: chrono::DateTime<chrono::Utc>,
+    level: String,
+    source: Option<String>,
+    logger: String,
+    span: Option<String>,
+    message: String,
+    fields: Option<serde_json::Value>,
+}
+
+/// 全局发送端：`start_db_log_sink` 启动后写入；Layer 每次事件取它 `try_send`。
+/// 未启动（极早期 / EXEC_LOG_DB_SINK=off）时为空，Layer 直接跳过。
+static DB_LOG_TX: OnceLock<mpsc::Sender<DbLogRecord>> = OnceLock::new();
+
+/// 由模块路径 / 人工 target 归一到统一 source 维度。
+fn source_from_target(target: &str) -> Option<&'static str> {
+    if target.contains("workflow") {
+        Some("workflow")
+    } else if target.contains("scheduler") {
+        Some("scheduler")
+    } else if target == "access_log" || target.contains("auth") {
+        Some("api")
+    } else {
+        None
+    }
+}
+
+/// tracing Layer：把符合条件的事件投递到落库 channel。
+struct DbLogLayer;
+
+impl<S> Layer<S> for DbLogLayer
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
+        let Some(tx) = DB_LOG_TX.get() else {
+            return;
+        };
+
+        let meta = event.metadata();
+        let level = *meta.level();
+
+        // 只入库 INFO/WARN/ERROR；DEBUG/TRACE 控量丢弃。
+        if !matches!(level, Level::INFO | Level::WARN | Level::ERROR) {
+            return;
+        }
+
+        let target = meta.target();
+        let is_problem = matches!(level, Level::WARN | Level::ERROR);
+        let exec_source = source_from_target(target);
+        // 采集：任意来源的 WARN/ERROR，或工作流/调度等执行来源的 INFO。
+        if !is_problem && exec_source.is_none() {
+            return;
+        }
+
+        // 关联键：必须在请求 scope 内（有 trace_id）才有归并价值。
+        let Some(trace_id) = REQUEST_ID
+            .try_with(|s| s.clone())
+            .ok()
+            .filter(|s| !s.is_empty())
+        else {
+            return;
+        };
+
+        let mut visitor = FieldCollector::default();
+        event.record(&mut visitor);
+        let message = visitor.message.unwrap_or_default();
+        let span = ctx.lookup_current().map(|s| s.name().to_string());
+        let fields = if visitor.extra.is_empty() {
+            None
+        } else {
+            Some(serde_json::Value::Object(
+                visitor.extra.into_iter().collect(),
+            ))
+        };
+
+        // 有界 channel：满了 try_send 直接 Err 被忽略——宁可丢日志也不阻塞业务线程。
+        let _ = tx.try_send(DbLogRecord {
+            trace_id,
+            ts: chrono::Utc::now(),
+            level: level.as_str().to_string(),
+            source: exec_source.map(str::to_string),
+            logger: target.to_string(),
+            span,
+            message,
+            fields,
+        });
+    }
+}
+
+/// 启动细节日志落库后台任务。须在 PgPool 就绪后调用一次（main 启动期）。
+///
+/// 由 `EXEC_LOG_DB_SINK`（默认 on，设 `off` 关闭）控制是否启用。
+pub fn start_db_log_sink(pool: sqlx::PgPool) {
+    if std::env::var("EXEC_LOG_DB_SINK")
+        .map(|v| v.eq_ignore_ascii_case("off"))
+        .unwrap_or(false)
+    {
+        tracing::info!("EXEC_LOG_DB_SINK=off：细节日志落库层未启用");
+        return;
+    }
+
+    let (tx, mut rx) = mpsc::channel::<DbLogRecord>(10_000);
+    if DB_LOG_TX.set(tx).is_err() {
+        // 已初始化过（理论上只调一次）；不重复启动。
+        return;
+    }
+
+    tokio::spawn(async move {
+        tracing::info!("执行细节日志落库层已启动 (batch≤500, flush=500ms)");
+        let mut buf: Vec<DbLogRecord> = Vec::with_capacity(500);
+        let mut ticker = tokio::time::interval(std::time::Duration::from_millis(500));
+        loop {
+            tokio::select! {
+                _ = ticker.tick() => {
+                    flush_db_logs(&pool, &mut buf).await;
+                }
+                n = rx.recv_many(&mut buf, 500) => {
+                    if n == 0 {
+                        // 发送端全部 drop（进程收尾）：冲走剩余后退出。
+                        flush_db_logs(&pool, &mut buf).await;
+                        break;
+                    }
+                    if buf.len() >= 500 {
+                        flush_db_logs(&pool, &mut buf).await;
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// 批量写入并清空缓冲。失败只 eprintln（不能用 tracing，否则可能递归触发本层）。
+async fn flush_db_logs(pool: &sqlx::PgPool, buf: &mut Vec<DbLogRecord>) {
+    if buf.is_empty() {
+        return;
+    }
+    let mut qb = sqlx::QueryBuilder::new(
+        "INSERT INTO management.execution_logs \
+         (trace_id, ts, level, source, logger, span, message, fields) ",
+    );
+    qb.push_values(buf.drain(..), |mut b, r| {
+        b.push_bind(r.trace_id)
+            .push_bind(r.ts)
+            .push_bind(r.level)
+            .push_bind(r.source)
+            .push_bind(r.logger)
+            .push_bind(r.span)
+            .push_bind(r.message)
+            .push_bind(r.fields);
+    });
+    if let Err(e) = qb.build().execute(pool).await {
+        eprintln!("[logging] execution_logs 批量写入失败: {e}");
     }
 }
 
@@ -312,8 +531,12 @@ mod tests {
         let out = build_file_writer();
         assert!(out.is_none(), "未设置任何环境变量时应返回 None");
 
-        if let Some(v) = prev_dir { std::env::set_var("LOG_DIR", v); }
-        if let Some(v) = prev_file { std::env::set_var("LOG_FILE", v); }
+        if let Some(v) = prev_dir {
+            std::env::set_var("LOG_DIR", v);
+        }
+        if let Some(v) = prev_file {
+            std::env::set_var("LOG_FILE", v);
+        }
     }
 
     #[test]
@@ -342,8 +565,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         std::env::remove_var("LOG_DIR");
-        if let Some(v) = prev_dir { std::env::set_var("LOG_DIR", v); }
-        if let Some(v) = prev_file { std::env::set_var("LOG_FILE", v); }
+        if let Some(v) = prev_dir {
+            std::env::set_var("LOG_DIR", v);
+        }
+        if let Some(v) = prev_file {
+            std::env::set_var("LOG_FILE", v);
+        }
     }
 
     #[test]
@@ -386,8 +613,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         std::env::remove_var("LOG_FILE");
-        if let Some(v) = prev_dir { std::env::set_var("LOG_DIR", v); }
-        if let Some(v) = prev_file { std::env::set_var("LOG_FILE", v); }
+        if let Some(v) = prev_dir {
+            std::env::set_var("LOG_DIR", v);
+        }
+        if let Some(v) = prev_file {
+            std::env::set_var("LOG_FILE", v);
+        }
     }
 
     #[test]
@@ -417,7 +648,11 @@ mod tests {
         let _ = std::fs::remove_file(&blocker);
 
         std::env::remove_var("LOG_DIR");
-        if let Some(v) = prev_dir { std::env::set_var("LOG_DIR", v); }
-        if let Some(v) = prev_file { std::env::set_var("LOG_FILE", v); }
+        if let Some(v) = prev_dir {
+            std::env::set_var("LOG_DIR", v);
+        }
+        if let Some(v) = prev_file {
+            std::env::set_var("LOG_FILE", v);
+        }
     }
 }

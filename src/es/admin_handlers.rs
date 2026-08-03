@@ -66,14 +66,13 @@ async fn fetch_connection_authorized(
     claims: &Claims,
     id: i64,
 ) -> Result<EsConnection, AppError> {
-    let conn = sqlx::query_as::<_, EsConnection>(
-        "SELECT * FROM management.es_connections WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| AppError::Internal(format!("查询 ES 连接失败: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("ES 连接 {} 不存在", id)))?;
+    let conn =
+        sqlx::query_as::<_, EsConnection>("SELECT * FROM management.es_connections WHERE id = $1")
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| AppError::Internal(format!("查询 ES 连接失败: {e}")))?
+            .ok_or_else(|| AppError::NotFound(format!("ES 连接 {} 不存在", id)))?;
     require_tenant_admin(pool, claims, conn.tenant_id).await?;
     Ok(conn)
 }
@@ -144,33 +143,36 @@ pub async fn list_connections(
 ) -> Result<Json<Vec<EsConnection>>, AppError> {
     // 超管：可指定 tenant_id 过滤，未指定则全平台；
     // 非超管：忽略 query 里的 tenant_id，强制只看自己管辖的租户。
-    let rows = if claims.is_superadmin {
-        match q.tenant_id {
-            Some(t) => sqlx::query_as::<_, EsConnection>(
-                "SELECT * FROM management.es_connections WHERE tenant_id = $1 ORDER BY id DESC",
-            )
-            .bind(t)
-            .fetch_all(&pool)
-            .await,
-            None => sqlx::query_as::<_, EsConnection>(
-                "SELECT * FROM management.es_connections ORDER BY id DESC",
-            )
-            .fetch_all(&pool)
-            .await,
-        }
-    } else {
-        let admins = audit_handlers::admin_tenant_ids(&pool, &claims).await?;
-        if admins.is_empty() {
-            return Ok(Json(vec![]));
-        }
-        sqlx::query_as::<_, EsConnection>(
+    let rows =
+        if claims.is_superadmin {
+            match q.tenant_id {
+                Some(t) => sqlx::query_as::<_, EsConnection>(
+                    "SELECT * FROM management.es_connections WHERE tenant_id = $1 ORDER BY id DESC",
+                )
+                .bind(t)
+                .fetch_all(&pool)
+                .await,
+                None => {
+                    sqlx::query_as::<_, EsConnection>(
+                        "SELECT * FROM management.es_connections ORDER BY id DESC",
+                    )
+                    .fetch_all(&pool)
+                    .await
+                }
+            }
+        } else {
+            let admins = audit_handlers::admin_tenant_ids(&pool, &claims).await?;
+            if admins.is_empty() {
+                return Ok(Json(vec![]));
+            }
+            sqlx::query_as::<_, EsConnection>(
             "SELECT * FROM management.es_connections WHERE tenant_id = ANY($1) ORDER BY id DESC",
         )
         .bind(&admins)
         .fetch_all(&pool)
         .await
-    }
-    .map_err(|e| AppError::Internal(format!("列出 ES 连接失败: {e}")))?;
+        }
+        .map_err(|e| AppError::Internal(format!("列出 ES 连接失败: {e}")))?;
     Ok(Json(rows))
 }
 
@@ -234,27 +236,28 @@ pub async fn update_connection(
         .to_string();
     validate_auth_type(&final_auth_type)?;
 
-    let final_credential_enc: Option<String> = match (req.credential.as_deref(), final_auth_type.as_str()) {
-        // 切到 'none' → 永远清空
-        (_, "none") => None,
-        // 没传 credential 且 auth_type 没变 → 保留原 enc
-        (None, t) if t == existing.auth_type => existing.auth_credential_enc.clone(),
-        // 切了 auth_type 但没给新 credential → 拒绝（防止用旧 ApiKey 当 Basic user:pass 解析）
-        (None, _) => {
-            return Err(AppError::InvalidQuery(
-                "切换 auth_type 时必须同时提供新的 credential".to_string(),
-            ));
-        }
-        // 给了非空 credential → 重新加密
-        (Some(s), _) if !s.is_empty() => Some(crypto::encrypt_secret(s)?),
-        // 给了空串但 auth_type 不是 none → 拒
-        (Some(_), _) => {
-            return Err(AppError::InvalidQuery(format!(
-                "auth_type={} 必须提供非空 credential",
-                final_auth_type
-            )));
-        }
-    };
+    let final_credential_enc: Option<String> =
+        match (req.credential.as_deref(), final_auth_type.as_str()) {
+            // 切到 'none' → 永远清空
+            (_, "none") => None,
+            // 没传 credential 且 auth_type 没变 → 保留原 enc
+            (None, t) if t == existing.auth_type => existing.auth_credential_enc.clone(),
+            // 切了 auth_type 但没给新 credential → 拒绝（防止用旧 ApiKey 当 Basic user:pass 解析）
+            (None, _) => {
+                return Err(AppError::InvalidQuery(
+                    "切换 auth_type 时必须同时提供新的 credential".to_string(),
+                ));
+            }
+            // 给了非空 credential → 重新加密
+            (Some(s), _) if !s.is_empty() => Some(crypto::encrypt_secret(s)?),
+            // 给了空串但 auth_type 不是 none → 拒
+            (Some(_), _) => {
+                return Err(AppError::InvalidQuery(format!(
+                    "auth_type={} 必须提供非空 credential",
+                    final_auth_type
+                )));
+            }
+        };
 
     if let Some(url) = req.base_url.as_deref() {
         validate_base_url(url)?;
@@ -326,9 +329,9 @@ pub async fn health_check(
     // base_url 末尾可能带 /，统一去掉
     let url = format!("{}/", conn.base_url.trim_end_matches('/'));
     let mut req = client.get(&url);
-    if let Some(header) = build_auth_header(&conn).map_err(|e| {
-        AppError::Internal(format!("解密 ES 凭据失败: {e}"))
-    })? {
+    if let Some(header) = build_auth_header(&conn)
+        .map_err(|e| AppError::Internal(format!("解密 ES 凭据失败: {e}")))?
+    {
         req = req.header("authorization", header);
     }
     let resp = req
@@ -478,14 +481,13 @@ pub async fn delete_token(
     Path((connection_id, token_id)): Path<(i64, i64)>,
 ) -> Result<Json<Value>, AppError> {
     let _ = fetch_connection_authorized(&pool, &claims, connection_id).await?;
-    let res = sqlx::query(
-        "DELETE FROM management.es_access_tokens WHERE id = $1 AND connection_id = $2",
-    )
-    .bind(token_id)
-    .bind(connection_id)
-    .execute(&pool)
-    .await
-    .map_err(|e| AppError::Internal(format!("删除 token 失败: {e}")))?;
+    let res =
+        sqlx::query("DELETE FROM management.es_access_tokens WHERE id = $1 AND connection_id = $2")
+            .bind(token_id)
+            .bind(connection_id)
+            .execute(&pool)
+            .await
+            .map_err(|e| AppError::Internal(format!("删除 token 失败: {e}")))?;
     Ok(Json(json!({"deleted": res.rows_affected()})))
 }
 
@@ -509,9 +511,7 @@ fn validate_base_url(url: &str) -> Result<(), AppError> {
         ));
     }
     if trimmed.contains(' ') || trimmed.contains('\n') {
-        return Err(AppError::InvalidQuery(
-            "base_url 含非法字符".to_string(),
-        ));
+        return Err(AppError::InvalidQuery("base_url 含非法字符".to_string()));
     }
     Ok(())
 }
@@ -547,7 +547,8 @@ pub(crate) fn build_auth_header(conn: &EsConnection) -> Result<Option<String>, A
                 "basic" => {
                     // 用户输入 `user:pass` → base64 → Authorization: Basic <b64>
                     use base64::Engine as _;
-                    let encoded = base64::engine::general_purpose::STANDARD.encode(plain.as_bytes());
+                    let encoded =
+                        base64::engine::general_purpose::STANDARD.encode(plain.as_bytes());
                     Ok(Some(format!("Basic {}", encoded)))
                 }
                 other => Err(AppError::Internal(format!(

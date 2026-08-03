@@ -30,12 +30,32 @@ function resolveBackendUrl() {
   }
 }
 
+function resolveGatewayUrl() {
+  if (process.env.GATEWAY_CONTROL_URL) {
+    return process.env.GATEWAY_CONTROL_URL
+  }
+  if (process.env.NEXT_PUBLIC_GATEWAY_API_URL) {
+    return process.env.NEXT_PUBLIC_GATEWAY_API_URL
+  }
+  return 'http://127.0.0.1:8088'
+}
+
 const backendUrl = resolveBackendUrl()
+const gatewayUrl = resolveGatewayUrl()
 console.log(`[next.config] backend URL = ${backendUrl}`)
+console.log(`[next.config] gateway URL = ${gatewayUrl}`)
 
 const nextConfig = {
   reactStrictMode: true,
   output: 'standalone',
+  // IdP 页面展示的 Discovery / OAuth2 端点必须指向对外可达的后端地址（issuer 与端点自洽）。
+  // 只透传运维显式设置的 NEXT_PUBLIC_IDP_ISSUER（如 https://api.example.com）；不设时前端在运行期
+  // 按访问来源(origin)推导，避免把构建机的 127.0.0.1:3000 烤进产物导致部署后仍显示本地地址。
+  env: {
+    NEXT_PUBLIC_IDP_ISSUER: process.env.NEXT_PUBLIC_IDP_ISSUER || '',
+    // `/workflow/*` 由 App Router 的长请求代理处理，避免 rewrites 内置代理约 30s 后断连。
+    ONEBASE_BACKEND_URL: backendUrl,
+  },
   // 生产构建时跳过 TS/ESLint 严格检查，避免遗留的小问题阻断 Docker 镜像构建
   typescript: { ignoreBuildErrors: true },
   eslint: { ignoreDuringBuilds: true },
@@ -68,7 +88,16 @@ const nextConfig = {
   },
   async rewrites() {
     return [
+      // 网关控制面（Go）：K8s 生产由 Ingress 同域路由 /gateway-admin、/healthz；
+      // 本地 dev / 无 Ingress 时由这里反代到 GATEWAY_CONTROL_URL。
+      { source: '/gateway-admin/:path*', destination: `${gatewayUrl}/gateway-admin/:path*` },
+      { source: '/healthz', destination: `${gatewayUrl}/healthz` },
       { source: '/api/:path*', destination: `${backendUrl}/api/:path*` },
+      // OIDC / IdP 对外端点：让本域名（同源）也能访问到后端的 Discovery、JWKS、OAuth2 与上游回调。
+      { source: '/.well-known/:path*', destination: `${backendUrl}/.well-known/:path*` },
+      { source: '/oauth2/:path*', destination: `${backendUrl}/oauth2/:path*` },
+      { source: '/events/:path*', destination: `${backendUrl}/events/:path*` },
+      { source: '/sse', destination: `${backendUrl}/sse` },
       { source: '/rest/:path*', destination: `${backendUrl}/rest/:path*` },
       { source: '/auth/:path*', destination: `${backendUrl}/auth/:path*` },
       { source: '/health', destination: `${backendUrl}/health` },
@@ -76,7 +105,8 @@ const nextConfig = {
       { source: '/realtime/:path*', destination: `${backendUrl}/realtime/:path*` },
       { source: '/query', destination: `${backendUrl}/query` },
       { source: '/transaction', destination: `${backendUrl}/transaction` },
-      { source: '/workflow/:path*', destination: `${backendUrl}/workflow/:path*` },
+      // MCP 工作流创作端点：本页教程给用户的接入地址是 origin/mcp，必须代理到后端
+      { source: '/mcp', destination: `${backendUrl}/mcp` },
     ]
   },
 }

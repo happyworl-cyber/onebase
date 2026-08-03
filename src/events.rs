@@ -72,6 +72,7 @@ impl EventBus {
         self.sender.subscribe()
     }
 
+    #[allow(dead_code)]
     pub fn receiver_count(&self) -> usize {
         self.sender.receiver_count()
     }

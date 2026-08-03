@@ -323,7 +323,11 @@ impl RateLimiter {
         default_max_requests: u64,
         fallback: FallbackConfig,
     ) -> Self {
-        let redis_status = if redis.is_some() { "connected" } else { "absent" };
+        let redis_status = if redis.is_some() {
+            "connected"
+        } else {
+            "absent"
+        };
         let limiter = Self {
             redis,
             pool,
@@ -467,10 +471,8 @@ impl RateLimiter {
         }
 
         let mut allowed = true;
-        let mut tightest = RateLimitDecision::allow_full(
-            self.default_max_requests,
-            DEFAULT_RATE_LIMIT_WINDOW,
-        );
+        let mut tightest =
+            RateLimitDecision::allow_full(self.default_max_requests, DEFAULT_RATE_LIMIT_WINDOW);
         let mut tightest_remaining = u64::MAX;
         let mut any_degraded = false;
 
@@ -534,10 +536,7 @@ impl RateLimiter {
         // 把连续失败 streak 清零，并在曾经降级过的情况下记录"恢复"事件
         let prev = self.metrics.redis_failures_streak.swap(0, Ordering::AcqRel);
         if prev >= REDIS_DEGRADE_LOG_THRESHOLD
-            && self
-                .metrics
-                .degraded_logged
-                .swap(false, Ordering::AcqRel)
+            && self.metrics.degraded_logged.swap(false, Ordering::AcqRel)
         {
             tracing::info!(
                 "RateLimiter Redis 已恢复，退出降级模式（之前连续失败 {} 次）",
@@ -618,22 +617,13 @@ impl RateLimiter {
         LimiterStats {
             total_checks: self.metrics.total_checks.load(Ordering::Relaxed),
             redis_configured: self.redis.is_some(),
-            redis_failures_total: self
-                .metrics
-                .redis_failures_total
-                .load(Ordering::Relaxed),
-            redis_failures_streak: self
-                .metrics
-                .redis_failures_streak
-                .load(Ordering::Relaxed),
+            redis_failures_total: self.metrics.redis_failures_total.load(Ordering::Relaxed),
+            redis_failures_streak: self.metrics.redis_failures_streak.load(Ordering::Relaxed),
             fallback_decisions_total: self
                 .metrics
                 .fallback_decisions_total
                 .load(Ordering::Relaxed),
-            fallback_rejected_total: self
-                .metrics
-                .fallback_rejected_total
-                .load(Ordering::Relaxed),
+            fallback_rejected_total: self.metrics.fallback_rejected_total.load(Ordering::Relaxed),
             local_counter_keys: self.local.len(),
             fallback_mode: self.fallback.mode.as_str(),
             fallback_multiplier: self.fallback.multiplier,
@@ -862,11 +852,7 @@ fn extract_client_ip(req: &Request) -> String {
             }
         }
     }
-    if let Some(v) = req
-        .headers()
-        .get("x-real-ip")
-        .and_then(|v| v.to_str().ok())
-    {
+    if let Some(v) = req.headers().get("x-real-ip").and_then(|v| v.to_str().ok()) {
         let trimmed = v.trim();
         if !trimmed.is_empty() {
             return trimmed.to_string();
@@ -929,8 +915,14 @@ mod tests {
     #[test]
     fn test_endpoint_rule_matches_only_matching_path() {
         let r = rule("endpoint", Some("/api/v1/*"), None);
-        assert!(rule_matches(&r, &ctx("/api/v1/users", "1.1.1.1", None, None)));
-        assert!(!rule_matches(&r, &ctx("/api/v2/users", "1.1.1.1", None, None)));
+        assert!(rule_matches(
+            &r,
+            &ctx("/api/v1/users", "1.1.1.1", None, None)
+        ));
+        assert!(!rule_matches(
+            &r,
+            &ctx("/api/v2/users", "1.1.1.1", None, None)
+        ));
     }
 
     #[test]
@@ -958,7 +950,10 @@ mod tests {
         assert!(!rule_matches(&r, &ctx("/x", "1.1.1.1", None, None)));
 
         let any_user = rule("user", Some("*"), None);
-        assert!(rule_matches(&any_user, &ctx("/x", "1.1.1.1", Some(99), None)));
+        assert!(rule_matches(
+            &any_user,
+            &ctx("/x", "1.1.1.1", Some(99), None)
+        ));
         assert!(!rule_matches(&any_user, &ctx("/x", "1.1.1.1", None, None)));
     }
 
@@ -1002,8 +997,14 @@ mod tests {
     #[test]
     fn test_fallback_mode_from_env() {
         assert_eq!(FallbackMode::from_env_str(""), FallbackMode::Degraded);
-        assert_eq!(FallbackMode::from_env_str("degraded"), FallbackMode::Degraded);
-        assert_eq!(FallbackMode::from_env_str("DEGRADED"), FallbackMode::Degraded);
+        assert_eq!(
+            FallbackMode::from_env_str("degraded"),
+            FallbackMode::Degraded
+        );
+        assert_eq!(
+            FallbackMode::from_env_str("DEGRADED"),
+            FallbackMode::Degraded
+        );
         assert_eq!(FallbackMode::from_env_str("closed"), FallbackMode::Closed);
         assert_eq!(FallbackMode::from_env_str("deny"), FallbackMode::Closed);
         assert_eq!(FallbackMode::from_env_str("open"), FallbackMode::Open);
@@ -1062,38 +1063,17 @@ mod tests {
         // 直接构造 metrics+local 而不走 RateLimiter 完整构造（避免 spawn）
         let local = LocalCounters::default();
         // closed 模式：Redis 缺失 → 立即拒绝
-        let result = simulate_fallback(
-            FallbackMode::Closed,
-            0.5,
-            "k",
-            100,
-            60,
-            &local,
-        );
+        let result = simulate_fallback(FallbackMode::Closed, 0.5, "k", 100, 60, &local);
         assert!(!result.allowed);
         assert!(result.degraded);
 
         // open 模式：保留历史一断全放
-        let result = simulate_fallback(
-            FallbackMode::Open,
-            0.5,
-            "k",
-            100,
-            60,
-            &local,
-        );
+        let result = simulate_fallback(FallbackMode::Open, 0.5, "k", 100, 60, &local);
         assert!(result.allowed);
         assert!(result.degraded);
 
         // degraded 模式：本地计数 cap=50（100×0.5），第 1 次必允许
-        let result = simulate_fallback(
-            FallbackMode::Degraded,
-            0.5,
-            "k_deg",
-            100,
-            60,
-            &local,
-        );
+        let result = simulate_fallback(FallbackMode::Degraded, 0.5, "k_deg", 100, 60, &local);
         assert!(result.allowed);
         assert_eq!(result.limit, 50);
         assert_eq!(result.remaining, 49);

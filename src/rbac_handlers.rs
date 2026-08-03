@@ -17,9 +17,7 @@ use crate::redis_manager::RedisManager;
 
 /// 缩写：从可选的 `Extension<RedisManager>` 中拿出底层 `&RedisManager`，喂给
 /// `permissions::invalidate_*` 系列辅助。Redis 不可用时为 `None`，调用方静默跳过缓存失效。
-fn redis_ref(
-    redis: &Option<Extension<RedisManager>>,
-) -> Option<&RedisManager> {
+fn redis_ref(redis: &Option<Extension<RedisManager>>) -> Option<&RedisManager> {
     redis.as_ref().map(|Extension(r)| r)
 }
 
@@ -144,11 +142,7 @@ pub async fn is_superadmin(pool: &PgPool, user_id: i32) -> Result<bool> {
 /// 用于所有 RBAC 写操作（创建/修改角色、分配权限等）。
 ///
 /// 委托给 `permissions::require_tenant_admin`，保留本地名是为了不动调用点。
-async fn require_tenant_admin(
-    pool: &PgPool,
-    claims: &Claims,
-    tenant_id: i32,
-) -> Result<()> {
+async fn require_tenant_admin(pool: &PgPool, claims: &Claims, tenant_id: i32) -> Result<()> {
     permissions::require_tenant_admin(pool, claims, tenant_id).await
 }
 
@@ -245,12 +239,13 @@ pub async fn update_role(
     require_tenant_admin(&pool, &claims, tenant_id).await?;
 
     // 禁止修改系统角色
-    let existing = sqlx::query("SELECT is_system FROM management.roles WHERE id = $1 AND tenant_id = $2")
-        .bind(role_id)
-        .bind(tenant_id)
-        .fetch_optional(&pool)
-        .await?
-        .ok_or_else(|| AppError::NotFound("角色不存在".to_string()))?;
+    let existing =
+        sqlx::query("SELECT is_system FROM management.roles WHERE id = $1 AND tenant_id = $2")
+            .bind(role_id)
+            .bind(tenant_id)
+            .fetch_optional(&pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound("角色不存在".to_string()))?;
 
     if existing.get::<bool, _>("is_system") {
         return Err(AppError::Forbidden("不能修改系统角色".to_string()));
@@ -297,12 +292,13 @@ pub async fn delete_role(
 ) -> Result<Json<Value>> {
     require_tenant_admin(&pool, &claims, tenant_id).await?;
 
-    let existing = sqlx::query("SELECT is_system FROM management.roles WHERE id = $1 AND tenant_id = $2")
-        .bind(role_id)
-        .bind(tenant_id)
-        .fetch_optional(&pool)
-        .await?
-        .ok_or_else(|| AppError::NotFound("角色不存在".to_string()))?;
+    let existing =
+        sqlx::query("SELECT is_system FROM management.roles WHERE id = $1 AND tenant_id = $2")
+            .bind(role_id)
+            .bind(tenant_id)
+            .fetch_optional(&pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound("角色不存在".to_string()))?;
 
     if existing.get::<bool, _>("is_system") {
         return Err(AppError::Forbidden("不能删除系统角色".to_string()));
@@ -327,7 +323,6 @@ pub async fn get_role_permissions(
     State(pool): State<PgPool>,
     Path(role_id): Path<i32>,
 ) -> Result<Json<Vec<Permission>>> {
-
     // 验证角色属于当前租户
     sqlx::query("SELECT id FROM management.roles WHERE id = $1 AND tenant_id = $2")
         .bind(role_id)
@@ -412,7 +407,6 @@ pub async fn list_permissions(
     TenantContext(tenant_id): TenantContext,
     State(pool): State<PgPool>,
 ) -> Result<Json<Vec<Permission>>> {
-
     let rows = sqlx::query(
         r#"
         SELECT id, tenant_id, resource, action, conditions, allowed_columns,
@@ -554,7 +548,6 @@ pub async fn get_user_roles(
     State(pool): State<PgPool>,
     Path(target_user_id): Path<i32>,
 ) -> Result<Json<Vec<UserRole>>> {
-
     let rows = sqlx::query(
         r#"
         SELECT ur.id, ur.user_id, ur.role_id, ur.tenant_id, r.name AS role_name, ur.created_at::TEXT
@@ -604,9 +597,7 @@ pub async fn assign_user_role(
     .fetch_one(&pool)
     .await?;
     if !role_belongs {
-        return Err(AppError::InvalidQuery(
-            "角色不属于该租户".to_string(),
-        ));
+        return Err(AppError::InvalidQuery("角色不属于该租户".to_string()));
     }
 
     // 目标用户必须已隶属于该租户（避免把外部用户拉进来当成员）
@@ -619,9 +610,7 @@ pub async fn assign_user_role(
     .fetch_one(&pool)
     .await?;
     if !target_in_tenant {
-        return Err(AppError::InvalidQuery(
-            "目标用户不属于该租户".to_string(),
-        ));
+        return Err(AppError::InvalidQuery("目标用户不属于该租户".to_string()));
     }
 
     sqlx::query(
@@ -639,7 +628,8 @@ pub async fn assign_user_role(
     .map_err(|e| AppError::InvalidQuery(format!("分配角色失败: {}", e)))?;
 
     // 仅这一个用户在这个租户内的权限视图变了。
-    permissions::invalidate_user_permissions(redis_ref(&redis), req.tenant_id, target_user_id).await;
+    permissions::invalidate_user_permissions(redis_ref(&redis), req.tenant_id, target_user_id)
+        .await;
 
     Ok(Json(json!({ "success": true, "message": "角色已分配" })))
 }
@@ -761,7 +751,6 @@ pub async fn require_schema_permission(
     Ok(())
 }
 
-
 /// 查询用户在指定租户下对某资源的有效权限
 /// 返回所有匹配的 Permission 记录
 ///
@@ -855,7 +844,8 @@ pub fn merge_permissions(permissions: &[Permission], user_id: i32) -> Permission
             Err(e) => {
                 tracing::warn!(
                     "permission {} 的 conditions 解析失败，已忽略: {}",
-                    perm.id, e
+                    perm.id,
+                    e
                 );
             }
         }
@@ -863,7 +853,10 @@ pub fn merge_permissions(permissions: &[Permission], user_id: i32) -> Permission
         // 合并列（取并集：多个权限允许的列合并）
         if let Some(cols) = &perm.allowed_columns {
             if let Some(arr) = cols.as_array() {
-                let cols_vec: Vec<String> = arr.iter().filter_map(|c| c.as_str().map(String::from)).collect();
+                let cols_vec: Vec<String> = arr
+                    .iter()
+                    .filter_map(|c| c.as_str().map(String::from))
+                    .collect();
                 match &mut all_allowed {
                     Some(existing) => {
                         for c in cols_vec {
@@ -879,7 +872,10 @@ pub fn merge_permissions(permissions: &[Permission], user_id: i32) -> Permission
 
         // 合并被拒绝的列（取交集：只有所有权限都拒绝的列才最终拒绝）
         if let Some(denied) = perm.denied_columns.as_array() {
-            let d: Vec<String> = denied.iter().filter_map(|c| c.as_str().map(String::from)).collect();
+            let d: Vec<String> = denied
+                .iter()
+                .filter_map(|c| c.as_str().map(String::from))
+                .collect();
             if all_denied.is_empty() {
                 all_denied = d;
             } else {
@@ -962,14 +958,21 @@ mod tests {
         assert_eq!(result.row_conditions[0].field, "author_id");
         assert_eq!(result.row_conditions[0].op, RowOp::Eq);
         assert_eq!(result.row_conditions[0].value, serde_json::json!(42));
-        assert_eq!(result.allowed_columns, Some(vec!["id".to_string(), "title".to_string()]));
+        assert_eq!(
+            result.allowed_columns,
+            Some(vec!["id".to_string(), "title".to_string()])
+        );
     }
 
     #[test]
     fn test_merge_multiple_permissions_columns_union() {
         let perms = vec![
             make_perm(serde_json::json!([]), Some(vec!["id", "title"]), &[]),
-            make_perm(serde_json::json!([]), Some(vec!["title", "content", "author"]), &[]),
+            make_perm(
+                serde_json::json!([]),
+                Some(vec!["title", "content", "author"]),
+                &[],
+            ),
         ];
         let result = merge_permissions(&perms, 1);
         let cols = result.allowed_columns.unwrap();

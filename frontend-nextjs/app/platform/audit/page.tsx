@@ -1,7 +1,26 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import api from '@/lib/api'
+
+interface PlatformAdminLog {
+  id: number
+  user_id: number | null
+  username: string | null
+  email: string | null
+  action: string
+  category: 'project' | 'workflow' | 'sql' | 'platform'
+  operation: string
+  summary: string
+  resource: string
+  request_method: string
+  request_path: string
+  request_body: Record<string, unknown> | null
+  response_status: number | null
+  ip_address: string | null
+  duration_ms: number | null
+  created_at: string
+}
 
 interface AuditLog {
   id: number
@@ -50,8 +69,11 @@ interface RawSqlStats {
   count: number
 }
 
+type Tab = 'platform' | 'audit' | 'slow' | 'raw-sql'
+
 export default function AuditPage() {
-  const [tab, setTab] = useState<'audit' | 'slow' | 'raw-sql'>('audit')
+  const [tab, setTab] = useState<Tab>('platform')
+  const [platformLogs, setPlatformLogs] = useState<PlatformAdminLog[]>([])
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([])
   const [slowQueries, setSlowQueries] = useState<SlowQuery[]>([])
   const [rawSqlLogs, setRawSqlLogs] = useState<RawSqlAuditLog[]>([])
@@ -59,10 +81,16 @@ export default function AuditPage() {
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(0)
+  const [expandedId, setExpandedId] = useState<number | null>(null)
   const [filters, setFilters] = useState({
     action: '',
     resource: '',
     user_id: '',
+  })
+  const [platformFilters, setPlatformFilters] = useState({
+    resource: '',
+    user_id: '',
+    category: '',
   })
   const [rawSqlFilters, setRawSqlFilters] = useState({
     action: '',
@@ -72,15 +100,34 @@ export default function AuditPage() {
   })
 
   useEffect(() => {
-    if (tab === 'audit') loadAuditLogs()
+    if (tab === 'platform') loadPlatformLogs()
+    else if (tab === 'audit') loadAuditLogs()
     else if (tab === 'slow') loadSlowQueries()
     else loadRawSqlLogs()
   }, [tab, page])
 
+  const loadPlatformLogs = async () => {
+    setLoading(true)
+    try {
+      const params: Record<string, unknown> = { limit: 50, offset: page * 50 }
+      if (platformFilters.resource) params.resource = platformFilters.resource
+      if (platformFilters.user_id) params.user_id = parseInt(platformFilters.user_id)
+      if (platformFilters.category) params.category = platformFilters.category
+
+      const res = await api.get('/api/platform/admin-audit-logs', { params })
+      setPlatformLogs(res.data.data || [])
+      setTotal(res.data.total || 0)
+    } catch (err) {
+      console.error('加载平台操作日志失败:', err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const loadAuditLogs = async () => {
     setLoading(true)
     try {
-      const params: any = { limit: 50, offset: page * 50 }
+      const params: Record<string, unknown> = { limit: 50, offset: page * 50 }
       if (filters.action) params.action = filters.action
       if (filters.resource) params.resource = filters.resource
       if (filters.user_id) params.user_id = parseInt(filters.user_id)
@@ -110,7 +157,7 @@ export default function AuditPage() {
   const loadRawSqlLogs = async () => {
     setLoading(true)
     try {
-      const params: any = { limit: 50, offset: page * 50 }
+      const params: Record<string, unknown> = { limit: 50, offset: page * 50 }
       if (rawSqlFilters.action) params.action = rawSqlFilters.action
       if (rawSqlFilters.user_id) params.user_id = parseInt(rawSqlFilters.user_id)
       if (rawSqlFilters.database_id) params.database_id = parseInt(rawSqlFilters.database_id)
@@ -125,6 +172,32 @@ export default function AuditPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const switchTab = (next: Tab) => {
+    setTab(next)
+    setPage(0)
+    setExpandedId(null)
+  }
+
+  const categoryColor = (category: string) => {
+    const colors: Record<string, string> = {
+      project: 'bg-blue-100 text-blue-800',
+      workflow: 'bg-indigo-100 text-indigo-800',
+      sql: 'bg-orange-100 text-orange-800',
+      platform: 'bg-purple-100 text-purple-800',
+    }
+    return colors[category] || 'bg-gray-100 text-gray-800'
+  }
+
+  const categoryLabel = (category: string) => {
+    const labels: Record<string, string> = {
+      project: '项目',
+      workflow: '工作流',
+      sql: 'SQL',
+      platform: '平台',
+    }
+    return labels[category] || category
   }
 
   const rawSqlActionColor = (action: string) => {
@@ -153,38 +226,200 @@ export default function AuditPage() {
     return 'text-red-600'
   }
 
+  const Pagination = () =>
+    total > 50 ? (
+      <div className="flex items-center justify-between px-4 py-3 border-t bg-gray-50">
+        <span className="text-xs text-gray-500">共 {total} 条</span>
+        <div className="flex space-x-2">
+          <button
+            onClick={() => setPage(Math.max(0, page - 1))}
+            disabled={page === 0}
+            className="btn-default text-xs disabled:opacity-50"
+          >
+            上一页
+          </button>
+          <button
+            onClick={() => setPage(page + 1)}
+            disabled={(page + 1) * 50 >= total}
+            className="btn-default text-xs disabled:opacity-50"
+          >
+            下一页
+          </button>
+        </div>
+      </div>
+    ) : null
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold text-gray-900">审计日志</h1>
-        <p className="text-sm text-gray-500 mt-1">查看所有 API 操作和慢查询记录</p>
+        <p className="text-sm text-gray-500 mt-1">
+          记录项目创建、工作流变更、SQL 执行等平台关键操作，含操作人与时间
+        </p>
       </div>
 
-      {/* Tab 切换 */}
-      <div className="flex space-x-1 bg-gray-100 p-1 rounded-lg w-fit">
+      <div className="flex space-x-1 bg-gray-100 p-1 rounded-lg w-fit flex-wrap">
         <button
-          onClick={() => { setTab('audit'); setPage(0); }}
-          className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${tab === 'audit' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+          onClick={() => switchTab('platform')}
+          className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${tab === 'platform' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
         >
-          <i className="fas fa-shield-alt mr-2"></i>审计日志
+          <i className="fas fa-crown mr-2"></i>平台操作
         </button>
         <button
-          onClick={() => { setTab('slow'); setPage(0); }}
+          onClick={() => switchTab('audit')}
+          className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${tab === 'audit' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+        >
+          <i className="fas fa-shield-alt mr-2"></i>全部审计
+        </button>
+        <button
+          onClick={() => switchTab('slow')}
           className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${tab === 'slow' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
         >
           <i className="fas fa-clock mr-2"></i>慢查询
         </button>
         <button
-          onClick={() => { setTab('raw-sql'); setPage(0); }}
+          onClick={() => switchTab('raw-sql')}
           className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${tab === 'raw-sql' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
         >
           <i className="fas fa-terminal mr-2"></i>原始 SQL 审计
         </button>
       </div>
 
+      {tab === 'platform' && (
+        <>
+          <div className="card p-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <select
+                value={platformFilters.category}
+                onChange={(e) => setPlatformFilters({ ...platformFilters, category: e.target.value })}
+                className="input-base text-sm"
+              >
+                <option value="">全部类型</option>
+                <option value="project">项目</option>
+                <option value="workflow">工作流</option>
+                <option value="sql">SQL</option>
+                <option value="platform">平台配置</option>
+              </select>
+              <input
+                type="text"
+                placeholder="路径筛选，如 /api/admin/workflows..."
+                value={platformFilters.resource}
+                onChange={(e) => setPlatformFilters({ ...platformFilters, resource: e.target.value })}
+                className="input-base text-sm flex-1 min-w-[200px]"
+              />
+              <input
+                type="text"
+                placeholder="用户 ID"
+                value={platformFilters.user_id}
+                onChange={(e) => setPlatformFilters({ ...platformFilters, user_id: e.target.value })}
+                className="input-base text-sm w-24"
+              />
+              <button
+                onClick={() => {
+                  setPage(0)
+                  loadPlatformLogs()
+                }}
+                className="btn-primary text-sm"
+              >
+                <i className="fas fa-search mr-1"></i>筛选
+              </button>
+            </div>
+          </div>
+
+          <div className="card overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">时间</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">类型</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">操作详情</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">操作人</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">状态</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">耗时</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">IP</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {loading ? (
+                  <tr>
+                    <td colSpan={8} className="text-center py-8 text-gray-400">
+                      <i className="fas fa-spinner fa-spin mr-2"></i>加载中...
+                    </td>
+                  </tr>
+                ) : platformLogs.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="text-center py-8 text-gray-400">
+                      暂无平台操作记录
+                    </td>
+                  </tr>
+                ) : (
+                  platformLogs.map((log) => (
+                    <Fragment key={log.id}>
+                      <tr className="hover:bg-gray-50">
+                        <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
+                          {new Date(log.created_at).toLocaleString('zh-CN')}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${categoryColor(log.category)}`}>
+                            {categoryLabel(log.category)}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="text-xs text-gray-900 font-medium">{log.summary || log.operation}</div>
+                          <div className="text-[11px] font-mono text-gray-400 mt-0.5 truncate max-w-md" title={log.request_path}>
+                            {log.request_method} {log.request_path}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-700">
+                          {log.username ? (
+                            <span title={log.email ?? undefined}>
+                              {log.username}
+                              <span className="text-gray-400 ml-1">#{log.user_id}</span>
+                            </span>
+                          ) : (
+                            <span className="text-gray-400">{log.user_id ?? '-'}</span>
+                          )}
+                        </td>
+                        <td className={`px-4 py-3 text-xs font-medium ${statusColor(log.response_status)}`}>
+                          {log.response_status ?? '-'}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-600">
+                          {log.duration_ms != null ? `${log.duration_ms}ms` : '-'}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-500">{log.ip_address ?? '-'}</td>
+                        <td className="px-4 py-3 text-xs">
+                          {log.request_body && (
+                            <button
+                              onClick={() => setExpandedId(expandedId === log.id ? null : log.id)}
+                              className="text-blue-600 hover:text-blue-800"
+                            >
+                              {expandedId === log.id ? '收起' : '详情'}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                      {expandedId === log.id && log.request_body && (
+                        <tr>
+                          <td colSpan={8} className="px-4 py-3 bg-gray-50">
+                            <pre className="text-xs font-mono text-gray-700 overflow-x-auto whitespace-pre-wrap">
+                              {JSON.stringify(log.request_body, null, 2)}
+                            </pre>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  ))
+                )}
+              </tbody>
+            </table>
+            <Pagination />
+          </div>
+        </>
+      )}
+
       {tab === 'audit' && (
         <>
-          {/* 筛选 */}
           <div className="card p-4">
             <div className="flex items-center space-x-4">
               <select
@@ -212,13 +447,18 @@ export default function AuditPage() {
                 onChange={(e) => setFilters({ ...filters, user_id: e.target.value })}
                 className="input-base text-sm w-24"
               />
-              <button onClick={() => { setPage(0); loadAuditLogs(); }} className="btn-primary text-sm">
+              <button
+                onClick={() => {
+                  setPage(0)
+                  loadAuditLogs()
+                }}
+                className="btn-primary text-sm"
+              >
                 <i className="fas fa-search mr-1"></i>筛选
               </button>
             </div>
           </div>
 
-          {/* 审计列表 */}
           <div className="card overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
@@ -234,11 +474,17 @@ export default function AuditPage() {
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {loading ? (
-                  <tr><td colSpan={7} className="text-center py-8 text-gray-400">
-                    <i className="fas fa-spinner fa-spin mr-2"></i>加载中...
-                  </td></tr>
+                  <tr>
+                    <td colSpan={7} className="text-center py-8 text-gray-400">
+                      <i className="fas fa-spinner fa-spin mr-2"></i>加载中...
+                    </td>
+                  </tr>
                 ) : auditLogs.length === 0 ? (
-                  <tr><td colSpan={7} className="text-center py-8 text-gray-400">暂无审计记录</td></tr>
+                  <tr>
+                    <td colSpan={7} className="text-center py-8 text-gray-400">
+                      暂无审计记录
+                    </td>
+                  </tr>
                 ) : (
                   auditLogs.map((log) => (
                     <tr key={log.id} className="hover:bg-gray-50">
@@ -246,16 +492,19 @@ export default function AuditPage() {
                         {new Date(log.created_at).toLocaleString('zh-CN')}
                       </td>
                       <td className="px-4 py-3">
-                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${methodColor(log.request_method)}`}>
+                        <span
+                          className={`px-2 py-0.5 rounded text-xs font-medium ${methodColor(log.request_method)}`}
+                        >
                           {log.request_method}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-xs font-mono text-gray-700 max-w-xs truncate" title={log.request_path}>
+                      <td
+                        className="px-4 py-3 text-xs font-mono text-gray-700 max-w-xs truncate"
+                        title={log.request_path}
+                      >
                         {log.request_path}
                       </td>
-                      <td className="px-4 py-3 text-xs text-gray-600">
-                        {log.user_id ?? '-'}
-                      </td>
+                      <td className="px-4 py-3 text-xs text-gray-600">{log.user_id ?? '-'}</td>
                       <td className={`px-4 py-3 text-xs font-medium ${statusColor(log.response_status)}`}>
                         {log.response_status ?? '-'}
                       </td>
@@ -268,23 +517,13 @@ export default function AuditPage() {
                 )}
               </tbody>
             </table>
-
-            {total > 50 && (
-              <div className="flex items-center justify-between px-4 py-3 border-t bg-gray-50">
-                <span className="text-xs text-gray-500">共 {total} 条</span>
-                <div className="flex space-x-2">
-                  <button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0} className="btn-default text-xs disabled:opacity-50">上一页</button>
-                  <button onClick={() => setPage(page + 1)} disabled={(page + 1) * 50 >= total} className="btn-default text-xs disabled:opacity-50">下一页</button>
-                </div>
-              </div>
-            )}
+            <Pagination />
           </div>
         </>
       )}
 
       {tab === 'raw-sql' && (
         <>
-          {/* 顶部统计卡片 */}
           {rawSqlStats.length > 0 && (
             <div className="card p-4">
               <h3 className="text-sm font-medium text-gray-700 mb-3">按 blocked_reason 分布（当前筛选条件下）</h3>
@@ -301,7 +540,6 @@ export default function AuditPage() {
             </div>
           )}
 
-          {/* 筛选 */}
           <div className="card p-4">
             <div className="flex flex-wrap items-center gap-3">
               <select
@@ -337,13 +575,18 @@ export default function AuditPage() {
                 />
                 <span>仅看被拦截</span>
               </label>
-              <button onClick={() => { setPage(0); loadRawSqlLogs(); }} className="btn-primary text-sm">
+              <button
+                onClick={() => {
+                  setPage(0)
+                  loadRawSqlLogs()
+                }}
+                className="btn-primary text-sm"
+              >
                 <i className="fas fa-search mr-1"></i>筛选
               </button>
             </div>
           </div>
 
-          {/* 列表 */}
           <div className="card overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
@@ -361,11 +604,17 @@ export default function AuditPage() {
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {loading ? (
-                  <tr><td colSpan={9} className="text-center py-8 text-gray-400">
-                    <i className="fas fa-spinner fa-spin mr-2"></i>加载中...
-                  </td></tr>
+                  <tr>
+                    <td colSpan={8} className="text-center py-8 text-gray-400">
+                      <i className="fas fa-spinner fa-spin mr-2"></i>加载中...
+                    </td>
+                  </tr>
                 ) : rawSqlLogs.length === 0 ? (
-                  <tr><td colSpan={9} className="text-center py-8 text-gray-400">暂无原始 SQL 记录</td></tr>
+                  <tr>
+                    <td colSpan={8} className="text-center py-8 text-gray-400">
+                      暂无原始 SQL 记录
+                    </td>
+                  </tr>
                 ) : (
                   rawSqlLogs.map((log) => (
                     <tr key={log.id} className="hover:bg-gray-50">
@@ -390,7 +639,10 @@ export default function AuditPage() {
                           <span className="text-gray-300">-</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-xs text-red-700 font-mono max-w-xs truncate" title={log.blocked_reason ?? ''}>
+                      <td
+                        className="px-4 py-3 text-xs text-red-700 font-mono max-w-xs truncate"
+                        title={log.blocked_reason ?? ''}
+                      >
                         {log.blocked_reason ?? '-'}
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-600">
@@ -401,16 +653,7 @@ export default function AuditPage() {
                 )}
               </tbody>
             </table>
-
-            {total > 50 && (
-              <div className="flex items-center justify-between px-4 py-3 border-t bg-gray-50">
-                <span className="text-xs text-gray-500">共 {total} 条</span>
-                <div className="flex space-x-2">
-                  <button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0} className="btn-default text-xs disabled:opacity-50">上一页</button>
-                  <button onClick={() => setPage(page + 1)} disabled={(page + 1) * 50 >= total} className="btn-default text-xs disabled:opacity-50">下一页</button>
-                </div>
-              </div>
-            )}
+            <Pagination />
           </div>
         </>
       )}
@@ -429,11 +672,17 @@ export default function AuditPage() {
             </thead>
             <tbody className="divide-y divide-gray-200">
               {loading ? (
-                <tr><td colSpan={5} className="text-center py-8 text-gray-400">
-                  <i className="fas fa-spinner fa-spin mr-2"></i>加载中...
-                </td></tr>
+                <tr>
+                  <td colSpan={5} className="text-center py-8 text-gray-400">
+                    <i className="fas fa-spinner fa-spin mr-2"></i>加载中...
+                  </td>
+                </tr>
               ) : slowQueries.length === 0 ? (
-                <tr><td colSpan={5} className="text-center py-8 text-gray-400">暂无慢查询记录</td></tr>
+                <tr>
+                  <td colSpan={5} className="text-center py-8 text-gray-400">
+                    暂无慢查询记录
+                  </td>
+                </tr>
               ) : (
                 slowQueries.map((q) => (
                   <tr key={q.id} className="hover:bg-gray-50">
@@ -442,11 +691,16 @@ export default function AuditPage() {
                     </td>
                     <td className="px-4 py-3 text-xs font-mono text-gray-700">{q.schema_name ?? '-'}</td>
                     <td className="px-4 py-3 text-xs font-mono text-gray-700">{q.table_name ?? '-'}</td>
-                    <td className="px-4 py-3 text-xs font-mono text-gray-600 max-w-md truncate" title={q.sql_preview ?? ''}>
+                    <td
+                      className="px-4 py-3 text-xs font-mono text-gray-600 max-w-md truncate"
+                      title={q.sql_preview ?? ''}
+                    >
                       {q.sql_preview ?? '-'}
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${q.duration_ms > 1000 ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                      <span
+                        className={`px-2 py-0.5 rounded text-xs font-medium ${q.duration_ms > 1000 ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'}`}
+                      >
                         {q.duration_ms}ms
                       </span>
                     </td>

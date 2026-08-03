@@ -22,9 +22,9 @@ use crate::redis_manager::RedisManager;
 ///
 /// 支持两种 path 形态：
 ///
-/// 1. 标准三段：`/api/v1/{database_id}/{schema}/{table}[/{id}]`
+/// 1. 标准三段：`/api/v1/{database_slug}/{schema}/{table}[/{id}]`
 ///    —— schema 在 path 第 4 段
-/// 2. PostgREST 兼容两段：`/api/v1/{database_id}/{table}`
+/// 2. PostgREST 兼容两段：`/api/v1/{database_slug}/{table}`
 ///    —— schema 必须来自 `Content-Profile`（写）或 `Accept-Profile`（读）请求头；
 ///       非法 / 缺失则回落到 `public`。与
 ///       [`crate::postgrest_compat::resolve_schema`] 行为完全对齐
@@ -117,7 +117,137 @@ pub async fn rbac_middleware(
     let action = method_to_action(&method);
     let resource = format!("{}.{}", schema, table);
 
-    // 尝试获取 JWT Claims
+    // 数据面 API Key（cr_）：即使 auth_middleware 已注入了合成 Claims，仍走 Key scope
+    // 路径——Key 的 permissions JSON 才是数据面授权来源，不应改成用户 RBAC。
+    let api_key = req
+        .headers()
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .filter(|s| s.starts_with("cr_"))
+        .map(|s| s.to_string())
+        .or_else(|| {
+            req.headers()
+                .get("apikey")
+                .and_then(|h| h.to_str().ok())
+                .filter(|s| s.starts_with("cr_"))
+                .map(|s| s.to_string())
+        });
+
+    if let Some(api_key) = api_key {
+        if let Some(ctx) = req
+            .extensions()
+            .get::<crate::middleware::ApiKeyContext>()
+            .cloned()
+        {
+            if ctx.database_id != database_id {
+                return Err(AppError::Unauthorized("API Key 与数据库不匹配".to_string()));
+            }
+            if let Some(header_db_id) = req
+                .headers()
+                .get("X-Database-Id")
+                .and_then(|h| h.to_str().ok())
+                .and_then(|s| s.parse::<i32>().ok())
+            {
+                if ctx.database_id != header_db_id {
+                    return Err(AppError::Forbidden(
+                        "API key does not have access to this database".to_string(),
+                    ));
+                }
+            }
+            check_api_key_scope(&ctx.permissions, &resource, action, &schema)?;
+            req.extensions_mut().insert(PermissionResult {
+                allowed: true,
+                row_conditions: vec![],
+                allowed_columns: None,
+                is_superadmin: false,
+            });
+            return Ok(next.run(req).await);
+        }
+
+        // Fallback for middleware-order variations in tests and legacy routes.
+        // 查询 API Key 记录（含 scope）
+        let key_row = sqlx::query(
+            r#"
+                SELECT database_id, permissions
+                FROM management.api_keys
+                WHERE key_hash = encode(sha256($1::bytea), 'hex')
+                  AND is_active = true
+                  AND (expires_at IS NULL OR expires_at > NOW())
+                "#,
+        )
+        .bind(&api_key)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("校验 API Key 失败: {}", e)))?;
+
+        let row = key_row.ok_or_else(|| {
+            tracing::warn!(
+                target: "authz",
+                database_id = database_id,
+                resource = %resource,
+                action = %action,
+                "RBAC 拒绝：API Key 无效或已过期"
+            );
+            AppError::Unauthorized("API Key 无效或已过期".to_string())
+        })?;
+
+        let key_db_id: i32 = row.get("database_id");
+        if key_db_id != database_id {
+            tracing::warn!(
+                target: "authz",
+                key_database_id = key_db_id,
+                request_database_id = database_id,
+                resource = %resource,
+                "RBAC 拒绝：API Key 与数据库不匹配"
+            );
+            return Err(AppError::Unauthorized("API Key 与数据库不匹配".to_string()));
+        }
+
+        // Also validate X-Database-Id header if present to prevent header spoofing
+        if let Some(header_db_id) = req
+            .headers()
+            .get("X-Database-Id")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.parse::<i32>().ok())
+        {
+            if key_db_id != header_db_id {
+                tracing::warn!(
+                    target: "authz",
+                    key_database_id = key_db_id,
+                    header_database_id = header_db_id,
+                    resource = %resource,
+                    "RBAC 拒绝：API Key 与 X-Database-Id 头不匹配（疑似越权探测）"
+                );
+                return Err(AppError::Forbidden(
+                    "API key does not have access to this database".to_string(),
+                ));
+            }
+        }
+
+        let permissions: serde_json::Value = row.get("permissions");
+        check_api_key_scope(&permissions, &resource, action, &schema).map_err(|e| {
+            tracing::warn!(
+                target: "authz",
+                database_id = database_id,
+                resource = %resource,
+                action = %action,
+                "RBAC 拒绝：API Key scope 不覆盖目标资源/操作"
+            );
+            e
+        })?;
+
+        req.extensions_mut().insert(PermissionResult {
+            allowed: true,
+            row_conditions: vec![],
+            allowed_columns: None,
+            // 下面字段保持与原 API Key 分支一致
+            is_superadmin: false,
+        });
+        return Ok(next.run(req).await);
+    }
+
+    // 尝试获取 JWT / 平台令牌 /（非 cr_ 场景）Claims
     let claims_opt = req.extensions().get::<Claims>().cloned();
 
     match claims_opt {
@@ -125,13 +255,12 @@ pub async fn rbac_middleware(
             let user_id = claims.sub;
 
             // 检查是否为超管
-            let sa_row = sqlx::query(
-                "SELECT COALESCE(is_superadmin, false) AS sa FROM users WHERE id = $1",
-            )
-            .bind(user_id)
-            .fetch_optional(&pool)
-            .await
-            .map_err(|e| AppError::Internal(format!("查询用户失败: {}", e)))?;
+            let sa_row =
+                sqlx::query("SELECT COALESCE(is_superadmin, false) AS sa FROM users WHERE id = $1")
+                    .bind(user_id)
+                    .fetch_optional(&pool)
+                    .await
+                    .map_err(|e| AppError::Internal(format!("查询用户失败: {}", e)))?;
 
             if sa_row.map(|r| r.get::<bool, _>("sa")).unwrap_or(false) {
                 req.extensions_mut().insert(PermissionResult::superadmin());
@@ -163,12 +292,19 @@ pub async fn rbac_middleware(
             let permissions = if let Some(ref redis) = redis_opt {
                 match PermissionCache::get(redis, tenant_id, user_id, &resource, action).await {
                     Some(cached) => {
-                        tracing::debug!("RBAC 权限命中缓存: user={} resource={}", user_id, resource);
+                        tracing::debug!(
+                            "RBAC 权限命中缓存: user={} resource={}",
+                            user_id,
+                            resource
+                        );
                         cached
                     }
                     None => {
-                        let perms = query_user_permissions(&pool, user_id, tenant_id, &resource, action).await?;
-                        PermissionCache::set(redis, tenant_id, user_id, &resource, action, &perms).await;
+                        let perms =
+                            query_user_permissions(&pool, user_id, tenant_id, &resource, action)
+                                .await?;
+                        PermissionCache::set(redis, tenant_id, user_id, &resource, action, &perms)
+                            .await;
                         perms
                     }
                 }
@@ -177,6 +313,15 @@ pub async fn rbac_middleware(
             };
 
             if permissions.is_empty() {
+                tracing::warn!(
+                    target: "authz",
+                    user_id = user_id,
+                    tenant_id = tenant_id,
+                    database_id = database_id,
+                    resource = %resource,
+                    action = %action,
+                    "RBAC 权限拒绝：用户对该资源无任何授权"
+                );
                 return Err(AppError::Forbidden(format!(
                     "没有权限对 {} 执行 {} 操作",
                     resource, action
@@ -187,69 +332,17 @@ pub async fn rbac_middleware(
             req.extensions_mut().insert(result);
         }
         None => {
-            // 没有 JWT → 必须是 API Key
-            let api_key = req
-                .headers()
-                .get("Authorization")
-                .and_then(|h| h.to_str().ok())
-                .and_then(|s| s.strip_prefix("Bearer "))
-                .filter(|s| s.starts_with("cr_"))
-                .ok_or_else(|| {
-                    AppError::Unauthorized(
-                        "请提供有效的 API Key 或 JWT Token".to_string(),
-                    )
-                })?;
-
-            // 查询 API Key 记录（含 scope）
-            let key_row = sqlx::query(
-                r#"
-                SELECT database_id, permissions
-                FROM management.api_keys
-                WHERE key_hash = encode(sha256($1::bytea), 'hex')
-                  AND is_active = true
-                  AND (expires_at IS NULL OR expires_at > NOW())
-                "#,
-            )
-            .bind(api_key)
-            .fetch_optional(&pool)
-            .await
-            .map_err(|e| AppError::Internal(format!("校验 API Key 失败: {}", e)))?;
-
-            let row = key_row.ok_or_else(|| {
-                AppError::Unauthorized("API Key 无效或已过期".to_string())
-            })?;
-
-            let key_db_id: i32 = row.get("database_id");
-            if key_db_id != database_id {
-                return Err(AppError::Unauthorized(
-                    "API Key 与数据库不匹配".to_string(),
-                ));
-            }
-
-            // Also validate X-Database-Id header if present to prevent header spoofing
-            if let Some(header_db_id) = req.headers()
-                .get("X-Database-Id")
-                .and_then(|h| h.to_str().ok())
-                .and_then(|s| s.parse::<i32>().ok())
-            {
-                if key_db_id != header_db_id {
-                    return Err(AppError::Forbidden(
-                        "API key does not have access to this database".to_string(),
-                    ));
-                }
-            }
-
-            let permissions: serde_json::Value = row.get("permissions");
-            check_api_key_scope(&permissions, &resource, action, &schema)?;
-
-            // 通过 scope 校验 → 注入"无 RBAC 行/列限制"的允许结果
-            // （API Key 仅在 scope 层面控制；行/列限制需切换到 JWT + RBAC）
-            req.extensions_mut().insert(PermissionResult {
-                allowed: true,
-                row_conditions: vec![],
-                allowed_columns: None,
-                is_superadmin: false,
-            });
+            // cr_ 已在上方优先处理；走到这里说明既无 Claims 也无 cr_ Key。
+            tracing::warn!(
+                target: "authz",
+                database_id = database_id,
+                resource = %resource,
+                action = %action,
+                "RBAC 拒绝：既无 JWT 也无 API Key"
+            );
+            return Err(AppError::Unauthorized(
+                "请提供有效的 API Key 或 JWT Token".to_string(),
+            ));
         }
     }
 
@@ -287,11 +380,17 @@ fn check_api_key_scope(
         let actions = permissions
             .get("allowed_actions")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_uppercase)).collect::<Vec<_>>())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_uppercase))
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
 
         if !actions.is_empty()
-            && !actions.iter().any(|a| a == "*" || a == action || a == "ALL")
+            && !actions
+                .iter()
+                .any(|a| a == "*" || a == action || a == "ALL")
         {
             return Err(AppError::Forbidden(format!(
                 "API Key 不允许执行 {} 操作",
@@ -302,14 +401,18 @@ fn check_api_key_scope(
         let resources = permissions
             .get("allowed_resources")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
 
         if !resources.is_empty() {
             let schema_wildcard = format!("{}.*", schema);
-            let allowed = resources.iter().any(|r| {
-                r == "*" || r == "*.*" || r == resource || r == &schema_wildcard
-            });
+            let allowed = resources
+                .iter()
+                .any(|r| r == "*" || r == "*.*" || r == resource || r == &schema_wildcard);
             if !allowed {
                 return Err(AppError::Forbidden(format!(
                     "API Key 不允许访问资源: {}",
@@ -322,11 +425,18 @@ fn check_api_key_scope(
 
     // 旧格式（仅按 action 类别校验）
     let allow_action = match action {
-        "SELECT" => permissions.get("read").and_then(|v| v.as_bool()).unwrap_or(false),
-        "INSERT" | "UPDATE" => {
-            permissions.get("write").and_then(|v| v.as_bool()).unwrap_or(false)
-        }
-        "DELETE" => permissions.get("delete").and_then(|v| v.as_bool()).unwrap_or(false),
+        "SELECT" => permissions
+            .get("read")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        "INSERT" | "UPDATE" => permissions
+            .get("write")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        "DELETE" => permissions
+            .get("delete")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         _ => false,
     };
     if !allow_action {
@@ -388,12 +498,10 @@ mod tests {
         assert!(extract_auto_api_parts("/api/schemas", &Method::GET, &empty_headers()).is_none());
         assert!(extract_auto_api_parts("/auth/login", &Method::GET, &empty_headers()).is_none());
         // 第三段不是 i32 → 不可解析
-        assert!(extract_auto_api_parts(
-            "/api/v1/abc/public/posts",
-            &Method::GET,
-            &empty_headers()
-        )
-        .is_none());
+        assert!(
+            extract_auto_api_parts("/api/v1/abc/public/posts", &Method::GET, &empty_headers())
+                .is_none()
+        );
     }
 
     #[test]
@@ -439,12 +547,10 @@ mod tests {
     #[test]
     fn test_extract_auto_api_parts_skips_rpc_route() {
         // 三段：rpc 子路由不该走 Auto API RBAC（RPC 路由有自己的鉴权链）
-        assert!(extract_auto_api_parts(
-            "/api/v1/3/rpc/some_fn",
-            &Method::POST,
-            &empty_headers()
-        )
-        .is_none());
+        assert!(
+            extract_auto_api_parts("/api/v1/3/rpc/some_fn", &Method::POST, &empty_headers())
+                .is_none()
+        );
         // 两段：path 段第 4 个不会是 rpc（rpc 路由本身是三段），但防御性挡一下
     }
 

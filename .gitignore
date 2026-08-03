@@ -18,6 +18,9 @@ frontend-nextjs/.env.local
 .vscode/
 .idea/
 *.swp
+
+# OMC 工具产物
+.omc/
 *.swo
 *~
 
@@ -35,4 +38,25 @@ docker-data/
 #qoder
 .qoder/
 
+# 本机工具产物（构建工具链路径 / codegraph 索引 / cursor 本地规则）
+.cargo/
+.codegraph/
+.cursor/
+
+# 项目记忆 hook 运行期状态（机器本地，不入库）
+.memory/.hook-state.json
+# codegraph 状态汇总（机器本地，由记忆系统部署写入）
+.memory/.codegraph-status.json
+# 个人偏好（单机个人层，仅无原生记忆宿主存在）
+.memory/个人偏好.md
+
 ._*
+
+# 本地 AI 工作区文件（会话生成，不入库）
+.claude/
+.memory/
+.superpowers/
+/CLAUDE.md
+
+# playwright-mcp 本地测试产物
+.playwright-mcp/

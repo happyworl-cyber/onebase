@@ -1,6 +1,7 @@
 //! ES「应用」API：把 Elasticsearch 包装成业务侧无需写 DSL / 不需要 ES SDK 的 HTTP 接口。
 //!
-//! 路由前缀 `/api/es-app/`；与 `/api/es/*es_path` 透传层共用同一套
+//! 路由前缀 `/api/es-app/` 或 `/api/v1/:database_slug/es-app/`；与 `/api/es/*` /
+//! `/api/v1/:database_slug/es/*` 透传层共用同一套 `cres_es_xxx` token 鉴权。
 //! `Authorization: ApiKey cres_es_xxx` token，所以一份 token 同时可用于两种模式。
 //!
 //! ## 提供的高层操作
@@ -11,7 +12,7 @@
 //! PUT    /api/es-app/{index}/docs/{id}     按 id upsert（整文档替换 + 不存在则创建）
 //! PATCH  /api/es-app/{index}/docs/{id}     按 id 部分更新（{doc:{...}} 或裸字段）
 //! DELETE /api/es-app/{index}/docs/{id}     按 id 删除
-//! POST   /api/es-app/{index}/search        扁平 where/q/sort/page/size/select
+//! POST   /api/es-app/{index}/search        扁平查询 + 受限 terms/composite 聚合
 //! POST   /api/es-app/{index}/count         同上但只算 total，无文档
 //! POST   /api/es-app/{index}/bulk          批量 index/create/update/delete
 //! POST   /api/es-app/{index}/_init         按字段类型字典创建 index + mapping
@@ -41,16 +42,27 @@
 //! | `{f: {in: [...]}}`                  | `terms: {f: [...]}`               | filter   |
 //! | `{f: {contains: "..."}}`            | `match: {f: "..."}`               | filter   |
 //! | `{f: {prefix: "..."}}`              | `prefix: {f: "..."}`              | filter   |
+//! | `{f: {prefix: {value, ...}}}`        | `prefix: {f: {value, ...}}`        | filter   |
+//! | `{f: {wildcard: "..."}}`            | `wildcard: {f: "..."}`            | filter   |
+//! | `{f: {wildcard: {value, ...}}}`      | `wildcard: {f: {value, ...}}`      | filter   |
 //! | `{f: {exists: true}}`               | `exists: {field: f}`              | filter   |
 //! | `{f: {exists: false}}`              | `exists: {field: f}`              | must_not |
 //! | `q` + 可选 `q_fields`                | `query_string` / `multi_match`     | must     |
 //!
 //! 多个 range op 合并到同字段（`gte` + `lte` → `range: {f: {gte, lte}}`）。
 //!
-//! 故意**不**暴露：脚本查询、agg、suggest、template、KNN —— 这些场景应直接走透传层。
+//! `nested_paths` 声明的前缀（如 `title`/`content`）会让命中该前缀的 `q_fields`
+//! 包进 `nested` 查询 + `inner_hits` 高亮；其余字段照常走 multi_match，多个子句用
+//! `bool.should + minimum_should_match:1` 组合。nested 命中的高亮片段会被汇总到
+//! 结果每条记录的 `_highlights` 字段。每条 multi_match 用 `type=bool_prefix` +
+//! `operator=and`——适配「边输入边搜」：前面的词精确 AND 命中、最后一个词当前缀，
+//! 避免 OR 默认语义下整句搜索命中半个库。
+//!
+//! 聚合仅开放无脚本的 `terms` / `composite` 子集（每次最多 20 项、总 bucket size 最多 10000）。
+//! 故意**不**暴露：脚本查询、其它 agg、suggest、template、KNN —— 这些场景应直接走透传层。
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
@@ -64,9 +76,28 @@ use crate::error::AppError;
 use crate::es::admin_handlers::build_auth_header;
 use crate::es::auth as es_auth;
 use crate::es::proxy_common::{
-    build_upstream_url, enforce_app_access, pick_client, resolve_token, spawn_usage_update,
-    ResolvedToken,
+    build_upstream_url, enforce_app_access, pick_client, resolve_token_for_request,
+    spawn_usage_update, EsTenantScope, ResolvedToken,
 };
+
+// ── 路径参数 ────────────────────────────────────────────────────────────
+//
+// 同一套 router 同时挂在 `/api/es-app/...` 与 `/api/v1/:database_slug/es-app/...`。
+// 后者比前者多一个 `database_slug` 路径参数，若用 `Path<String>` /
+// `Path<(String, String)>` 这类按个数匹配的 extractor，会在带 slug 的路由上
+// 报 "Wrong number of path arguments"。改用具名结构体按 key 解析：多余的
+// `database_slug` 会被 serde 忽略，两种挂载方式都能正确取出 index / id。
+
+#[derive(Debug, Deserialize)]
+pub struct IndexPath {
+    index: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DocPath {
+    index: String,
+    id: String,
+}
 
 // ── 通用 helper：往上游发请求 + 解 JSON ─────────────────────────────────
 
@@ -152,9 +183,10 @@ async fn upstream_raw(
     let status_axum =
         StatusCode::from_u16(upstream_status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
 
-    let bytes = resp.bytes().await.map_err(|e| {
-        AppError::ServiceUnavailable(format!("读取上游 ES 响应失败: {}", e))
-    })?;
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| AppError::ServiceUnavailable(format!("读取上游 ES 响应失败: {}", e)))?;
 
     // ES 在 5xx 时偶尔返回 text/html（reverse-proxy 错误页），别假设永远是 JSON
     let parsed: Value = if bytes.is_empty() {
@@ -213,10 +245,11 @@ fn json_response(status: StatusCode, body: Value) -> Response {
 pub async fn create_doc(
     State(pool): State<PgPool>,
     headers: axum::http::HeaderMap,
-    Path(index): Path<String>,
+    scope: Option<Extension<EsTenantScope>>,
+    Path(IndexPath { index }): Path<IndexPath>,
     Json(mut body): Json<Value>,
 ) -> Result<Response, AppError> {
-    let token = resolve_token(&pool, &headers).await?;
+    let token = resolve_token_for_request(&pool, &headers, scope).await?;
     enforce_app_access(&token, "POST", &index)?;
 
     // 把可选的 `_id` 从 body 抠出来（ES `_doc` endpoint 不接受 body 里有 _id）
@@ -252,9 +285,10 @@ pub async fn create_doc(
 pub async fn get_doc(
     State(pool): State<PgPool>,
     headers: axum::http::HeaderMap,
-    Path((index, id)): Path<(String, String)>,
+    scope: Option<Extension<EsTenantScope>>,
+    Path(DocPath { index, id }): Path<DocPath>,
 ) -> Result<Response, AppError> {
-    let token = resolve_token(&pool, &headers).await?;
+    let token = resolve_token_for_request(&pool, &headers, scope).await?;
     enforce_app_access(&token, "GET", &index)?;
 
     let path = format!("/{}/_doc/{}", index, url_encode_id(&id));
@@ -288,14 +322,16 @@ pub async fn get_doc(
 pub async fn upsert_doc(
     State(pool): State<PgPool>,
     headers: axum::http::HeaderMap,
-    Path((index, id)): Path<(String, String)>,
+    scope: Option<Extension<EsTenantScope>>,
+    Path(DocPath { index, id }): Path<DocPath>,
     Json(body): Json<Value>,
 ) -> Result<Response, AppError> {
-    let token = resolve_token(&pool, &headers).await?;
+    let token = resolve_token_for_request(&pool, &headers, scope).await?;
     enforce_app_access(&token, "PUT", &index)?;
 
     let path = format!("/{}/_doc/{}", index, url_encode_id(&id));
-    let (status, upstream) = upstream_json(&token, ReqMethod::PUT, &path, None, Some(&body)).await?;
+    let (status, upstream) =
+        upstream_json(&token, ReqMethod::PUT, &path, None, Some(&body)).await?;
     spawn_usage_update(pool.clone(), token.token_id);
 
     let result = json!({
@@ -316,10 +352,11 @@ pub async fn upsert_doc(
 pub async fn patch_doc(
     State(pool): State<PgPool>,
     headers: axum::http::HeaderMap,
-    Path((index, id)): Path<(String, String)>,
+    scope: Option<Extension<EsTenantScope>>,
+    Path(DocPath { index, id }): Path<DocPath>,
     Json(body): Json<Value>,
 ) -> Result<Response, AppError> {
-    let token = resolve_token(&pool, &headers).await?;
+    let token = resolve_token_for_request(&pool, &headers, scope).await?;
     enforce_app_access(&token, "PATCH", &index)?;
 
     // 是否已经是 `{doc: ...}` 形态？以 `doc` 键存在为判据
@@ -347,9 +384,10 @@ pub async fn patch_doc(
 pub async fn delete_doc(
     State(pool): State<PgPool>,
     headers: axum::http::HeaderMap,
-    Path((index, id)): Path<(String, String)>,
+    scope: Option<Extension<EsTenantScope>>,
+    Path(DocPath { index, id }): Path<DocPath>,
 ) -> Result<Response, AppError> {
-    let token = resolve_token(&pool, &headers).await?;
+    let token = resolve_token_for_request(&pool, &headers, scope).await?;
     enforce_app_access(&token, "DELETE", &index)?;
 
     let path = format!("/{}/_doc/{}", index, url_encode_id(&id));
@@ -381,6 +419,10 @@ pub struct SearchRequest {
     pub q: Option<String>,
     #[serde(default)]
     pub q_fields: Option<Vec<String>>,
+    /// 声明哪些 `q_fields` 前缀是 ES nested 字段（如 `["title", "content"]`）。
+    /// 命中的字段会被包进 `nested` 查询 + `inner_hits` 高亮；其余走普通 multi_match。
+    #[serde(default)]
+    pub nested_paths: Option<Vec<String>>,
     #[serde(default)]
     pub sort: Option<Vec<SortClause>>,
     #[serde(default)]
@@ -389,9 +431,18 @@ pub struct SearchRequest {
     pub size: Option<u32>,
     #[serde(default)]
     pub select: Option<Vec<String>>,
+    /// 受限聚合：仅支持顶层 `terms`，选项只开放 `field` / `size`。
+    #[serde(default)]
+    pub aggs: Option<Map<String, Value>>,
     /// 透传给 ES 的 `track_total_hits`（默认 true，确保 total 不被 10000 截断）
     #[serde(default)]
     pub track_total: Option<Value>,
+    /// 精确命中加权字段，格式同 q_fields，支持 `^boost`（如 `"title^10"`）。
+    /// 当 `q` 非空时，额外生成 `match_phrase` + `.keyword term` 两条 should 子句，
+    /// 让精确短语 / 完全匹配的文档排名优先于仅前缀局部命中的文档。
+    /// 不影响是否命中（must 条件不变），只提升得分。
+    #[serde(default)]
+    pub exact_boost_fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -409,33 +460,22 @@ fn default_sort_order() -> String {
 pub async fn search(
     State(pool): State<PgPool>,
     headers: axum::http::HeaderMap,
-    Path(index): Path<String>,
+    scope: Option<Extension<EsTenantScope>>,
+    Path(IndexPath { index }): Path<IndexPath>,
     Json(req): Json<SearchRequest>,
 ) -> Result<Response, AppError> {
-    let token = resolve_token(&pool, &headers).await?;
+    let token = resolve_token_for_request(&pool, &headers, scope).await?;
     enforce_app_access(&token, "POST", &index)?;
 
     let page = req.page.unwrap_or(1).max(1);
     let size = req.size.unwrap_or(20).min(1000); // 硬上限 1000：超过应改用 scroll / search_after
     let from = (page - 1) * size;
 
-    let mut body = build_search_query(&req)?;
-    if let Some(obj) = body.as_object_mut() {
-        obj.insert("from".to_string(), json!(from));
-        obj.insert("size".to_string(), json!(size));
-        if let Some(sort) = build_sort(&req) {
-            obj.insert("sort".to_string(), sort);
-        }
-        if let Some(select) = &req.select {
-            obj.insert("_source".to_string(), json!(select));
-        }
-        // track_total_hits 默认 true（避免 total 在 >10000 时被截）
-        let track = req.track_total.clone().unwrap_or(json!(true));
-        obj.insert("track_total_hits".to_string(), track);
-    }
+    let body = build_search_body(&req, from, size)?;
 
     let path = format!("/{}/_search", index);
-    let (status, upstream) = upstream_json(&token, ReqMethod::POST, &path, None, Some(&body)).await?;
+    let (status, upstream) =
+        upstream_json(&token, ReqMethod::POST, &path, None, Some(&body)).await?;
     spawn_usage_update(pool.clone(), token.token_id);
 
     if !status.is_success() {
@@ -443,10 +483,7 @@ pub async fn search(
         return Ok(json_response(status, upstream));
     }
 
-    let took_ms = upstream
-        .get("took")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    let took_ms = upstream.get("took").and_then(|v| v.as_u64()).unwrap_or(0);
     let total = upstream
         .get("hits")
         .and_then(|h| h.get("total"))
@@ -460,32 +497,300 @@ pub async fn search(
         .map(|arr| arr.iter().map(flatten_hit).collect())
         .unwrap_or_default();
 
-    Ok(json_response(
-        status,
-        json!({
-            "total": total,
-            "page": page,
-            "size": size,
-            "took_ms": took_ms,
-            "data": data,
-        }),
-    ))
+    let mut result = json!({
+        "total": total,
+        "page": page,
+        "size": size,
+        "took_ms": took_ms,
+        "data": data,
+    });
+    if let (Some(out), Some(aggregations)) = (result.as_object_mut(), upstream.get("aggregations"))
+    {
+        out.insert("aggregations".to_string(), aggregations.clone());
+    }
+
+    Ok(json_response(status, result))
+}
+
+/// 构造完整的 `_search` body，并在发往 ES 前校验受限聚合。
+fn build_search_body(req: &SearchRequest, from: u32, size: u32) -> Result<Value, AppError> {
+    let mut body = build_search_query(req)?;
+    if let Some(obj) = body.as_object_mut() {
+        obj.insert("from".to_string(), json!(from));
+        obj.insert("size".to_string(), json!(size));
+        if let Some(sort) = build_sort(req) {
+            obj.insert("sort".to_string(), sort);
+        }
+        if let Some(select) = &req.select {
+            obj.insert("_source".to_string(), json!(select));
+        }
+        if let Some(aggs) = &req.aggs {
+            obj.insert("aggs".to_string(), validate_aggregations(aggs)?);
+        }
+        // track_total_hits 默认 true（避免 total 在 >10000 时被截）
+        let track = req.track_total.clone().unwrap_or(json!(true));
+        obj.insert("track_total_hits".to_string(), track);
+    }
+    Ok(body)
+}
+
+const MAX_AGGREGATIONS: usize = 20;
+const MAX_TOTAL_AGG_BUCKETS: u64 = 10_000;
+const MAX_COMPOSITE_AGG_SIZE: u64 = 1_000;
+const MAX_COMPOSITE_SOURCES: usize = 10;
+
+/// 校验 ES App 暴露的聚合子集，拒绝 script 和其它高成本/高权限聚合。
+fn validate_aggregations(aggs: &Map<String, Value>) -> Result<Value, AppError> {
+    if aggs.len() > MAX_AGGREGATIONS {
+        return Err(AppError::InvalidQuery(format!(
+            "aggs 最多支持 {} 项",
+            MAX_AGGREGATIONS
+        )));
+    }
+
+    let mut validated = Map::new();
+    let mut total_bucket_budget = 0_u64;
+    for (name, definition) in aggs {
+        if name.trim().is_empty() || name.len() > 128 {
+            return Err(AppError::InvalidQuery(
+                "aggs 名称不能为空且不能超过 128 字节".to_string(),
+            ));
+        }
+        let definition = definition
+            .as_object()
+            .ok_or_else(|| AppError::InvalidQuery(format!("aggs.{} 必须是对象", name)))?;
+        if definition.len() != 1 {
+            return Err(AppError::InvalidQuery(format!(
+                "aggs.{} 必须且只能包含 terms 或 composite",
+                name
+            )));
+        }
+
+        let (validated_definition, bucket_budget) = if let Some(terms) = definition.get("terms") {
+            validate_terms_aggregation(name, terms)?
+        } else if let Some(composite) = definition.get("composite") {
+            validate_composite_aggregation(name, composite)?
+        } else {
+            return Err(AppError::InvalidQuery(format!(
+                "aggs.{} 仅支持 terms 或 composite 聚合",
+                name
+            )));
+        };
+        total_bucket_budget = total_bucket_budget
+            .checked_add(bucket_budget)
+            .ok_or_else(|| AppError::InvalidQuery("aggs size 总和过大".to_string()))?;
+        if total_bucket_budget > MAX_TOTAL_AGG_BUCKETS {
+            return Err(AppError::InvalidQuery(format!(
+                "aggs 所有 size 总和不能超过 {}",
+                MAX_TOTAL_AGG_BUCKETS
+            )));
+        }
+        validated.insert(name.clone(), validated_definition);
+    }
+    Ok(Value::Object(validated))
+}
+
+fn validate_terms_aggregation(name: &str, terms: &Value) -> Result<(Value, u64), AppError> {
+    let terms = terms
+        .as_object()
+        .ok_or_else(|| AppError::InvalidQuery(format!("aggs.{}.terms 必须是对象", name)))?;
+    if let Some(unknown) = terms
+        .keys()
+        .find(|key| !matches!(key.as_str(), "field" | "size"))
+    {
+        return Err(AppError::InvalidQuery(format!(
+            "aggs.{}.terms 不支持参数 `{}`；支持 field/size",
+            name, unknown
+        )));
+    }
+
+    let field =
+        validate_aggregation_field(terms.get("field"), &format!("aggs.{}.terms.field", name))?;
+    let size = validate_optional_size(
+        terms.get("size"),
+        MAX_TOTAL_AGG_BUCKETS,
+        &format!("aggs.{}.terms.size", name),
+    )?;
+
+    let mut terms_out = Map::new();
+    terms_out.insert("field".to_string(), Value::String(field));
+    if let Some(size) = size {
+        terms_out.insert("size".to_string(), json!(size));
+    }
+    Ok((json!({ "terms": terms_out }), size.unwrap_or(10)))
+}
+
+fn validate_composite_aggregation(name: &str, composite: &Value) -> Result<(Value, u64), AppError> {
+    let composite = composite
+        .as_object()
+        .ok_or_else(|| AppError::InvalidQuery(format!("aggs.{}.composite 必须是对象", name)))?;
+    if let Some(unknown) = composite
+        .keys()
+        .find(|key| !matches!(key.as_str(), "size" | "sources" | "after"))
+    {
+        return Err(AppError::InvalidQuery(format!(
+            "aggs.{}.composite 不支持参数 `{}`；支持 size/sources/after",
+            name, unknown
+        )));
+    }
+
+    let size = validate_optional_size(
+        composite.get("size"),
+        MAX_COMPOSITE_AGG_SIZE,
+        &format!("aggs.{}.composite.size", name),
+    )?;
+    let sources = composite
+        .get("sources")
+        .and_then(Value::as_array)
+        .filter(|sources| !sources.is_empty() && sources.len() <= MAX_COMPOSITE_SOURCES)
+        .ok_or_else(|| {
+            AppError::InvalidQuery(format!(
+                "aggs.{}.composite.sources 必须是 1..={} 项的数组",
+                name, MAX_COMPOSITE_SOURCES
+            ))
+        })?;
+
+    let mut source_names: Vec<String> = Vec::with_capacity(sources.len());
+    let mut validated_sources: Vec<Value> = Vec::with_capacity(sources.len());
+    for (index, source) in sources.iter().enumerate() {
+        let source = source
+            .as_object()
+            .filter(|source| source.len() == 1)
+            .ok_or_else(|| {
+                AppError::InvalidQuery(format!(
+                    "aggs.{}.composite.sources[{}] 必须只包含一个命名 source",
+                    name, index
+                ))
+            })?;
+        let (source_name, source_definition) = source.iter().next().expect("长度已校验为 1");
+        if source_name.trim().is_empty() || source_name.len() > 128 {
+            return Err(AppError::InvalidQuery(format!(
+                "aggs.{}.composite.sources[{}] 名称不能为空且不能超过 128 字节",
+                name, index
+            )));
+        }
+        if source_names.contains(source_name) {
+            return Err(AppError::InvalidQuery(format!(
+                "aggs.{}.composite source `{}` 重复",
+                name, source_name
+            )));
+        }
+
+        let source_definition = source_definition.as_object().ok_or_else(|| {
+            AppError::InvalidQuery(format!(
+                "aggs.{}.composite source `{}` 必须是对象",
+                name, source_name
+            ))
+        })?;
+        if source_definition.len() != 1 || !source_definition.contains_key("terms") {
+            return Err(AppError::InvalidQuery(format!(
+                "aggs.{}.composite source `{}` 仅支持 terms",
+                name, source_name
+            )));
+        }
+        let source_terms = source_definition["terms"].as_object().ok_or_else(|| {
+            AppError::InvalidQuery(format!(
+                "aggs.{}.composite source `{}`.terms 必须是对象",
+                name, source_name
+            ))
+        })?;
+        if let Some(unknown) = source_terms.keys().find(|key| key.as_str() != "field") {
+            return Err(AppError::InvalidQuery(format!(
+                "aggs.{}.composite source `{}`.terms 不支持参数 `{}`；仅支持 field",
+                name, source_name, unknown
+            )));
+        }
+        let field = validate_aggregation_field(
+            source_terms.get("field"),
+            &format!(
+                "aggs.{}.composite source `{}`.terms.field",
+                name, source_name
+            ),
+        )?;
+
+        source_names.push(source_name.clone());
+        let mut source_out = Map::new();
+        source_out.insert(source_name.clone(), json!({ "terms": { "field": field } }));
+        validated_sources.push(Value::Object(source_out));
+    }
+
+    let mut composite_out = Map::new();
+    if let Some(size) = size {
+        composite_out.insert("size".to_string(), json!(size));
+    }
+    composite_out.insert("sources".to_string(), Value::Array(validated_sources));
+    if let Some(after) = composite.get("after") {
+        let after = after.as_object().ok_or_else(|| {
+            AppError::InvalidQuery(format!("aggs.{}.composite.after 必须是对象", name))
+        })?;
+        if after.len() != source_names.len() || after.keys().any(|key| !source_names.contains(key))
+        {
+            return Err(AppError::InvalidQuery(format!(
+                "aggs.{}.composite.after 必须包含且仅包含所有 source 名称",
+                name
+            )));
+        }
+        if let Some((key, _)) = after
+            .iter()
+            .find(|(_, value)| !(value.is_string() || value.is_number() || value.is_boolean()))
+        {
+            return Err(AppError::InvalidQuery(format!(
+                "aggs.{}.composite.after.{} 必须是字符串、数字或布尔值",
+                name, key
+            )));
+        }
+        composite_out.insert("after".to_string(), Value::Object(after.clone()));
+    }
+
+    Ok((json!({ "composite": composite_out }), size.unwrap_or(10)))
+}
+
+fn validate_aggregation_field(value: Option<&Value>, path: &str) -> Result<String, AppError> {
+    value
+        .and_then(Value::as_str)
+        .filter(|field| !field.trim().is_empty() && field.len() <= 512)
+        .map(ToString::to_string)
+        .ok_or_else(|| {
+            AppError::InvalidQuery(format!("{} 必须是非空字符串且不超过 512 字节", path))
+        })
+}
+
+fn validate_optional_size(
+    value: Option<&Value>,
+    max: u64,
+    path: &str,
+) -> Result<Option<u64>, AppError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value
+        .as_u64()
+        .ok_or_else(|| AppError::InvalidQuery(format!("{} 必须是正整数", path)))?;
+    if value == 0 || value > max {
+        return Err(AppError::InvalidQuery(format!(
+            "{} 必须在 1..={} 之间",
+            path, max
+        )));
+    }
+    Ok(Some(value))
 }
 
 /// POST /api/es-app/:index/count
 pub async fn count(
     State(pool): State<PgPool>,
     headers: axum::http::HeaderMap,
-    Path(index): Path<String>,
+    scope: Option<Extension<EsTenantScope>>,
+    Path(IndexPath { index }): Path<IndexPath>,
     Json(req): Json<SearchRequest>,
 ) -> Result<Response, AppError> {
-    let token = resolve_token(&pool, &headers).await?;
+    let token = resolve_token_for_request(&pool, &headers, scope).await?;
     enforce_app_access(&token, "POST", &index)?;
 
     // /_count 只接受 `query`；其它都剥掉
     let body = build_search_query(&req)?;
     let path = format!("/{}/_count", index);
-    let (status, upstream) = upstream_json(&token, ReqMethod::POST, &path, None, Some(&body)).await?;
+    let (status, upstream) =
+        upstream_json(&token, ReqMethod::POST, &path, None, Some(&body)).await?;
     spawn_usage_update(pool.clone(), token.token_id);
 
     if !status.is_success() {
@@ -509,7 +814,52 @@ fn flatten_hit(hit: &Value) -> Value {
         // _score 在 filter-only 查询时是 null / 0；保留以便调用方判定相关性
         out.insert("_score".to_string(), v.clone());
     }
+    // nested 命中的高亮片段（如有）汇总到 _highlights，方便前端展示"命中了哪段译文"
+    if let Some(hl) = extract_highlights(hit) {
+        out.insert("_highlights".to_string(), hl);
+    }
     Value::Object(out)
+}
+
+/// 从 nested `inner_hits` 里汇总高亮片段，输出形如 `{ "title.value": ["...<em>x</em>..."] }`。
+///
+/// 同一字段跨多条 nested 子文档命中的片段会合并到一个数组；没有任何高亮时返回 `None`。
+fn extract_highlights(hit: &Value) -> Option<Value> {
+    let inner = hit.get("inner_hits")?.as_object()?;
+    let mut out: Map<String, Value> = Map::new();
+    for (_path, ih) in inner {
+        let hits = match ih
+            .get("hits")
+            .and_then(|h| h.get("hits"))
+            .and_then(|a| a.as_array())
+        {
+            Some(arr) => arr,
+            None => continue,
+        };
+        for h in hits {
+            let hl = match h.get("highlight").and_then(|v| v.as_object()) {
+                Some(m) => m,
+                None => continue,
+            };
+            for (field, frags) in hl {
+                let frag_arr = match frags.as_array() {
+                    Some(a) => a,
+                    None => continue,
+                };
+                let slot = out
+                    .entry(field.clone())
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                if let Some(existing) = slot.as_array_mut() {
+                    existing.extend(frag_arr.iter().cloned());
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(Value::Object(out))
+    }
 }
 
 /// 把 `SearchRequest.where_` + `q` 翻译成 `{query: {bool: {...}}}`。
@@ -519,6 +869,8 @@ fn build_search_query(req: &SearchRequest) -> Result<Value, AppError> {
     let mut filter: Vec<Value> = Vec::new();
     let mut must_not: Vec<Value> = Vec::new();
     let mut must: Vec<Value> = Vec::new();
+    // should 不影响是否命中，只提升精确/短语匹配文档的得分
+    let mut should: Vec<Value> = Vec::new();
 
     if let Some(where_map) = &req.where_ {
         for (field, val) in where_map.iter() {
@@ -528,20 +880,26 @@ fn build_search_query(req: &SearchRequest) -> Result<Value, AppError> {
 
     if let Some(q) = &req.q {
         if !q.trim().is_empty() {
-            let clause = match &req.q_fields {
-                Some(fields) if !fields.is_empty() => json!({
-                    "multi_match": { "query": q, "fields": fields }
-                }),
-                _ => json!({
-                    "query_string": { "query": q }
-                }),
-            };
-            must.push(clause);
+            must.push(build_q_clause(req, q));
+
+            // 精确命中 boost：match_phrase（短语包含）+ .keyword term（完全等于），
+            // 让 title="A" 这类精确匹配文档得分远高于仅前缀局部命中的文档。
+            if let Some(boost_fields) = &req.exact_boost_fields {
+                for f in boost_fields {
+                    let (field, boost) = parse_field_boost(f);
+                    should.push(
+                        json!({ "match_phrase": { &field: { "query": q, "boost": boost } } }),
+                    );
+                    // .keyword 子字段完全精确匹配，给 2 倍 boost
+                    let kw = format!("{}.keyword", field);
+                    should.push(json!({ "term": { kw: { "value": q, "boost": boost * 2.0 } } }));
+                }
+            }
         }
     }
 
-    // 三个桶都空：match_all（ES bool 也允许空 bool，但 match_all 更直观）
-    if filter.is_empty() && must_not.is_empty() && must.is_empty() {
+    // 四个桶都空：match_all
+    if filter.is_empty() && must_not.is_empty() && must.is_empty() && should.is_empty() {
         return Ok(json!({ "query": { "match_all": {} } }));
     }
 
@@ -555,7 +913,106 @@ fn build_search_query(req: &SearchRequest) -> Result<Value, AppError> {
     if !must.is_empty() {
         bool_obj.insert("must".to_string(), Value::Array(must));
     }
+    if !should.is_empty() {
+        bool_obj.insert("should".to_string(), Value::Array(should));
+    }
     Ok(json!({ "query": { "bool": bool_obj } }))
+}
+
+/// 解析 `"field_name^boost"` → `("field_name", boost)`，无 `^` 时 boost 默认 1.0。
+fn parse_field_boost(field: &str) -> (String, f64) {
+    match field.split_once('^') {
+        Some((name, b)) => (name.to_string(), b.parse::<f64>().unwrap_or(1.0)),
+        None => (field.to_string(), 1.0),
+    }
+}
+
+/// 构造 `q` 全文检索子句。
+///
+/// - 未声明 `nested_paths`：保持原行为（有 `q_fields` 用 multi_match，否则 query_string）。
+/// - 声明了 `nested_paths`：把 `q_fields` 按 nested 前缀（如 `title.`）分组——每个 nested
+///   path 包一层 `nested` 查询并带 `inner_hits`（含高亮），其余普通字段合成一条 multi_match；
+///   多个子句用 `bool.should + minimum_should_match:1` 组合（命中任意字段即算相关）。
+///   每条 multi_match 用 `type=bool_prefix` + `operator=and`（边输入边搜，详见模块头注释）。
+fn build_q_clause(req: &SearchRequest, q: &str) -> Value {
+    let nested = req.nested_paths.clone().unwrap_or_default();
+
+    // 无 nested 声明 —— 完全兼容老行为
+    if nested.is_empty() {
+        return match &req.q_fields {
+            Some(fields) if !fields.is_empty() => json!({
+                "multi_match": { "query": q, "fields": fields }
+            }),
+            _ => json!({
+                "query_string": { "query": q }
+            }),
+        };
+    }
+
+    let fields = req.q_fields.clone().unwrap_or_default();
+    let mut should: Vec<Value> = Vec::new();
+
+    // 每个 nested path 一条 nested 子句
+    for path in &nested {
+        let prefix = format!("{}.", path);
+        let path_fields: Vec<String> = fields
+            .iter()
+            .filter(|f| f.starts_with(&prefix))
+            .cloned()
+            .collect();
+        if path_fields.is_empty() {
+            continue;
+        }
+        // inner_hits 高亮字段名要去掉 `^boost` 后缀
+        let mut hl_fields = Map::new();
+        for f in &path_fields {
+            hl_fields.insert(strip_boost(f).to_string(), json!({}));
+        }
+        should.push(json!({
+            "nested": {
+                "path": path,
+                // 两层评分：
+                // must=bool_prefix  保证「边输入边搜」前缀命中（如 "Mys" → "Mystery"）；
+                // should=best_fields 利用 BM25 字段长度归一化给完整词额外加分——
+                //   title="A"（1词）比 title="Recovery of my account"（4词）得分高得多，
+                //   解决精确匹配排名靠后的问题。
+                "query": {
+                    "bool": {
+                        "must": [{ "multi_match": { "query": q, "fields": path_fields, "type": "bool_prefix", "operator": "and" } }],
+                        "should": [{ "multi_match": { "query": q, "fields": path_fields, "type": "best_fields", "operator": "and" } }]
+                    }
+                },
+                "inner_hits": { "highlight": { "fields": hl_fields } }
+            }
+        }));
+    }
+
+    // 非 nested 的普通字段合成一条两层查询（与 nested 内部相同策略）
+    let flat_fields: Vec<String> = fields
+        .iter()
+        .filter(|f| !nested.iter().any(|p| f.starts_with(&format!("{}.", p))))
+        .cloned()
+        .collect();
+    if !flat_fields.is_empty() {
+        should.push(json!({
+            "bool": {
+                "must": [{ "multi_match": { "query": q, "fields": flat_fields, "type": "bool_prefix", "operator": "and" } }],
+                "should": [{ "multi_match": { "query": q, "fields": flat_fields, "type": "best_fields", "operator": "and" } }]
+            }
+        }));
+    }
+
+    // 兜底：声明了 nested 却没有任何可用字段 → 退回 query_string，避免空 should 查不到东西
+    if should.is_empty() {
+        return json!({ "query_string": { "query": q } });
+    }
+
+    json!({ "bool": { "minimum_should_match": 1, "should": should } })
+}
+
+/// 去掉字段名里的 `^boost` 后缀（`title.value^3` → `title.value`），用于 highlight 字段名。
+fn strip_boost(field: &str) -> &str {
+    field.split('^').next().unwrap_or(field)
 }
 
 /// 翻译一条 `{field: value | {ops...}}`。
@@ -612,10 +1069,8 @@ fn translate_where_entry(
                 filter.push(json!({ "match": { field: s } }));
             }
             "prefix" | "starts_with" => {
-                let s = v.as_str().ok_or_else(|| {
-                    AppError::InvalidQuery(format!("where.{}.{} 必须是字符串", field, op))
-                })?;
-                filter.push(json!({ "prefix": { field: s } }));
+                let prefix = translate_multi_term_value(field, op, v)?;
+                filter.push(json!({ "prefix": { field: prefix } }));
             }
             "exists" => {
                 let b = v.as_bool().ok_or_else(|| {
@@ -628,10 +1083,8 @@ fn translate_where_entry(
                 }
             }
             "wildcard" => {
-                let s = v.as_str().ok_or_else(|| {
-                    AppError::InvalidQuery(format!("where.{}.wildcard 必须是字符串", field))
-                })?;
-                filter.push(json!({ "wildcard": { field: s } }));
+                let wildcard = translate_multi_term_value(field, op, v)?;
+                filter.push(json!({ "wildcard": { field: wildcard } }));
             }
             other => {
                 return Err(AppError::InvalidQuery(format!(
@@ -645,6 +1098,80 @@ fn translate_where_entry(
         filter.push(json!({ "range": { field: range_obj } }));
     }
     Ok(())
+}
+
+/// 翻译 prefix / wildcard 的简写或 ES 参数对象。
+///
+/// - `"promo-*"` 保持原有字符串简写；
+/// - `{"value":"*iphone*","case_insensitive":true,"rewrite":"constant_score"}`
+///   允许业务侧使用 ES multi-term query 的常用参数。
+fn translate_multi_term_value(
+    field: &str,
+    operator: &str,
+    value: &Value,
+) -> Result<Value, AppError> {
+    if value.is_string() {
+        return Ok(value.clone());
+    }
+
+    let options = value.as_object().ok_or_else(|| {
+        AppError::InvalidQuery(format!(
+            "where.{}.{} 必须是字符串或参数对象",
+            field, operator
+        ))
+    })?;
+
+    let query_value = options
+        .get("value")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AppError::InvalidQuery(format!("where.{}.{}.value 必须是字符串", field, operator))
+        })?;
+
+    if let Some(case_insensitive) = options.get("case_insensitive") {
+        if !case_insensitive.is_boolean() {
+            return Err(AppError::InvalidQuery(format!(
+                "where.{}.{}.case_insensitive 必须是布尔值",
+                field, operator
+            )));
+        }
+    }
+    if let Some(rewrite) = options.get("rewrite") {
+        if !rewrite.is_string() {
+            return Err(AppError::InvalidQuery(format!(
+                "where.{}.{}.rewrite 必须是字符串",
+                field, operator
+            )));
+        }
+    }
+    if let Some(boost) = options.get("boost") {
+        if !boost.is_number() {
+            return Err(AppError::InvalidQuery(format!(
+                "where.{}.{}.boost 必须是数字",
+                field, operator
+            )));
+        }
+    }
+
+    const ALLOWED_OPTIONS: &[&str] = &["value", "case_insensitive", "rewrite", "boost"];
+    if let Some(unknown) = options
+        .keys()
+        .find(|key| !ALLOWED_OPTIONS.contains(&key.as_str()))
+    {
+        return Err(AppError::InvalidQuery(format!(
+            "where.{}.{} 不支持参数 `{}`；支持 value/case_insensitive/rewrite/boost",
+            field, operator, unknown
+        )));
+    }
+
+    let mut translated = Map::new();
+    translated.insert("value".to_string(), json!(query_value));
+    for option in ["case_insensitive", "rewrite", "boost"] {
+        if let Some(option_value) = options.get(option) {
+            translated.insert(option.to_string(), option_value.clone());
+        }
+    }
+    Ok(Value::Object(translated))
 }
 
 fn build_sort(req: &SearchRequest) -> Option<Value> {
@@ -688,10 +1215,11 @@ pub struct BulkOp {
 pub async fn bulk(
     State(pool): State<PgPool>,
     headers: axum::http::HeaderMap,
-    Path(index): Path<String>,
+    scope: Option<Extension<EsTenantScope>>,
+    Path(IndexPath { index }): Path<IndexPath>,
     Json(req): Json<BulkRequest>,
 ) -> Result<Response, AppError> {
-    let token = resolve_token(&pool, &headers).await?;
+    let token = resolve_token_for_request(&pool, &headers, scope).await?;
     enforce_app_access(&token, "POST", &index)?;
 
     if req.operations.is_empty() {
@@ -770,10 +1298,7 @@ fn build_bulk_ndjson(index: &str, req: &BulkRequest) -> Result<String, AppError>
             }
             "update" => {
                 let id = op.id.as_ref().ok_or_else(|| {
-                    AppError::InvalidQuery(format!(
-                        "bulk.operations[{}]: action=update 需要 id",
-                        i
-                    ))
+                    AppError::InvalidQuery(format!("bulk.operations[{}]: action=update 需要 id", i))
                 })?;
                 let doc = op.doc.as_ref().ok_or_else(|| {
                     AppError::InvalidQuery(format!(
@@ -795,10 +1320,7 @@ fn build_bulk_ndjson(index: &str, req: &BulkRequest) -> Result<String, AppError>
             }
             "delete" => {
                 let id = op.id.as_ref().ok_or_else(|| {
-                    AppError::InvalidQuery(format!(
-                        "bulk.operations[{}]: action=delete 需要 id",
-                        i
-                    ))
+                    AppError::InvalidQuery(format!("bulk.operations[{}]: action=delete 需要 id", i))
                 })?;
                 let header = json!({ "delete": { "_index": index, "_id": id } });
                 out.push_str(&serde_json::to_string(&header).unwrap());
@@ -873,10 +1395,11 @@ pub struct InitIndexRequest {
 pub async fn init_index(
     State(pool): State<PgPool>,
     headers: axum::http::HeaderMap,
-    Path(index): Path<String>,
+    scope: Option<Extension<EsTenantScope>>,
+    Path(IndexPath { index }): Path<IndexPath>,
     Json(req): Json<InitIndexRequest>,
 ) -> Result<Response, AppError> {
-    let token = resolve_token(&pool, &headers).await?;
+    let token = resolve_token_for_request(&pool, &headers, scope).await?;
     // 用 POST 校验（用户对这个 endpoint 打的是 POST）；上游再翻译成 PUT
     enforce_app_access(&token, "POST", &index)?;
 
@@ -937,9 +1460,10 @@ fn normalize_settings(mut settings: Map<String, Value>) -> Map<String, Value> {
 pub async fn delete_index(
     State(pool): State<PgPool>,
     headers: axum::http::HeaderMap,
-    Path(index): Path<String>,
+    scope: Option<Extension<EsTenantScope>>,
+    Path(IndexPath { index }): Path<IndexPath>,
 ) -> Result<Response, AppError> {
-    let token = resolve_token(&pool, &headers).await?;
+    let token = resolve_token_for_request(&pool, &headers, scope).await?;
     enforce_app_access(&token, "DELETE", &index)?;
 
     let path = format!("/{}", index);
@@ -952,9 +1476,10 @@ pub async fn delete_index(
 pub async fn get_index_info(
     State(pool): State<PgPool>,
     headers: axum::http::HeaderMap,
-    Path(index): Path<String>,
+    scope: Option<Extension<EsTenantScope>>,
+    Path(IndexPath { index }): Path<IndexPath>,
 ) -> Result<Response, AppError> {
-    let token = resolve_token(&pool, &headers).await?;
+    let token = resolve_token_for_request(&pool, &headers, scope).await?;
     enforce_app_access(&token, "GET", &index)?;
 
     let path = format!("/{}", index);
@@ -968,10 +1493,7 @@ pub async fn get_index_info(
     // ES 返回 `{"<index_name>": {"aliases":..., "mappings":..., "settings":...}}`
     // 抠出 inner object，再带 `index` 字段方便调用方使用
     if let Some((real_name, inner)) = upstream.as_object().and_then(|o| o.iter().next()) {
-        let mut out = inner
-            .as_object()
-            .cloned()
-            .unwrap_or_default();
+        let mut out = inner.as_object().cloned().unwrap_or_default();
         out.insert("index".to_string(), Value::String(real_name.clone()));
         return Ok(json_response(status, Value::Object(out)));
     }
@@ -989,9 +1511,10 @@ pub struct ListIndicesQuery {
 pub async fn list_indices(
     State(pool): State<PgPool>,
     headers: axum::http::HeaderMap,
+    scope: Option<Extension<EsTenantScope>>,
     Query(q): Query<ListIndicesQuery>,
 ) -> Result<Response, AppError> {
-    let token = resolve_token(&pool, &headers).await?;
+    let token = resolve_token_for_request(&pool, &headers, scope).await?;
 
     // 只校 method（这条 endpoint 不针对具体 index）
     if !token.allowed_methods.iter().any(|m| m == "GET") {
@@ -1003,14 +1526,8 @@ pub async fn list_indices(
     let path = "/_cat/indices".to_string();
     // 强制 JSON + 选择字段，控制响应体积
     let query_str = "format=json&h=index,health,status,docs.count,store.size";
-    let (status, upstream) = upstream_json(
-        &token,
-        ReqMethod::GET,
-        &path,
-        Some(query_str),
-        None,
-    )
-    .await?;
+    let (status, upstream) =
+        upstream_json(&token, ReqMethod::GET, &path, Some(query_str), None).await?;
     spawn_usage_update(pool.clone(), token.token_id);
 
     if !status.is_success() {
@@ -1074,6 +1591,147 @@ mod tests {
         let r = req("{}");
         let q = build_search_query(&r).unwrap();
         assert_eq!(q, json!({ "query": { "match_all": {} } }));
+    }
+
+    #[test]
+    fn search_terms_aggregation_is_added_to_body() {
+        let r = req(r#"{
+            "where": {"article_type": 0, "delete_status": 0},
+            "size": 0,
+            "aggs": {
+                "topic_counts": {
+                    "terms": {"field": "topics", "size": 10000}
+                }
+            }
+        }"#);
+        let body = build_search_body(&r, 0, 0).unwrap();
+        assert_eq!(
+            body["aggs"],
+            json!({
+                "topic_counts": {
+                    "terms": {"field": "topics", "size": 10000}
+                }
+            })
+        );
+        assert_eq!(body["size"], 0);
+        assert_eq!(body["from"], 0);
+        assert_eq!(body["track_total_hits"], true);
+    }
+
+    #[test]
+    fn search_composite_aggregation_is_added_to_body() {
+        let r = req(r#"{
+            "size": 0,
+            "aggs": {
+                "topic_counts": {
+                    "composite": {
+                        "size": 1000,
+                        "sources": [
+                            {"topic": {"terms": {"field": "topics"}}}
+                        ],
+                        "after": {"topic": "上一页最后一个值"}
+                    }
+                }
+            }
+        }"#);
+        let body = build_search_body(&r, 0, 0).unwrap();
+        assert_eq!(
+            body["aggs"],
+            json!({
+                "topic_counts": {
+                    "composite": {
+                        "size": 1000,
+                        "sources": [
+                            {"topic": {"terms": {"field": "topics"}}}
+                        ],
+                        "after": {"topic": "上一页最后一个值"}
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn search_aggregation_rejects_unsafe_or_oversized_options() {
+        let scripted = req(r#"{
+            "aggs": {
+                "topic_counts": {
+                    "terms": {"field": "topics", "script": "malicious"}
+                }
+            }
+        }"#);
+        assert!(build_search_body(&scripted, 0, 0)
+            .unwrap_err()
+            .to_string()
+            .contains("不支持参数 `script`"));
+
+        let oversized = req(r#"{
+            "aggs": {
+                "topic_counts": {
+                    "terms": {"field": "topics", "size": 10001}
+                }
+            }
+        }"#);
+        assert!(build_search_body(&oversized, 0, 0)
+            .unwrap_err()
+            .to_string()
+            .contains("1..=10000"));
+
+        let combined_oversized = req(r#"{
+            "aggs": {
+                "topics": {"terms": {"field": "topics", "size": 6000}},
+                "authors": {"terms": {"field": "author_id", "size": 5000}}
+            }
+        }"#);
+        assert!(build_search_body(&combined_oversized, 0, 0)
+            .unwrap_err()
+            .to_string()
+            .contains("size 总和不能超过 10000"));
+
+        let unsupported = req(r#"{
+            "aggs": {
+                "avg_score": {
+                    "avg": {"field": "score"}
+                }
+            }
+        }"#);
+        assert!(build_search_body(&unsupported, 0, 0)
+            .unwrap_err()
+            .to_string()
+            .contains("仅支持 terms 或 composite 聚合"));
+
+        let composite_scripted = req(r#"{
+            "aggs": {
+                "topics": {
+                    "composite": {
+                        "sources": [
+                            {"topic": {"terms": {"field": "topics", "script": "malicious"}}}
+                        ]
+                    }
+                }
+            }
+        }"#);
+        assert!(build_search_body(&composite_scripted, 0, 0)
+            .unwrap_err()
+            .to_string()
+            .contains("仅支持 field"));
+
+        let composite_bad_after = req(r#"{
+            "aggs": {
+                "topics": {
+                    "composite": {
+                        "sources": [
+                            {"topic": {"terms": {"field": "topics"}}}
+                        ],
+                        "after": {"wrong_source": "x"}
+                    }
+                }
+            }
+        }"#);
+        assert!(build_search_body(&composite_bad_after, 0, 0)
+            .unwrap_err()
+            .to_string()
+            .contains("必须包含且仅包含所有 source 名称"));
     }
 
     #[test]
@@ -1164,13 +1822,11 @@ mod tests {
 
     #[test]
     fn search_contains_and_prefix_and_wildcard() {
-        let r = req(
-            r#"{"where": {
+        let r = req(r#"{"where": {
                 "title": {"contains": "首单"},
                 "code":  {"prefix": "ORD-"},
                 "tags":  {"wildcard": "promo-*"}
-            }}"#,
-        );
+            }}"#);
         let q = build_search_query(&r).unwrap();
         let filters = q["query"]["bool"]["filter"].as_array().unwrap();
         assert!(filters
@@ -1185,10 +1841,95 @@ mod tests {
     }
 
     #[test]
-    fn search_exists_true_and_false() {
-        let r = req(
-            r#"{"where": {"a": {"exists": true}, "b": {"exists": false}}}"#,
+    fn search_prefix_accepts_es_options() {
+        let r = req(r#"{"where": {
+            "name": {"prefix": {
+                "value": "iphone",
+                "case_insensitive": true,
+                "rewrite": "constant_score",
+                "boost": 2
+            }}
+        }}"#);
+        let q = build_search_query(&r).unwrap();
+        assert_eq!(
+            q,
+            json!({
+                "query": {
+                    "bool": {
+                        "filter": [{
+                            "prefix": {
+                                "name": {
+                                    "value": "iphone",
+                                    "case_insensitive": true,
+                                    "rewrite": "constant_score",
+                                    "boost": 2
+                                }
+                            }
+                        }]
+                    }
+                }
+            })
         );
+    }
+
+    #[test]
+    fn search_wildcard_accepts_es_options() {
+        let r = req(r#"{"where": {
+            "name": {"wildcard": {
+                "value": "*iphone*",
+                "case_insensitive": true,
+                "rewrite": "constant_score",
+                "boost": 2
+            }}
+        }}"#);
+        let q = build_search_query(&r).unwrap();
+        assert_eq!(
+            q,
+            json!({
+                "query": {
+                    "bool": {
+                        "filter": [{
+                            "wildcard": {
+                                "name": {
+                                    "value": "*iphone*",
+                                    "case_insensitive": true,
+                                    "rewrite": "constant_score",
+                                    "boost": 2
+                                }
+                            }
+                        }]
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn search_wildcard_rejects_invalid_options() {
+        let missing_value = req(r#"{"where":{"name":{"wildcard":{"case_insensitive":true}}}}"#);
+        assert!(build_search_query(&missing_value)
+            .unwrap_err()
+            .to_string()
+            .contains("wildcard.value 必须是字符串"));
+
+        let invalid_case =
+            req(r#"{"where":{"name":{"wildcard":{"value":"*iphone*","case_insensitive":"yes"}}}}"#);
+        assert!(build_search_query(&invalid_case)
+            .unwrap_err()
+            .to_string()
+            .contains("case_insensitive 必须是布尔值"));
+
+        let unknown_option =
+            req(r#"{"where":{"name":{"wildcard":{"value":"*iphone*","unknown":true}}}}"#);
+        assert!(build_search_query(&unknown_option)
+            .unwrap_err()
+            .to_string()
+            .contains("不支持参数 `unknown`"));
+    }
+
+    #[test]
+    fn search_exists_true_and_false() {
+        let r = req(r#"{"where": {"a": {"exists": true}, "b": {"exists": false}}}"#);
         let q = build_search_query(&r).unwrap();
         let bool_obj = &q["query"]["bool"];
         assert!(bool_obj["filter"]
@@ -1222,6 +1963,76 @@ mod tests {
                 "query": { "bool": { "must": [{ "multi_match": { "query": "promo", "fields": ["title", "remark"] } }] } }
             })
         );
+    }
+
+    #[test]
+    fn search_q_nested_paths_wraps_nested_query() {
+        let r = req(r#"{"q": "篮球",
+                "q_fields": ["title.value^3", "content.value", "tags"],
+                "nested_paths": ["title", "content"]}"#);
+        let q = build_search_query(&r).unwrap();
+        let should = q["query"]["bool"]["must"][0]["bool"]["should"]
+            .as_array()
+            .unwrap();
+        // title / content 各一条 nested + 普通字段 tags 一条 bool = 3 条
+        assert_eq!(should.len(), 3);
+        // title 这条：nested.path=title，内部 bool.must 用 bool_prefix + operator=and，
+        // bool.should 用 best_fields（BM25 长度归一化，精确匹配加分）
+        assert!(should.iter().any(|c| {
+            let inner_must = &c["nested"]["query"]["bool"]["must"][0]["multi_match"];
+            c["nested"]["path"] == "title"
+                && inner_must["fields"][0] == "title.value^3"
+                && inner_must["type"] == "bool_prefix"
+                && inner_must["operator"] == "and"
+                && c["nested"]["query"]["bool"]["should"][0]["multi_match"]["type"] == "best_fields"
+                // 高亮字段名去掉了 boost
+                && c["nested"]["inner_hits"]["highlight"]["fields"]
+                    .get("title.value")
+                    .is_some()
+        }));
+        assert!(should.iter().any(|c| c["nested"]["path"] == "content"));
+        // 非 nested 的 tags 走两层 bool（must=bool_prefix, should=best_fields）
+        assert!(should.iter().any(|c| {
+            c["bool"]["must"][0]["multi_match"]["fields"]
+                .as_array()
+                .map_or(false, |a| a.contains(&json!("tags")))
+        }));
+        assert_eq!(
+            q["query"]["bool"]["must"][0]["bool"]["minimum_should_match"],
+            1
+        );
+    }
+
+    #[test]
+    fn search_q_nested_without_fields_falls_back_to_query_string() {
+        // 声明了 nested 但字段不属于任何 nested path → 走普通两层 bool
+        let r = req(r#"{"q": "x", "q_fields": ["other"], "nested_paths": ["title"]}"#);
+        let q = build_search_query(&r).unwrap();
+        // other 不属于 title.* → 进普通 bool（must=bool_prefix），should 仍有一条
+        let should = q["query"]["bool"]["must"][0]["bool"]["should"]
+            .as_array()
+            .unwrap();
+        assert_eq!(should.len(), 1);
+        // 该条是 bool，其 must[0] 含 multi_match
+        assert!(should[0]["bool"]["must"][0]["multi_match"]["fields"]
+            .as_array()
+            .map_or(false, |a| a.contains(&json!("other"))));
+    }
+
+    #[test]
+    fn extract_highlights_collects_inner_hits() {
+        let hit = json!({
+            "_id": "1",
+            "_source": { "article_id": 1 },
+            "inner_hits": {
+                "title": { "hits": { "hits": [
+                    { "highlight": { "title.value": ["<em>篮球</em>教学"] } }
+                ]}}
+            }
+        });
+        let flat = flatten_hit(&hit);
+        assert_eq!(flat["_highlights"]["title.value"][0], "<em>篮球</em>教学");
+        assert_eq!(flat["article_id"], 1);
     }
 
     #[test]
@@ -1414,6 +2225,59 @@ mod tests {
     fn url_encode_id_escapes_special_chars() {
         assert_eq!(url_encode_id("a/b c"), "a%2Fb%20c");
         assert_eq!(url_encode_id("abc-123"), "abc%2D123");
+    }
+
+    #[test]
+    fn exact_boost_fields_adds_should_clauses() {
+        let r = req(
+            r#"{"q": "A", "q_fields": ["title", "content"], "exact_boost_fields": ["title^10"]}"#,
+        );
+        let q = build_search_query(&r).unwrap();
+        // must 仍然存在（必须命中）
+        assert!(q["query"]["bool"]["must"].as_array().is_some());
+        // should 有两条：match_phrase + term on .keyword
+        let should = q["query"]["bool"]["should"].as_array().unwrap();
+        assert_eq!(should.len(), 2);
+        assert!(should
+            .iter()
+            .any(|c| c["match_phrase"]["title"]["query"] == "A"
+                && c["match_phrase"]["title"]["boost"] == 10.0));
+        assert!(should
+            .iter()
+            .any(|c| c["term"]["title.keyword"]["value"] == "A"
+                && c["term"]["title.keyword"]["boost"] == 20.0));
+    }
+
+    #[test]
+    fn exact_boost_fields_no_boost_suffix_defaults_to_1() {
+        let r = req(r#"{"q": "hello", "exact_boost_fields": ["title"]}"#);
+        let q = build_search_query(&r).unwrap();
+        let should = q["query"]["bool"]["should"].as_array().unwrap();
+        assert!(should
+            .iter()
+            .any(|c| c["match_phrase"]["title"]["boost"] == 1.0));
+        assert!(should
+            .iter()
+            .any(|c| c["term"]["title.keyword"]["boost"] == 2.0));
+    }
+
+    #[test]
+    fn exact_boost_fields_empty_q_no_should() {
+        let r = req(r#"{"q": "  ", "exact_boost_fields": ["title^5"]}"#);
+        let q = build_search_query(&r).unwrap();
+        // q 为空白 → match_all，不应有 should
+        assert_eq!(q, json!({ "query": { "match_all": {} } }));
+    }
+
+    #[test]
+    fn parse_field_boost_with_and_without_caret() {
+        assert_eq!(parse_field_boost("title^5"), ("title".to_string(), 5.0));
+        assert_eq!(
+            parse_field_boost("content^2.5"),
+            ("content".to_string(), 2.5)
+        );
+        assert_eq!(parse_field_boost("body"), ("body".to_string(), 1.0));
+        assert_eq!(parse_field_boost("x^bad"), ("x".to_string(), 1.0));
     }
 
     #[test]

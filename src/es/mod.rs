@@ -3,7 +3,8 @@
 //! 业务端连"平台代理 URL"而不是 ES 直连：
 //!   - `/api/admin/es-connections/*`     管理 ES 集群连接配置（含加密的 ApiKey）
 //!   - `/api/admin/es-connections/:id/tokens/*`  管理代理 token（业务端持有的凭据）
-//!   - `/api/es/*es_path`                业务侧实际打的代理路径，token 隐含 connection
+//!   - `/api/es/*es_path` 或 `/api/v1/:database_slug/es/*`  业务侧透传代理
+//!   - `/api/es-app/*` 或 `/api/v1/:database_slug/es-app/*`  高层应用 API
 //!
 //! 子模块分工：
 //!   - `models`           PG 行映射（EsConnection / EsAccessToken）

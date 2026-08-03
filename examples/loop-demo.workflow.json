@@ -1,0 +1,63 @@
+{
+  "format": "onebase.workflow",
+  "version": 1,
+  "exported_at": "2026-07-15T00:00:00.000Z",
+  "workflow": {
+    "name": "循环节点演示 (ForEach)",
+    "slug": "loop-demo-foreach",
+    "description": "演示新增的 loop 循环节点：for_each 遍历 {{trigger.items}}，循环体回显 {{loop.item}}/{{loop.index}}，完成出口返回 {{loop.results}}。自包含、无外部依赖，可直接通过 endpoint 测试。",
+    "department": "",
+    "category": "控制流",
+    "trigger_type": "endpoint",
+    "trigger_config": {},
+    "nodes": [
+      {
+        "id": "lp",
+        "type": "loop",
+        "label": "遍历循环",
+        "config": {
+          "loop_mode": "for_each",
+          "items": "{{trigger.items}}",
+          "concurrency": 1,
+          "allow_failure": false,
+          "_position": { "x": 320, "y": 40 }
+        }
+      },
+      {
+        "id": "build",
+        "type": "transform",
+        "label": "处理当前元素",
+        "config": {
+          "output": {
+            "index": "{{loop.index}}",
+            "count": "{{loop.count}}",
+            "item": "{{loop.item}}",
+            "note": "已处理第 {{loop.count}} 个元素"
+          },
+          "_position": { "x": 200, "y": 220 }
+        }
+      },
+      {
+        "id": "resp",
+        "type": "response",
+        "label": "返回结果",
+        "config": {
+          "status_code": 200,
+          "body": {
+            "total_iterations": "{{lp.iterations}}",
+            "reached_max": "{{lp.reached_max}}",
+            "results": "{{lp.results}}"
+          },
+          "_position": { "x": 520, "y": 220 }
+        }
+      }
+    ],
+    "edges": [
+      { "from": "lp", "to": "build", "branch": "body" },
+      { "from": "build", "to": "lp", "edge_type": "loop_back", "target_handle": "back" },
+      { "from": "lp", "to": "resp", "branch": "done" }
+    ],
+    "timeout_ms": null,
+    "max_retries": 0
+  }
+}

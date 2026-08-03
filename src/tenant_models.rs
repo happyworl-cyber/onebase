@@ -17,6 +17,7 @@ pub struct TenantDatabase {
     pub id: i32,
     pub tenant_id: i32,
     pub connection_name: String,
+    pub slug: Option<String>,
     pub db_host: String,
     pub db_port: i32,
     pub db_name: String,
@@ -49,6 +50,7 @@ pub struct UserConnection {
     pub tenant_id: i32,
     pub tenant_name: String,
     pub database_id: i32,
+    pub database_slug: Option<String>,
     pub connection_name: String,
     pub db_host: String,
     pub db_port: i32,
@@ -80,6 +82,7 @@ pub struct TestConnectionResponse {
 pub struct CreateDatabaseConnectionRequest {
     pub tenant_id: i32,
     pub connection_name: String,
+    pub slug: Option<String>,
     pub db_host: String,
     pub db_port: i32,
     pub db_name: String,
@@ -90,10 +93,35 @@ pub struct CreateDatabaseConnectionRequest {
     pub connection_timeout: Option<i32>,
 }
 
+/// 更新租户数据库连接请求
+///
+/// 除名称 / slug / 连接池参数外，也允许项目 owner/admin 改实际连接目标
+/// （host / port / db / user / password）。所有字段 `Option`，缺省即不改；
+/// `db_password` 传空串同样视为"不修改密码"（与超管侧 `update_tenant` 一致）。
+#[derive(Debug, Deserialize)]
+pub struct UpdateDatabaseConnectionRequest {
+    pub connection_name: Option<String>,
+    pub slug: Option<String>,
+    pub db_host: Option<String>,
+    pub db_port: Option<i32>,
+    pub db_name: Option<String>,
+    pub db_user: Option<String>,
+    pub db_password: Option<String>,
+    pub max_connections: Option<i32>,
+    pub connection_timeout: Option<i32>,
+}
+
 /// 切换连接请求
 #[derive(Debug, Deserialize)]
 pub struct SwitchConnectionRequest {
     pub database_id: i32,
+}
+
+/// 调整连接顺序请求：按 `ordered_ids` 顺序写回 sort_order。
+#[derive(Debug, Deserialize)]
+pub struct ReorderConnectionsRequest {
+    pub tenant_id: i32,
+    pub ordered_ids: Vec<i32>,
 }
 
 /// 切换连接响应
@@ -104,4 +132,3 @@ pub struct SwitchConnectionResponse {
     pub connection_name: String,
     pub message: String,
 }
-

@@ -1,0 +1,43 @@
+{
+  "name": "Python 节点测试 (pip 依赖)",
+  "slug": "py-code-node-pip-test",
+  "department": "共享",
+  "category": "测试",
+  "trigger_type": "endpoint",
+  "trigger_config": {},
+  "timeout_ms": 60000,
+  "max_retries": 0,
+  "database_id": 2,
+  "tenant_id": 4,
+  "description": "测试 code 节点 language=python 的工作流级 pip 依赖：保存后后端 pip install --target 到工作流私有 site-packages，节点里 import 第三方包。",
+  "dependencies": {
+    "python": {
+      "requirements": ["six==1.17.0"]
+    }
+  },
+  "nodes": [
+    {
+      "id": "py",
+      "type": "code",
+      "label": "Python + pip 依赖",
+      "config": {
+        "_position": { "x": 60, "y": 60 },
+        "language": "python",
+        "code": "import six\n\n\ndef execute(ctx):\n    body = ctx.body or {}\n    return {\n        'result': {\n            'engine': 'python',\n            'six_version': six.__version__,\n            'is_py3': six.PY3,\n            'echo_body': body\n        }\n    }\n"
+      }
+    },
+    {
+      "id": "resp",
+      "type": "response",
+      "label": "返回结果",
+      "config": {
+        "_position": { "x": 60, "y": 220 },
+        "body": "{{py.result}}",
+        "status_code": 200
+      }
+    }
+  ],
+  "edges": [
+    { "from": "py", "to": "resp" }
+  ]
+}

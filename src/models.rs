@@ -1,6 +1,49 @@
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
+// ─── 时间序列化工具（统一 UTC 标记）─────────────────────────────
+//
+// 数据库 `TIMESTAMP` 列以 UTC 存储但**不带时区信息**。直接 `serialize` 或 `.to_string()`
+// 得到的字符串没有 Z/偏移，前端 `new Date(...)` 会按浏览器本地时区解析，导致显示时间
+// 与北京时间差 8 小时。这里统一转成带偏移的 RFC3339（如 `2026-06-29T04:23:14+00:00`），
+// 前端即可正确转换到本地时区。所有展示用的 NaiveDateTime 都应经由这里输出。
+
+/// 把 UTC 存储的 `NaiveDateTime` 转成带偏移的 RFC3339 字符串。
+pub fn naive_to_utc_string(dt: chrono::NaiveDateTime) -> String {
+    chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc).to_rfc3339()
+}
+
+/// `naive_to_utc_string` 的 Option 版本：None → None。
+pub fn naive_opt_to_utc_string(dt: Option<chrono::NaiveDateTime>) -> Option<String> {
+    dt.map(naive_to_utc_string)
+}
+
+/// serde `serialize_with` 适配器：结构体字段为 `NaiveDateTime` 时使用。
+pub fn serialize_naive_as_utc<S>(
+    dt: &chrono::NaiveDateTime,
+    s: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(*dt, chrono::Utc).serialize(s)
+}
+
+/// serde `serialize_with` 适配器：结构体字段为 `Option<NaiveDateTime>` 时使用。
+#[allow(dead_code)]
+pub fn serialize_naive_as_utc_opt<S>(
+    dt: &Option<chrono::NaiveDateTime>,
+    s: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match dt {
+        Some(d) => serialize_naive_as_utc(d, s),
+        None => s.serialize_none(),
+    }
+}
+
 /// 用户注册请求
 #[derive(Debug, Deserialize, Validate)]
 pub struct RegisterRequest {
@@ -41,10 +84,14 @@ pub struct UserInfo {
     pub role: String,
     #[serde(default)]
     pub is_superadmin: bool,
+    /// 是否必须先修改密码才能继续使用（内置默认管理员首登强制改密）
+    #[serde(default)]
+    pub must_change_password: bool,
     pub created_at: String,
 }
 
 /// 刷新 Token 请求
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct RefreshTokenRequest {
     pub token: String,
@@ -114,4 +161,3 @@ mod tests {
         assert!(req.validate().is_err());
     }
 }
-

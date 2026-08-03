@@ -7,6 +7,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
+// 当前 ScheduledTask 列用 String 存 kind/status；这些枚举留给校验与 API 序列化。
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskKind {
@@ -23,6 +25,7 @@ pub enum TaskKind {
     Shell,
 }
 
+#[allow(dead_code)]
 impl TaskKind {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -41,6 +44,7 @@ impl TaskKind {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum OverlapPolicy {
@@ -48,6 +52,7 @@ pub enum OverlapPolicy {
     Allow,
 }
 
+#[allow(dead_code)]
 impl OverlapPolicy {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -64,6 +69,7 @@ impl OverlapPolicy {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum RunStatus {
@@ -74,6 +80,7 @@ pub enum RunStatus {
     Cancelled,
 }
 
+#[allow(dead_code)]
 impl RunStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -86,6 +93,7 @@ impl RunStatus {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum TriggeredBy {
@@ -93,6 +101,7 @@ pub enum TriggeredBy {
     Manual,
 }
 
+#[allow(dead_code)]
 impl TriggeredBy {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -134,6 +143,10 @@ pub struct ScheduledTask {
     pub timeout_secs: i32,
     pub max_retries: i32,
     pub overlap_policy: String,
+    pub alert_webhook_url: Option<String>,
+    pub alert_webhook_template: Option<serde_json::Value>,
+    pub alert_throttle_hours: i32,
+    pub last_alert_sent_at: Option<DateTime<Utc>>,
     pub next_run_at: Option<DateTime<Utc>>,
     pub last_run_at: Option<DateTime<Utc>>,
     pub last_run_status: Option<String>,
@@ -144,6 +157,7 @@ pub struct ScheduledTask {
     pub updated_at: DateTime<Utc>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct ScheduledTaskRun {
     pub id: i64,

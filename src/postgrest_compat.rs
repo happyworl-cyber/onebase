@@ -190,6 +190,12 @@ mod tests {
     }
 
     #[test]
+    fn translates_in_operator() {
+        let out = translate_query("status=in.(active,pending)&id=in.(1,2,3)");
+        assert_eq!(out, "status.in=(active,pending)&id.in=(1,2,3)");
+    }
+
+    #[test]
     fn translates_eq_neq_gte() {
         let out = translate_query("a=eq.1&b=neq.2&c=gte.3");
         assert_eq!(out, "a.eq=1&b.neq=2&c.gte=3");

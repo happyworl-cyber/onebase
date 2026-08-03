@@ -1,5 +1,5 @@
 //! 迁移脚本：添加 API Keys 表
-//! 
+//!
 //! 运行方式: cargo run --bin migrate_api_keys
 
 use sqlx::postgres::PgPoolOptions;
@@ -8,19 +8,18 @@ use std::env;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv::dotenv().ok();
-    
-    let database_url = env::var("DATABASE_URL")
-        .expect("DATABASE_URL must be set");
-    
+
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+
     println!("正在连接数据库...");
-    
+
     let pool = PgPoolOptions::new()
         .max_connections(5)
         .connect(&database_url)
         .await?;
-    
+
     println!("连接成功，开始迁移...");
-    
+
     // 创建 API Keys 表
     println!("创建 api_keys 表...");
     sqlx::query(r#"
@@ -41,22 +40,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     "#)
     .execute(&pool)
     .await?;
-    
+
     println!("创建索引...");
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_api_keys_database_id ON management.api_keys(database_id)")
-        .execute(&pool)
-        .await?;
-    
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON management.api_keys(key_hash)")
-        .execute(&pool)
-        .await?;
-    
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_api_keys_database_id ON management.api_keys(database_id)",
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON management.api_keys(key_hash)",
+    )
+    .execute(&pool)
+    .await?;
+
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_api_keys_active ON management.api_keys(is_active) WHERE is_active = true")
         .execute(&pool)
         .await?;
-    
+
     println!("✅ API Keys 表迁移完成！");
-    
+
     Ok(())
 }
-

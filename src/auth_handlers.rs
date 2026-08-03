@@ -58,6 +58,7 @@ struct UserRow {
     password_hash: String,
     role: String,
     is_superadmin: bool,
+    must_change_password: bool,
     created_at: chrono::NaiveDateTime,
 }
 
@@ -68,6 +69,7 @@ struct UserPublicRow {
     email: String,
     role: String,
     is_superadmin: bool,
+    must_change_password: bool,
     created_at: chrono::NaiveDateTime,
 }
 
@@ -83,11 +85,10 @@ pub async fn register(
         .map_err(|e| AppError::InvalidQuery(format!("验证失败: {}", e)))?;
 
     // 检查邮箱是否已存在
-    let existing_user: Option<(i32,)> =
-        sqlx::query_as("SELECT id FROM users WHERE email = $1")
-            .bind(&req.email)
-            .fetch_optional(&pool)
-            .await?;
+    let existing_user: Option<(i32,)> = sqlx::query_as("SELECT id FROM users WHERE email = $1")
+        .bind(&req.email)
+        .fetch_optional(&pool)
+        .await?;
 
     if existing_user.is_some() {
         return Err(AppError::InvalidQuery("邮箱已被注册".to_string()));
@@ -112,7 +113,10 @@ pub async fn register(
         r#"
         INSERT INTO users (username, email, password_hash, role)
         VALUES ($1, $2, $3, 'user')
-        RETURNING id, username, email, role, COALESCE(is_superadmin, false) AS is_superadmin, created_at
+        RETURNING id, username, email, role,
+                  COALESCE(is_superadmin, false) AS is_superadmin,
+                  COALESCE(must_change_password, false) AS must_change_password,
+                  created_at
         "#,
     )
     .bind(&req.username)
@@ -129,13 +133,22 @@ pub async fn register(
     let ip = extract_client_ip(&headers, &addr);
     record_session(&pool, user.id, &jti, ua, Some(&ip)).await?;
 
+    tracing::info!(
+        target: "auth",
+        user_id = user.id,
+        email = %user.email,
+        ip = %ip,
+        "新用户注册成功"
+    );
+
     let user_info = UserInfo {
         id: user.id,
         username: user.username,
         email: user.email,
         role: user.role,
         is_superadmin: user.is_superadmin,
-        created_at: user.created_at.to_string(),
+        must_change_password: user.must_change_password,
+        created_at: crate::models::naive_to_utc_string(user.created_at),
     };
 
     Ok((
@@ -153,7 +166,12 @@ fn extract_client_ip(headers: &HeaderMap, addr: &Option<ConnectInfo<SocketAddr>>
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.split(',').next())
         .map(|s| s.trim().to_string())
-        .or_else(|| headers.get("x-real-ip").and_then(|v| v.to_str().ok()).map(String::from))
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(String::from)
+        })
         .or_else(|| addr.as_ref().map(|a| a.0.ip().to_string()))
         .unwrap_or_else(|| "unknown".to_string())
 }
@@ -169,23 +187,34 @@ pub async fn login(
     req.validate()
         .map_err(|e| AppError::InvalidQuery(format!("验证失败: {}", e)))?;
 
+    let ip = extract_client_ip(&headers, &addr);
+
     if let Some(Extension(ref r)) = redis {
-        let ip = extract_client_ip(&headers, &addr);
         let key = format!("login_rl:{}", ip);
         if let Ok(count) = r.incr_with_expire(&key, LOGIN_RATE_LIMIT_WINDOW).await {
             if count > LOGIN_RATE_LIMIT_MAX {
-                return Err(AppError::TooManyRequests(
-                    format!("登录尝试过于频繁，请 {} 秒后重试", LOGIN_RATE_LIMIT_WINDOW)
-                ));
+                tracing::warn!(
+                    target: "auth",
+                    email = %req.email,
+                    ip = %ip,
+                    count = count,
+                    "登录频率超限，触发限流"
+                );
+                return Err(AppError::TooManyRequests(format!(
+                    "登录尝试过于频繁，请 {} 秒后重试",
+                    LOGIN_RATE_LIMIT_WINDOW
+                )));
             }
         }
     }
 
     // 查询用户
-    let user: UserRow = sqlx::query_as(
+    let user: UserRow = match sqlx::query_as(
         r#"
         SELECT id, username, email, password_hash, role,
-               COALESCE(is_superadmin, false) AS is_superadmin, created_at
+               COALESCE(is_superadmin, false) AS is_superadmin,
+               COALESCE(must_change_password, false) AS must_change_password,
+               created_at
         FROM users
         WHERE email = $1
         "#,
@@ -193,11 +222,29 @@ pub async fn login(
     .bind(&req.email)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::Unauthorized("邮箱或密码错误".to_string()))?;
+    {
+        Some(u) => u,
+        None => {
+            tracing::warn!(
+                target: "auth",
+                email = %req.email,
+                ip = %ip,
+                "登录失败：邮箱不存在"
+            );
+            return Err(AppError::Unauthorized("邮箱或密码错误".to_string()));
+        }
+    };
 
     // 验证密码
     let password_valid = verify_password(&req.password, &user.password_hash)?;
     if !password_valid {
+        tracing::warn!(
+            target: "auth",
+            user_id = user.id,
+            email = %req.email,
+            ip = %ip,
+            "登录失败：密码错误"
+        );
         return Err(AppError::Unauthorized("邮箱或密码错误".to_string()));
     }
 
@@ -206,8 +253,15 @@ pub async fn login(
     let ua = headers
         .get(axum::http::header::USER_AGENT)
         .and_then(|v| v.to_str().ok());
-    let ip = extract_client_ip(&headers, &addr);
     record_session(&pool, user.id, &jti, ua, Some(&ip)).await?;
+
+    tracing::info!(
+        target: "auth",
+        user_id = user.id,
+        email = %user.email,
+        ip = %ip,
+        "用户登录成功"
+    );
 
     let user_info = UserInfo {
         id: user.id,
@@ -215,7 +269,8 @@ pub async fn login(
         email: user.email,
         role: user.role,
         is_superadmin: user.is_superadmin,
-        created_at: user.created_at.to_string(),
+        must_change_password: user.must_change_password,
+        created_at: crate::models::naive_to_utc_string(user.created_at),
     };
 
     Ok(Json(AuthResponse {
@@ -234,7 +289,9 @@ pub async fn get_me(
     let user: UserPublicRow = sqlx::query_as(
         r#"
         SELECT id, username, email, role,
-               COALESCE(is_superadmin, false) AS is_superadmin, created_at
+               COALESCE(is_superadmin, false) AS is_superadmin,
+               COALESCE(must_change_password, false) AS must_change_password,
+               created_at
         FROM users
         WHERE id = $1
         "#,
@@ -250,7 +307,8 @@ pub async fn get_me(
         email: user.email,
         role: user.role,
         is_superadmin: user.is_superadmin,
-        created_at: user.created_at.to_string(),
+        must_change_password: user.must_change_password,
+        created_at: crate::models::naive_to_utc_string(user.created_at),
     }))
 }
 
@@ -265,12 +323,11 @@ pub async fn refresh_token(
     headers: HeaderMap,
     addr: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<Value>, AppError> {
-    let row: Option<(bool,)> = sqlx::query_as(
-        "SELECT COALESCE(is_superadmin, false) FROM users WHERE id = $1",
-    )
-    .bind(claims.sub)
-    .fetch_optional(&pool)
-    .await?;
+    let row: Option<(bool,)> =
+        sqlx::query_as("SELECT COALESCE(is_superadmin, false) FROM users WHERE id = $1")
+            .bind(claims.sub)
+            .fetch_optional(&pool)
+            .await?;
 
     let is_superadmin = row.map(|r| r.0).unwrap_or(false);
 
@@ -315,6 +372,13 @@ pub async fn logout(
     .await
     .map_err(|e| AppError::Internal(format!("注销失败: {}", e)))?;
 
+    tracing::info!(
+        target: "auth",
+        user_id = claims.sub,
+        email = %claims.email,
+        "用户登出成功"
+    );
+
     Ok(Json(json!({ "message": "已退出登录" })))
 }
 
@@ -339,12 +403,10 @@ pub async fn change_password(
     let user_id = claims.sub; // claims.sub 现在是 i32 类型
 
     // 获取用户当前密码（不使用 query! 宏以避免编译期连接数据库的依赖）
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT password_hash FROM users WHERE id = $1",
-    )
-    .bind(user_id)
-    .fetch_optional(&pool)
-    .await?;
+    let row: Option<(String,)> = sqlx::query_as("SELECT password_hash FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(&pool)
+        .await?;
     let password_hash = row
         .ok_or_else(|| AppError::Unauthorized("用户不存在".to_string()))?
         .0;
@@ -352,17 +414,32 @@ pub async fn change_password(
     // 验证旧密码
     let password_valid = verify_password(&req.old_password, &password_hash)?;
     if !password_valid {
+        tracing::warn!(
+            target: "auth",
+            user_id,
+            "修改密码失败：旧密码错误"
+        );
         return Err(AppError::Unauthorized("旧密码错误".to_string()));
+    }
+
+    // 新密码不能与旧密码相同——否则内置默认密码“只能用一次”的约束形同虚设。
+    if req.new_password == req.old_password {
+        return Err(AppError::InvalidQuery(
+            "新密码不能与旧密码相同".to_string(),
+        ));
     }
 
     // 哈希新密码
     let new_password_hash = hash_password(&req.new_password)?;
 
-    sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
-        .bind(&new_password_hash)
-        .bind(user_id)
-        .execute(&pool)
-        .await?;
+    // 同步清除“需强制改密”标记并记录改密时间，之后 auth 网关不再拦截。
+    sqlx::query(
+        "UPDATE users SET password_hash = $1, must_change_password = false, password_changed_at = NOW() WHERE id = $2",
+    )
+    .bind(&new_password_hash)
+    .bind(user_id)
+    .execute(&pool)
+    .await?;
 
     // 吊销该用户其它所有活跃会话（保留当前会话，让用户不至于立刻被踢出）
     let revoked_count = sqlx::query(
@@ -381,9 +458,15 @@ pub async fn change_password(
     .map(|r| r.rows_affected())
     .unwrap_or(0);
 
+    tracing::info!(
+        target: "auth",
+        user_id,
+        other_sessions_revoked = revoked_count,
+        "用户修改密码成功"
+    );
+
     Ok(Json(json!({
         "message": "密码修改成功",
         "other_sessions_revoked": revoked_count
     })))
 }
-

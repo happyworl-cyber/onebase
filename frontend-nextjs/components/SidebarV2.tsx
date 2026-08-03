@@ -3,7 +3,6 @@
 import { useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { clearAuthToken } from '@/lib/auth'
-import { BRAND } from '@/lib/brand'
 
 interface MenuItem {
   name: string
@@ -111,7 +110,7 @@ export default function SidebarV2() {
             <i className="fas fa-database text-white text-lg"></i>
           </div>
           <div>
-            <h1 className="text-lg font-bold text-white tracking-wide">{BRAND}</h1>
+            <h1 className="text-lg font-bold text-white tracking-wide">OneBase</h1>
             <p className="text-xs text-white/60">数据库管理平台</p>
           </div>
         </div>

@@ -16,13 +16,9 @@ use std::collections::HashMap;
 /// 选目标连接池：`dynamic_db_middleware` 给的优先；没注入直接拒绝——
 /// 旧实现是"没 db_id 就用 main_pool"，等于把租户表导出请求悄悄落到管理库上，
 /// 既会返回错误数据，又会泄漏 management schema。所以这里 strict 一些。
-fn require_target_pool<'a>(
-    dynamic: &'a Option<Extension<PgPool>>,
-) -> Result<&'a PgPool> {
+fn require_target_pool<'a>(dynamic: &'a Option<Extension<PgPool>>) -> Result<&'a PgPool> {
     dynamic.as_deref().ok_or_else(|| {
-        AppError::InvalidQuery(
-            "缺少 X-Database-Id 请求头，无法定位导出目标数据库".to_string(),
-        )
+        AppError::InvalidQuery("缺少 X-Database-Id 请求头，无法定位导出目标数据库".to_string())
     })
 }
 
@@ -37,9 +33,7 @@ async fn require_export_access(
     let database_id = db_id
         .map(|Extension(CurrentDatabaseId(id))| id)
         .ok_or_else(|| {
-            AppError::InvalidQuery(
-                "缺少 X-Database-Id 请求头，无法定位导出目标数据库".to_string(),
-            )
+            AppError::InvalidQuery("缺少 X-Database-Id 请求头，无法定位导出目标数据库".to_string())
         })?;
     permissions::require_database_admin(main_pool, claims, database_id).await
 }
@@ -63,10 +57,7 @@ pub async fn export_csv(
 
     if rows.is_empty() {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("text/csv"),
-        );
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/csv"));
         return Ok((StatusCode::OK, headers, "".to_string()).into_response());
     }
 
@@ -195,9 +186,7 @@ pub async fn export_sql_csv(
     permissions::require_platform_superadmin(&claims)?;
     // 必须带 X-Database-Id；否则会落到管理库导出 management.* 数据。
     let _ = db_id.as_ref().ok_or_else(|| {
-        AppError::InvalidQuery(
-            "缺少 X-Database-Id 请求头，无法定位导出目标数据库".to_string(),
-        )
+        AppError::InvalidQuery("缺少 X-Database-Id 请求头，无法定位导出目标数据库".to_string())
     })?;
     let pool = require_target_pool(&dynamic_pool)?;
 
@@ -218,10 +207,7 @@ pub async fn export_sql_csv(
 
     if rows.is_empty() {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("text/csv"),
-        );
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/csv"));
         return Ok((StatusCode::OK, headers, "".to_string()).into_response());
     }
 
@@ -286,13 +272,14 @@ fn get_value_as_string(row: &sqlx::postgres::PgRow, idx: usize) -> String {
     } else if let Ok(v) = row.try_get::<Option<String>, _>(idx) {
         v.unwrap_or_else(|| "NULL".to_string())
     } else if let Ok(v) = row.try_get::<Option<i32>, _>(idx) {
-        v.map(|n| n.to_string()).unwrap_or_else(|| "NULL".to_string())
+        v.map(|n| n.to_string())
+            .unwrap_or_else(|| "NULL".to_string())
     } else if let Ok(v) = row.try_get::<Option<i64>, _>(idx) {
-        v.map(|n| n.to_string()).unwrap_or_else(|| "NULL".to_string())
+        v.map(|n| n.to_string())
+            .unwrap_or_else(|| "NULL".to_string())
     } else if let Ok(v) = row.try_get::<serde_json::Value, _>(idx) {
         v.to_string()
     } else {
         "NULL".to_string()
     }
 }
-

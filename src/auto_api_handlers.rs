@@ -1,9 +1,9 @@
 //! Auto API - 自动生成的 RESTful API
-//! 
+//!
 //! 根据数据库表结构自动提供 CRUD 接口
-//! 
-//! URL 格式: /api/v1/{database_id}/{schema}/{table}
-//! 
+//!
+//! URL 格式: /api/v1/{database_slug}/{schema}/{table}
+//!
 //! 支持的操作:
 //! - GET    /api/v1/{db}/{schema}/{table}        - 查询列表
 //! - GET    /api/v1/{db}/{schema}/{table}/{id}   - 查询单条
@@ -18,7 +18,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sqlx::{Column, PgPool, Postgres, Row, Transaction};
+use sqlx::{PgPool, Row};
 
 use crate::audit_middleware::SlowQueryLogger;
 use crate::auth::Claims;
@@ -32,22 +32,25 @@ use crate::query_cache::QueryCache;
 use crate::rbac_models::{PermissionResult, RowCondition, RowOp};
 use crate::redis_manager::RedisManager;
 
-/// 在事务内把当前 JWT 用户 ID 注入到 PostgreSQL session 变量 `app.current_user_id`
-/// （第三个参数 `true` = 事务局部 GUC，等价于 `SET LOCAL`，COMMIT/ROLLBACK 后自动清除）。
+/// 把 RLS 会话变量折进业务 SQL，避免单独一次 `set_config` 往返（跨公网约 2 RTT）。
 ///
-/// 供业务库的 PostgreSQL Row-Level Security POLICY 读取。
-/// 未登录调用（仅在通过 API Key 时可能）会写入字符串 "0"，配合 RLS 模板里的
-/// `NULLIF(current_setting('app.current_user_id', true), '0')::int` 可以识别匿名身份。
-async fn inject_session_user_id(
-    tx: &mut Transaction<'_, Postgres>,
-    user_id: i32,
-) -> Result<()> {
-    sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
-        .bind(user_id.to_string())
-        .execute(&mut **tx)
-        .await
-        .map_err(AppError::Database)?;
-    Ok(())
+/// `set_config(..., true)` = SET LOCAL：在显式事务内对后续语句生效；在自动提交下
+/// 仅对**本条语句**生效（正好覆盖单语句读路径的 RLS）。
+///
+/// `user_id` 来自服务端 Claims / API Key 路径（`i32`），按十进制字面量嵌入，
+/// 不移动业务 SQL 已有的 `$N` 编号。
+fn sql_with_session_user(sql: &str, user_id: i32) -> String {
+    let trimmed = sql.trim_start();
+    let sess = format!(
+        "__onebase_sess AS (SELECT set_config('app.current_user_id', '{}', true))",
+        user_id
+    );
+    if trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case("with") {
+        let rest = trimmed[4..].trim_start();
+        format!("WITH {}, {}", sess, rest)
+    } else {
+        format!("WITH {} {}", sess, trimmed)
+    }
 }
 
 /// 从 Claims 提取用户 ID；无 claims（API Key 调用）时返回 0。
@@ -87,10 +90,11 @@ fn value_to_bind_string(v: &serde_json::Value) -> String {
 /// | 数字含小数点 / 科学计数 | `f64` | double precision |
 /// | 其它 | `&str` | text |
 ///
-/// **已知 edge case**：列是 `text` 但 query 值是数字字面值（如 `?id=eq.123`，id 是
-/// UUID 文本列）—— 这里会 bind i64，PG 报 `text = bigint` 不存在。这种 case 当前
-/// 罕见，后续若需要彻底覆盖可改成"查 information_schema 缓存列类型按列类型 bind"，
-/// 与 PostgREST 同款思路。
+/// **edge case（已在 filter 路径修复）**：列是 `text`/`uuid`/`timestamp` 但 query 值是
+/// 数字字面值（如 `?name=eq.111`）—— 纯靠本函数会 bind i64，PG 报 `text = bigint` 不存在。
+/// list/patch/delete 的 filter WHERE 现在会先 [`fetch_column_types`](crate::query_builder::fetch_column_types)
+/// 拿列真实类型，对占位符写 `$N::<udt>` 并以 text 绑定（见 [`BindSpec::Cast`]），bind_inferred 仅作
+/// 拿不到列类型时的回退。
 fn bind_inferred<'q>(
     q: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
     raw: &'q str,
@@ -116,6 +120,30 @@ fn bind_inferred<'q>(
     // 字符串场景：原始 raw 包含可能的前后空白；尊重业务方原始输入而不是 trim 后
     // 的值（PG text 列对空白敏感）
     q.bind(raw)
+}
+
+/// 一个过滤条件占位符的绑定方式。
+///
+/// - `Cast`：已知列类型，SQL 侧写 `$N::<udt>`，值统一以 **text** 绑定，交给 PG 对应类型的
+///   input 函数解析（`'111'::int8`、`'uuid...'::uuid`）。这同时修了两类 500：
+///   `text 列 = 数字字面值`（bind_inferred 误绑 bigint）与 `int/uuid/timestamp 列 = 文本`。
+///   用列真实类型做 cast，整数列等仍可走索引（PG 整数族支持跨型比较）。
+/// - `Text`：强制按 text 绑定但不带 cast（LIKE/ILIKE 这类天然作用于文本的算子）。
+/// - `Inferred`：拿不到列类型时的回退，沿用按字面值形态推断（与历史行为一致）。
+enum BindSpec {
+    Cast(String),
+    Text(String),
+    Inferred(String),
+}
+
+fn apply_bind<'q>(
+    q: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
+    spec: &'q BindSpec,
+) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
+    match spec {
+        BindSpec::Cast(s) | BindSpec::Text(s) => q.bind(s.as_str()),
+        BindSpec::Inferred(s) => bind_inferred(q, s),
+    }
 }
 
 /// 判定一行待插入的数据是否满足 RBAC 行条件。
@@ -167,8 +195,13 @@ fn check_insert_satisfies_row_condition(
         // 这一块在 INSERT 路径上很少见，做最严判断会误伤业务，所以保守：未提供字段判失败，提供字段则按值比
         RowOp::Gt | RowOp::Gte | RowOp::Lt | RowOp::Lte => {
             let actual = v.ok_or_else(|| format!("列 {} 缺失", cond.field))?;
-            let a = actual.as_f64().ok_or_else(|| format!("列 {} 不是数值", cond.field))?;
-            let b = cond.value.as_f64().ok_or_else(|| "条件值不是数值".to_string())?;
+            let a = actual
+                .as_f64()
+                .ok_or_else(|| format!("列 {} 不是数值", cond.field))?;
+            let b = cond
+                .value
+                .as_f64()
+                .ok_or_else(|| "条件值不是数值".to_string())?;
             let ok = match cond.op {
                 RowOp::Gt => a > b,
                 RowOp::Gte => a >= b,
@@ -176,10 +209,17 @@ fn check_insert_satisfies_row_condition(
                 RowOp::Lte => a <= b,
                 _ => unreachable!(),
             };
-            if ok { Ok(()) } else { Err(format!("列 {} 不满足约束", cond.field)) }
+            if ok {
+                Ok(())
+            } else {
+                Err(format!("列 {} 不满足约束", cond.field))
+            }
         }
         RowOp::In => {
-            let arr = cond.value.as_array().ok_or_else(|| "IN 条件值必须是数组".to_string())?;
+            let arr = cond
+                .value
+                .as_array()
+                .ok_or_else(|| "IN 条件值必须是数组".to_string())?;
             let actual = v.ok_or_else(|| format!("列 {} 缺失", cond.field))?;
             if arr.iter().any(|x| value_eq(x, actual)) {
                 Ok(())
@@ -223,11 +263,7 @@ fn append_rbac_where(
                         p
                     })
                     .collect();
-                where_clauses.push(format!(
-                    "\"{}\" IN ({})",
-                    c.field,
-                    placeholders.join(", ")
-                ));
+                where_clauses.push(format!("\"{}\" IN ({})", c.field, placeholders.join(", ")));
             }
             other => {
                 where_clauses.push(format!("\"{}\" {} ${}", c.field, other.as_sql(), idx));
@@ -292,7 +328,7 @@ fn row_to_db_config(row: &sqlx::postgres::PgRow) -> crate::pool_manager::Databas
         database: row.get("db_name"),
         username: row.get("db_user"),
         password: decrypt_db_password(&encrypted),
-        max_connections: 10,
+        max_connections: crate::pool_manager::DEFAULT_TENANT_MAX_CONNECTIONS,
         connection_timeout: 30,
     }
 }
@@ -305,9 +341,10 @@ fn check_circuit_breaker(
     if let Some(axum::extract::Extension(ref mgr)) = cb_mgr {
         let cb = mgr.get_or_create(database_id);
         if !cb.allow_request() {
-            return Err(AppError::ServiceUnavailable(
-                format!("数据库 {} 熔断中，请稍后重试", database_id),
-            ));
+            return Err(AppError::ServiceUnavailable(format!(
+                "数据库 {} 熔断中，请稍后重试",
+                database_id
+            )));
         }
     }
     Ok(())
@@ -334,11 +371,31 @@ fn cb_record_failure(
 }
 
 /// 获取数据库写池（Primary）
-async fn get_write_pool(main_pool: &PgPool, database_id: i32) -> Result<PgPool> {
+pub(crate) async fn get_write_pool(main_pool: &PgPool, database_id: i32) -> Result<PgPool> {
     ensure_pool_loaded(main_pool, database_id).await?;
     POOL_MANAGER
         .get_write_pool(database_id)
         .ok_or_else(|| AppError::NotFound(format!("数据库连接 {} 不存在", database_id)))
+}
+
+/// 加载租户库 `DatabaseConfig`（供 LISTEN 等建立独立连接，不经过业务池 checkout）。
+pub(crate) async fn load_database_config(
+    main_pool: &PgPool,
+    database_id: i32,
+) -> Result<crate::pool_manager::DatabaseConfig> {
+    let row = sqlx::query(
+        r#"
+        SELECT id, db_host, db_port, db_name, db_user, db_password_encrypted
+        FROM management.tenant_databases
+        WHERE id = $1 AND is_active = true
+        "#,
+    )
+    .bind(database_id)
+    .fetch_optional(main_pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("数据库连接 {} 不存在或已禁用", database_id)))?;
+
+    Ok(row_to_db_config(&row))
 }
 
 /// 获取数据库读池（有 Replica 时自动路由）
@@ -350,7 +407,7 @@ async fn get_read_pool(main_pool: &PgPool, database_id: i32) -> Result<PgPool> {
 }
 
 /// 确保 primary + replica 已加载
-async fn ensure_pool_loaded(main_pool: &PgPool, database_id: i32) -> Result<()> {
+pub(crate) async fn ensure_pool_loaded(main_pool: &PgPool, database_id: i32) -> Result<()> {
     if POOL_MANAGER.get_write_pool(database_id).is_some() {
         return Ok(());
     }
@@ -407,9 +464,111 @@ async fn ensure_pool_loaded(main_pool: &PgPool, database_id: i32) -> Result<()> 
     Ok(())
 }
 
-/// 向后兼容：获取池（默认 primary）
-async fn get_pool_for_database(main_pool: &PgPool, database_id: i32) -> Result<PgPool> {
-    get_write_pool(main_pool, database_id).await
+fn env_flag_enabled(name: &str, default: bool) -> bool {
+    match std::env::var(name).ok().map(|v| v.to_ascii_lowercase()) {
+        Some(s) if s == "false" || s == "0" || s == "no" || s == "off" => false,
+        Some(s) if s == "true" || s == "1" || s == "yes" || s == "on" => true,
+        Some(_) => default,
+        None => default,
+    }
+}
+
+/// 启动后后台预热活跃 primary 租户池，把「创建连接池」移出首个用户请求。
+///
+/// - `TENANT_POOL_PREWARM` 默认 true；false/0/no/off 关闭
+/// - `TENANT_POOL_PREWARM_LIMIT` 默认 50
+/// - `TENANT_POOL_PREWARM_CONCURRENCY` 默认 4
+pub fn spawn_tenant_pool_prewarm(main_pool: PgPool) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        if !env_flag_enabled("TENANT_POOL_PREWARM", true) {
+            tracing::info!("租户池预热已关闭（TENANT_POOL_PREWARM）");
+            return;
+        }
+
+        let limit = std::env::var("TENANT_POOL_PREWARM_LIMIT")
+            .ok()
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(50)
+            .max(0);
+        let concurrency = std::env::var("TENANT_POOL_PREWARM_CONCURRENCY")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(4)
+            .max(1);
+
+        if limit == 0 {
+            tracing::info!("租户池预热跳过（TENANT_POOL_PREWARM_LIMIT=0）");
+            return;
+        }
+
+        let ids: Vec<i32> = match sqlx::query_scalar(
+            r#"
+            SELECT id
+            FROM management.tenant_databases
+            WHERE is_active = true
+              AND COALESCE(db_role, 'primary') = 'primary'
+            ORDER BY id
+            LIMIT $1
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&main_pool)
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("租户池预热：查询活跃 primary 失败: {}", e);
+                return;
+            }
+        };
+
+        if ids.is_empty() {
+            tracing::info!("租户池预热：无活跃 primary");
+            return;
+        }
+
+        tracing::info!(
+            "租户池预热开始: {} 个 primary，并发={}",
+            ids.len(),
+            concurrency
+        );
+
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
+        let mut join_set = tokio::task::JoinSet::new();
+        for id in ids {
+            let pool = main_pool.clone();
+            let permit = sem.clone().acquire_owned().await;
+            let Ok(permit) = permit else {
+                break;
+            };
+            join_set.spawn(async move {
+                let result = ensure_pool_loaded(&pool, id).await;
+                drop(permit);
+                (id, result)
+            });
+        }
+
+        let mut ok = 0usize;
+        let mut fail = 0usize;
+        while let Some(joined) = join_set.join_next().await {
+            match joined {
+                Ok((id, Ok(()))) => {
+                    ok += 1;
+                    tracing::debug!(database_id = id, "租户池预热成功");
+                }
+                Ok((id, Err(e))) => {
+                    fail += 1;
+                    tracing::warn!(database_id = id, error = %e, "租户池预热失败");
+                }
+                Err(e) => {
+                    fail += 1;
+                    tracing::warn!("租户池预热 task join 失败: {}", e);
+                }
+            }
+        }
+
+        tracing::info!("租户池预热完成: ok={}, fail={}", ok, fail);
+    })
 }
 
 /// 认证来源
@@ -419,13 +578,28 @@ enum AuthSource {
     Jwt,
 }
 
+fn auth_from_api_key_context(
+    ctx: &crate::middleware::ApiKeyContext,
+    path_database_id: i32,
+) -> Result<(i32, AuthSource)> {
+    if ctx.database_id != path_database_id {
+        return Err(AppError::Unauthorized("API Key 与数据库不匹配".to_string()));
+    }
+    Ok((ctx.database_id, AuthSource::ApiKey))
+}
+
 /// 验证请求身份：必须持有有效 API Key 或有效 JWT，否则返回 401
 async fn validate_auth(
     main_pool: &PgPool,
     headers: &HeaderMap,
     path_database_id: i32,
     has_jwt: bool,
+    api_key_ctx: Option<&crate::middleware::ApiKeyContext>,
 ) -> Result<(i32, AuthSource)> {
+    if let Some(ctx) = api_key_ctx {
+        return auth_from_api_key_context(ctx, path_database_id);
+    }
+
     // 优先检查 API Key（以 "cr_" 前缀区分于 JWT）
     if let Some(auth_header) = headers.get("Authorization") {
         if let Ok(auth_str) = auth_header.to_str() {
@@ -451,13 +625,6 @@ async fn validate_auth(
                     if db_id != path_database_id {
                         return Err(AppError::Unauthorized("API Key 与数据库不匹配".to_string()));
                     }
-
-                    let _ = sqlx::query(
-                        "UPDATE management.api_keys SET last_used_at = NOW() WHERE key_hash = encode(sha256($1::bytea), 'hex')"
-                    )
-                    .bind(api_key)
-                    .execute(main_pool)
-                    .await;
 
                     return Ok((db_id, AuthSource::ApiKey));
                 }
@@ -493,12 +660,14 @@ fn is_valid_identifier(name: &str) -> bool {
 fn validate_path_identifiers(schema: &str, table: &str) -> Result<()> {
     if !is_valid_identifier(schema) {
         return Err(AppError::InvalidQuery(format!(
-            "非法的 schema 名称: '{}'", schema
+            "非法的 schema 名称: '{}'",
+            schema
         )));
     }
     if !is_valid_identifier(table) {
         return Err(AppError::InvalidQuery(format!(
-            "非法的 table 名称: '{}'", table
+            "非法的 table 名称: '{}'",
+            table
         )));
     }
     Ok(())
@@ -514,10 +683,127 @@ fn build_select_fields(select: &Option<String>) -> String {
                 .filter(|f| is_valid_identifier(f))
                 .map(|f| format!("\"{}\"", f))
                 .collect();
-            if safe.is_empty() { "*".to_string() } else { safe.join(", ") }
+            if safe.is_empty() {
+                "*".to_string()
+            } else {
+                safe.join(", ")
+            }
         }
         None => "*".to_string(),
     }
+}
+
+/// 聚合函数白名单：URL 后缀（小写）→ SQL 函数名。清单外一律不认。
+fn agg_func(name: &str) -> Option<&'static str> {
+    match name.to_ascii_lowercase().as_str() {
+        "count" => Some("COUNT"),
+        "sum" => Some("SUM"),
+        "avg" => Some("AVG"),
+        "min" => Some("MIN"),
+        "max" => Some("MAX"),
+        _ => None,
+    }
+}
+
+/// 归一化 select token：去掉两侧空白与 PostgREST 风格的尾随 `()`（`count()` → `count`）。
+fn normalize_select_token(tok: &str) -> &str {
+    let t = tok.trim();
+    t.strip_suffix("()").unwrap_or(t).trim_end()
+}
+
+/// 判断 select 是否包含聚合表达式（`count` / `count()` / `col.sum` / `col.avg()` 等）。
+/// 用于决定是否走聚合 + GROUP BY 分支。
+fn select_has_aggregate(select: &Option<String>) -> bool {
+    let Some(s) = select else { return false };
+    s.split(',').any(|tok| {
+        let t = normalize_select_token(tok);
+        if t.eq_ignore_ascii_case("count") {
+            return true;
+        }
+        match t.split_once('.') {
+            Some((col, func)) => !col.is_empty() && agg_func(func).is_some(),
+            None => false,
+        }
+    })
+}
+
+/// 构建带聚合的 SELECT / GROUP BY，返回 `(select_clause, group_by_clause)`。
+///
+/// 语法：`count`（→ `COUNT(*)`）、`col.count` / `col.sum` / `col.avg` / `col.min` /
+/// `col.max`（尾随 `()` 可选）。其余纯列名视为分组列，自动进入 GROUP BY。
+///
+/// 安全：列名一律走 `is_valid_identifier` 校验后加引号；有 RBAC 列白名单时，任何被
+/// 引用的列（聚合参数或分组列）必须在白名单内，否则 403。`SUM`/`AVG` 结果可能是
+/// `numeric`（本项目 sqlx 未启用 decimal，解码会得 null），统一 cast 成 float8 保证
+/// JSON 里是数字。
+fn build_aggregate_select(
+    select: &str,
+    allowed: &Option<Vec<String>>,
+) -> Result<(String, String)> {
+    let col_allowed = |c: &str| -> bool {
+        match allowed {
+            Some(list) if !list.is_empty() => list.iter().any(|a| a == c),
+            _ => true,
+        }
+    };
+
+    let mut aggregates: Vec<String> = Vec::new();
+    let mut group_cols: Vec<String> = Vec::new();
+
+    for tok in select.split(',') {
+        let t = normalize_select_token(tok);
+        if t.is_empty() {
+            continue;
+        }
+        if t.eq_ignore_ascii_case("count") {
+            aggregates.push("COUNT(*) AS \"count\"".to_string());
+            continue;
+        }
+        match t.split_once('.') {
+            Some((col, func)) if agg_func(func).is_some() => {
+                if !is_valid_identifier(col) {
+                    return Err(AppError::InvalidQuery(format!("非法的聚合列: '{}'", col)));
+                }
+                if !col_allowed(col) {
+                    return Err(AppError::Forbidden(format!("无权访问列: {}", col)));
+                }
+                let lf = func.to_ascii_lowercase();
+                let alias = format!("{}_{}", col, lf);
+                let expr = match lf.as_str() {
+                    "count" => format!("COUNT(\"{}\")", col),
+                    "sum" => format!("CAST(SUM(\"{}\") AS double precision)", col),
+                    "avg" => format!("CAST(AVG(\"{}\") AS double precision)", col),
+                    "min" => format!("MIN(\"{}\")", col),
+                    "max" => format!("MAX(\"{}\")", col),
+                    _ => unreachable!("agg_func 已过滤"),
+                };
+                aggregates.push(format!("{} AS \"{}\"", expr, alias));
+            }
+            _ => {
+                // 纯列名 → 分组列
+                if !is_valid_identifier(t) {
+                    return Err(AppError::InvalidQuery(format!("非法的字段: '{}'", t)));
+                }
+                if !col_allowed(t) {
+                    return Err(AppError::Forbidden(format!("无权访问列: {}", t)));
+                }
+                group_cols.push(format!("\"{}\"", t));
+            }
+        }
+    }
+
+    if aggregates.is_empty() {
+        return Err(AppError::InvalidQuery("select 中未解析到聚合函数".to_string()));
+    }
+
+    let mut select_parts = group_cols.clone();
+    select_parts.extend(aggregates);
+    let group_by = if group_cols.is_empty() {
+        String::new()
+    } else {
+        format!("GROUP BY {}", group_cols.join(", "))
+    };
+    Ok((select_parts.join(", "), group_by))
 }
 
 /// 构建 ORDER BY 子句（校验标识符合法性）
@@ -530,7 +816,11 @@ fn build_order_clause(order: &Option<String>) -> String {
                 if !is_valid_identifier(field) {
                     return String::new();
                 }
-                let direction = if parts[1].to_lowercase() == "desc" { "DESC" } else { "ASC" };
+                let direction = if parts[1].to_lowercase() == "desc" {
+                    "DESC"
+                } else {
+                    "ASC"
+                };
                 format!("ORDER BY \"{}\" {}", field, direction)
             } else {
                 if !is_valid_identifier(order_str) {
@@ -548,7 +838,11 @@ fn apply_column_filter(select: &Option<String>, perm: &Option<PermissionResult>)
     if let Some(p) = perm {
         if let Some(ref allowed) = p.allowed_columns {
             if !allowed.is_empty() {
-                return allowed.iter().map(|c| format!("\"{}\"", c)).collect::<Vec<_>>().join(", ");
+                return allowed
+                    .iter()
+                    .map(|c| format!("\"{}\"", c))
+                    .collect::<Vec<_>>()
+                    .join(", ");
             }
         }
     }
@@ -557,36 +851,8 @@ fn apply_column_filter(select: &Option<String>, perm: &Option<PermissionResult>)
 
 /// 将数据库行转换为 JSON 对象
 fn row_to_json(row: &sqlx::postgres::PgRow) -> Value {
-    let mut obj = serde_json::Map::new();
-    for column in row.columns() {
-        let key = column.name().to_string();
-        let idx = column.ordinal();
-
-        let value: Value = if let Ok(v) = row.try_get::<String, _>(idx) {
-            Value::String(v)
-        } else if let Ok(v) = row.try_get::<i32, _>(idx) {
-            json!(v)
-        } else if let Ok(v) = row.try_get::<i64, _>(idx) {
-            json!(v)
-        } else if let Ok(v) = row.try_get::<f64, _>(idx) {
-            json!(v)
-        } else if let Ok(v) = row.try_get::<bool, _>(idx) {
-            Value::Bool(v)
-        } else if let Ok(v) = row.try_get::<Option<String>, _>(idx) {
-            v.map(Value::String).unwrap_or(Value::Null)
-        } else if let Ok(v) = row.try_get::<Option<i32>, _>(idx) {
-            v.map(|n| json!(n)).unwrap_or(Value::Null)
-        } else if let Ok(v) = row.try_get::<Option<i64>, _>(idx) {
-            v.map(|n| json!(n)).unwrap_or(Value::Null)
-        } else if let Ok(v) = row.try_get::<serde_json::Value, _>(idx) {
-            v
-        } else {
-            Value::Null
-        };
-
-        obj.insert(key, value);
-    }
-    Value::Object(obj)
+    // 统一解码（含 uuid）。历史上这里漏掉 uuid 时，主键会静默变成 null。
+    crate::pg_row_json::pg_row_to_json(row)
 }
 
 /// 从查询字符串解析过滤条件（校验字段名合法性）。
@@ -603,14 +869,11 @@ fn row_to_json(row: &sqlx::postgres::PgRow) -> Value {
 fn parse_filters(query_string: &str) -> Vec<(String, String, String)> {
     use percent_encoding::percent_decode_str;
 
-    let decode_value = |raw: &str| -> String {
-        percent_decode_str(raw)
-            .decode_utf8_lossy()
-            .into_owned()
-    };
+    let decode_value =
+        |raw: &str| -> String { percent_decode_str(raw).decode_utf8_lossy().into_owned() };
 
     let mut filters = Vec::new();
-    
+
     for pair in query_string.split('&') {
         if let Some((key, value)) = pair.split_once('=') {
             let decoded_value = decode_value(value);
@@ -648,38 +911,92 @@ fn parse_filters(query_string: &str) -> Vec<(String, String, String)> {
             }
         }
     }
-    
+
     filters
 }
 
-/// GET /api/v1/{database_id}/{schema}/{table} - 查询列表
+/// 从原始 query 串解析过滤条件：先做 PostgREST `field=op.value` → `field.op=value`
+/// 翻译（与两段路径 wrapper 一致），再 [`parse_filters`]。对已含 `.` 的内部风格
+/// 参数是幂等透传；`status.in=a,b,c` 与 `status=in.(a,b,c)` 均可识别。
+fn parse_filters_from_query(query_string: &str) -> Vec<(String, String, String)> {
+    parse_filters(&crate::postgrest_compat::translate_query(query_string))
+}
+
+/// Auto API 的 `database_id` 权威来源是 `X-Database-Id` 请求头。
+///
+/// 路由里第一段是 `:database_slug`（可能是 slug 如 `shirehub`，也可能是数字
+/// id 如 `5`）。axum 的路由匹配（path 参数捕获）发生在 `Router::layer` 中间件
+/// **之前**，所以 `auto_api_database_slug_middleware` 改写 URI 对 handler 的
+/// `Path<(i32, ...)>` 提取是无效的——捕获到的仍是原始 slug 字符串，直接当 i32
+/// 解析会 400（`Cannot parse "shirehub" to i32`）。因此 handler 不能从 path 段
+/// 取 database_id，必须读中间件已解析好并覆盖写入的 `X-Database-Id` 头（与 RPC
+/// 路径同款做法）。
+fn database_id_from_headers(headers: &HeaderMap) -> Result<i32> {
+    headers
+        .get("X-Database-Id")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.trim().parse::<i32>().ok())
+        .ok_or_else(|| {
+            AppError::InvalidQuery(
+                "无法解析 database_slug：缺少有效的 X-Database-Id（中间件未注入或 slug 解析失败）"
+                    .to_string(),
+            )
+        })
+}
+
+/// GET /api/v1/{database_slug}/{schema}/{table} - 查询列表
 pub async fn list_records(
     State(main_pool): State<PgPool>,
-    Path((database_id, schema, table)): Path<(i32, String, String)>,
+    Path((_database_slug, schema, table)): Path<(String, String, String)>,
     Query(params): Query<QueryParams>,
     headers: HeaderMap,
     raw_query: axum::extract::RawQuery,
     claims: Option<axum::extract::Extension<Claims>>,
+    api_key_ctx: Option<axum::extract::Extension<crate::middleware::ApiKeyContext>>,
     rbac: Option<axum::extract::Extension<PermissionResult>>,
     redis: Option<axum::extract::Extension<RedisManager>>,
     cb_mgr: Option<axum::extract::Extension<CircuitBreakerManager>>,
 ) -> Result<Json<ApiResponse<Vec<Value>>>> {
+    let database_id = database_id_from_headers(&headers)?;
     validate_path_identifiers(&schema, &table)?;
-    validate_auth(&main_pool, &headers, database_id, claims.is_some()).await?;
+    tracing::debug!(
+        target: "auto_api",
+        database_id = database_id,
+        schema = %schema,
+        table = %table,
+        user_id = user_id_from_claims(&claims),
+        method = "GET",
+        "Auto API list_records"
+    );
+    validate_auth(
+        &main_pool,
+        &headers,
+        database_id,
+        claims.is_some(),
+        api_key_ctx.as_ref().map(|e| &e.0),
+    )
+    .await?;
     check_circuit_breaker(&cb_mgr, database_id)?;
 
     let perm = rbac.map(|e| e.0);
-    let row_conditions = perm.as_ref().map(|p| p.row_conditions.clone()).unwrap_or_default();
+    let row_conditions = perm
+        .as_ref()
+        .map(|p| p.row_conditions.clone())
+        .unwrap_or_default();
     let allowed_columns = perm.as_ref().and_then(|p| p.allowed_columns.clone());
 
     let query_string = raw_query.0.as_deref().unwrap_or("");
     let rc_fingerprint = row_conditions_to_fingerprint(&row_conditions);
+    let count_pref = parse_prefer_count(&headers);
     // user_id 写入 fingerprint：不同用户经 RLS 后可见结果不同，缓存必须分桶
-    let fingerprint = QueryCache::build_fingerprint(
-        query_string,
-        &rc_fingerprint,
-        &allowed_columns,
-        user_id_from_claims(&claims),
+    let fingerprint = list_cache_fingerprint(
+        &QueryCache::build_fingerprint(
+            query_string,
+            &rc_fingerprint,
+            &allowed_columns,
+            user_id_from_claims(&claims),
+        ),
+        count_pref,
     );
 
     if let Some(axum::extract::Extension(ref r)) = redis {
@@ -699,15 +1016,45 @@ pub async fn list_records(
         }
     };
 
-    let select_fields = apply_column_filter(&params.select, &perm);
+    // 聚合查询（count/sum/avg/min/max，可带分组列 → GROUP BY）走独立分支；
+    // 普通列查询保持原有 apply_column_filter 逻辑不变。
+    let has_aggregate = select_has_aggregate(&params.select);
+    let (select_fields, group_by_clause) = if has_aggregate {
+        let allowed = perm.as_ref().and_then(|p| p.allowed_columns.clone());
+        build_aggregate_select(params.select.as_deref().unwrap_or(""), &allowed)?
+    } else {
+        (apply_column_filter(&params.select, &perm), String::new())
+    };
     let order_clause = build_order_clause(&params.order);
     let limit = params.limit.unwrap_or(100).min(1000);
     let offset = params.offset.unwrap_or(0);
 
-    let filters = raw_query.0.map(|q| parse_filters(&q)).unwrap_or_default();
+    let filters = raw_query
+        .0
+        .map(|q| parse_filters_from_query(&q))
+        .unwrap_or_default();
+
+    // 列类型映射：用来给过滤占位符做精确 cast（修 text 列被数字字面值打成 500 等）。
+    // 仅在有过滤条件时拉取，避免给无过滤查询增加一次 information_schema 往返。失败则回退
+    // 到按字面值推断（与历史行为一致），不阻断查询。
+    let col_types: std::collections::HashMap<String, String> = if filters.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        crate::query_builder::fetch_column_types(&pool, database_id, &schema, &table)
+            .await
+            .unwrap_or_default()
+    };
+    let cast_for = |field: &str| -> Option<String> {
+        col_types
+            .get(field)
+            .and_then(|u| crate::query_builder::safe_cast_target(u))
+            .map(|s| s.to_string())
+    };
 
     let mut where_clauses = Vec::new();
-    let mut bind_values: Vec<String> = Vec::new();
+    let mut filter_binds: Vec<BindSpec> = Vec::new();
+    // RBAC 行条件沿用旧的 String + bind_inferred 路径（值来自配置而非外部输入）。
+    let mut rbac_binds: Vec<String> = Vec::new();
     let mut next_param_idx: usize = 1;
 
     for (field, op, value) in filters.iter() {
@@ -721,10 +1068,7 @@ pub async fn list_records(
             // PostgREST 语法：`field=in.(a,b,c)` —— rewrite middleware 会改写成
             // `field.in=(a,b,c)`，parse_filters 拿到 value = "(a,b,c)" 或裸 "a,b,c"。
             // 在 SQL 侧展开为 `"field" IN ($n, $n+1, ...)`，每项单独参数化绑定。
-            let raw = value
-                .trim()
-                .trim_start_matches('(')
-                .trim_end_matches(')');
+            let raw = value.trim().trim_start_matches('(').trim_end_matches(')');
             let items: Vec<String> = raw
                 .split(',')
                 .map(|s| s.trim().to_string())
@@ -735,32 +1079,55 @@ pub async fn list_records(
                 // 这里写恒假，让结果集明确为空而不是触发 500。
                 where_clauses.push("FALSE".to_string());
             } else {
+                let cast = cast_for(field);
                 let placeholders: Vec<String> = (0..items.len())
-                    .map(|i| format!("${}", next_param_idx + i))
+                    .map(|i| match &cast {
+                        Some(c) => format!("${}::{}", next_param_idx + i, c),
+                        None => format!("${}", next_param_idx + i),
+                    })
                     .collect();
-                where_clauses.push(format!(
-                    "\"{}\" IN ({})",
-                    field,
-                    placeholders.join(", ")
-                ));
+                where_clauses.push(format!("\"{}\" IN ({})", field, placeholders.join(", ")));
                 let n = items.len();
                 for item in items {
-                    bind_values.push(item);
+                    filter_binds.push(match &cast {
+                        Some(_) => BindSpec::Cast(item),
+                        None => BindSpec::Inferred(item),
+                    });
                 }
                 next_param_idx += n;
             }
-        } else {
+        } else if op == "LIKE" || op == "ILIKE" {
+            // 模式匹配天然作用于文本：按 text 绑定，避免 `name.like=111` 被推断成 bigint
+            // 而报 `operator does not exist: text ~~ bigint`。
             where_clauses.push(format!("\"{}\" {} ${}", field, op, next_param_idx));
-            bind_values.push(value.clone());
+            filter_binds.push(BindSpec::Text(value.clone()));
+            next_param_idx += 1;
+        } else {
+            // = / != / > / >= / < / <=：有列类型则按列真实类型 cast（text 绑定值），
+            // 否则回退到字面值推断。
+            match cast_for(field) {
+                Some(cast) => {
+                    where_clauses.push(format!(
+                        "\"{}\" {} ${}::{}",
+                        field, op, next_param_idx, cast
+                    ));
+                    filter_binds.push(BindSpec::Cast(value.clone()));
+                }
+                None => {
+                    where_clauses.push(format!("\"{}\" {} ${}", field, op, next_param_idx));
+                    filter_binds.push(BindSpec::Inferred(value.clone()));
+                }
+            }
             next_param_idx += 1;
         }
     }
 
-    // RBAC 行级条件：参数化绑定，禁止裸字符串拼接
+    // RBAC 行级条件：参数化绑定，禁止裸字符串拼接。占位符接在过滤条件之后继续编号，
+    // 绑定时也必须先绑 filter_binds 再绑 rbac_binds，保持与占位符顺序一致。
     if !row_conditions.is_empty() {
         next_param_idx = append_rbac_where(
             &mut where_clauses,
-            &mut bind_values,
+            &mut rbac_binds,
             &row_conditions,
             next_param_idx,
         );
@@ -779,49 +1146,26 @@ pub async fn list_records(
     );
 
     let sql = format!(
-        "SELECT {} FROM \"{}\".\"{}\" {} {} LIMIT {} OFFSET {}",
-        select_fields, schema, table, where_clause, order_clause, limit, offset
+        "SELECT {} FROM \"{}\".\"{}\" {} {} {} LIMIT {} OFFSET {}",
+        select_fields, schema, table, where_clause, group_by_clause, order_clause, limit, offset
     );
 
+    let user_id = user_id_from_claims(&claims);
+    let sql = sql_with_session_user(&sql, user_id);
     tracing::debug!("Auto API SQL: {}", sql);
 
-    // 包一层事务：注入 app.current_user_id 给 PG RLS 使用
-    let mut tx = pool.begin().await.map_err(AppError::Database)?;
-    inject_session_user_id(&mut tx, user_id_from_claims(&claims)).await?;
-
-    let mut count_query = sqlx::query(&count_sql);
-    for value in &bind_values {
-        count_query = bind_inferred(count_query, value);
-    }
-
-    // count_sql 与下面的 data SQL 共享 WHERE：count 失败几乎必然意味着 data 也会
-    // 失败（同样的列名 / 类型 / 权限）。**绝对不能 unwrap_or(0)** 把错误吞掉 —— 之前
-    // 就是这么写的，结果错误被吞掉后事务进入 aborted 状态，紧跟着的 SELECT 报
-    // "current transaction is aborted, commands ignored until end of transaction block"，
-    // 客户端看到的错误跟真实 root cause（如列不存在 / 类型不兼容 / RLS 拒绝）完全
-    // 错位，排障极其困难。明确把 count 错误向上返回；事务 drop 时 sqlx 会自动 rollback。
-    let total_count: i64 = match count_query.fetch_one(&mut *tx).await {
-        Ok(r) => r.get("count"),
-        Err(e) => {
-            cb_record_failure(&cb_mgr, database_id);
-            tracing::warn!(
-                schema = %schema,
-                table = %table,
-                "COUNT(*) 查询失败，整个请求按失败返回；SQL: {} ; err: {}",
-                count_sql,
-                e
-            );
-            return Err(AppError::Database(e));
-        }
-    };
-
+    // 读路径：GUC 折进 SQL，不再 BEGIN/独立 set_config/COMMIT（热路径省约 4 RTT）。
+    // COUNT 若需要则同样带 CTE（自动提交下 SET LOCAL 不跨语句）。
     let mut query = sqlx::query(&sql);
-    for value in &bind_values {
+    for spec in &filter_binds {
+        query = apply_bind(query, spec);
+    }
+    for value in &rbac_binds {
         query = bind_inferred(query, value);
     }
 
     let query_start = std::time::Instant::now();
-    let rows = match query.fetch_all(&mut *tx).await {
+    let rows = match query.fetch_all(&pool).await {
         Ok(r) => {
             cb_record_success(&cb_mgr, database_id);
             r
@@ -831,19 +1175,50 @@ pub async fn list_records(
             return Err(AppError::Database(e));
         }
     };
-    tx.commit().await.map_err(AppError::Database)?;
+
+    let total_count: Option<i64> = match decide_list_total(count_pref, offset, limit, rows.len()) {
+        TotalDecision::Known(v) => {
+            tracing::debug!(
+                target: "auto_api",
+                "skip COUNT(*) (page not full or count=none)"
+            );
+            v
+        }
+        TotalDecision::NeedCount => {
+            let count_sql = sql_with_session_user(&count_sql, user_id);
+            let mut count_query = sqlx::query(&count_sql);
+            for spec in &filter_binds {
+                count_query = apply_bind(count_query, spec);
+            }
+            for value in &rbac_binds {
+                count_query = bind_inferred(count_query, value);
+            }
+            match count_query.fetch_one(&pool).await {
+                Ok(r) => Some(r.get::<i64, _>("count")),
+                Err(e) => {
+                    cb_record_failure(&cb_mgr, database_id);
+                    tracing::warn!(
+                        schema = %schema,
+                        table = %table,
+                        "COUNT(*) 查询失败，整个请求按失败返回；SQL: {} ; err: {}",
+                        count_sql,
+                        e
+                    );
+                    return Err(AppError::Database(e));
+                }
+            }
+        }
+    };
+
     let query_ms = query_start.elapsed().as_millis() as i32;
 
     SlowQueryLogger::log(&main_pool, database_id, &schema, &table, &sql, query_ms).await;
 
-    let results: Vec<Value> = rows
-        .iter()
-        .map(|row| row_to_json(row))
-        .collect();
+    let results: Vec<Value> = rows.iter().map(|row| row_to_json(row)).collect();
 
     let response = ApiResponse {
         data: results,
-        count: Some(total_count),
+        count: total_count,
         error: None,
     };
 
@@ -867,21 +1242,20 @@ pub async fn list_records(
 /// 全部 RBAC / 缓存 / 熔断 / RLS / 审计逻辑。
 pub async fn list_records_pgrest(
     State(main_pool): State<PgPool>,
-    Path((database_id, table)): Path<(i32, String)>,
+    Path((database_slug, table)): Path<(String, String)>,
     Query(params): Query<QueryParams>,
     headers: HeaderMap,
     raw_query: axum::extract::RawQuery,
     claims: Option<axum::extract::Extension<Claims>>,
+    api_key_ctx: Option<axum::extract::Extension<crate::middleware::ApiKeyContext>>,
     rbac: Option<axum::extract::Extension<PermissionResult>>,
     redis: Option<axum::extract::Extension<RedisManager>>,
     cb_mgr: Option<axum::extract::Extension<CircuitBreakerManager>>,
 ) -> Result<axum::response::Response> {
     let schema = postgrest_compat::resolve_schema(&axum::http::Method::GET, &headers);
     // 重写 query：PostgREST filter 翻译 + X-Project-IDs 附加 IN filter
-    let synthesized = postgrest_compat::translate_and_augment_query(
-        raw_query.0.as_deref(),
-        &headers,
-    );
+    let synthesized =
+        postgrest_compat::translate_and_augment_query(raw_query.0.as_deref(), &headers);
     let synthesized_opt = if synthesized.is_empty() {
         None
     } else {
@@ -897,11 +1271,12 @@ pub async fn list_records_pgrest(
     // 的字面值，所以可以直接复用 axum 反序列化好的 params；不需要再 deserialize 一次。
     let inner: Json<ApiResponse<Vec<Value>>> = list_records(
         State(main_pool),
-        Path((database_id, schema, table)),
+        Path((database_slug, schema, table)),
         Query(params),
         headers,
         axum::extract::RawQuery(synthesized_opt),
         claims,
+        api_key_ctx,
         rbac,
         redis,
         cb_mgr,
@@ -994,9 +1369,11 @@ fn wants_single_object_response(headers: &HeaderMap) -> bool {
 /// body 决定），仅做 schema 翻译后 forward。
 pub async fn create_record_pgrest(
     State(main_pool): State<PgPool>,
-    Path((database_id, table)): Path<(i32, String)>,
+    Path((database_slug, table)): Path<(String, String)>,
+    Query(params): Query<CreateParams>,
     headers: HeaderMap,
     claims: Option<axum::extract::Extension<Claims>>,
+    api_key_ctx: Option<axum::extract::Extension<crate::middleware::ApiKeyContext>>,
     rbac: Option<axum::extract::Extension<PermissionResult>>,
     redis: Option<axum::extract::Extension<RedisManager>>,
     event_bus: Option<axum::extract::Extension<EventBus>>,
@@ -1006,9 +1383,11 @@ pub async fn create_record_pgrest(
     let schema = postgrest_compat::resolve_schema(&axum::http::Method::POST, &headers);
     create_record(
         State(main_pool),
-        Path((database_id, schema, table)),
+        Path((database_slug, schema, table)),
+        Query(params),
         headers,
         claims,
+        api_key_ctx,
         rbac,
         redis,
         event_bus,
@@ -1018,19 +1397,38 @@ pub async fn create_record_pgrest(
     .await
 }
 
-/// GET /api/v1/{database_id}/{schema}/{table}/{id} - 查询单条记录
+/// GET /api/v1/{database_slug}/{schema}/{table}/{id} - 查询单条记录
 pub async fn get_record(
     State(main_pool): State<PgPool>,
-    Path((database_id, schema, table, id)): Path<(i32, String, String, String)>,
+    Path((_database_slug, schema, table, id)): Path<(String, String, String, String)>,
     Query(params): Query<QueryParams>,
     headers: HeaderMap,
     claims: Option<axum::extract::Extension<Claims>>,
+    api_key_ctx: Option<axum::extract::Extension<crate::middleware::ApiKeyContext>>,
     rbac: Option<axum::extract::Extension<PermissionResult>>,
     redis: Option<axum::extract::Extension<RedisManager>>,
     cb_mgr: Option<axum::extract::Extension<CircuitBreakerManager>>,
 ) -> Result<Json<ApiResponse<Option<Value>>>> {
+    let database_id = database_id_from_headers(&headers)?;
     validate_path_identifiers(&schema, &table)?;
-    validate_auth(&main_pool, &headers, database_id, claims.is_some()).await?;
+    tracing::debug!(
+        target: "auto_api",
+        database_id = database_id,
+        schema = %schema,
+        table = %table,
+        record_id = %id,
+        user_id = user_id_from_claims(&claims),
+        method = "GET",
+        "Auto API get_record"
+    );
+    validate_auth(
+        &main_pool,
+        &headers,
+        database_id,
+        claims.is_some(),
+        api_key_ctx.as_ref().map(|e| &e.0),
+    )
+    .await?;
     check_circuit_breaker(&cb_mgr, database_id)?;
 
     let perm = rbac.map(|e| e.0);
@@ -1059,11 +1457,22 @@ pub async fn get_record(
     };
     let select_fields = apply_column_filter(&params.select, &perm);
     let pk_column = get_primary_key_column(&pool, &schema, &table).await?;
+    let col_types: std::collections::HashMap<String, String> =
+        crate::query_builder::fetch_column_types(&pool, database_id, &schema, &table)
+            .await
+            .unwrap_or_default();
 
-    // 主键过滤为 $1，RBAC 行条件从 $2 开始
-    let mut where_clauses = vec![format!("\"{}\" = $1", pk_column)];
+    // 主键过滤为 $1（按 PK 列类型 cast，避免 uuid = text），RBAC 行条件从 $2 开始
+    let mut where_clauses = vec![format!(
+        "\"{}\" = {}",
+        pk_column,
+        typed_placeholder(1, &pk_column, &col_types)
+    )];
     let mut bind_values: Vec<String> = vec![id.clone()];
-    let row_conds = perm.as_ref().map(|p| p.row_conditions.clone()).unwrap_or_default();
+    let row_conds = perm
+        .as_ref()
+        .map(|p| p.row_conditions.clone())
+        .unwrap_or_default();
     let _ = append_rbac_where(&mut where_clauses, &mut bind_values, &row_conds, 2);
 
     let sql = format!(
@@ -1074,16 +1483,13 @@ pub async fn get_record(
         where_clauses.join(" AND ")
     );
 
-    // 事务 + RLS 上下文
-    let mut tx = pool.begin().await.map_err(AppError::Database)?;
-    inject_session_user_id(&mut tx, user_id_from_claims(&claims)).await?;
-
+    let sql = sql_with_session_user(&sql, user_id_from_claims(&claims));
     let mut q = sqlx::query(&sql);
     // PK + rbac 用 bind_inferred 推类型，否则 bigint PK 比较会报 `bigint = text`。
     for v in &bind_values {
         q = bind_inferred(q, v);
     }
-    let row = match q.fetch_optional(&mut *tx).await {
+    let row = match q.fetch_optional(&pool).await {
         Ok(r) => {
             cb_record_success(&cb_mgr, database_id);
             r
@@ -1093,7 +1499,6 @@ pub async fn get_record(
             return Err(AppError::Database(e));
         }
     };
-    tx.commit().await.map_err(AppError::Database)?;
 
     let result = row.map(|row| row_to_json(&row));
 
@@ -1116,136 +1521,499 @@ pub async fn get_record(
     Ok(Json(response))
 }
 
-/// POST /api/v1/{database_id}/{schema}/{table} - 创建记录
+/// POST create_record 的查询参数（PostgREST 风格 upsert 支持）。
+#[derive(Debug, Deserialize, Default)]
+pub struct CreateParams {
+    /// `?on_conflict=col1,col2` —— upsert 的唯一键（冲突目标列）。
+    pub on_conflict: Option<String>,
+}
+
+/// ON CONFLICT 子句的语义，由 `Prefer` 头 + `on_conflict` 参数共同决定。
+enum ConflictClause {
+    /// 无冲突处理：冲突直接报错（默认，纯 INSERT）。
+    None,
+    /// 冲突忽略：`ON CONFLICT [(target)] DO NOTHING`。
+    DoNothing { target: Vec<String> },
+    /// 冲突更新（真正的 upsert）：`ON CONFLICT (target) DO UPDATE SET ...`。
+    DoUpdate { target: Vec<String> },
+}
+
+/// 解析 `Prefer: resolution=merge-duplicates|ignore-duplicates`（PostgREST 语义）。
+/// 返回 `Some("merge")` / `Some("ignore")` / `None`。大小写不敏感、逗号分隔可并存其它 prefer。
+fn parse_prefer_resolution(headers: &HeaderMap) -> Option<&'static str> {
+    let raw = headers.get("prefer")?.to_str().ok()?.to_ascii_lowercase();
+    for part in raw.split(',') {
+        let part = part.trim();
+        if let Some(v) = part.strip_prefix("resolution=") {
+            match v.trim() {
+                "merge-duplicates" => return Some("merge"),
+                "ignore-duplicates" => return Some("ignore"),
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CountPreference {
+    /// Default / exact / planned / estimated — need a precise total when possible.
+    Exact,
+    /// Prefer: count=none — never run COUNT(*).
+    None,
+}
+
+fn list_cache_fingerprint(base: &str, count_preference: CountPreference) -> String {
+    let count = match count_preference {
+        CountPreference::Exact => "exact",
+        CountPreference::None => "none",
+    };
+    format!("{base}||prefer-count:{count}")
+}
+
+fn parse_prefer_count(headers: &HeaderMap) -> CountPreference {
+    let Some(raw) = headers.get("prefer").and_then(|v| v.to_str().ok()) else {
+        return CountPreference::Exact;
+    };
+    let mut result = CountPreference::Exact;
+    for part in raw.split(',') {
+        let part = part.trim();
+        let Some(rest) = part
+            .split_once('=')
+            .filter(|(k, _)| k.eq_ignore_ascii_case("count"))
+            .map(|(_, v)| v.trim())
+        else {
+            continue;
+        };
+        if rest.eq_ignore_ascii_case("none") {
+            result = CountPreference::None;
+        } else if rest.eq_ignore_ascii_case("exact")
+            || rest.eq_ignore_ascii_case("planned")
+            || rest.eq_ignore_ascii_case("estimated")
+        {
+            result = CountPreference::Exact;
+        }
+        // unknown count=* values ignored (keep previous)
+    }
+    result
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TotalDecision {
+    /// `Some(n)` = exact total; `None` = unknown (`*` in Content-Range).
+    Known(Option<i64>),
+    NeedCount,
+}
+
+fn decide_list_total(
+    prefer: CountPreference,
+    offset: i64,
+    limit: i64,
+    returned: usize,
+) -> TotalDecision {
+    match prefer {
+        CountPreference::None => TotalDecision::Known(None),
+        CountPreference::Exact => {
+            let returned = returned as i64;
+            if returned == 0 {
+                if offset == 0 {
+                    TotalDecision::Known(Some(0))
+                } else {
+                    TotalDecision::NeedCount
+                }
+            } else if returned < limit {
+                TotalDecision::Known(Some(offset.saturating_add(returned)))
+            } else {
+                TotalDecision::NeedCount
+            }
+        }
+    }
+}
+
+/// 把 `on_conflict=col1,col2` 解析为已校验的列名列表（防注入）。
+fn parse_on_conflict_columns(raw: &Option<String>) -> Result<Vec<String>> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let mut cols = Vec::new();
+    for c in raw.split(',') {
+        let c = c.trim();
+        if c.is_empty() {
+            continue;
+        }
+        if !is_valid_identifier(c) {
+            return Err(AppError::InvalidQuery(format!(
+                "非法的 on_conflict 列名: '{}'",
+                c
+            )));
+        }
+        cols.push(c.to_string());
+    }
+    Ok(cols)
+}
+
+/// 构建单条 INSERT 语句（可含 ON CONFLICT），返回 SQL 与按行主序排列的 bind 值。
+///
+/// - `columns`：所有行的列名并集（原始未加引号），缺列的行用 `DEFAULT` 占位。
+/// - `col_types`：列名 → PG `udt_name`；命中白名单时占位符写成 `$N::uuid` 等，
+///   解决 `column "id" is of type uuid but expression is of type text`。
+/// - 每个 chunk 都是独立语句，占位符从 `$1` 重新开始。
+fn build_bulk_insert<'a>(
+    schema: &str,
+    table: &str,
+    columns: &[String],
+    rows: &[&'a serde_json::Map<String, Value>],
+    conflict: &ConflictClause,
+    col_types: &std::collections::HashMap<String, String>,
+) -> (String, Vec<&'a Value>) {
+    let quoted_cols: Vec<String> = columns.iter().map(|c| format!("\"{}\"", c)).collect();
+
+    let mut binds: Vec<&Value> = Vec::new();
+    let mut param_idx = 1usize;
+    let mut value_rows: Vec<String> = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut cells: Vec<String> = Vec::with_capacity(columns.len());
+        for col in columns {
+            match row.get(col) {
+                Some(v) => {
+                    cells.push(typed_placeholder(param_idx, col, col_types));
+                    param_idx += 1;
+                    binds.push(v);
+                }
+                None => cells.push("DEFAULT".to_string()),
+            }
+        }
+        value_rows.push(format!("({})", cells.join(", ")));
+    }
+
+    let conflict_sql = match conflict {
+        ConflictClause::None => String::new(),
+        ConflictClause::DoNothing { target } => {
+            if target.is_empty() {
+                " ON CONFLICT DO NOTHING".to_string()
+            } else {
+                let t: Vec<String> = target.iter().map(|c| format!("\"{}\"", c)).collect();
+                format!(" ON CONFLICT ({}) DO NOTHING", t.join(", "))
+            }
+        }
+        ConflictClause::DoUpdate { target } => {
+            let t: Vec<String> = target.iter().map(|c| format!("\"{}\"", c)).collect();
+            let set: Vec<String> = columns
+                .iter()
+                .filter(|c| !target.iter().any(|tc| tc == *c))
+                .map(|c| format!("\"{c}\" = EXCLUDED.\"{c}\""))
+                .collect();
+            if set.is_empty() {
+                // 所有列都是冲突键，无可更新列 → 退化为 DO NOTHING，避免 SQL 语法错误。
+                format!(" ON CONFLICT ({}) DO NOTHING", t.join(", "))
+            } else {
+                format!(
+                    " ON CONFLICT ({}) DO UPDATE SET {}",
+                    t.join(", "),
+                    set.join(", ")
+                )
+            }
+        }
+    };
+
+    let sql = format!(
+        "INSERT INTO \"{}\".\"{}\" ({}) VALUES {}{} RETURNING *",
+        schema,
+        table,
+        quoted_cols.join(", "),
+        value_rows.join(", "),
+        conflict_sql
+    );
+    (sql, binds)
+}
+
+/// `$N` 或 `$N::uuid` 等：按列真实 udt 做白名单 cast（与 filter / SqlBuilder 同策略）。
+fn typed_placeholder(
+    n: usize,
+    col: &str,
+    col_types: &std::collections::HashMap<String, String>,
+) -> String {
+    match col_types
+        .get(col)
+        .and_then(|u| crate::query_builder::safe_cast_target(u))
+    {
+        Some(t) => format!("${}::{}", n, t),
+        None => format!("${}", n),
+    }
+}
+
+/// POST /api/v1/{database_slug}/{schema}/{table} - 创建记录（支持单条 / 批量 / upsert）
+///
+/// 请求体可以是：
+/// - JSON 对象 `{...}`：插入单条，返回单个对象（向后兼容）。
+/// - JSON 数组 `[{...}, {...}]`：一次事务内批量插入，返回对象数组。
+///
+/// upsert（PostgREST 语义）：
+/// - `Prefer: resolution=merge-duplicates` + `?on_conflict=col1,col2` → 冲突更新。
+/// - `Prefer: resolution=ignore-duplicates` [+ `?on_conflict=...`] → 冲突跳过。
 pub async fn create_record(
     State(main_pool): State<PgPool>,
-    Path((database_id, schema, table)): Path<(i32, String, String)>,
+    Path((_database_slug, schema, table)): Path<(String, String, String)>,
+    Query(params): Query<CreateParams>,
     headers: HeaderMap,
     claims: Option<axum::extract::Extension<Claims>>,
+    api_key_ctx: Option<axum::extract::Extension<crate::middleware::ApiKeyContext>>,
     rbac: Option<axum::extract::Extension<PermissionResult>>,
     redis: Option<axum::extract::Extension<RedisManager>>,
     event_bus: Option<axum::extract::Extension<EventBus>>,
     cb_mgr: Option<axum::extract::Extension<CircuitBreakerManager>>,
     Json(body): Json<Value>,
 ) -> Result<(StatusCode, Json<ApiResponse<Value>>)> {
+    let database_id = database_id_from_headers(&headers)?;
     validate_path_identifiers(&schema, &table)?;
-    validate_auth(&main_pool, &headers, database_id, claims.is_some()).await?;
+
+    // 统一把请求体归一为「行数组」；对象 = 单元素批。
+    let was_array = body.is_array();
+    let rows: Vec<&serde_json::Map<String, Value>> = match &body {
+        Value::Object(o) => vec![o],
+        Value::Array(arr) => {
+            let mut v = Vec::with_capacity(arr.len());
+            for item in arr {
+                let o = item.as_object().ok_or_else(|| {
+                    AppError::InvalidQuery("批量插入的数组元素必须是 JSON 对象".to_string())
+                })?;
+                v.push(o);
+            }
+            v
+        }
+        _ => {
+            return Err(AppError::InvalidQuery(
+                "请求体必须是 JSON 对象或对象数组".to_string(),
+            ))
+        }
+    };
+
+    tracing::debug!(
+        target: "auto_api",
+        database_id = database_id,
+        schema = %schema,
+        table = %table,
+        user_id = user_id_from_claims(&claims),
+        method = "POST",
+        rows = rows.len(),
+        "Auto API create_record"
+    );
+
+    if rows.is_empty() {
+        return Err(AppError::InvalidQuery("请求体不能为空".to_string()));
+    }
+    // 上限保护：单请求过大既撑爆内存也超 PG 参数上限的多 chunk，仍建议客户端分批。
+    const MAX_BULK_ROWS: usize = 50_000;
+    if rows.len() > MAX_BULK_ROWS {
+        return Err(AppError::InvalidQuery(format!(
+            "单次批量插入行数不能超过 {}（当前 {}）",
+            MAX_BULK_ROWS,
+            rows.len()
+        )));
+    }
+    if rows.iter().any(|o| o.is_empty()) {
+        return Err(AppError::InvalidQuery("批量插入的对象不能为空".to_string()));
+    }
+
+    validate_auth(
+        &main_pool,
+        &headers,
+        database_id,
+        claims.is_some(),
+        api_key_ctx.as_ref().map(|e| &e.0),
+    )
+    .await?;
     check_circuit_breaker(&cb_mgr, database_id)?;
 
     let perm = rbac.map(|e| e.0);
-    let pool = match get_write_pool(&main_pool, database_id).await {
-        Ok(p) => p,
-        Err(e) => {
-            cb_record_failure(&cb_mgr, database_id);
-            return Err(e);
+
+    // 列并集：以首行列序为准，追加后续行的新列。批量插入用同一组列名。
+    let mut columns: Vec<String> = Vec::new();
+    for row in &rows {
+        for key in row.keys() {
+            if !is_valid_identifier(key) {
+                return Err(AppError::InvalidQuery(format!("非法的列名: '{}'", key)));
+            }
+            if !columns.iter().any(|c| c == key) {
+                columns.push(key.clone());
+            }
         }
-    };
-    
-    let obj = body.as_object().ok_or_else(|| {
-        AppError::InvalidQuery("请求体必须是 JSON 对象".to_string())
-    })?;
-    
-    if obj.is_empty() {
-        return Err(AppError::InvalidQuery("请求体不能为空".to_string()));
     }
 
-    // 列级权限：禁止 INSERT 配置以外的列
+    // 列级权限：禁止写入配置以外的列（对列并集判定）。
     if let Some(ref p) = perm {
         if let Some(ref allowed) = p.allowed_columns {
-            for key in obj.keys() {
+            for key in &columns {
                 if !allowed.iter().any(|c| c == key) {
+                    return Err(AppError::Forbidden(format!("无权写入列: {}", key)));
+                }
+            }
+        }
+    }
+
+    // 行级权限：每一行都必须满足 row_conditions（防止越权写入其他用户/租户的行）。
+    if let Some(ref p) = perm {
+        for cond in &p.row_conditions {
+            for row in &rows {
+                if let Err(e) = check_insert_satisfies_row_condition(row, cond) {
                     return Err(AppError::Forbidden(format!(
-                        "无权写入列: {}",
-                        key
+                        "INSERT 数据未满足行级权限约束: {}",
+                        e
                     )));
                 }
             }
         }
     }
 
-    // 行级权限：要求 INSERT 的数据满足 row_conditions（防止越权写入到其他用户/租户的行）
-    if let Some(ref p) = perm {
-        for cond in &p.row_conditions {
-            if let Err(e) = check_insert_satisfies_row_condition(obj, cond) {
-                return Err(AppError::Forbidden(format!(
-                    "INSERT 数据未满足行级权限约束: {}",
-                    e
-                )));
+    // 解析冲突处理策略（upsert）。
+    let on_conflict_cols = parse_on_conflict_columns(&params.on_conflict)?;
+    let conflict = match parse_prefer_resolution(&headers) {
+        Some("merge") => {
+            if on_conflict_cols.is_empty() {
+                return Err(AppError::InvalidQuery(
+                    "resolution=merge-duplicates 需要通过 ?on_conflict=col1,col2 指定冲突键"
+                        .to_string(),
+                ));
+            }
+            ConflictClause::DoUpdate {
+                target: on_conflict_cols.clone(),
+            }
+        }
+        Some("ignore") => ConflictClause::DoNothing {
+            target: on_conflict_cols.clone(),
+        },
+        _ => ConflictClause::None,
+    };
+
+    let pool = match get_write_pool(&main_pool, database_id).await {
+        Ok(p) => p,
+        Err(e) => {
+            cb_record_failure(&cb_mgr, database_id);
+            return Err(e);
+        }
+    };
+
+    // 列类型 → INSERT 占位符 `$N::uuid` 等；失败则退化为裸 `$N`（与历史行为一致）。
+    let col_types: std::collections::HashMap<String, String> =
+        crate::query_builder::fetch_column_types(&pool, database_id, &schema, &table)
+            .await
+            .unwrap_or_default();
+
+    // 按 PG 参数上限（65535）分块，全部在同一事务内执行以保证原子性。
+    // RLS：仅第一条 SQL 带 session CTE；SET LOCAL 在事务内对后续 chunk 仍生效。
+    let max_rows_per_chunk = std::cmp::max(1, 65000 / std::cmp::max(1, columns.len()));
+    let user_id = user_id_from_claims(&claims);
+
+    let mut tx = pool.begin().await.map_err(AppError::Database)?;
+
+    let mut results: Vec<Value> = Vec::with_capacity(rows.len());
+    let mut first_chunk = true;
+    for chunk in rows.chunks(max_rows_per_chunk) {
+        let (sql, binds) =
+            build_bulk_insert(&schema, &table, &columns, chunk, &conflict, &col_types);
+        let sql = if first_chunk {
+            first_chunk = false;
+            sql_with_session_user(&sql, user_id)
+        } else {
+            sql
+        };
+        let mut query = sqlx::query(&sql);
+        for value in binds {
+            query = bind_json_value(query, value);
+        }
+        match query.fetch_all(&mut *tx).await {
+            Ok(fetched) => {
+                cb_record_success(&cb_mgr, database_id);
+                for row in &fetched {
+                    results.push(row_to_json(row));
+                }
+            }
+            Err(e) => {
+                cb_record_failure(&cb_mgr, database_id);
+                return Err(AppError::InvalidQuery(format!("创建记录失败: {}", e)));
             }
         }
     }
-
-    let columns: Vec<String> = obj.keys().map(|k| format!("\"{}\"", k)).collect();
-    let placeholders: Vec<String> = (1..=obj.len()).map(|i| format!("${}", i)).collect();
-    
-    let sql = format!(
-        "INSERT INTO \"{}\".\"{}\" ({}) VALUES ({}) RETURNING *",
-        schema, table, columns.join(", "), placeholders.join(", ")
-    );
-
-    // 事务 + RLS 上下文
-    let mut tx = pool.begin().await.map_err(AppError::Database)?;
-    inject_session_user_id(&mut tx, user_id_from_claims(&claims)).await?;
-
-    let mut query = sqlx::query(&sql);
-    for value in obj.values() {
-        query = bind_json_value(query, value);
-    }
-
-    let row = match query.fetch_one(&mut *tx).await {
-        Ok(r) => {
-            cb_record_success(&cb_mgr, database_id);
-            r
-        }
-        Err(e) => {
-            cb_record_failure(&cb_mgr, database_id);
-            return Err(AppError::InvalidQuery(format!("创建记录失败: {}", e)));
-        }
-    };
     tx.commit().await.map_err(AppError::Database)?;
-
-    let result = row_to_json(&row);
 
     if let Some(axum::extract::Extension(ref r)) = redis {
         QueryCache::invalidate_table(r, database_id, &schema, &table).await;
     }
 
     if let Some(axum::extract::Extension(ref bus)) = event_bus {
-        bus.publish(DataChangeEvent {
-            tenant_id: 0,
-            database_id,
-            schema: schema.clone(),
-            table: table.clone(),
-            action: ChangeAction::Insert,
-            old_data: None,
-            new_data: Some(result.clone()),
-            user_id: None,
-            timestamp: chrono::Utc::now(),
-            request_id: crate::request_id::current(),
-        });
+        for result in &results {
+            bus.publish(DataChangeEvent {
+                tenant_id: 0,
+                database_id,
+                schema: schema.clone(),
+                table: table.clone(),
+                action: ChangeAction::Insert,
+                old_data: None,
+                new_data: Some(result.clone()),
+                user_id: None,
+                timestamp: chrono::Utc::now(),
+                request_id: crate::request_id::current(),
+            });
+        }
     }
 
-    Ok((StatusCode::CREATED, Json(ApiResponse {
-        data: result,
-        count: None,
-        error: None,
-    })))
+    // 数组请求 → 返回数组 + count；单对象请求 → 返回单个对象（向后兼容）。
+    if was_array {
+        let count = results.len() as i64;
+        Ok((
+            StatusCode::CREATED,
+            Json(ApiResponse {
+                data: Value::Array(results),
+                count: Some(count),
+                error: None,
+            }),
+        ))
+    } else {
+        let data = results.into_iter().next().unwrap_or(Value::Null);
+        Ok((
+            StatusCode::CREATED,
+            Json(ApiResponse {
+                data,
+                count: None,
+                error: None,
+            }),
+        ))
+    }
 }
 
-/// PATCH /api/v1/{database_id}/{schema}/{table}/{id} - 更新记录
+/// PATCH /api/v1/{database_slug}/{schema}/{table}/{id} - 更新记录
 pub async fn update_record(
     State(main_pool): State<PgPool>,
-    Path((database_id, schema, table, id)): Path<(i32, String, String, String)>,
+    Path((_database_slug, schema, table, id)): Path<(String, String, String, String)>,
     headers: HeaderMap,
     claims: Option<axum::extract::Extension<Claims>>,
+    api_key_ctx: Option<axum::extract::Extension<crate::middleware::ApiKeyContext>>,
     rbac: Option<axum::extract::Extension<PermissionResult>>,
     redis: Option<axum::extract::Extension<RedisManager>>,
     event_bus: Option<axum::extract::Extension<EventBus>>,
     cb_mgr: Option<axum::extract::Extension<CircuitBreakerManager>>,
     Json(body): Json<Value>,
 ) -> Result<Json<ApiResponse<Value>>> {
+    let database_id = database_id_from_headers(&headers)?;
     validate_path_identifiers(&schema, &table)?;
-    validate_auth(&main_pool, &headers, database_id, claims.is_some()).await?;
+    tracing::debug!(
+        target: "auto_api",
+        database_id = database_id,
+        schema = %schema,
+        table = %table,
+        record_id = %id,
+        user_id = user_id_from_claims(&claims),
+        method = "PATCH",
+        "Auto API update_record"
+    );
+    validate_auth(
+        &main_pool,
+        &headers,
+        database_id,
+        claims.is_some(),
+        api_key_ctx.as_ref().map(|e| &e.0),
+    )
+    .await?;
     check_circuit_breaker(&cb_mgr, database_id)?;
 
     let perm = rbac.map(|e| e.0);
@@ -1256,11 +2024,11 @@ pub async fn update_record(
             return Err(e);
         }
     };
-    
-    let obj = body.as_object().ok_or_else(|| {
-        AppError::InvalidQuery("请求体必须是 JSON 对象".to_string())
-    })?;
-    
+
+    let obj = body
+        .as_object()
+        .ok_or_else(|| AppError::InvalidQuery("请求体必须是 JSON 对象".to_string()))?;
+
     if obj.is_empty() {
         return Err(AppError::InvalidQuery("请求体不能为空".to_string()));
     }
@@ -1270,28 +2038,42 @@ pub async fn update_record(
         if let Some(ref allowed) = p.allowed_columns {
             for key in obj.keys() {
                 if !allowed.iter().any(|c| c == key) {
-                    return Err(AppError::Forbidden(format!(
-                        "无权更新列: {}",
-                        key
-                    )));
+                    return Err(AppError::Forbidden(format!("无权更新列: {}", key)));
                 }
             }
         }
     }
 
     let pk_column = get_primary_key_column(&pool, &schema, &table).await?;
-    
+    let col_types: std::collections::HashMap<String, String> =
+        crate::query_builder::fetch_column_types(&pool, database_id, &schema, &table)
+            .await
+            .unwrap_or_default();
+
     let set_clauses: Vec<String> = obj
         .keys()
         .enumerate()
-        .map(|(i, k)| format!("\"{}\" = ${}", k, i + 1))
+        .map(|(i, k)| {
+            format!(
+                "\"{}\" = {}",
+                k,
+                typed_placeholder(i + 1, k, &col_types)
+            )
+        })
         .collect();
 
     // pk 占用 $N+1，RBAC 行条件从 $N+2 开始
     let pk_placeholder = obj.len() + 1;
-    let mut where_clauses = vec![format!("\"{}\" = ${}", pk_column, pk_placeholder)];
+    let mut where_clauses = vec![format!(
+        "\"{}\" = {}",
+        pk_column,
+        typed_placeholder(pk_placeholder, &pk_column, &col_types)
+    )];
     let mut rbac_binds: Vec<String> = Vec::new();
-    let row_conds = perm.as_ref().map(|p| p.row_conditions.clone()).unwrap_or_default();
+    let row_conds = perm
+        .as_ref()
+        .map(|p| p.row_conditions.clone())
+        .unwrap_or_default();
     let _ = append_rbac_where(
         &mut where_clauses,
         &mut rbac_binds,
@@ -1299,17 +2081,16 @@ pub async fn update_record(
         pk_placeholder + 1,
     );
 
-    let sql = format!(
-        "UPDATE \"{}\".\"{}\" SET {} WHERE {} RETURNING *",
-        schema,
-        table,
-        set_clauses.join(", "),
-        where_clauses.join(" AND ")
+    let sql = sql_with_session_user(
+        &format!(
+            "UPDATE \"{}\".\"{}\" SET {} WHERE {} RETURNING *",
+            schema,
+            table,
+            set_clauses.join(", "),
+            where_clauses.join(" AND ")
+        ),
+        user_id_from_claims(&claims),
     );
-
-    // 事务 + RLS 上下文
-    let mut tx = pool.begin().await.map_err(AppError::Database)?;
-    inject_session_user_id(&mut tx, user_id_from_claims(&claims)).await?;
 
     let mut query = sqlx::query(&sql);
     for value in obj.values() {
@@ -1322,7 +2103,7 @@ pub async fn update_record(
         query = bind_inferred(query, v);
     }
 
-    let row = match query.fetch_optional(&mut *tx).await {
+    let row = match query.fetch_optional(&pool).await {
         Ok(r) => {
             cb_record_success(&cb_mgr, database_id);
             r
@@ -1332,11 +2113,8 @@ pub async fn update_record(
             return Err(AppError::InvalidQuery(format!("更新记录失败: {}", e)));
         }
     };
-    tx.commit().await.map_err(AppError::Database)?;
 
-    let row = row.ok_or_else(|| AppError::NotFound(
-        format!("记录 {} 不存在或您无权访问", id)
-    ))?;
+    let row = row.ok_or_else(|| AppError::NotFound(format!("记录 {} 不存在或您无权访问", id)))?;
 
     let result = row_to_json(&row);
 
@@ -1366,19 +2144,38 @@ pub async fn update_record(
     }))
 }
 
-/// DELETE /api/v1/{database_id}/{schema}/{table}/{id} - 删除记录
+/// DELETE /api/v1/{database_slug}/{schema}/{table}/{id} - 删除记录
 pub async fn delete_record(
     State(main_pool): State<PgPool>,
-    Path((database_id, schema, table, id)): Path<(i32, String, String, String)>,
+    Path((_database_slug, schema, table, id)): Path<(String, String, String, String)>,
     headers: HeaderMap,
     claims: Option<axum::extract::Extension<Claims>>,
+    api_key_ctx: Option<axum::extract::Extension<crate::middleware::ApiKeyContext>>,
     rbac: Option<axum::extract::Extension<PermissionResult>>,
     redis: Option<axum::extract::Extension<RedisManager>>,
     event_bus: Option<axum::extract::Extension<EventBus>>,
     cb_mgr: Option<axum::extract::Extension<CircuitBreakerManager>>,
 ) -> Result<Json<ApiResponse<Value>>> {
+    let database_id = database_id_from_headers(&headers)?;
     validate_path_identifiers(&schema, &table)?;
-    validate_auth(&main_pool, &headers, database_id, claims.is_some()).await?;
+    tracing::debug!(
+        target: "auto_api",
+        database_id = database_id,
+        schema = %schema,
+        table = %table,
+        record_id = %id,
+        user_id = user_id_from_claims(&claims),
+        method = "DELETE",
+        "Auto API delete_record"
+    );
+    validate_auth(
+        &main_pool,
+        &headers,
+        database_id,
+        claims.is_some(),
+        api_key_ctx.as_ref().map(|e| &e.0),
+    )
+    .await?;
     check_circuit_breaker(&cb_mgr, database_id)?;
 
     let perm = rbac.map(|e| e.0);
@@ -1390,22 +2187,32 @@ pub async fn delete_record(
         }
     };
     let pk_column = get_primary_key_column(&pool, &schema, &table).await?;
+    let col_types: std::collections::HashMap<String, String> =
+        crate::query_builder::fetch_column_types(&pool, database_id, &schema, &table)
+            .await
+            .unwrap_or_default();
 
-    let mut where_clauses = vec![format!("\"{}\" = $1", pk_column)];
+    let mut where_clauses = vec![format!(
+        "\"{}\" = {}",
+        pk_column,
+        typed_placeholder(1, &pk_column, &col_types)
+    )];
     let mut bind_values: Vec<String> = vec![id.clone()];
-    let row_conds = perm.as_ref().map(|p| p.row_conditions.clone()).unwrap_or_default();
+    let row_conds = perm
+        .as_ref()
+        .map(|p| p.row_conditions.clone())
+        .unwrap_or_default();
     let _ = append_rbac_where(&mut where_clauses, &mut bind_values, &row_conds, 2);
 
-    let sql = format!(
-        "DELETE FROM \"{}\".\"{}\" WHERE {} RETURNING *",
-        schema,
-        table,
-        where_clauses.join(" AND ")
+    let sql = sql_with_session_user(
+        &format!(
+            "DELETE FROM \"{}\".\"{}\" WHERE {} RETURNING *",
+            schema,
+            table,
+            where_clauses.join(" AND ")
+        ),
+        user_id_from_claims(&claims),
     );
-
-    // 事务 + RLS 上下文
-    let mut tx = pool.begin().await.map_err(AppError::Database)?;
-    inject_session_user_id(&mut tx, user_id_from_claims(&claims)).await?;
 
     let mut q = sqlx::query(&sql);
     // PK + rbac 都用 bind_inferred 推 i64/bool/text，否则 bigint PK 比较会报
@@ -1413,7 +2220,7 @@ pub async fn delete_record(
     for v in &bind_values {
         q = bind_inferred(q, v);
     }
-    let row = match q.fetch_optional(&mut *tx).await {
+    let row = match q.fetch_optional(&pool).await {
         Ok(r) => {
             cb_record_success(&cb_mgr, database_id);
             r
@@ -1423,11 +2230,8 @@ pub async fn delete_record(
             return Err(AppError::InvalidQuery(format!("删除记录失败: {}", e)));
         }
     };
-    tx.commit().await.map_err(AppError::Database)?;
 
-    let row = row.ok_or_else(|| AppError::NotFound(
-        format!("记录 {} 不存在或您无权访问", id)
-    ))?;
+    let row = row.ok_or_else(|| AppError::NotFound(format!("记录 {} 不存在或您无权访问", id)))?;
 
     let result = row_to_json(&row);
 
@@ -1457,7 +2261,7 @@ pub async fn delete_record(
     }))
 }
 
-/// PATCH /api/v1/{database_id}/{schema}/{table}?filter=... - 批量按过滤条件更新
+/// PATCH /api/v1/{database_slug}/{schema}/{table}?filter=... - 批量按过滤条件更新
 ///
 /// PostgREST 语义的"按 query filter 批量更新"。与 [`update_record`] 的关键区别：
 /// - 不靠 path 末段的 `:id` 锁定单条，而是 query string 的 `field=op.value` 过滤集合；
@@ -1471,18 +2275,36 @@ pub async fn delete_record(
 /// - 事务内注入 `app.current_user_id`，配合 PG RLS POLICY 工作。
 pub async fn update_records(
     State(main_pool): State<PgPool>,
-    Path((database_id, schema, table)): Path<(i32, String, String)>,
+    Path((_database_slug, schema, table)): Path<(String, String, String)>,
     headers: HeaderMap,
     raw_query: axum::extract::RawQuery,
     claims: Option<axum::extract::Extension<Claims>>,
+    api_key_ctx: Option<axum::extract::Extension<crate::middleware::ApiKeyContext>>,
     rbac: Option<axum::extract::Extension<PermissionResult>>,
     redis: Option<axum::extract::Extension<RedisManager>>,
     event_bus: Option<axum::extract::Extension<EventBus>>,
     cb_mgr: Option<axum::extract::Extension<CircuitBreakerManager>>,
     Json(body): Json<Value>,
 ) -> Result<Json<ApiResponse<Vec<Value>>>> {
+    let database_id = database_id_from_headers(&headers)?;
     validate_path_identifiers(&schema, &table)?;
-    validate_auth(&main_pool, &headers, database_id, claims.is_some()).await?;
+    tracing::debug!(
+        target: "auto_api",
+        database_id = database_id,
+        schema = %schema,
+        table = %table,
+        user_id = user_id_from_claims(&claims),
+        method = "PATCH",
+        "Auto API update_records（批量）"
+    );
+    validate_auth(
+        &main_pool,
+        &headers,
+        database_id,
+        claims.is_some(),
+        api_key_ctx.as_ref().map(|e| &e.0),
+    )
+    .await?;
     check_circuit_breaker(&cb_mgr, database_id)?;
 
     let perm = rbac.map(|e| e.0);
@@ -1508,10 +2330,10 @@ pub async fn update_records(
     // filters：至少一个；不允许"裸 PATCH 整张表"。RBAC row_conditions 不算 filter，
     // 这是行级安全的兜底，不是用户的"显式意图"。
     let query_string = raw_query.0.as_deref().unwrap_or("");
-    let filters = parse_filters(query_string);
+    let filters = parse_filters_from_query(query_string);
     if filters.is_empty() {
         return Err(AppError::InvalidQuery(
-            "批量更新必须提供至少一个过滤条件（如 ?id=eq.123），禁止裸 PATCH 整表".to_string(),
+            "批量更新必须提供至少一个过滤条件（如 ?id.eq=123 或 ?id.in=1,2,3），禁止裸 PATCH 整表".to_string(),
         ));
     }
 
@@ -1523,17 +2345,35 @@ pub async fn update_records(
         }
     };
 
+    // 列类型映射：给 SET / filter 占位符做精确 cast（修 uuid 列写入 text 等）。
+    let col_types: std::collections::HashMap<String, String> =
+        crate::query_builder::fetch_column_types(&pool, database_id, &schema, &table)
+            .await
+            .unwrap_or_default();
+    let cast_for = |field: &str| -> Option<String> {
+        col_types
+            .get(field)
+            .and_then(|u| crate::query_builder::safe_cast_target(u))
+            .map(|s| s.to_string())
+    };
+
     // SET：每个待更新列拿一个 $N（按 obj.keys() 的迭代顺序，下面 bind 时同序）。
     let set_clauses: Vec<String> = obj
         .keys()
         .enumerate()
-        .map(|(i, k)| format!("\"{}\" = ${}", k, i + 1))
+        .map(|(i, k)| {
+            format!(
+                "\"{}\" = {}",
+                k,
+                typed_placeholder(i + 1, k, &col_types)
+            )
+        })
         .collect();
     let mut next_param_idx = obj.len() + 1;
 
-    // WHERE：filter 转 SQL，复用 list_records 的占位符策略。
+    // WHERE：filter 转 SQL，复用 list_records 的占位符 + cast 策略。
     let mut where_clauses: Vec<String> = Vec::new();
-    let mut filter_binds: Vec<String> = Vec::new();
+    let mut filter_binds: Vec<BindSpec> = Vec::new();
     for (field, op, value) in filters.iter() {
         if op == "IS" {
             if value.to_lowercase() == "null" {
@@ -1551,59 +2391,86 @@ pub async fn update_records(
             if items.is_empty() {
                 where_clauses.push("FALSE".to_string());
             } else {
+                let cast = cast_for(field);
                 let placeholders: Vec<String> = (0..items.len())
-                    .map(|i| format!("${}", next_param_idx + i))
+                    .map(|i| match &cast {
+                        Some(c) => format!("${}::{}", next_param_idx + i, c),
+                        None => format!("${}", next_param_idx + i),
+                    })
                     .collect();
                 where_clauses.push(format!("\"{}\" IN ({})", field, placeholders.join(", ")));
                 let n = items.len();
                 for item in items {
-                    filter_binds.push(item);
+                    filter_binds.push(match &cast {
+                        Some(_) => BindSpec::Cast(item),
+                        None => BindSpec::Inferred(item),
+                    });
                 }
                 next_param_idx += n;
             }
-        } else {
+        } else if op == "LIKE" || op == "ILIKE" {
             where_clauses.push(format!("\"{}\" {} ${}", field, op, next_param_idx));
-            filter_binds.push(value.clone());
+            filter_binds.push(BindSpec::Text(value.clone()));
+            next_param_idx += 1;
+        } else {
+            match cast_for(field) {
+                Some(cast) => {
+                    where_clauses.push(format!(
+                        "\"{}\" {} ${}::{}",
+                        field, op, next_param_idx, cast
+                    ));
+                    filter_binds.push(BindSpec::Cast(value.clone()));
+                }
+                None => {
+                    where_clauses.push(format!("\"{}\" {} ${}", field, op, next_param_idx));
+                    filter_binds.push(BindSpec::Inferred(value.clone()));
+                }
+            }
             next_param_idx += 1;
         }
     }
 
     // RBAC 行级条件
-    let row_conds = perm.as_ref().map(|p| p.row_conditions.clone()).unwrap_or_default();
+    let row_conds = perm
+        .as_ref()
+        .map(|p| p.row_conditions.clone())
+        .unwrap_or_default();
     let mut rbac_binds: Vec<String> = Vec::new();
     if !row_conds.is_empty() {
-        next_param_idx =
-            append_rbac_where(&mut where_clauses, &mut rbac_binds, &row_conds, next_param_idx);
+        next_param_idx = append_rbac_where(
+            &mut where_clauses,
+            &mut rbac_binds,
+            &row_conds,
+            next_param_idx,
+        );
     }
     let _ = next_param_idx;
 
-    let sql = format!(
-        "UPDATE \"{}\".\"{}\" SET {} WHERE {} RETURNING *",
-        schema,
-        table,
-        set_clauses.join(", "),
-        where_clauses.join(" AND ")
+    let sql = sql_with_session_user(
+        &format!(
+            "UPDATE \"{}\".\"{}\" SET {} WHERE {} RETURNING *",
+            schema,
+            table,
+            set_clauses.join(", "),
+            where_clauses.join(" AND ")
+        ),
+        user_id_from_claims(&claims),
     );
-
-    let mut tx = pool.begin().await.map_err(AppError::Database)?;
-    inject_session_user_id(&mut tx, user_id_from_claims(&claims)).await?;
 
     let mut query = sqlx::query(&sql);
     // 绑顺序：先 SET（obj.values 与 obj.keys 同序，用 bind_json_value 按 JSON 字面值
-    // 类型 bind），再 filter binds 与 rbac binds（用 bind_inferred 按字面值形态推断
-    // 类型）。**别用 `query.bind(&String)`**：那会把整列都 bind 成 PG `text`，
-    // bigint / int 列会直接报 `operator does not exist: bigint = text`。
+    // 类型 bind），再 filter binds（按列类型 cast / 推断）与 rbac binds。
     for value in obj.values() {
         query = bind_json_value(query, value);
     }
-    for v in &filter_binds {
-        query = bind_inferred(query, v);
+    for spec in &filter_binds {
+        query = apply_bind(query, spec);
     }
     for v in &rbac_binds {
         query = bind_inferred(query, v);
     }
 
-    let rows = match query.fetch_all(&mut *tx).await {
+    let rows = match query.fetch_all(&pool).await {
         Ok(r) => {
             cb_record_success(&cb_mgr, database_id);
             r
@@ -1613,7 +2480,6 @@ pub async fn update_records(
             return Err(AppError::InvalidQuery(format!("批量更新失败: {}", e)));
         }
     };
-    tx.commit().await.map_err(AppError::Database)?;
 
     let results: Vec<Value> = rows.iter().map(row_to_json).collect();
 
@@ -1647,32 +2513,50 @@ pub async fn update_records(
     }))
 }
 
-/// DELETE /api/v1/{database_id}/{schema}/{table}?filter=... - 批量按过滤条件删除
+/// DELETE /api/v1/{database_slug}/{schema}/{table}?filter=... - 批量按过滤条件删除
 ///
 /// 同 [`update_records`]：必须显式给 filter（防止裸 DELETE 全表）；RBAC + RLS + 缓存
 /// 失效 + EventBus 广播 与单条 [`delete_record`] 一致。
 pub async fn delete_records(
     State(main_pool): State<PgPool>,
-    Path((database_id, schema, table)): Path<(i32, String, String)>,
+    Path((_database_slug, schema, table)): Path<(String, String, String)>,
     headers: HeaderMap,
     raw_query: axum::extract::RawQuery,
     claims: Option<axum::extract::Extension<Claims>>,
+    api_key_ctx: Option<axum::extract::Extension<crate::middleware::ApiKeyContext>>,
     rbac: Option<axum::extract::Extension<PermissionResult>>,
     redis: Option<axum::extract::Extension<RedisManager>>,
     event_bus: Option<axum::extract::Extension<EventBus>>,
     cb_mgr: Option<axum::extract::Extension<CircuitBreakerManager>>,
 ) -> Result<Json<ApiResponse<Vec<Value>>>> {
+    let database_id = database_id_from_headers(&headers)?;
     validate_path_identifiers(&schema, &table)?;
-    validate_auth(&main_pool, &headers, database_id, claims.is_some()).await?;
+    tracing::debug!(
+        target: "auto_api",
+        database_id = database_id,
+        schema = %schema,
+        table = %table,
+        user_id = user_id_from_claims(&claims),
+        method = "DELETE",
+        "Auto API delete_records（批量）"
+    );
+    validate_auth(
+        &main_pool,
+        &headers,
+        database_id,
+        claims.is_some(),
+        api_key_ctx.as_ref().map(|e| &e.0),
+    )
+    .await?;
     check_circuit_breaker(&cb_mgr, database_id)?;
 
     let perm = rbac.map(|e| e.0);
 
     let query_string = raw_query.0.as_deref().unwrap_or("");
-    let filters = parse_filters(query_string);
+    let filters = parse_filters_from_query(query_string);
     if filters.is_empty() {
         return Err(AppError::InvalidQuery(
-            "批量删除必须提供至少一个过滤条件（如 ?id=eq.123），禁止裸 DELETE 整表".to_string(),
+            "批量删除必须提供至少一个过滤条件（如 ?id.eq=123 或 ?id.in=1,2,3），禁止裸 DELETE 整表".to_string(),
         ));
     }
 
@@ -1684,8 +2568,20 @@ pub async fn delete_records(
         }
     };
 
+    // 列类型映射：给过滤占位符做精确 cast（修 text 列 + 数字过滤值等 500）。失败回退推断。
+    let col_types: std::collections::HashMap<String, String> =
+        crate::query_builder::fetch_column_types(&pool, database_id, &schema, &table)
+            .await
+            .unwrap_or_default();
+    let cast_for = |field: &str| -> Option<String> {
+        col_types
+            .get(field)
+            .and_then(|u| crate::query_builder::safe_cast_target(u))
+            .map(|s| s.to_string())
+    };
+
     let mut where_clauses: Vec<String> = Vec::new();
-    let mut filter_binds: Vec<String> = Vec::new();
+    let mut filter_binds: Vec<BindSpec> = Vec::new();
     let mut next_param_idx: usize = 1;
     for (field, op, value) in filters.iter() {
         if op == "IS" {
@@ -1704,52 +2600,80 @@ pub async fn delete_records(
             if items.is_empty() {
                 where_clauses.push("FALSE".to_string());
             } else {
+                let cast = cast_for(field);
                 let placeholders: Vec<String> = (0..items.len())
-                    .map(|i| format!("${}", next_param_idx + i))
+                    .map(|i| match &cast {
+                        Some(c) => format!("${}::{}", next_param_idx + i, c),
+                        None => format!("${}", next_param_idx + i),
+                    })
                     .collect();
                 where_clauses.push(format!("\"{}\" IN ({})", field, placeholders.join(", ")));
                 let n = items.len();
                 for item in items {
-                    filter_binds.push(item);
+                    filter_binds.push(match &cast {
+                        Some(_) => BindSpec::Cast(item),
+                        None => BindSpec::Inferred(item),
+                    });
                 }
                 next_param_idx += n;
             }
-        } else {
+        } else if op == "LIKE" || op == "ILIKE" {
             where_clauses.push(format!("\"{}\" {} ${}", field, op, next_param_idx));
-            filter_binds.push(value.clone());
+            filter_binds.push(BindSpec::Text(value.clone()));
+            next_param_idx += 1;
+        } else {
+            match cast_for(field) {
+                Some(cast) => {
+                    where_clauses.push(format!(
+                        "\"{}\" {} ${}::{}",
+                        field, op, next_param_idx, cast
+                    ));
+                    filter_binds.push(BindSpec::Cast(value.clone()));
+                }
+                None => {
+                    where_clauses.push(format!("\"{}\" {} ${}", field, op, next_param_idx));
+                    filter_binds.push(BindSpec::Inferred(value.clone()));
+                }
+            }
             next_param_idx += 1;
         }
     }
 
-    let row_conds = perm.as_ref().map(|p| p.row_conditions.clone()).unwrap_or_default();
+    let row_conds = perm
+        .as_ref()
+        .map(|p| p.row_conditions.clone())
+        .unwrap_or_default();
+    let mut rbac_binds: Vec<String> = Vec::new();
     if !row_conds.is_empty() {
         next_param_idx = append_rbac_where(
             &mut where_clauses,
-            &mut filter_binds,
+            &mut rbac_binds,
             &row_conds,
             next_param_idx,
         );
     }
     let _ = next_param_idx;
 
-    let sql = format!(
-        "DELETE FROM \"{}\".\"{}\" WHERE {} RETURNING *",
-        schema,
-        table,
-        where_clauses.join(" AND ")
+    let sql = sql_with_session_user(
+        &format!(
+            "DELETE FROM \"{}\".\"{}\" WHERE {} RETURNING *",
+            schema,
+            table,
+            where_clauses.join(" AND ")
+        ),
+        user_id_from_claims(&claims),
     );
 
-    let mut tx = pool.begin().await.map_err(AppError::Database)?;
-    inject_session_user_id(&mut tx, user_id_from_claims(&claims)).await?;
-
     let mut q = sqlx::query(&sql);
-    // 同 update_records：必须 bind_inferred 才能让 bigint / int 列正确比较；
-    // 详见 `bind_inferred` 文档与上面注释。
-    for v in &filter_binds {
+    // 先 filter binds（按列类型 cast / 推断），再 rbac binds（bind_inferred），与占位符同序。
+    for spec in &filter_binds {
+        q = apply_bind(q, spec);
+    }
+    for v in &rbac_binds {
         q = bind_inferred(q, v);
     }
 
-    let rows = match q.fetch_all(&mut *tx).await {
+    let rows = match q.fetch_all(&pool).await {
         Ok(r) => {
             cb_record_success(&cb_mgr, database_id);
             r
@@ -1759,7 +2683,6 @@ pub async fn delete_records(
             return Err(AppError::InvalidQuery(format!("批量删除失败: {}", e)));
         }
     };
-    tx.commit().await.map_err(AppError::Database)?;
 
     let results: Vec<Value> = rows.iter().map(row_to_json).collect();
 
@@ -1801,10 +2724,11 @@ pub async fn delete_records(
 /// 缓存 / EventBus 路径都被复用。
 pub async fn update_records_pgrest(
     State(main_pool): State<PgPool>,
-    Path((database_id, table)): Path<(i32, String)>,
+    Path((database_slug, table)): Path<(String, String)>,
     headers: HeaderMap,
     raw_query: axum::extract::RawQuery,
     claims: Option<axum::extract::Extension<Claims>>,
+    api_key_ctx: Option<axum::extract::Extension<crate::middleware::ApiKeyContext>>,
     rbac: Option<axum::extract::Extension<PermissionResult>>,
     redis: Option<axum::extract::Extension<RedisManager>>,
     event_bus: Option<axum::extract::Extension<EventBus>>,
@@ -1812,10 +2736,8 @@ pub async fn update_records_pgrest(
     Json(body): Json<Value>,
 ) -> Result<Json<ApiResponse<Vec<Value>>>> {
     let schema = postgrest_compat::resolve_schema(&axum::http::Method::PATCH, &headers);
-    let synthesized = postgrest_compat::translate_and_augment_query(
-        raw_query.0.as_deref(),
-        &headers,
-    );
+    let synthesized =
+        postgrest_compat::translate_and_augment_query(raw_query.0.as_deref(), &headers);
     let synthesized_opt = if synthesized.is_empty() {
         None
     } else {
@@ -1823,10 +2745,11 @@ pub async fn update_records_pgrest(
     };
     update_records(
         State(main_pool),
-        Path((database_id, schema, table)),
+        Path((database_slug, schema, table)),
         headers,
         axum::extract::RawQuery(synthesized_opt),
         claims,
+        api_key_ctx,
         rbac,
         redis,
         event_bus,
@@ -1839,20 +2762,19 @@ pub async fn update_records_pgrest(
 /// DELETE /api/v1/{database_id}/{table}?filter=... - PostgREST 两段形态的批量删除
 pub async fn delete_records_pgrest(
     State(main_pool): State<PgPool>,
-    Path((database_id, table)): Path<(i32, String)>,
+    Path((database_slug, table)): Path<(String, String)>,
     headers: HeaderMap,
     raw_query: axum::extract::RawQuery,
     claims: Option<axum::extract::Extension<Claims>>,
+    api_key_ctx: Option<axum::extract::Extension<crate::middleware::ApiKeyContext>>,
     rbac: Option<axum::extract::Extension<PermissionResult>>,
     redis: Option<axum::extract::Extension<RedisManager>>,
     event_bus: Option<axum::extract::Extension<EventBus>>,
     cb_mgr: Option<axum::extract::Extension<CircuitBreakerManager>>,
 ) -> Result<Json<ApiResponse<Vec<Value>>>> {
     let schema = postgrest_compat::resolve_schema(&axum::http::Method::DELETE, &headers);
-    let synthesized = postgrest_compat::translate_and_augment_query(
-        raw_query.0.as_deref(),
-        &headers,
-    );
+    let synthesized =
+        postgrest_compat::translate_and_augment_query(raw_query.0.as_deref(), &headers);
     let synthesized_opt = if synthesized.is_empty() {
         None
     } else {
@@ -1860,10 +2782,11 @@ pub async fn delete_records_pgrest(
     };
     delete_records(
         State(main_pool),
-        Path((database_id, schema, table)),
+        Path((database_slug, schema, table)),
         headers,
         axum::extract::RawQuery(synthesized_opt),
         claims,
+        api_key_ctx,
         rbac,
         redis,
         event_bus,
@@ -1891,7 +2814,7 @@ async fn get_primary_key_column(pool: &PgPool, schema: &str, table: &str) -> Res
     .bind(table)
     .fetch_optional(pool)
     .await?;
-    
+
     match pk {
         Some(row) => Ok(row.get("column_name")),
         None => Ok("id".to_string()), // 默认使用 id
@@ -1900,23 +2823,25 @@ async fn get_primary_key_column(pool: &PgPool, schema: &str, table: &str) -> Res
 
 /// 将 JSON 值绑定到查询。
 ///
-/// PG 不做隐式 `text → bigint / timestamptz / date` cast，sqlx 默认会把所有 JSON
+/// PG 不做隐式 `text → bigint / timestamptz / date / uuid` cast，sqlx 默认会把所有 JSON
 /// String 当 PG `text` 发过去——结果 INSERT / UPDATE 进非 text 列时 PG 直接报
 /// `column "x" is of type ... but expression is of type text`。
 ///
-/// 这里在 String 路径上做"字面值形态推断"：先尝试解析为常见时间格式，命中就 bind
-/// 对应的 chrono 类型（sqlx 会以正确的 PG 类型编码）；都失败再退回 text。
+/// 主修复路径：调用方应在 SQL 占位符上按列类型写 `$N::uuid` 等（见 [`typed_placeholder`] /
+/// [`build_bulk_insert`]），值仍可按 JSON 字面值绑定；PG 会走目标类型的 input 函数。
+///
+/// 这里在 String 路径上另做"字面值形态推断"作为兜底：先尝试解析为常见时间 / UUID，
+/// 命中就 bind 对应的原生类型；都失败再退回 text。
 ///
 /// 已覆盖：
-/// - RFC 3339 / ISO 8601 带时区 → `DateTime<Utc>` → `timestamptz`（自动可 cast 到
-///   `timestamp` 列，赋值上下文允许）。
-/// - 不带时区的 `YYYY-MM-DDTHH:MM:SS[.fff]` → `NaiveDateTime` → `timestamp`。
-/// - 纯日期 `YYYY-MM-DD` → `NaiveDate` → `date`。
+/// - RFC 3339 / ISO 8601 带时区 → `DateTime<Utc>` → `timestamptz`
+/// - 不带时区的 `YYYY-MM-DDTHH:MM:SS[.fff]` → `NaiveDateTime` → `timestamp`
+/// - 纯日期 `YYYY-MM-DD` → `NaiveDate` → `date`
+/// - UUID 文本（含/不含连字符）→ `uuid::Uuid` → `uuid`
 ///
-/// **未覆盖**（已知 edge case，再发生时再扩）：
-/// - UUID 文本：当前业务很少把 UUID 当 JSON 字符串写到非 text 列。
+/// **未覆盖**：
 /// - 数字字面值字符串 `"123"`：不推断为 i64，避免误伤"text 列存数字串"的合法 case。
-///   想往 bigint 列写就直接用 JSON Number。
+///   想往 bigint 列写就直接用 JSON Number，或依赖 `$N::int8` cast。
 fn bind_json_value<'q>(
     query: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
     value: &'q Value,
@@ -1933,17 +2858,26 @@ fn bind_json_value<'q>(
                 query.bind(n.to_string())
             }
         }
-        Value::String(s) => bind_string_with_datetime_inference(query, s),
+        Value::String(s) => bind_string_with_type_inference(query, s),
         Value::Array(_) | Value::Object(_) => query.bind(value.clone()),
     }
 }
 
-/// 见 [`bind_json_value`] 文档：按字面值形态推断 timestamp / date / text。
-fn bind_string_with_datetime_inference<'q>(
+/// 见 [`bind_json_value`] 文档：按字面值形态推断 timestamp / date / uuid / text。
+fn bind_string_with_type_inference<'q>(
     query: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
     s: &'q str,
 ) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
     use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+
+    // UUID：标准连字符 36 字符，或无连字符 32 hex。parse 失败则继续后面的时间推断。
+    // 与 `$N::uuid` cast 叠加时也安全（uuid→uuid）；若误入 text 列且无 cast，
+    // 仍可能报类型错——因此 create/update 路径必须以列类型 cast 为主。
+    if s.len() == 36 || s.len() == 32 {
+        if let Ok(u) = uuid::Uuid::parse_str(s) {
+            return query.bind(u);
+        }
+    }
 
     // 启发式：长度太短就不像时间，省下三次 parse 调用。
     //   - `YYYY-MM-DD` = 10
@@ -1955,7 +2889,12 @@ fn bind_string_with_datetime_inference<'q>(
             return query.bind(dt.with_timezone(&Utc));
         }
         // 2) 不带时区的 `YYYY-MM-DDTHH:MM:SS[.fff]` → timestamp。两种分隔符都试。
-        for fmt in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"] {
+        for fmt in [
+            "%Y-%m-%dT%H:%M:%S%.f",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M:%S%.f",
+            "%Y-%m-%d %H:%M:%S",
+        ] {
             if let Ok(ndt) = NaiveDateTime::parse_from_str(s, fmt) {
                 return query.bind(ndt);
             }
@@ -1998,12 +2937,15 @@ pub struct ApiKeyInfo {
 // 调用点直接持有 Claims，少一次 SQL（用 JWT 里的 is_superadmin 即可），
 // 错误信息也由统一模块给出，避免"管理 API Key"这类业务字眼漂移。
 
-/// GET /api/admin/api-keys/{database_id} - 获取项目的 API Keys 列表
+/// GET /api/admin/api-keys/{database_slug} - 获取项目的 API Keys 列表
 pub async fn list_api_keys(
     State(pool): State<PgPool>,
-    Path(database_id): Path<i32>,
+    Path(database_slug): Path<String>,
     claims: axum::extract::Extension<Claims>,
 ) -> Result<Json<Vec<ApiKeyInfo>>> {
+    let database_id =
+        permissions::resolve_database_id_by_slug_for_claims(&pool, &claims.0, &database_slug)
+            .await?;
     permissions::require_database_admin(&pool, &claims.0, database_id).await?;
     let keys = sqlx::query(
         r#"
@@ -2017,7 +2959,7 @@ pub async fn list_api_keys(
     .bind(database_id)
     .fetch_all(&pool)
     .await?;
-    
+
     let result: Vec<ApiKeyInfo> = keys
         .iter()
         .map(|row| ApiKeyInfo {
@@ -2031,40 +2973,42 @@ pub async fn list_api_keys(
             expires_at: row.get("expires_at"),
         })
         .collect();
-    
+
     Ok(Json(result))
 }
 
-/// POST /api/admin/api-keys/{database_id} - 创建新的 API Key
+/// POST /api/admin/api-keys/{database_slug} - 创建新的 API Key
 pub async fn create_api_key(
     State(pool): State<PgPool>,
-    Path(database_id): Path<i32>,
+    Path(database_slug): Path<String>,
     claims: axum::extract::Extension<Claims>,
     Json(req): Json<Value>,
 ) -> Result<Json<Value>> {
+    let database_id =
+        permissions::resolve_database_id_by_slug_for_claims(&pool, &claims.0, &database_slug)
+            .await?;
     permissions::require_database_admin(&pool, &claims.0, database_id).await?;
 
-    let name = req["name"].as_str().ok_or_else(|| {
-        AppError::InvalidQuery("缺少 API Key 名称".to_string())
-    })?;
-    
-    let tenant_id: i32 = sqlx::query_scalar(
-        "SELECT tenant_id FROM management.tenant_databases WHERE id = $1"
-    )
-    .bind(database_id)
-    .fetch_one(&pool)
-    .await?;
-    
+    let name = req["name"]
+        .as_str()
+        .ok_or_else(|| AppError::InvalidQuery("缺少 API Key 名称".to_string()))?;
+
+    let tenant_id: i32 =
+        sqlx::query_scalar("SELECT tenant_id FROM management.tenant_databases WHERE id = $1")
+            .bind(database_id)
+            .fetch_one(&pool)
+            .await?;
+
     // 生成 API Key
     let api_key = generate_api_key();
     let key_prefix = format!("{}...", &api_key[..8]); // cr_xxxxx...
-    
+
     // 计算 SHA256 哈希
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(api_key.as_bytes());
     let key_hash = hex::encode(hasher.finalize());
-    
+
     // 权限设置（推荐使用 allowed_resources / allowed_actions 精细 scope）
     // 兼容旧字段 read/write/delete；如客户端传入新字段会一并保存
     let mut permissions = req
@@ -2085,7 +3029,7 @@ pub async fn create_api_key(
     }
 
     let expires_in_days = req["expires_in_days"].as_i64();
-    
+
     let row = sqlx::query(
         r#"
         INSERT INTO management.api_keys 
@@ -2103,12 +3047,17 @@ pub async fn create_api_key(
     .bind(expires_in_days)
     .fetch_one(&pool)
     .await?;
-    
+
     let id: i32 = row.get("id");
     let created_at: String = row.get("created_at");
-    
-    tracing::info!("创建了新的 API Key: {} (id={}, database_id={})", name, id, database_id);
-    
+
+    tracing::info!(
+        "创建了新的 API Key: {} (id={}, database_id={})",
+        name,
+        id,
+        database_id
+    );
+
     Ok(Json(json!({
         "id": id,
         "name": name,
@@ -2120,21 +3069,24 @@ pub async fn create_api_key(
     })))
 }
 
-/// DELETE /api/admin/api-keys/{database_id}/{key_id} - 删除 API Key
+/// DELETE /api/admin/api-keys/{database_slug}/{key_id} - 删除 API Key
 pub async fn delete_api_key(
     State(pool): State<PgPool>,
-    Path((database_id, key_id)): Path<(i32, i32)>,
+    Path((database_slug, key_id)): Path<(String, i32)>,
     claims: axum::extract::Extension<Claims>,
 ) -> Result<Json<Value>> {
+    let database_id =
+        permissions::resolve_database_id_by_slug_for_claims(&pool, &claims.0, &database_slug)
+            .await?;
     permissions::require_database_admin(&pool, &claims.0, database_id).await?;
     let result = sqlx::query(
-        "DELETE FROM management.api_keys WHERE id = $1 AND database_id = $2 RETURNING name"
+        "DELETE FROM management.api_keys WHERE id = $1 AND database_id = $2 RETURNING name",
     )
     .bind(key_id)
     .bind(database_id)
     .fetch_optional(&pool)
     .await?;
-    
+
     match result {
         Some(row) => {
             let name: String = row.get("name");
@@ -2151,6 +3103,247 @@ pub async fn delete_api_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn obj(json: serde_json::Value) -> serde_json::Map<String, Value> {
+        json.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn auth_from_api_key_context_matches_db() {
+        let ctx = crate::middleware::ApiKeyContext {
+            key_id: 1,
+            tenant_id: 2,
+            database_id: 5,
+            permissions: serde_json::json!({}),
+            bound_slug: "uba".into(),
+        };
+        let (id, src) = auth_from_api_key_context(&ctx, 5).unwrap();
+        assert_eq!(id, 5);
+        assert!(matches!(src, AuthSource::ApiKey));
+        assert!(auth_from_api_key_context(&ctx, 9).is_err());
+    }
+
+    #[test]
+    fn bulk_insert_single_row_plain() {
+        let r = obj(serde_json::json!({"a": 1, "b": "x"}));
+        let rows = vec![&r];
+        let cols = vec!["a".to_string(), "b".to_string()];
+        let types = std::collections::HashMap::new();
+        let (sql, binds) =
+            build_bulk_insert("public", "t", &cols, &rows, &ConflictClause::None, &types);
+        assert_eq!(
+            sql,
+            "INSERT INTO \"public\".\"t\" (\"a\", \"b\") VALUES ($1, $2) RETURNING *"
+        );
+        assert_eq!(binds.len(), 2);
+    }
+
+    #[test]
+    fn bulk_insert_multi_row_with_missing_col_uses_default() {
+        let r1 = obj(serde_json::json!({"a": 1, "b": "x"}));
+        let r2 = obj(serde_json::json!({"a": 2})); // 缺 b → DEFAULT
+        let rows = vec![&r1, &r2];
+        let cols = vec!["a".to_string(), "b".to_string()];
+        let types = std::collections::HashMap::new();
+        let (sql, binds) =
+            build_bulk_insert("public", "t", &cols, &rows, &ConflictClause::None, &types);
+        assert_eq!(
+            sql,
+            "INSERT INTO \"public\".\"t\" (\"a\", \"b\") VALUES ($1, $2), ($3, DEFAULT) RETURNING *"
+        );
+        assert_eq!(binds.len(), 3); // 1,x,2
+    }
+
+    #[test]
+    fn bulk_insert_casts_uuid_column() {
+        let r = obj(serde_json::json!({
+            "id": "22de2cc9-cc38-4b80-bacc-a4059beb678c",
+            "name": "n"
+        }));
+        let rows = vec![&r];
+        let cols = vec!["id".to_string(), "name".to_string()];
+        let mut types = std::collections::HashMap::new();
+        types.insert("id".to_string(), "uuid".to_string());
+        types.insert("name".to_string(), "text".to_string());
+        let (sql, binds) =
+            build_bulk_insert("public", "t", &cols, &rows, &ConflictClause::None, &types);
+        assert_eq!(
+            sql,
+            "INSERT INTO \"public\".\"t\" (\"id\", \"name\") VALUES ($1::uuid, $2::text) RETURNING *"
+        );
+        assert_eq!(binds.len(), 2);
+    }
+
+    #[test]
+    fn bulk_insert_upsert_do_update_excludes_conflict_target() {
+        let r = obj(serde_json::json!({"team_user_id": 5, "name": "n"}));
+        let rows = vec![&r];
+        let cols = vec!["team_user_id".to_string(), "name".to_string()];
+        let conflict = ConflictClause::DoUpdate {
+            target: vec!["team_user_id".to_string()],
+        };
+        let types = std::collections::HashMap::new();
+        let (sql, _binds) =
+            build_bulk_insert("public", "mind_users", &cols, &rows, &conflict, &types);
+        assert_eq!(
+            sql,
+            "INSERT INTO \"public\".\"mind_users\" (\"team_user_id\", \"name\") VALUES ($1, $2) ON CONFLICT (\"team_user_id\") DO UPDATE SET \"name\" = EXCLUDED.\"name\" RETURNING *"
+        );
+    }
+
+    #[test]
+    fn bulk_insert_ignore_duplicates_with_and_without_target() {
+        let r = obj(serde_json::json!({"a": 1}));
+        let rows = vec![&r];
+        let cols = vec!["a".to_string()];
+        let types = std::collections::HashMap::new();
+        let (sql_no_target, _) = build_bulk_insert(
+            "public",
+            "t",
+            &cols,
+            &rows,
+            &ConflictClause::DoNothing { target: vec![] },
+            &types,
+        );
+        assert!(sql_no_target.ends_with("ON CONFLICT DO NOTHING RETURNING *"));
+        let (sql_target, _) = build_bulk_insert(
+            "public",
+            "t",
+            &cols,
+            &rows,
+            &ConflictClause::DoNothing {
+                target: vec!["a".to_string()],
+            },
+            &types,
+        );
+        assert!(sql_target.ends_with("ON CONFLICT (\"a\") DO NOTHING RETURNING *"));
+    }
+
+    #[test]
+    fn prefer_resolution_parsing() {
+        let mut h = HeaderMap::new();
+        h.insert("prefer", "resolution=merge-duplicates".parse().unwrap());
+        assert_eq!(parse_prefer_resolution(&h), Some("merge"));
+        h.insert(
+            "prefer",
+            "return=representation, resolution=ignore-duplicates"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(parse_prefer_resolution(&h), Some("ignore"));
+        assert_eq!(parse_prefer_resolution(&HeaderMap::new()), None);
+    }
+
+    #[test]
+    fn prefer_count_parsing() {
+        let mut h = HeaderMap::new();
+        assert_eq!(parse_prefer_count(&h), CountPreference::Exact);
+
+        h.insert("prefer", "count=none".parse().unwrap());
+        assert_eq!(parse_prefer_count(&h), CountPreference::None);
+
+        h.insert("prefer", "COUNT=Exact".parse().unwrap());
+        assert_eq!(parse_prefer_count(&h), CountPreference::Exact);
+
+        h.insert(
+            "prefer",
+            "return=representation, count=planned".parse().unwrap(),
+        );
+        assert_eq!(parse_prefer_count(&h), CountPreference::Exact);
+
+        h.insert("prefer", "count=estimated".parse().unwrap());
+        assert_eq!(parse_prefer_count(&h), CountPreference::Exact);
+
+        h.insert("prefer", "count=none, count=exact".parse().unwrap());
+        // last matching count=* wins (scan left-to-right, overwrite)
+        assert_eq!(parse_prefer_count(&h), CountPreference::Exact);
+    }
+
+    #[test]
+    fn list_cache_fingerprint_separates_count_preferences() {
+        let exact = list_cache_fingerprint("base", CountPreference::Exact);
+        let none = list_cache_fingerprint("base", CountPreference::None);
+
+        assert_eq!(exact, "base||prefer-count:exact");
+        assert_eq!(none, "base||prefer-count:none");
+        assert_ne!(exact, none);
+    }
+
+    #[test]
+    fn sql_with_session_user_wraps_select() {
+        let out = sql_with_session_user(
+            r#"SELECT * FROM "public"."t" WHERE "id" = $1"#,
+            42,
+        );
+        assert!(out.starts_with(
+            "WITH __onebase_sess AS (SELECT set_config('app.current_user_id', '42', true))"
+        ));
+        assert!(out.contains(r#"SELECT * FROM "public"."t" WHERE "id" = $1"#));
+    }
+
+    #[test]
+    fn sql_with_session_user_merges_existing_with() {
+        let out = sql_with_session_user("WITH x AS (SELECT 1) SELECT * FROM x", 0);
+        assert!(out.starts_with("WITH __onebase_sess AS ("));
+        assert!(out.contains(", x AS (SELECT 1) SELECT * FROM x"));
+    }
+
+    #[test]
+    fn decide_list_total_skips_count_when_page_not_full() {
+        assert_eq!(
+            decide_list_total(CountPreference::Exact, 0, 100, 3),
+            TotalDecision::Known(Some(3))
+        );
+        assert_eq!(
+            decide_list_total(CountPreference::Exact, 10, 100, 3),
+            TotalDecision::Known(Some(13))
+        );
+        assert_eq!(
+            decide_list_total(CountPreference::Exact, 0, 100, 100),
+            TotalDecision::NeedCount
+        );
+        assert_eq!(
+            decide_list_total(CountPreference::None, 0, 100, 3),
+            TotalDecision::Known(None)
+        );
+        assert_eq!(
+            decide_list_total(CountPreference::Exact, 10, 100, 0),
+            TotalDecision::NeedCount
+        );
+        assert_eq!(
+            decide_list_total(CountPreference::Exact, 0, 100, 0),
+            TotalDecision::Known(Some(0))
+        );
+    }
+
+    #[test]
+    fn on_conflict_columns_rejects_injection() {
+        assert!(parse_on_conflict_columns(&Some("a,b".to_string())).is_ok());
+        assert!(parse_on_conflict_columns(&Some("a);drop".to_string())).is_err());
+        assert!(parse_on_conflict_columns(&None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_filters_in_comma_separated_values() {
+        let q = "status.in=active,pending,verified";
+        let filters = parse_filters_from_query(q);
+        assert_eq!(filters.len(), 1);
+        let (field, op, value) = &filters[0];
+        assert_eq!(field, "status");
+        assert_eq!(op, "IN");
+        assert_eq!(value, "active,pending,verified");
+    }
+
+    #[test]
+    fn parse_filters_in_postgrest_syntax() {
+        let q = "status=in.(active,pending)";
+        let filters = parse_filters_from_query(q);
+        assert_eq!(filters.len(), 1);
+        let (field, op, value) = &filters[0];
+        assert_eq!(field, "status");
+        assert_eq!(op, "IN");
+        assert_eq!(value, "(active,pending)");
+    }
 
     #[test]
     fn parse_filters_decodes_in_list_percent_encoded() {
@@ -2189,26 +3382,29 @@ mod tests {
     }
 }
 
-/// PATCH /api/admin/api-keys/{database_id}/{key_id} - 更新 API Key (启用/禁用)
+/// PATCH /api/admin/api-keys/{database_slug}/{key_id} - 更新 API Key (启用/禁用)
 pub async fn update_api_key(
     State(pool): State<PgPool>,
-    Path((database_id, key_id)): Path<(i32, i32)>,
+    Path((database_slug, key_id)): Path<(String, i32)>,
     claims: axum::extract::Extension<Claims>,
     Json(req): Json<Value>,
 ) -> Result<Json<Value>> {
+    let database_id =
+        permissions::resolve_database_id_by_slug_for_claims(&pool, &claims.0, &database_slug)
+            .await?;
     permissions::require_database_admin(&pool, &claims.0, database_id).await?;
     let is_active = req["is_active"].as_bool();
-    
+
     if let Some(active) = is_active {
         sqlx::query(
-            "UPDATE management.api_keys SET is_active = $1 WHERE id = $2 AND database_id = $3"
+            "UPDATE management.api_keys SET is_active = $1 WHERE id = $2 AND database_id = $3",
         )
         .bind(active)
         .bind(key_id)
         .bind(database_id)
         .execute(&pool)
         .await?;
-        
+
         Ok(Json(json!({
             "success": true,
             "message": if active { "API Key 已启用" } else { "API Key 已禁用" }
@@ -2217,4 +3413,3 @@ pub async fn update_api_key(
         Err(AppError::InvalidQuery("请提供 is_active 参数".to_string()))
     }
 }
-

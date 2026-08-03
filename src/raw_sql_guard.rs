@@ -76,7 +76,10 @@ impl RawSqlPolicy {
         };
 
         Self {
-            statement_timeout_ms: parse("RAW_SQL_STATEMENT_TIMEOUT_MS", default.statement_timeout_ms),
+            statement_timeout_ms: parse(
+                "RAW_SQL_STATEMENT_TIMEOUT_MS",
+                default.statement_timeout_ms,
+            ),
             max_returned_rows: parse(
                 "RAW_SQL_MAX_RETURNED_ROWS",
                 default.max_returned_rows as u64,
@@ -199,6 +202,32 @@ pub fn check_management_references(sql: &str) -> Result<()> {
     Ok(())
 }
 
+/// 禁止在连接池复用的 raw SQL 通道里执行会改变会话异步消息状态的命令。
+///
+/// 说明：
+/// - `LISTEN/UNLISTEN` 会让连接持续接收 `NotificationResponse`；
+/// - 而 `/query` 连接会归还池子复用，后续普通 SQL 可能撞上异步通知并触发
+///   `unexpected message: NotificationResponse` 协议错误；
+/// - `SELECT pg_notify(...)` 不会污染会话状态，因此允许。
+pub fn check_forbidden_session_commands(sql: &str) -> Result<()> {
+    let body = strip_leading_sql_comments(sql);
+    let first_word = body
+        .split_whitespace()
+        .next()
+        .map(|w| w.to_uppercase())
+        .unwrap_or_default();
+
+    if first_word == "LISTEN" || first_word == "UNLISTEN" {
+        return Err(AppError::InvalidQuery(
+            "原始 SQL 通道不允许执行 LISTEN/UNLISTEN：该命令会污染连接池并导致后续查询报错。\
+             如需发布测试消息，请使用 SELECT pg_notify(...); 如需长期监听，请使用服务端监听桥配置。"
+                .to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 // ─── 不变量 3：写/DDL 强制 acknowledge_destructive ──────────────────────
 /// SELECT 类放行；写 / DDL / 事务必须带 ack。
 ///
@@ -263,6 +292,238 @@ pub async fn reset_session_guards(conn: &mut PoolConnection<Postgres>) {
     }
 }
 
+// ─── SQL 类型识别 / DDL 执行（/query 与 v1 raw DDL 共用）────────────────
+
+/// 识别 SQL 首关键字类型（剥掉前导注释后）。
+pub fn get_sql_type(sql: &str) -> &'static str {
+    let body = strip_leading_sql_comments(sql);
+    let sql_upper = body.to_uppercase();
+    let first_word = sql_upper.split_whitespace().next().unwrap_or("");
+
+    match first_word {
+        "SELECT" | "WITH" | "EXPLAIN" | "SHOW" => "SELECT",
+        "INSERT" => "INSERT",
+        "UPDATE" => "UPDATE",
+        "DELETE" => "DELETE",
+        "CREATE" => "CREATE",
+        "ALTER" => "ALTER",
+        "DROP" => "DROP",
+        "TRUNCATE" => "TRUNCATE",
+        "COMMENT" => "COMMENT",
+        "GRANT" | "REVOKE" => "PERMISSION",
+        "BEGIN" | "COMMIT" | "ROLLBACK" => "TRANSACTION",
+        "REFRESH" | "VACUUM" | "ANALYZE" | "REINDEX" => "UTILITY",
+        _ => "OTHER",
+    }
+}
+
+/// v1 raw DDL 通道仅允许的数据定义类语句。
+pub fn require_ddl_only_sql_type(sql_type: &str) -> Result<()> {
+    match sql_type {
+        "CREATE" | "ALTER" | "DROP" | "COMMENT" => Ok(()),
+        _ => Err(AppError::InvalidQuery(format!(
+            "v1 raw DDL 仅允许 CREATE / ALTER / DROP / COMMENT，当前识别为 {} 类语句",
+            sql_type
+        ))),
+    }
+}
+
+/// 黑名单：DROP DATABASE / DROP SCHEMA / TRUNCATE 等灾难级操作。
+pub fn is_dangerous_operation(sql: &str) -> bool {
+    let body = strip_leading_sql_comments(sql);
+    let sql_upper = body.to_uppercase();
+    sql_upper.contains("DROP DATABASE")
+        || sql_upper.contains("DROP SCHEMA")
+        || sql_upper.starts_with("TRUNCATE")
+}
+
+/// 将 PG 执行错误原样回给调用方（用于手写 SQL 场景）。
+pub fn map_user_sql_err(e: sqlx::Error) -> AppError {
+    match e {
+        sqlx::Error::Database(db_err) => {
+            let sqlstate = db_err
+                .code()
+                .as_deref()
+                .map(str::to_string)
+                .unwrap_or_default();
+            let msg = if sqlstate.is_empty() {
+                db_err.message().to_string()
+            } else {
+                format!("{} (SQLSTATE {})", db_err.message(), sqlstate)
+            };
+            tracing::warn!(
+                target: "raw_sql_audit",
+                event = "raw_sql_execution_error",
+                sqlstate = %sqlstate,
+                "SQL 执行失败: {}",
+                db_err.message()
+            );
+            AppError::InvalidQuery(msg)
+        }
+        other => AppError::Database(other),
+    }
+}
+
+/// 剥掉 SQL 里所有 `--` 行注释和 `/* */` 块注释（保留字符串 / 美元引用里的内容）。
+/// 执行前调用，避免客户端把换行压扁后 `--` 注释吞掉后续语句。
+pub fn strip_sql_comments(sql: &str) -> String {
+    enum State {
+        Normal,
+        SingleQuote,
+        DoubleQuote,
+        DollarQuote(String),
+        LineComment,
+        BlockComment,
+    }
+
+    let chars: Vec<char> = sql.chars().collect();
+    let n = chars.len();
+    let mut out = String::new();
+    let mut state = State::Normal;
+    let mut i = 0;
+
+    while i < n {
+        let c = chars[i];
+        match &state {
+            State::Normal => {
+                if c == '\'' {
+                    out.push(c);
+                    state = State::SingleQuote;
+                    i += 1;
+                } else if c == '"' {
+                    out.push(c);
+                    state = State::DoubleQuote;
+                    i += 1;
+                } else if c == '-' && i + 1 < n && chars[i + 1] == '-' {
+                    state = State::LineComment;
+                    i += 2;
+                } else if c == '/' && i + 1 < n && chars[i + 1] == '*' {
+                    state = State::BlockComment;
+                    i += 2;
+                } else if c == '$' {
+                    let mut j = i + 1;
+                    while j < n && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
+                        j += 1;
+                    }
+                    if j < n && chars[j] == '$' {
+                        let tag: String = chars[i..=j].iter().collect();
+                        out.push_str(&tag);
+                        state = State::DollarQuote(tag);
+                        i = j + 1;
+                    } else {
+                        out.push(c);
+                        i += 1;
+                    }
+                } else {
+                    out.push(c);
+                    i += 1;
+                }
+            }
+            State::SingleQuote => {
+                out.push(c);
+                if c == '\'' {
+                    if i + 1 < n && chars[i + 1] == '\'' {
+                        out.push('\'');
+                        i += 2;
+                    } else {
+                        state = State::Normal;
+                        i += 1;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+            State::DoubleQuote => {
+                out.push(c);
+                if c == '"' {
+                    if i + 1 < n && chars[i + 1] == '"' {
+                        out.push('"');
+                        i += 2;
+                    } else {
+                        state = State::Normal;
+                        i += 1;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+            State::DollarQuote(tag) => {
+                let tag = tag.clone();
+                let tag_chars: Vec<char> = tag.chars().collect();
+                if i + tag_chars.len() <= n && chars[i..i + tag_chars.len()] == tag_chars[..] {
+                    out.push_str(&tag);
+                    i += tag_chars.len();
+                    state = State::Normal;
+                } else {
+                    out.push(c);
+                    i += 1;
+                }
+            }
+            State::LineComment => {
+                if c == '\n' {
+                    out.push('\n');
+                    state = State::Normal;
+                }
+                i += 1;
+            }
+            State::BlockComment => {
+                if c == '*' && i + 1 < n && chars[i + 1] == '/' {
+                    state = State::Normal;
+                    i += 2;
+                } else if c == '\n' {
+                    out.push('\n');
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+    out.trim().to_string()
+}
+
+/// 在已 acquire 且已 `apply_session_guards` 的连接上执行单条 DDL / 工具语句。
+/// 必须逐条 `execute`，不能把 `SET` 和用户 SQL 拼进同一条 `raw_sql`——
+/// PG simple query 会把多语句包进同一隐式事务，导致 `CREATE INDEX CONCURRENTLY` 等失败。
+pub async fn execute_raw_on_conn(
+    conn: &mut PoolConnection<Postgres>,
+    user_sql: &str,
+) -> std::result::Result<(), sqlx::Error> {
+    let stripped = strip_sql_comments(user_sql);
+    let trimmed = stripped.trim().trim_end_matches(';');
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(trimmed).execute(&mut **conn).await.map(|_| ())
+}
+
+/// 跑 DDL / 工具语句（autocommit，每条语句独立提交）。
+pub async fn run_raw_script_autocommit(
+    pool: &PgPool,
+    user_sql: &str,
+    policy: RawSqlPolicy,
+) -> std::result::Result<(), sqlx::Error> {
+    let mut conn = pool.acquire().await?;
+    let timeout = policy.statement_timeout_ms.to_string();
+    sqlx::query(&format!("SET statement_timeout = {}", timeout))
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query(&format!(
+        "SET idle_in_transaction_session_timeout = {}",
+        timeout
+    ))
+    .execute(&mut *conn)
+    .await?;
+    let result = execute_raw_on_conn(&mut conn, user_sql).await;
+    let _ = sqlx::query("RESET statement_timeout")
+        .execute(&mut *conn)
+        .await;
+    let _ = sqlx::query("RESET idle_in_transaction_session_timeout")
+        .execute(&mut *conn)
+        .await;
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,6 +553,21 @@ mod tests {
     }
 
     #[test]
+    fn check_forbidden_session_commands_blocks_listen_unlisten() {
+        assert!(check_forbidden_session_commands("LISTEN growth_animation_available").is_err());
+        assert!(check_forbidden_session_commands("  -- c\nUNLISTEN *").is_err());
+    }
+
+    #[test]
+    fn check_forbidden_session_commands_allows_pg_notify_select() {
+        assert!(check_forbidden_session_commands(
+            "SELECT pg_notify('growth_animation_available', '{\"ok\":true}')"
+        )
+        .is_ok());
+        assert!(check_forbidden_session_commands("SELECT 1").is_ok());
+    }
+
+    #[test]
     fn require_destructive_ack_lets_select_through() {
         require_destructive_ack("SELECT", false).expect("SELECT 不需要 ack");
     }
@@ -299,8 +575,8 @@ mod tests {
     #[test]
     fn require_destructive_ack_blocks_write_without_ack() {
         for kind in ["UPDATE", "INSERT", "DELETE", "DROP", "ALTER", "TRUNCATE"] {
-            let err = require_destructive_ack(kind, false)
-                .expect_err(&format!("{} 必须要求 ack", kind));
+            let err =
+                require_destructive_ack(kind, false).expect_err(&format!("{} 必须要求 ack", kind));
             assert!(matches!(err, AppError::InvalidQuery(_)));
         }
     }
@@ -308,6 +584,18 @@ mod tests {
     #[test]
     fn require_destructive_ack_lets_write_through_with_ack() {
         require_destructive_ack("UPDATE", true).expect("ack=true 时通过");
+    }
+
+    #[test]
+    fn require_ddl_only_allows_create_alter_drop() {
+        require_ddl_only_sql_type("CREATE").unwrap();
+        require_ddl_only_sql_type("ALTER").unwrap();
+        require_ddl_only_sql_type("DROP").unwrap();
+    }
+
+    #[test]
+    fn require_ddl_only_rejects_select() {
+        assert!(require_ddl_only_sql_type("SELECT").is_err());
     }
 
     #[test]
@@ -330,6 +618,22 @@ mod tests {
         assert_eq!(strip_leading_sql_comments("-- 只有注释没语句"), "");
         assert_eq!(strip_leading_sql_comments("/* 没闭合的块注释"), "");
         assert_eq!(strip_leading_sql_comments(""), "");
+    }
+
+    #[test]
+    fn strip_sql_comments_removes_inline_and_leading() {
+        assert_eq!(
+            strip_sql_comments("-- 1. 创建表\nCREATE TABLE t (id int)"),
+            "CREATE TABLE t (id int)"
+        );
+        assert_eq!(
+            strip_sql_comments("SELECT 1 /* block */ , 2"),
+            "SELECT 1  , 2"
+        );
+        assert_eq!(
+            strip_sql_comments("INSERT INTO t VALUES ('-- not a comment')"),
+            "INSERT INTO t VALUES ('-- not a comment')"
+        );
     }
 
     #[test]

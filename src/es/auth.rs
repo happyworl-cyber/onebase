@@ -322,7 +322,13 @@ mod tests {
             AccessDecision::Denied(_)
         ));
         assert!(matches!(
-            check_access("POST", "/_cluster/settings", &methods, &denylist, &allowlist),
+            check_access(
+                "POST",
+                "/_cluster/settings",
+                &methods,
+                &denylist,
+                &allowlist
+            ),
             AccessDecision::Denied(_)
         ));
         // 不命中黑名单
@@ -370,7 +376,13 @@ mod tests {
         let denylist: Vec<String> = vec![];
         let allowlist = vec!["*".to_string()];
         assert_eq!(
-            check_access("GET", "/anything-goes/_search", &methods, &denylist, &allowlist),
+            check_access(
+                "GET",
+                "/anything-goes/_search",
+                &methods,
+                &denylist,
+                &allowlist
+            ),
             AccessDecision::Allowed
         );
     }

@@ -101,7 +101,10 @@ interface ToastContainerProps {
 
 function ToastContainer({ toasts, removeToast }: ToastContainerProps) {
   return (
-    <div className="fixed bottom-4 right-4 z-[10000] flex flex-col-reverse gap-2 pointer-events-none">
+    <div
+      className="fixed bottom-4 z-[10000] flex flex-col-reverse gap-2 pointer-events-none"
+      style={{ right: 'calc(1rem + var(--ai-panel-offset, 0px))' }}
+    >
       {toasts.map((toast) => (
         <ToastItem key={toast.id} toast={toast} onClose={() => removeToast(toast.id)} />
       ))}

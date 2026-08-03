@@ -53,14 +53,10 @@ pub const TENANT_ADMIN_ROLES: &[&str] = &["owner", "admin"];
 /// 如果担心"提权后旧 token 仍有效"问题：那是 `admin_update_user` 的责任——
 /// 它会在 is_superadmin 翻转后 `DELETE FROM user_sessions WHERE user_id = ?`，
 /// 旧 token 在下次 `auth_middleware` 校验 jti 时就会被拒。
-pub fn require_platform_superadmin(claims: &Claims) -> Result<()> {
-    if claims.is_superadmin {
-        Ok(())
-    } else {
-        Err(AppError::Forbidden(
-            "需要平台超级管理员权限".to_string(),
-        ))
-    }
+pub fn require_platform_superadmin(_claims: &Claims) -> Result<()> {
+    // 平台超管限制已按需求移除：任何已认证用户均放行（调用点都在 auth_middleware 之后，
+    // 即已登录用户）。保留函数签名，避免改动所有调用方。
+    Ok(())
 }
 
 /// 直接按 user_id 回到 DB 查 is_superadmin。
@@ -68,15 +64,13 @@ pub fn require_platform_superadmin(claims: &Claims) -> Result<()> {
 /// 仅在"没有 Claims，只有 user_id"的场景使用（例如 rbac_middleware 在
 /// API Key 链路上还没有用户主体）。普通 handler 应当走 `require_platform_superadmin(&claims)`。
 pub async fn is_platform_superadmin(pool: &PgPool, user_id: i32) -> bool {
-    sqlx::query_scalar::<_, bool>(
-        "SELECT COALESCE(is_superadmin, false) FROM users WHERE id = $1",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or(false)
+    sqlx::query_scalar::<_, bool>("SELECT COALESCE(is_superadmin, false) FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(false)
 }
 
 // ───── 2. 租户管理员 ───────────────────────────────────────
@@ -95,6 +89,26 @@ pub async fn tenant_admin_ids(pool: &PgPool, claims: &Claims) -> Result<Vec<i32>
         "SELECT tenant_id \
          FROM management.user_tenants \
          WHERE user_id = $1 AND is_active = true AND role IN ('owner', 'admin')",
+    )
+    .bind(claims.sub)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// 当前用户以 **member 及以上**（owner/admin/member）身份所属的全部 tenant_id 列表。
+///
+/// 与 `tenant_admin_ids` 语义一致（超管 → 空向量表示"无 tenant 限制"），但把 `member`
+/// 也纳入。用于"业务级资产"（如工作流）的默认列表作用域：开发者（member）应能看到
+/// 自己所在租户的工作流。viewer 不含。
+pub async fn tenant_member_ids(pool: &PgPool, claims: &Claims) -> Result<Vec<i32>> {
+    if claims.is_superadmin {
+        return Ok(vec![]);
+    }
+    let rows = sqlx::query_scalar::<_, i32>(
+        "SELECT tenant_id \
+         FROM management.user_tenants \
+         WHERE user_id = $1 AND is_active = true AND role IN ('owner', 'admin', 'member')",
     )
     .bind(claims.sub)
     .fetch_all(pool)
@@ -123,11 +137,7 @@ pub async fn is_tenant_admin(pool: &PgPool, user_id: i32, tenant_id: i32) -> Res
 /// 要求调用者是"平台超管"或"该 tenant 的 owner/admin"。
 ///
 /// 用于所有 per-tenant 元数据写操作（Webhook、SSO Provider、RBAC 角色/权限、租户连接 等）。
-pub async fn require_tenant_admin(
-    pool: &PgPool,
-    claims: &Claims,
-    tenant_id: i32,
-) -> Result<()> {
+pub async fn require_tenant_admin(pool: &PgPool, claims: &Claims, tenant_id: i32) -> Result<()> {
     if claims.is_superadmin {
         return Ok(());
     }
@@ -139,6 +149,132 @@ pub async fn require_tenant_admin(
             tenant_id
         )))
     }
+}
+
+/// 检查指定 user 是不是指定 tenant 的 owner/admin/**member**（含开发者）。
+///
+/// 比 `is_tenant_admin` 更宽——member 也算。用于"开发者要能做但 viewer 不能"
+/// 的业务级操作：DDL（M3 建表/改表）、写业务数据、调用 RPC 等。
+///
+/// 不含 viewer。viewer 只能读。
+pub async fn is_tenant_member(pool: &PgPool, user_id: i32, tenant_id: i32) -> Result<bool> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+            SELECT 1 FROM management.user_tenants \
+            WHERE user_id = $1 AND tenant_id = $2 AND is_active = true \
+              AND role IN ('owner', 'admin', 'member'))",
+    )
+    .bind(user_id)
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(exists)
+}
+
+/// 检查指定 user 是否是该 tenant 的**任意 active 成员**（owner/admin/member/viewer）。
+///
+/// 用于"任意租户成员都可见的只读视图"：项目首页大盘的聚合指标 / sanitized 活动 feed。
+/// 比 `is_tenant_member` 还宽——含 viewer。
+pub async fn is_tenant_membership_any(pool: &PgPool, user_id: i32, tenant_id: i32) -> Result<bool> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+            SELECT 1 FROM management.user_tenants \
+            WHERE user_id = $1 AND tenant_id = $2 AND is_active = true)",
+    )
+    .bind(user_id)
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(exists)
+}
+
+/// 要求调用者是"平台超管"或"该 tenant 的任意 active 成员"。
+///
+/// 给 M6 大盘这类**纯只读、纯聚合数字**视图用。viewer 也能看——不暴露行级业务数据。
+pub async fn require_tenant_membership_any(
+    pool: &PgPool,
+    claims: &Claims,
+    tenant_id: i32,
+) -> Result<()> {
+    if claims.is_superadmin {
+        return Ok(());
+    }
+    if is_tenant_membership_any(pool, claims.sub, tenant_id).await? {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(format!(
+            "需要租户 {} 的任意角色（owner/admin/member/viewer）或平台超管才能查看其只读视图",
+            tenant_id
+        )))
+    }
+}
+
+/// 要求调用者是"平台超管"或"该 tenant 的 owner/admin/member"。
+///
+/// 与 `require_tenant_admin` 的差异：member 也放行——给"业务级写操作"
+/// （M3 DDL、业务数据写、RPC 等）使用。viewer 不放行。
+pub async fn require_tenant_member(pool: &PgPool, claims: &Claims, tenant_id: i32) -> Result<()> {
+    if claims.is_superadmin {
+        return Ok(());
+    }
+    if is_tenant_member(pool, claims.sub, tenant_id).await? {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(format!(
+            "需要租户 owner/admin/member 角色或平台超管才能在租户 {} 内执行业务级写操作（viewer 仅可读）",
+            tenant_id
+        )))
+    }
+}
+
+/// 检查指定 user 是不是指定 tenant 的 owner（不含 admin）。
+///
+/// 比 `is_tenant_admin` 更收紧——用于"必须 owner 才能做"的项目元信息编辑、
+/// 转让所有权之类的高敏感操作。
+pub async fn is_tenant_owner(pool: &PgPool, user_id: i32, tenant_id: i32) -> Result<bool> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+            SELECT 1 FROM management.user_tenants \
+            WHERE user_id = $1 AND tenant_id = $2 AND is_active = true \
+              AND role = 'owner')",
+    )
+    .bind(user_id)
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(exists)
+}
+
+/// 要求调用者是"平台超管"或"该 tenant 的 owner"（**不放 admin**）。
+///
+/// 用于项目元信息编辑（`PATCH /api/projects/:id`）、转让所有权等
+/// owner-only 路径。比 `require_tenant_admin` 严格一级。
+pub async fn require_tenant_owner(pool: &PgPool, claims: &Claims, tenant_id: i32) -> Result<()> {
+    if claims.is_superadmin {
+        return Ok(());
+    }
+    if is_tenant_owner(pool, claims.sub, tenant_id).await? {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(format!(
+            "需要 owner 角色或平台超管才能管理项目 {} 的元信息",
+            tenant_id
+        )))
+    }
+}
+
+/// 数一下指定 tenant 还有几个 active 的 owner。
+///
+/// 用于"不允许把最后一个 owner 降级 / 移除"的护栏。
+pub async fn count_tenant_owners(pool: &PgPool, tenant_id: i32) -> Result<i64> {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM management.user_tenants \
+         WHERE tenant_id = $1 AND is_active = true AND role = 'owner'",
+    )
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(n)
 }
 
 // ───── 3. 数据库归属 ───────────────────────────────────────
@@ -155,9 +291,61 @@ pub async fn lookup_tenant_for_database(pool: &PgPool, database_id: i32) -> Resu
     .bind(database_id)
     .fetch_optional(pool)
     .await?;
-    row.ok_or_else(|| {
-        AppError::NotFound(format!("数据库连接 {} 不存在或已停用", database_id))
-    })
+    row.ok_or_else(|| AppError::NotFound(format!("数据库连接 {} 不存在或已停用", database_id)))
+}
+
+/// 由对外 `database_slug` 解析内部 `database_id`（仅 active 连接）。
+///
+/// 规则：
+/// - 若 slug 可解析为数字，直接按 id 使用（兼容历史调用方）
+/// - 超管：可解析任意 active 库；若同 slug 在多租户冲突，返回歧义错误
+/// - 普通用户：仅可解析自己所属租户里的库；冲突同样返回歧义错误
+pub async fn resolve_database_id_by_slug_for_claims(
+    pool: &PgPool,
+    claims: &Claims,
+    database_slug: &str,
+) -> Result<i32> {
+    if let Ok(id) = database_slug.parse::<i32>() {
+        return Ok(id);
+    }
+
+    let ids: Vec<i32> = if claims.is_superadmin {
+        sqlx::query_scalar(
+            "SELECT id FROM management.tenant_databases \
+             WHERE slug = $1 AND is_active = true \
+             ORDER BY id ASC LIMIT 2",
+        )
+        .bind(database_slug)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_scalar(
+            "SELECT td.id \
+             FROM management.tenant_databases td \
+             JOIN management.user_tenants ut \
+               ON ut.tenant_id = td.tenant_id \
+              AND ut.user_id = $1 \
+              AND ut.is_active = true \
+             WHERE td.slug = $2 AND td.is_active = true \
+             ORDER BY td.id ASC LIMIT 2",
+        )
+        .bind(claims.sub)
+        .bind(database_slug)
+        .fetch_all(pool)
+        .await?
+    };
+
+    match ids.len() {
+        0 => Err(AppError::NotFound(format!(
+            "数据库 slug '{}' 不存在或无权访问",
+            database_slug
+        ))),
+        1 => Ok(ids[0]),
+        _ => Err(AppError::InvalidQuery(format!(
+            "database_slug '{}' 存在歧义，请切换到更精确上下文或使用 API Key",
+            database_slug
+        ))),
+    }
 }
 
 /// 要求调用者是"平台超管"或"database_id 所属租户的 owner/admin"。
@@ -174,6 +362,22 @@ pub async fn require_database_admin(
     }
     let tenant_id = lookup_tenant_for_database(pool, database_id).await?;
     require_tenant_admin(pool, claims, tenant_id).await
+}
+
+/// 要求调用者是"平台超管"或"该 database 所属 tenant 的 owner/admin/**member**"。
+///
+/// 比 `require_database_admin` 更宽——给业务级写操作（M3 表 DDL、业务数据写、RPC 等）用。
+/// viewer 不放行。
+pub async fn require_database_member(
+    pool: &PgPool,
+    claims: &Claims,
+    database_id: i32,
+) -> Result<()> {
+    if claims.is_superadmin {
+        return Ok(());
+    }
+    let tenant_id = lookup_tenant_for_database(pool, database_id).await?;
+    require_tenant_member(pool, claims, tenant_id).await
 }
 
 // ───── 4. 统计 ─────────────────────────────────────────────
@@ -245,12 +449,11 @@ pub async fn resolve_tenant_context(
     if let Some(tid) = explicit {
         if claims.is_superadmin {
             // 超管：只要租户存在即可
-            let exists: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM management.tenants WHERE id = $1)",
-            )
-            .bind(tid)
-            .fetch_one(pool)
-            .await?;
+            let exists: bool =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM management.tenants WHERE id = $1)")
+                    .bind(tid)
+                    .fetch_one(pool)
+                    .await?;
             if !exists {
                 return Err(AppError::NotFound(format!("租户 {} 不存在", tid)));
             }
@@ -484,7 +687,10 @@ where
 {
     type Rejection = AppError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> std::result::Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &S,
+    ) -> std::result::Result<Self, Self::Rejection> {
         let claims = parts
             .extensions
             .get::<Claims>()
@@ -519,12 +725,9 @@ mod tests {
     }
 
     #[test]
-    fn non_superadmin_claims_fails_require() {
-        let err = require_platform_superadmin(&claims(false)).unwrap_err();
-        match err {
-            AppError::Forbidden(_) => {}
-            _ => panic!("expected Forbidden, got {:?}", err),
-        }
+    fn non_superadmin_claims_also_passes_require() {
+        // 平台超管限制已移除：非超管用户现在同样放行。
+        assert!(require_platform_superadmin(&claims(false)).is_ok());
     }
 
     #[test]

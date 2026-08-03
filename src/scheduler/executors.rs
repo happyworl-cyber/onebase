@@ -166,8 +166,13 @@ async fn resolve_database_pool(main_pool: &PgPool, database_id: i32) -> Result<P
         database: row.get("db_name"),
         username: row.get("db_user"),
         password,
-        max_connections: row.get::<Option<i32>, _>("max_connections").unwrap_or(10) as u32,
-        connection_timeout: row.get::<Option<i32>, _>("connection_timeout").unwrap_or(30) as u64,
+        max_connections: row
+            .get::<Option<i32>, _>("max_connections")
+            .unwrap_or(crate::pool_manager::DEFAULT_TENANT_MAX_CONNECTIONS as i32)
+            as u32,
+        connection_timeout: row
+            .get::<Option<i32>, _>("connection_timeout")
+            .unwrap_or(30) as u64,
     };
 
     POOL_MANAGER
@@ -221,16 +226,11 @@ impl HttpExecutor {
 
         if !self.allow_insecure && !url.starts_with("https://") {
             return Err(
-                "HTTP URL 必须 https（或显式设置 ALLOW_INSECURE_SCHEDULED_HTTP=true）"
-                    .to_string(),
+                "HTTP URL 必须 https（或显式设置 ALLOW_INSECURE_SCHEDULED_HTTP=true）".to_string(),
             );
         }
 
-        let method_str = task
-            .http_method
-            .as_deref()
-            .unwrap_or("POST")
-            .to_uppercase();
+        let method_str = task.http_method.as_deref().unwrap_or("POST").to_uppercase();
         let method = match method_str.as_str() {
             "GET" => reqwest::Method::GET,
             "POST" => reqwest::Method::POST,
@@ -261,7 +261,7 @@ impl HttpExecutor {
                 hasher.update(secret.as_bytes());
                 hasher.update(&body_bytes);
                 let sig = hex::encode(hasher.finalize());
-                req = req.header(crate::brand::signature_header(), sig);
+                req = req.header("X-Onebase-Signature", sig);
             }
         }
 
@@ -330,6 +330,7 @@ impl ShellSandboxMode {
         }
     }
 
+    #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Auto => "auto",
@@ -440,9 +441,12 @@ impl ShellExecutor {
             mode,
             effective.as_str(),
         );
-        Self { effective_sandbox: effective }
+        Self {
+            effective_sandbox: effective,
+        }
     }
 
+    #[allow(dead_code)]
     pub fn sandbox_label(&self) -> &'static str {
         self.effective_sandbox.as_str()
     }
@@ -564,7 +568,10 @@ impl ShellExecutor {
                 c.arg("-c").arg(script).current_dir(cwd);
                 // env_clear + 白名单：避免 leak onebase 进程的 SECRET / DB 凭据。
                 c.env_clear();
-                c.env("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+                c.env(
+                    "PATH",
+                    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                );
                 c.env("HOME", cwd);
                 for (k, v) in env_pairs {
                     c.env(k, v);
@@ -581,18 +588,30 @@ impl ShellExecutor {
                     "--new-session",
                     "--unshare-all",
                     "--share-net",
-                    "--ro-bind", "/", "/",
-                    "--tmpfs", "/tmp",
-                    "--tmpfs", "/var/tmp",
-                    "--tmpfs", "/home",
-                    "--proc", "/proc",
-                    "--dev", "/dev",
-                    "--chdir", cwd,
+                    "--ro-bind",
+                    "/",
+                    "/",
+                    "--tmpfs",
+                    "/tmp",
+                    "--tmpfs",
+                    "/var/tmp",
+                    "--tmpfs",
+                    "/home",
+                    "--proc",
+                    "/proc",
+                    "--dev",
+                    "/dev",
+                    "--chdir",
+                    cwd,
                 ]);
                 // 环境变量必须在 bwrap 层用 `--setenv` 注入，否则进入沙盒后会丢；
                 // onebase 自身的 env 我们不传，避免 secret 泄露。
                 c.env_clear();
-                c.args(["--setenv", "PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"]);
+                c.args([
+                    "--setenv",
+                    "PATH",
+                    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                ]);
                 c.args(["--setenv", "HOME", cwd]);
                 for (k, v) in env_pairs {
                     c.args(["--setenv", k, v]);
@@ -607,17 +626,24 @@ impl ShellExecutor {
                 // 这里只做"最小可用"，需要更严就显式 bwrap。
                 let mut c = tokio::process::Command::new("nsjail");
                 c.args([
-                    "--mode", "o",
+                    "--mode",
+                    "o",
                     "--quiet",
-                    "--rlimit_as", "max",
-                    "--rlimit_cpu", "max",
+                    "--rlimit_as",
+                    "max",
+                    "--rlimit_cpu",
+                    "max",
                     "--disable_clone_newnet", // 与 bwrap 的 --share-net 对齐：保留网络
-                    "--cwd", cwd,
+                    "--cwd",
+                    cwd,
                 ]);
                 c.env_clear();
                 // nsjail 没有 --setenv；--keep_env 默认 false，从 host 继承的 env 已被切；
                 // 子进程里只能拿到我们这边 .env() 显式塞的。
-                c.env("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+                c.env(
+                    "PATH",
+                    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                );
                 c.env("HOME", cwd);
                 for (k, v) in env_pairs {
                     c.env(k, v);
@@ -647,10 +673,7 @@ fn truncate_text(s: String, max_bytes: usize) -> String {
     }
     let mut out = String::with_capacity(safe_cut + 64);
     out.push_str(&s[..safe_cut]);
-    out.push_str(&format!(
-        "\n... [truncated, total {} bytes]",
-        s.len(),
-    ));
+    out.push_str(&format!("\n... [truncated, total {} bytes]", s.len(),));
     out
 }
 
@@ -712,6 +735,10 @@ mod tests {
             timeout_secs: 30,
             max_retries: 0,
             overlap_policy: "skip".to_string(),
+            alert_webhook_url: None,
+            alert_webhook_template: None,
+            alert_throttle_hours: 24,
+            last_alert_sent_at: None,
             next_run_at: None,
             last_run_at: None,
             last_run_status: None,
@@ -750,10 +777,7 @@ mod tests {
         task.http_url = Some("http://example.com/hook".to_string());
 
         let err = exec.execute(&task).await.err().unwrap();
-        assert!(
-            err.contains("https"),
-            "明文 http:// 默认应被拒绝: {err}"
-        );
+        assert!(err.contains("https"), "明文 http:// 默认应被拒绝: {err}");
     }
 
     #[tokio::test]
@@ -846,7 +870,7 @@ mod tests {
         // 4 字节 utf-8（emoji），在 max_bytes 中间切断时应回退到 char 边界，不能 panic。
         let s = "🌟".repeat(10); // 每个 emoji 4 字节，共 40 字节
         let out = truncate_text(s, 5); // 切到 5 字节，必须回退到 4 字节边界
-        // 不 panic 即通过；进一步验证不留半个 emoji
+                                       // 不 panic 即通过；进一步验证不留半个 emoji
         assert!(out.starts_with("🌟"));
     }
 }

@@ -176,11 +176,7 @@ pub async fn execute_transaction(
 
     let elapsed = start.elapsed().as_millis();
 
-    tracing::info!(
-        "事务执行成功: {} 个操作，耗时 {}ms",
-        results.len(),
-        elapsed
-    );
+    tracing::info!("事务执行成功: {} 个操作，耗时 {}ms", results.len(), elapsed);
 
     Ok((
         StatusCode::OK,
@@ -255,9 +251,10 @@ async fn execute_update(
         .as_ref()
         .ok_or_else(|| AppError::InvalidQuery("PATCH 操作需要提供 data 字段".to_string()))?;
 
-    let conditions = op.conditions.as_ref().ok_or_else(|| {
-        AppError::InvalidQuery("PATCH 操作需要提供 where 条件".to_string())
-    })?;
+    let conditions = op
+        .conditions
+        .as_ref()
+        .ok_or_else(|| AppError::InvalidQuery("PATCH 操作需要提供 where 条件".to_string()))?;
 
     // 验证标识符
     QueryParams::sanitize_identifier(&op.schema)?;
@@ -306,12 +303,12 @@ async fn execute_update(
 
     // 构建查询
     let mut query = sqlx::query(&sql);
-    
+
     // 绑定 SET 值
     for value in obj.values() {
         query = bind_json_value(query, value);
     }
-    
+
     // 绑定 WHERE 值
     for value in conditions.values() {
         query = query.bind(value);
@@ -326,9 +323,10 @@ async fn execute_delete(
     tx: &mut Transaction<'_, Postgres>,
     op: &TransactionOperation,
 ) -> Result<Value, AppError> {
-    let conditions = op.conditions.as_ref().ok_or_else(|| {
-        AppError::InvalidQuery("DELETE 操作需要提供 where 条件".to_string())
-    })?;
+    let conditions = op
+        .conditions
+        .as_ref()
+        .ok_or_else(|| AppError::InvalidQuery("DELETE 操作需要提供 where 条件".to_string()))?;
 
     // 验证标识符
     QueryParams::sanitize_identifier(&op.schema)?;

@@ -12,8 +12,7 @@ const SQL: &str = include_str!("../../migrations/002_create_example_tables.sql")
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv::dotenv().ok();
 
-    let database_url =
-        env::var("DATABASE_URL").expect("DATABASE_URL must be set in .env file");
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set in .env file");
 
     println!("🔌 连接到数据库: {}", database_url);
     let pool = PgPoolOptions::new()

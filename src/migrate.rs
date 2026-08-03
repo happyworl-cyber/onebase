@@ -61,6 +61,340 @@ pub async fn run_sql_script(pool: &PgPool, name: &str, sql: &str) -> MigrationSt
     stats
 }
 
+/// 管理库的完整迁移序列（编号 SQL 文件，按顺序幂等执行）。
+///
+/// **单一信源**：`migrate_all` binary 与 app 启动期自动迁移都走这张表，改迁移
+/// 只动这一处。`include_str!` 在编译期把 SQL 内联进二进制，运行时不依赖
+/// `migrations/` 目录存在（容器里可以不打包 SQL 文件）。
+///
+/// 注意：013_rls_helpers 是给业务库（tenant database）跑的，不在管理库范围内，
+/// 故意不收录。
+const MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "001 users table",
+        include_str!("../migrations/001_create_users_table.sql"),
+    ),
+    (
+        "003 management schema",
+        include_str!("../migrations/003_create_management_schema.sql"),
+    ),
+    (
+        "004 superadmin role",
+        include_str!("../migrations/004_add_superadmin_role.sql"),
+    ),
+    (
+        "005 RBAC tables",
+        include_str!("../migrations/005_rbac_tables.sql"),
+    ),
+    (
+        "006 SSO providers",
+        include_str!("../migrations/006_sso_providers.sql"),
+    ),
+    (
+        "007 read replicas",
+        include_str!("../migrations/007_read_replicas.sql"),
+    ),
+    (
+        "008 webhooks",
+        include_str!("../migrations/008_webhooks.sql"),
+    ),
+    (
+        "009 audit logs",
+        include_str!("../migrations/009_audit_logs.sql"),
+    ),
+    (
+        "010 gateway config",
+        include_str!("../migrations/010_gateway_config.sql"),
+    ),
+    (
+        "011 default permissions",
+        include_str!("../migrations/011_seed_default_permissions.sql"),
+    ),
+    (
+        "012 jwt sessions",
+        include_str!("../migrations/012_jwt_sessions.sql"),
+    ),
+    (
+        "014 scheduled tasks",
+        include_str!("../migrations/014_scheduled_tasks.sql"),
+    ),
+    (
+        "015 scheduled tasks shell",
+        include_str!("../migrations/015_scheduled_tasks_shell.sql"),
+    ),
+    (
+        "016 es proxy",
+        include_str!("../migrations/016_es_proxy.sql"),
+    ),
+    (
+        "017 scheduled tasks shell tenant",
+        include_str!("../migrations/017_scheduled_tasks_shell_tenant.sql"),
+    ),
+    (
+        "018 workspace kind",
+        include_str!("../migrations/018_workspace_kind.sql"),
+    ),
+    (
+        "019 pg pools + templates",
+        include_str!("../migrations/019_pg_pools_and_templates.sql"),
+    ),
+    (
+        "020 scheduled tasks timeout 24h",
+        include_str!("../migrations/020_scheduled_tasks_timeout_24h.sql"),
+    ),
+    (
+        "021 session rules",
+        include_str!("../migrations/021_session_rules.sql"),
+    ),
+    (
+        "022 workflows",
+        include_str!("../migrations/022_workflows.sql"),
+    ),
+    (
+        "023 sse routes",
+        include_str!("../migrations/023_sse_routes.sql"),
+    ),
+    (
+        "024 sse notify bridges",
+        include_str!("../migrations/024_sse_notify_bridges.sql"),
+    ),
+    (
+        "025 sse public endpoints",
+        include_str!("../migrations/025_sse_public_endpoints.sql"),
+    ),
+    (
+        "026 workflow db slug",
+        include_str!("../migrations/026_workflow_database_slug.sql"),
+    ),
+    (
+        "027 strip primary slug suffix",
+        include_str!("../migrations/027_strip_primary_slug_suffix.sql"),
+    ),
+    (
+        "028 workflow category",
+        include_str!("../migrations/028_workflow_category.sql"),
+    ),
+    (
+        "029 workflow versions",
+        include_str!("../migrations/029_workflow_versions.sql"),
+    ),
+    (
+        "030 mcp personal access tokens",
+        include_str!("../migrations/030_mcp_personal_access_tokens.sql"),
+    ),
+    (
+        "031 project env vars",
+        include_str!("../migrations/031_project_env_vars.sql"),
+    ),
+    (
+        "032 sso mind provider",
+        include_str!("../migrations/032_sso_mind_provider.sql"),
+    ),
+    (
+        "033 sso provider auto role",
+        include_str!("../migrations/033_sso_provider_auto_role.sql"),
+    ),
+    (
+        "034 sso states pkce",
+        include_str!("../migrations/034_sso_states_pkce.sql"),
+    ),
+    // 注意：存在两个「030」是两条 feature 分支合并的产物（personal_access_tokens
+    // 与 platform_tokens 是两套不同的令牌表，详见 main.rs 路由注册处的对照说明）。
+    // 编号重复无害——运行器按顺序跑、name 仅用于日志、SQL 自身幂等。
+    (
+        "030 platform tokens",
+        include_str!("../migrations/030_platform_tokens.sql"),
+    ),
+    (
+        "032 workflow taxonomy",
+        include_str!("../migrations/032_workflow_taxonomy.sql"),
+    ),
+    (
+        "035 workflow shared uncategorized",
+        include_str!("../migrations/035_workflow_shared_uncategorized.sql"),
+    ),
+    (
+        "036 execution logs",
+        include_str!("../migrations/036_execution_logs.sql"),
+    ),
+    (
+        "037 tenant databases sort order",
+        include_str!("../migrations/037_tenant_databases_sort_order.sql"),
+    ),
+    (
+        "041 idp foundation",
+        include_str!("../migrations/041_idp_foundation.sql"),
+    ),
+    (
+        "042 idp oidc runtime",
+        include_str!("../migrations/042_idp_oidc_runtime.sql"),
+    ),
+    (
+        "043 idp sessions",
+        include_str!("../migrations/043_idp_sessions.sql"),
+    ),
+    (
+        "044 idp provider config",
+        include_str!("../migrations/044_idp_provider_config.sql"),
+    ),
+    (
+        "045 idp login logs",
+        include_str!("../migrations/045_idp_login_logs.sql"),
+    ),
+    (
+        "046 workflow datasources",
+        include_str!("../migrations/046_workflow_datasources.sql"),
+    ),
+    (
+        "048 workflow cron fires",
+        include_str!("../migrations/048_workflow_cron_fires.sql"),
+    ),
+    (
+        "038 users must change password",
+        include_str!("../migrations/038_users_must_change_password.sql"),
+    ),
+    (
+        "046 redis connections",
+        include_str!("../migrations/046_redis_connections.sql"),
+    ),
+    (
+        "046 workflow doc share",
+        include_str!("../migrations/046_workflow_doc_share.sql"),
+    ),
+    (
+        "047 rest api doc share",
+        include_str!("../migrations/047_rest_api_doc_share.sql"),
+    ),
+    (
+        "049 alert webhooks",
+        include_str!("../migrations/049_alert_webhooks.sql"),
+    ),
+    (
+        "050 platform monitor",
+        include_str!("../migrations/050_platform_monitor.sql"),
+    ),
+    (
+        "051 public base settings",
+        include_str!("../migrations/051_public_base_settings.sql"),
+    ),
+    (
+        "052 kafka connections",
+        include_str!("../migrations/052_kafka_connections.sql"),
+    ),
+    (
+        "053 kafka access tokens",
+        include_str!("../migrations/053_kafka_access_tokens.sql"),
+    ),
+    (
+        "054 workflow dependencies",
+        include_str!("../migrations/054_workflow_dependencies.sql"),
+    ),
+    (
+        "055 workflow search index",
+        include_str!("../migrations/055_workflow_search_index.sql"),
+    ),
+];
+
+/// API Keys 表（内联 SQL，历史上由独立的 migrate_api_keys 维护，这里随主序列一起跑）。
+const API_KEYS_SQL: &str = r#"
+    CREATE TABLE IF NOT EXISTS management.api_keys (
+        id SERIAL PRIMARY KEY,
+        tenant_id INTEGER NOT NULL REFERENCES management.tenants(id) ON DELETE CASCADE,
+        database_id INTEGER NOT NULL REFERENCES management.tenant_databases(id) ON DELETE CASCADE,
+        name VARCHAR(100) NOT NULL,
+        key_hash VARCHAR(128) NOT NULL,
+        key_prefix VARCHAR(12) NOT NULL,
+        permissions JSONB DEFAULT '{"read": true, "write": true, "delete": true}',
+        is_active BOOLEAN DEFAULT true,
+        last_used_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP,
+        UNIQUE(key_hash)
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_keys_database_id ON management.api_keys(database_id);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash   ON management.api_keys(key_hash);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_active     ON management.api_keys(is_active) WHERE is_active = true;
+"#;
+
+/// 跨实例互斥用的 advisory lock key（任意固定常量，只要全集群一致即可）。
+/// 取自 "onebase.migrate" 的语义化魔数，避免与业务可能用到的 advisory lock 撞键。
+const MIGRATION_LOCK_KEY: i64 = 0x6372_6d67_7261_7465_u64 as i64;
+
+/// 执行完整的管理库迁移序列，**幂等**，可在每次进程启动时安全重复调用。
+///
+/// 并发安全：进入时先抢一把会话级 `pg_advisory_lock`，多实例同时启动只有一个
+/// 真正跑迁移，其余等锁后看到 `IF NOT EXISTS` 全部跳过。锁绑定在一条独占连接上，
+/// 函数返回（含出错路径）前一定释放。
+///
+/// 返回累计 [`MigrationStats`]；调用方据 `has_error()` 决定后续动作（binary 用它
+/// 决定 exit code，app 启动用它决定是否告警）。
+pub async fn run_all_migrations(pool: &PgPool) -> Result<MigrationStats, sqlx::Error> {
+    // 独占一条连接持有 advisory lock：锁是会话级的，必须 lock/unlock 同连接。
+    // 迁移本身仍在 pool 的其它连接上跑，不受影响。
+    let mut lock_conn = pool.acquire().await?;
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(MIGRATION_LOCK_KEY)
+        .execute(&mut *lock_conn)
+        .await?;
+
+    let result = run_all_inner(pool).await;
+
+    // 无论迁移成功与否都要解锁，否则这条连接归还池后锁仍被持有，下个实例永久等待。
+    let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
+        .bind(MIGRATION_LOCK_KEY)
+        .execute(&mut *lock_conn)
+        .await;
+
+    Ok(result)
+}
+
+/// 实际迁移步骤（已在 advisory lock 保护下调用）。
+async fn run_all_inner(pool: &PgPool) -> MigrationStats {
+    let mut total = MigrationStats::default();
+
+    // 后续 migration 都依赖 management schema 存在。
+    let _ = sqlx::query("CREATE SCHEMA IF NOT EXISTS management")
+        .execute(pool)
+        .await;
+
+    for (name, sql) in MIGRATIONS {
+        let stats = run_sql_script(pool, name, sql).await;
+        tracing::info!(
+            target: "onebase::migrate",
+            step = name, ok = stats.ok, skipped = stats.skipped, errors = stats.errors,
+            "迁移步骤完成"
+        );
+        accumulate(&mut total, &stats);
+    }
+
+    let api_keys = run_sql_script(pool, "API keys table", API_KEYS_SQL).await;
+    tracing::info!(
+        target: "onebase::migrate",
+        step = "API keys table", ok = api_keys.ok, skipped = api_keys.skipped, errors = api_keys.errors,
+        "迁移步骤完成"
+    );
+    accumulate(&mut total, &api_keys);
+
+    // users 表向后兼容字段（旧库可能缺）。ADD COLUMN IF NOT EXISTS 自身幂等。
+    let _ =
+        sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user'")
+            .execute(pool)
+            .await;
+    let _ = sqlx::query(
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_superadmin BOOLEAN DEFAULT false",
+    )
+    .execute(pool)
+    .await;
+
+    total
+}
+
+fn accumulate(total: &mut MigrationStats, step: &MigrationStats) {
+    total.ok += step.ok;
+    total.skipped += step.skipped;
+    total.errors += step.errors;
+}
+
 /// 把整段 SQL 切分成独立的 statement 列表。
 ///
 /// 与 `str::split(';')` 的区别：

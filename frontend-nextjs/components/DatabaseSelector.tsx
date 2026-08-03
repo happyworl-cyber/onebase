@@ -6,7 +6,7 @@ import { useAppStore } from '@/lib/store'
 
 export default function DatabaseSelector() {
   const router = useRouter()
-  const { currentDatabase, databases, setCurrentDatabase } = useAppStore()
+  const { currentDatabase, databases, setCurrentDatabase, currentConnection } = useAppStore()
   const [showMenu, setShowMenu] = useState(false)
   const [mounted, setMounted] = useState(false)
 
@@ -112,7 +112,14 @@ export default function DatabaseSelector() {
               <button
                 onClick={() => {
                   setShowMenu(false)
-                  router.push('/dashboard/connections')
+                  // 已退役 /dashboard/connections；改去项目设置里的数据库连接页。
+                  // currentConnection.tenant_id 即当前项目 id（workspace layout 铺好的）。
+                  const projectId = currentConnection?.tenant_id
+                  router.push(
+                    projectId
+                      ? `/workspace/${projectId}/settings/connections`
+                      : '/workspace',
+                  )
                 }}
                 className="w-full px-3 py-2 rounded-md text-left hover:bg-gray-50 transition-colors"
               >

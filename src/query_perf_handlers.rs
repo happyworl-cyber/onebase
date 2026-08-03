@@ -30,29 +30,21 @@ use sqlx::{PgPool, Row};
 
 /// 选择目标连接池：`dynamic_db_middleware` 注入的优先；没注入回退到管理库——
 /// 这种情况只会发生在调用方没带 `X-Database-Id` 头时，handler 一般会拒绝，但兜底有备无患。
-fn pick_pool<'a>(
-    main: &'a PgPool,
-    dynamic: &'a Option<Extension<PgPool>>,
-) -> &'a PgPool {
+fn pick_pool<'a>(main: &'a PgPool, dynamic: &'a Option<Extension<PgPool>>) -> &'a PgPool {
     dynamic.as_deref().unwrap_or(main)
 }
 
 /// 必须带 `X-Database-Id`；否则返回 400，避免在管理库上跑 `pg_stat_statements_reset()` 这种事。
 fn require_database_id(opt: Option<Extension<CurrentDatabaseId>>) -> Result<i32> {
-    opt.map(|Extension(CurrentDatabaseId(id))| id).ok_or_else(|| {
-        AppError::InvalidQuery(
-            "缺少 X-Database-Id 请求头，无法定位目标数据库".to_string(),
-        )
-    })
+    opt.map(|Extension(CurrentDatabaseId(id))| id)
+        .ok_or_else(|| {
+            AppError::InvalidQuery("缺少 X-Database-Id 请求头，无法定位目标数据库".to_string())
+        })
 }
 
 /// 普通用户读取统计要求：在该数据库下至少能"读到一张表"。这里不绑定到具体 table，
 /// 而是查 `management.permissions` 看是否有任何 `SELECT`/`ALL` 资格。超管直接放行。
-async fn require_db_read(
-    main_pool: &PgPool,
-    user_id: i32,
-    database_id: i32,
-) -> Result<()> {
+async fn require_db_read(main_pool: &PgPool, user_id: i32, database_id: i32) -> Result<()> {
     if is_superadmin(main_pool, user_id).await.unwrap_or(false) {
         return Ok(());
     }
@@ -302,11 +294,8 @@ pub async fn reset_statements(
     dynamic_pool: Option<Extension<PgPool>>,
 ) -> Result<Json<serde_json::Value>> {
     require_database_id(db_id_ext)?;
-    if !is_superadmin(&main_pool, claims.sub).await.unwrap_or(false) {
-        return Err(AppError::Forbidden(
-            "仅平台超级管理员可以重置 pg_stat_statements 统计".to_string(),
-        ));
-    }
+    // 平台超管限制已移除：任何已认证用户均可重置 pg_stat_statements 统计。
+    let _ = &claims;
 
     let pool = pick_pool(&main_pool, &dynamic_pool);
     sqlx::query("SELECT pg_stat_statements_reset()")
@@ -426,11 +415,8 @@ pub async fn cancel_active_query(
     dynamic_pool: Option<Extension<PgPool>>,
 ) -> Result<Json<serde_json::Value>> {
     require_database_id(db_id_ext)?;
-    if !is_superadmin(&main_pool, claims.sub).await.unwrap_or(false) {
-        return Err(AppError::Forbidden(
-            "仅平台超级管理员可以取消其他用户的查询".to_string(),
-        ));
-    }
+    // 平台超管限制已移除：任何已认证用户均可取消其他用户的查询。
+    let _ = &claims;
 
     let pool = pick_pool(&main_pool, &dynamic_pool);
     let terminate = p.terminate.unwrap_or(false);

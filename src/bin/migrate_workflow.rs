@@ -9,7 +9,10 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/onebase".to_string());
 
     println!("⚙️  OneBase Workflow DAG 引擎迁移");
-    println!("连接数据库: {}...", &database_url[..database_url.find('@').unwrap_or(20)]);
+    println!(
+        "连接数据库: {}...",
+        &database_url[..database_url.find('@').unwrap_or(20)]
+    );
 
     let pool = PgPool::connect(&database_url).await?;
 
@@ -33,7 +36,9 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
         if !has_nodes {
-            println!("  检测到旧版 workflows 表（线性 steps 模型），重命名为 workflows_v1_backup...");
+            println!(
+                "  检测到旧版 workflows 表（线性 steps 模型），重命名为 workflows_v1_backup..."
+            );
             sqlx::query("ALTER TABLE management.workflows RENAME TO workflows_v1_backup")
                 .execute(&pool)
                 .await?;
@@ -44,9 +49,11 @@ async fn main() -> anyhow::Result<()> {
             .fetch_one(&pool)
             .await?;
             if old_runs {
-                sqlx::query("ALTER TABLE management.workflow_runs RENAME TO workflow_runs_v1_backup")
-                    .execute(&pool)
-                    .await?;
+                sqlx::query(
+                    "ALTER TABLE management.workflow_runs RENAME TO workflow_runs_v1_backup",
+                )
+                .execute(&pool)
+                .await?;
             }
             println!("  ✅ 旧表已备份");
         } else {
@@ -57,7 +64,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // ===== 新版 workflows 表（DAG 模型） =====
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         CREATE TABLE IF NOT EXISTS management.workflows (
             id SERIAL PRIMARY KEY,
             tenant_id INTEGER REFERENCES management.tenants(id) ON DELETE CASCADE,
@@ -69,6 +77,7 @@ async fn main() -> anyhow::Result<()> {
             trigger_config JSONB NOT NULL DEFAULT '{}',
             nodes JSONB NOT NULL DEFAULT '[]',
             edges JSONB NOT NULL DEFAULT '[]',
+            dependencies JSONB NOT NULL DEFAULT '{}',
             is_enabled BOOLEAN NOT NULL DEFAULT true,
             timeout_ms INTEGER NOT NULL DEFAULT 30000,
             max_retries INTEGER NOT NULL DEFAULT 0,
@@ -77,13 +86,15 @@ async fn main() -> anyhow::Result<()> {
             updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
             CONSTRAINT workflows_slug_db_unique UNIQUE (database_id, slug)
         )
-    "#)
+    "#,
+    )
     .execute(&pool)
     .await?;
     println!("  ✅ management.workflows（DAG 模型）");
 
     // ===== workflow_runs 表 =====
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         CREATE TABLE IF NOT EXISTS management.workflow_runs (
             id BIGSERIAL PRIMARY KEY,
             workflow_id INTEGER NOT NULL REFERENCES management.workflows(id) ON DELETE CASCADE,
@@ -98,20 +109,21 @@ async fn main() -> anyhow::Result<()> {
             started_at TIMESTAMP NOT NULL DEFAULT NOW(),
             completed_at TIMESTAMP
         )
-    "#)
+    "#,
+    )
     .execute(&pool)
     .await?;
     println!("  ✅ management.workflow_runs");
 
     // ===== 索引 =====
     sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_workflows_slug ON management.workflows(database_id, slug)"
+        "CREATE INDEX IF NOT EXISTS idx_workflows_slug ON management.workflows(database_id, slug)",
     )
     .execute(&pool)
     .await?;
 
     sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_workflows_tenant ON management.workflows(tenant_id)"
+        "CREATE INDEX IF NOT EXISTS idx_workflows_tenant ON management.workflows(tenant_id)",
     )
     .execute(&pool)
     .await?;
@@ -137,7 +149,8 @@ async fn main() -> anyhow::Result<()> {
     println!("  ✅ 索引已创建");
 
     // ===== updated_at 触发器 =====
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         CREATE OR REPLACE FUNCTION management.update_workflows_updated_at()
         RETURNS TRIGGER AS $$
         BEGIN
@@ -145,7 +158,8 @@ async fn main() -> anyhow::Result<()> {
             RETURN NEW;
         END;
         $$ LANGUAGE plpgsql
-    "#)
+    "#,
+    )
     .execute(&pool)
     .await?;
 
@@ -153,18 +167,20 @@ async fn main() -> anyhow::Result<()> {
         .execute(&pool)
         .await?;
 
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         CREATE TRIGGER trigger_workflows_updated_at
             BEFORE UPDATE ON management.workflows
             FOR EACH ROW EXECUTE FUNCTION management.update_workflows_updated_at()
-    "#)
+    "#,
+    )
     .execute(&pool)
     .await?;
     println!("  ✅ updated_at 触发器");
 
     println!("\n✅ Workflow DAG 引擎迁移完成！");
     println!("\n触发器类型:");
-    println!("  - endpoint: POST /workflow/:database_id/:slug");
+    println!("  - endpoint: POST /workflow/:database_slug/:slug");
     println!("  - hook: Auto API CRUD 生命周期钩子");
     println!("  - cron: 定时触发（复用 scheduler）");
     println!("  - manual: 管理后台手动触发");

@@ -32,6 +32,8 @@ pub struct Config {
     pub scheduler_retry_base_secs: i64,
     /// 退避倍数；默认 2。
     pub scheduler_retry_factor: u32,
+    /// 同时执行的定时任务数上限（并发闸门）；默认 8。应显著小于 `DB_MAX_CONNECTIONS`。
+    pub scheduler_max_concurrency: usize,
     /// 是否允许 HTTP 任务使用明文 http://（默认 false，仅 https）。
     pub allow_insecure_scheduled_http: bool,
     /// Shell 任务沙盒模式。**默认 `auto`**：优先 bwrap → 退到 nsjail → 退到 direct(+ warn)。
@@ -40,6 +42,12 @@ pub struct Config {
     /// 枚举定义在 `crate::scheduler::executors` 内（lib-exposed），方便集成测试 import。
     pub scheduler_shell_sandbox_mode: crate::scheduler::ShellSandboxMode,
     pub cors_origins: Vec<String>,
+    /// 进程启动时是否自动执行管理库迁移（`onebase::migrate::run_all_migrations`）。
+    /// 默认 `true`：发版重启即同步 schema，免去生产环境手动跑 `migrate_all`。
+    /// 设 `AUTO_MIGRATE=off`（或 false/0/no）可关闭，留给"CI/CD 里 gated 迁移"的团队。
+    pub auto_migrate: bool,
+    /// 通用 SSE 总线 broadcast channel 容量；见 `SSE_HUB_CAPACITY`。
+    pub sse_hub_capacity: usize,
 }
 
 impl Config {
@@ -47,19 +55,17 @@ impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         dotenv::dotenv().ok();
 
-        let database_url = env::var("DATABASE_URL")
-            .expect("DATABASE_URL 必须设置在环境变量中");
+        let database_url = env::var("DATABASE_URL").expect("DATABASE_URL 必须设置在环境变量中");
 
-        let host = env::var("HOST")
-            .unwrap_or_else(|_| "127.0.0.1".to_string());
+        let host = env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
 
         let port = env::var("PORT")
             .unwrap_or_else(|_| "3000".to_string())
             .parse()
             .expect("PORT 必须是有效的数字");
 
-        let redis_url = env::var("REDIS_URL")
-            .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+        let redis_url =
+            env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
 
         // REQUIRE_REDIS：true/1/yes 视为要求；其他视为可选（默认）。
         let require_redis = env::var("REQUIRE_REDIS")
@@ -71,8 +77,8 @@ impl Config {
             .parse()
             .unwrap_or(100);
 
-        let rate_limit_fallback_mode = env::var("RATE_LIMIT_FALLBACK_MODE")
-            .unwrap_or_else(|_| "degraded".to_string());
+        let rate_limit_fallback_mode =
+            env::var("RATE_LIMIT_FALLBACK_MODE").unwrap_or_else(|_| "degraded".to_string());
 
         // 0.0~1.0，超出会在 RateLimiter 内 clamp。脏值回退到 0.5。
         let rate_limit_fallback_multiplier = env::var("RATE_LIMIT_FALLBACK_MULTIPLIER")
@@ -123,6 +129,12 @@ impl Config {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(2);
+        // 并发闸门上限：0 / 非法值一律回退默认 8，且强制 >= 1（0 会让调度器永远拿不到 permit）。
+        let scheduler_max_concurrency = env::var("SCHEDULER_MAX_CONCURRENCY")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(8);
         let allow_insecure_scheduled_http = env::var("ALLOW_INSECURE_SCHEDULED_HTTP")
             .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
             .unwrap_or(false);
@@ -140,6 +152,18 @@ impl Config {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
+
+        // AUTO_MIGRATE：缺省 true（启动自动迁移）；显式 off/false/0/no 才关闭。
+        let auto_migrate = env::var("AUTO_MIGRATE")
+            .map(|v| {
+                !matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "off" | "false" | "0" | "no"
+                )
+            })
+            .unwrap_or(true);
+
+        let sse_hub_capacity = onebase::sse_batch_config::sse_hub_capacity_from_env();
 
         Ok(Config {
             database_url,
@@ -159,9 +183,12 @@ impl Config {
             scheduler_stale_claim_grace_secs,
             scheduler_retry_base_secs,
             scheduler_retry_factor,
+            scheduler_max_concurrency,
             allow_insecure_scheduled_http,
             scheduler_shell_sandbox_mode,
             cors_origins,
+            auto_migrate,
+            sse_hub_capacity,
         })
     }
 }

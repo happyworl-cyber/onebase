@@ -11,7 +11,14 @@ pub mod executors;
 pub mod models;
 pub mod runner;
 
+// 对外稳定 re-export；crate 内多从子模块路径直接引用，故允许 unused_imports。
+#[allow(unused_imports)]
 pub use cron_parser::next_after;
+#[allow(unused_imports)]
 pub use executors::ShellSandboxMode;
-pub use models::{ScheduledTask, ScheduledTaskRun, TaskKind, RunStatus, OverlapPolicy, TriggeredBy};
+#[allow(unused_imports)]
+pub use models::{
+    OverlapPolicy, RunStatus, ScheduledTask, ScheduledTaskRun, TaskKind, TriggeredBy,
+};
+#[allow(unused_imports)]
 pub use runner::{SchedulerConfig, SchedulerRunner};

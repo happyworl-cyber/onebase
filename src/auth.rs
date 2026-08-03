@@ -16,7 +16,10 @@ static JWT_SECRET: Lazy<String> = Lazy::new(|| {
         panic!("JWT_SECRET 未设置或使用了默认值。生产环境必须设置 JWT_SECRET 环境变量为强随机字符串（32+ 位）。");
     }
     if secret.len() < 16 {
-        panic!("JWT_SECRET 太短（当前 {} 位），至少需要 16 位。", secret.len());
+        panic!(
+            "JWT_SECRET 太短（当前 {} 位），至少需要 16 位。",
+            secret.len()
+        );
     }
     secret
 });
@@ -43,21 +46,27 @@ static JWT_EXPIRATION: Lazy<i64> = Lazy::new(|| {
 ///   一并删除该用户全部 jti，强制下次重登录。
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
-    pub sub: i32,         // 用户 ID
-    pub email: String,    // 用户邮箱
-    pub role: String,     // 遗留：用户角色（仅前端展示，不参与权限判定，详见结构体文档）
+    pub sub: i32,      // 用户 ID
+    pub email: String, // 用户邮箱
+    pub role: String,  // 遗留：用户角色（仅前端展示，不参与权限判定，详见结构体文档）
     #[serde(default)]
     pub is_superadmin: bool, // 是否为平台超级管理员（权威字段）
     /// JWT 唯一标识，写入 user_sessions 表，可服务端吊销
     #[serde(default)]
     pub jti: String,
-    pub exp: i64,         // 过期时间（Unix 时间戳）
-    pub iat: i64,         // 签发时间
+    pub exp: i64, // 过期时间（Unix 时间戳）
+    pub iat: i64, // 签发时间
 }
 
 impl Claims {
     /// 创建新的 Claims
-    pub fn new(user_id: i32, email: String, role: String, is_superadmin: bool, jti: String) -> Self {
+    pub fn new(
+        user_id: i32,
+        email: String,
+        role: String,
+        is_superadmin: bool,
+        jti: String,
+    ) -> Self {
         let now = Utc::now();
         let exp = (now + Duration::seconds(*JWT_EXPIRATION)).timestamp();
 
@@ -73,6 +82,7 @@ impl Claims {
     }
 
     /// 检查 token 是否过期
+    #[allow(dead_code)]
     pub fn is_expired(&self) -> bool {
         Utc::now().timestamp() > self.exp
     }
@@ -140,8 +150,7 @@ pub fn hash_password(password: &str) -> Result<String, AppError> {
 
 /// 验证密码
 pub fn verify_password(password: &str, hash: &str) -> Result<bool, AppError> {
-    bcrypt::verify(password, hash)
-        .map_err(|e| AppError::Internal(format!("密码验证失败: {}", e)))
+    bcrypt::verify(password, hash).map_err(|e| AppError::Internal(format!("密码验证失败: {}", e)))
 }
 
 #[cfg(test)]
@@ -213,4 +222,3 @@ mod tests {
         assert!(result.is_err());
     }
 }
-

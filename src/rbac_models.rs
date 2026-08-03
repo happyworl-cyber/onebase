@@ -169,12 +169,14 @@ pub struct RowCondition {
 #[derive(Debug, Clone)]
 pub struct PermissionResult {
     /// 是否允许访问
+    #[allow(dead_code)]
     pub allowed: bool,
     /// 行级过滤条件（结构化、参数化）
     pub row_conditions: Vec<RowCondition>,
     /// 允许的列列表（None = 全部允许）
     pub allowed_columns: Option<Vec<String>>,
     /// 是否为超管（跳过所有限制）
+    #[allow(dead_code)]
     pub is_superadmin: bool,
 }
 

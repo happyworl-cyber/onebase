@@ -20,6 +20,7 @@ use sqlx::{PgPool, Row};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Semaphore;
 
 use crate::scheduler::cron_parser::next_after;
 use crate::scheduler::executors::{HttpExecutorRef, RpcExecutorRef, ShellExecutorRef};
@@ -32,7 +33,13 @@ pub struct SchedulerConfig {
     pub stale_claim_grace_secs: i64,
     pub retry_base_secs: i64,
     pub retry_factor: u32,
-    pub allow_insecure_http: bool,
+    /// 同时执行的任务数上限（`execute_one` 并发闸门）。
+    ///
+    /// 每个 `execute_one` 都会向**管理库池**做多次读写；若不限并发，单个 tick 可能一次
+    /// spawn `batch_size`（默认 32）个任务瞬间抢光连接池（默认 20），进而拖垮探活 /
+    /// 日志落库 / 健康探针，触发 k8s 反复重启。该值应显著小于 `DB_MAX_CONNECTIONS`，
+    /// 给 HTTP 流量与后台写入留出连接余量。默认 8。
+    pub max_concurrency: usize,
 }
 
 impl Default for SchedulerConfig {
@@ -43,7 +50,7 @@ impl Default for SchedulerConfig {
             stale_claim_grace_secs: 30,
             retry_base_secs: 60,
             retry_factor: 2,
-            allow_insecure_http: false,
+            max_concurrency: 8,
         }
     }
 }
@@ -56,6 +63,8 @@ pub struct SchedulerRunner {
     http_exec: HttpExecutorRef,
     shell_exec: ShellExecutorRef,
     running: Arc<AtomicBool>,
+    /// 并发闸门：限制同时在跑的 `execute_one` 数量（见 `SchedulerConfig::max_concurrency`）。
+    exec_sem: Arc<Semaphore>,
 }
 
 impl SchedulerRunner {
@@ -73,6 +82,7 @@ impl SchedulerRunner {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let runner_id = format!("{hostname}-{pid}-{nanos}");
+        let exec_sem = Arc::new(Semaphore::new(config.max_concurrency.max(1)));
         Self {
             pool,
             runner_id,
@@ -81,6 +91,7 @@ impl SchedulerRunner {
             http_exec,
             shell_exec,
             running: Arc::new(AtomicBool::new(true)),
+            exec_sem,
         }
     }
 
@@ -88,6 +99,7 @@ impl SchedulerRunner {
         self.running.clone()
     }
 
+    #[allow(dead_code)]
     pub fn runner_id(&self) -> &str {
         &self.runner_id
     }
@@ -117,10 +129,11 @@ impl SchedulerRunner {
         let me = self;
         tokio::spawn(async move {
             tracing::info!(
-                "SchedulerRunner 已启动: runner_id={} tick={:?} batch={}",
+                "SchedulerRunner 已启动: runner_id={} tick={:?} batch={} max_concurrency={}",
                 me.runner_id,
                 me.config.tick_interval,
-                me.config.batch_size
+                me.config.batch_size,
+                me.config.max_concurrency
             );
             while running.load(Ordering::Relaxed) {
                 tokio::time::sleep(me.config.tick_interval).await;
@@ -140,7 +153,14 @@ impl SchedulerRunner {
         let claimed = self.claim_due_tasks().await?;
         for task in claimed {
             let me = self.clone();
+            // 并发闸门：先拿 permit 再执行，避免一次 tick 把管理库连接池抢光。permit 随
+            // spawn 出去的任务持有，任务结束（含 timeout / panic）自动归还。
+            let permit = match me.exec_sem.clone().acquire_owned().await {
+                Ok(p) => p,
+                Err(_) => break, // Semaphore 已关闭（仅进程收尾时发生），停止本轮派发。
+            };
             tokio::spawn(async move {
+                let _permit = permit;
                 me.execute_one(task, "cron").await;
             });
         }
@@ -151,7 +171,13 @@ impl SchedulerRunner {
     /// `triggered_by='manual'`。
     pub async fn trigger_now(self: Arc<Self>, task: ScheduledTask) {
         let me = self;
+        // 手动 run-now 也走同一并发闸门，避免大批量手动触发绕过限流击穿连接池。
+        let permit = match me.exec_sem.clone().acquire_owned().await {
+            Ok(p) => p,
+            Err(_) => return,
+        };
         tokio::spawn(async move {
+            let _permit = permit;
             me.execute_one(task, "manual").await;
         });
     }
@@ -197,6 +223,11 @@ impl SchedulerRunner {
     }
 
     async fn execute_one(&self, task: ScheduledTask, triggered_by: &str) {
+        // 本次执行的统一关联键：cron / run-now 都没有（或跨 spawn 后读不到）HTTP 请求
+        // 上下文，故现场生成 UUID。写进 scheduled_task_runs.trace_id 与 execution_index，
+        // 让统一执行日志列表能把这次定时任务和它的 run 记录串起来。
+        let trace_id = crate::execution_log::new_trace_id();
+
         // overlap=skip 在 INSERT 之前判定——否则两个并发 /run-now 都会先各自写一行
         // status='running'，再都看到对方的 running 而把自己 cancel 掉，净结果 0 次执行。
         //
@@ -208,9 +239,10 @@ impl SchedulerRunner {
             if let Ok(n) = self.count_existing_running_runs(task.id).await {
                 if n > 0 {
                     let attempt = self.current_attempt(&task).await.unwrap_or(1);
-                    if let Err(e) = self
+                    match self
                         .create_run_record_with_status(
                             &task,
+                            &trace_id,
                             triggered_by,
                             attempt,
                             "cancelled",
@@ -218,10 +250,28 @@ impl SchedulerRunner {
                         )
                         .await
                     {
-                        tracing::error!(
-                            "create_run_record_with_status 失败 task_id={}: {e}",
-                            task.id
-                        );
+                        Ok(run_id) => {
+                            crate::execution_log::record_terminal(
+                                &self.pool,
+                                &trace_id,
+                                "scheduler",
+                                Some("scheduled_task_runs"),
+                                Some(run_id),
+                                task.tenant_id,
+                                None,
+                                Some(&task.name),
+                                "cancelled",
+                                Some(0),
+                                Some("overlap with previous run"),
+                            )
+                            .await;
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "create_run_record_with_status 失败 task_id={}: {e}",
+                                task.id
+                            );
+                        }
                     }
                     tracing::warn!("task_id={} overlap=skip：跳过本次触发", task.id);
                     if let Err(e) = self
@@ -239,7 +289,10 @@ impl SchedulerRunner {
         let started_at = Utc::now();
         let attempt = self.current_attempt(&task).await.unwrap_or(1);
 
-        let run_id = match self.create_run_record(&task, triggered_by, attempt).await {
+        let run_id = match self
+            .create_run_record(&task, &trace_id, triggered_by, attempt)
+            .await
+        {
             Ok(id) => id,
             Err(e) => {
                 tracing::error!("写 run 起始记录失败 task_id={}: {e}", task.id);
@@ -249,6 +302,19 @@ impl SchedulerRunner {
                 return;
             }
         };
+
+        // 统一执行索引：写一行 running，收口时 finish。失败返回 None，后续 finish 自动跳过。
+        let index_id = crate::execution_log::begin_index(
+            &self.pool,
+            &trace_id,
+            "scheduler",
+            Some("scheduled_task_runs"),
+            Some(run_id),
+            task.tenant_id,
+            None,
+            Some(&task.name),
+        )
+        .await;
 
         let timeout = Duration::from_secs(task.timeout_secs.max(1) as u64);
         let exec_future: std::pin::Pin<
@@ -271,14 +337,9 @@ impl SchedulerRunner {
             }),
             other => {
                 tracing::error!("未知任务类型 kind={} task_id={}", other, task.id);
+                let unknown_err = format!("unknown kind: {other}");
                 if let Err(e) = self
-                    .finalize_run(
-                        run_id,
-                        "failed",
-                        None,
-                        Some(&format!("unknown kind: {other}")),
-                        started_at,
-                    )
+                    .finalize_run(run_id, "failed", None, Some(&unknown_err), started_at)
                     .await
                 {
                     tracing::error!(
@@ -287,6 +348,14 @@ impl SchedulerRunner {
                         task.id
                     );
                 }
+                crate::execution_log::finish_index(
+                    &self.pool,
+                    index_id,
+                    "failed",
+                    Some((Utc::now() - started_at).num_milliseconds().max(0)),
+                    Some(&unknown_err),
+                )
+                .await;
                 if let Err(e) = self
                     .update_task_after_run(&task, "failed", self.cron_next_safe(&task))
                     .await
@@ -316,12 +385,35 @@ impl SchedulerRunner {
             );
         }
 
+        crate::execution_log::finish_index(
+            &self.pool,
+            index_id,
+            status,
+            Some((Utc::now() - started_at).num_milliseconds().max(0)),
+            err_msg.as_deref(),
+        )
+        .await;
+
         let next_run_at = self.compute_next_run_at(&task, status, attempt);
-        if let Err(e) = self
-            .update_task_after_run(&task, status, next_run_at)
-            .await
-        {
+        if let Err(e) = self.update_task_after_run(&task, status, next_run_at).await {
             tracing::error!("update_task_after_run 失败 task_id={}: {e}", task.id);
+        }
+
+        if matches!(status, "failed" | "timeout") && attempt >= task.max_retries {
+            crate::alert_webhook::spawn_scheduled_task_failure_alert(
+                self.pool.clone(),
+                task.id,
+                crate::alert_webhook::AlertWebhookContext {
+                    source: "scheduled_task",
+                    object_id: task.id,
+                    run_id,
+                    name: task.name.clone(),
+                    status: status.to_string(),
+                    error: err_msg,
+                    trigger_type: triggered_by.to_string(),
+                    trace_id: Some(trace_id),
+                },
+            );
         }
     }
 
@@ -408,18 +500,20 @@ impl SchedulerRunner {
     async fn create_run_record(
         &self,
         task: &ScheduledTask,
+        trace_id: &str,
         triggered_by: &str,
         attempt: i32,
     ) -> Result<i64, sqlx::Error> {
         let row = sqlx::query(
             "INSERT INTO management.scheduled_task_runs \
-                (task_id, status, runner_id, attempt_number, triggered_by) \
-             VALUES ($1, 'running', $2, $3, $4) RETURNING id",
+                (task_id, status, runner_id, attempt_number, triggered_by, trace_id) \
+             VALUES ($1, 'running', $2, $3, $4, $5) RETURNING id",
         )
         .bind(task.id)
         .bind(&self.runner_id)
         .bind(attempt)
         .bind(triggered_by)
+        .bind(trace_id)
         .fetch_one(&self.pool)
         .await?;
         Ok(row.get::<i64, _>("id"))
@@ -430,6 +524,7 @@ impl SchedulerRunner {
     async fn create_run_record_with_status(
         &self,
         task: &ScheduledTask,
+        trace_id: &str,
         triggered_by: &str,
         attempt: i32,
         status: &str,
@@ -437,8 +532,8 @@ impl SchedulerRunner {
     ) -> Result<i64, sqlx::Error> {
         let row = sqlx::query(
             "INSERT INTO management.scheduled_task_runs \
-                (task_id, status, runner_id, attempt_number, triggered_by, finished_at, error_message) \
-             VALUES ($1, $2, $3, $4, $5, NOW(), $6) RETURNING id",
+                (task_id, status, runner_id, attempt_number, triggered_by, finished_at, error_message, trace_id) \
+             VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7) RETURNING id",
         )
         .bind(task.id)
         .bind(status)
@@ -446,6 +541,7 @@ impl SchedulerRunner {
         .bind(attempt)
         .bind(triggered_by)
         .bind(error_message)
+        .bind(trace_id)
         .fetch_one(&self.pool)
         .await?;
         Ok(row.get::<i64, _>("id"))

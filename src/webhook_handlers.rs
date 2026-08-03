@@ -1,10 +1,11 @@
 use axum::{
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{PgPool, Row};
+use std::collections::HashMap;
 
 use crate::auth::Claims;
 use crate::error::{AppError, Result};
@@ -62,6 +63,7 @@ pub struct UpdateWebhook {
     pub is_active: Option<bool>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct WebhookResponse {
     pub id: i32,
@@ -80,9 +82,22 @@ pub struct WebhookResponse {
 /// 超管返回全部；租户 admin 仅返回本租户。
 pub async fn list_webhooks(
     State(pool): State<PgPool>,
+    Query(params): Query<HashMap<String, String>>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<serde_json::Value>> {
-    let rows = if claims.is_superadmin {
+    let tenant_id: Option<i32> = params.get("tenant_id").and_then(|v| v.parse().ok());
+
+    let rows = if let Some(tid) = tenant_id {
+        require_webhook_admin(&pool, &claims, tid).await?;
+        sqlx::query(
+            "SELECT id, tenant_id, name, url, event_pattern, \
+                    COALESCE(headers, '{}') as headers, retry_count, timeout_ms, is_active \
+             FROM management.webhooks WHERE tenant_id = $1 ORDER BY id",
+        )
+        .bind(tid)
+        .fetch_all(&pool)
+        .await?
+    } else if claims.is_superadmin {
         sqlx::query(
             "SELECT id, tenant_id, name, url, event_pattern, \
                     COALESCE(headers, '{}') as headers, retry_count, timeout_ms, is_active \
@@ -105,19 +120,22 @@ pub async fn list_webhooks(
         .await?
     };
 
-    let webhooks: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "id": r.get::<i32, _>("id"),
-            "tenant_id": r.get::<i32, _>("tenant_id"),
-            "name": r.get::<String, _>("name"),
-            "url": r.get::<String, _>("url"),
-            "event_pattern": r.get::<String, _>("event_pattern"),
-            "headers": r.get::<serde_json::Value, _>("headers"),
-            "retry_count": r.get::<i32, _>("retry_count"),
-            "timeout_ms": r.get::<i32, _>("timeout_ms"),
-            "is_active": r.get::<bool, _>("is_active"),
+    let webhooks: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<i32, _>("id"),
+                "tenant_id": r.get::<i32, _>("tenant_id"),
+                "name": r.get::<String, _>("name"),
+                "url": r.get::<String, _>("url"),
+                "event_pattern": r.get::<String, _>("event_pattern"),
+                "headers": r.get::<serde_json::Value, _>("headers"),
+                "retry_count": r.get::<i32, _>("retry_count"),
+                "timeout_ms": r.get::<i32, _>("timeout_ms"),
+                "is_active": r.get::<bool, _>("is_active"),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({ "data": webhooks })))
 }
@@ -146,7 +164,17 @@ pub async fn create_webhook(
     .await?;
 
     let id: i32 = row.get("id");
-    Ok(Json(json!({ "data": { "id": id }, "message": "Webhook 创建成功" })))
+    tracing::info!(
+        target: "webhook",
+        webhook_id = id,
+        tenant_id = ?body.tenant_id,
+        operator = claims.sub,
+        event_pattern = %body.event_pattern,
+        "创建 Webhook"
+    );
+    Ok(Json(
+        json!({ "data": { "id": id }, "message": "Webhook 创建成功" }),
+    ))
 }
 
 /// PATCH /api/admin/webhooks/:id
@@ -167,7 +195,7 @@ pub async fn update_webhook(
             retry_count = COALESCE($7, retry_count), \
             timeout_ms = COALESCE($8, timeout_ms), \
             is_active = COALESCE($9, is_active) \
-         WHERE id = $1"
+         WHERE id = $1",
     )
     .bind(id)
     .bind(&body.name)
@@ -185,6 +213,12 @@ pub async fn update_webhook(
         return Err(AppError::NotFound(format!("Webhook {} 不存在", id)));
     }
 
+    tracing::info!(
+        target: "webhook",
+        webhook_id = id,
+        operator = claims.sub,
+        "更新 Webhook"
+    );
     Ok(Json(json!({ "message": "更新成功" })))
 }
 
@@ -204,6 +238,12 @@ pub async fn delete_webhook(
         return Err(AppError::NotFound(format!("Webhook {} 不存在", id)));
     }
 
+    tracing::info!(
+        target: "webhook",
+        webhook_id = id,
+        operator = claims.sub,
+        "删除 Webhook"
+    );
     Ok(Json(json!({ "message": "删除成功" })))
 }
 
@@ -233,7 +273,7 @@ pub async fn test_webhook(
         "event": "TEST",
         "schema": "test",
         "table": "test",
-        "data": { "message": format!("{} Webhook 测试", crate::brand::NAME) },
+        "data": { "message": "OneBase Webhook 测试" },
         "timestamp": chrono::Utc::now().to_rfc3339(),
     });
 
@@ -249,14 +289,30 @@ pub async fn test_webhook(
     match req.send().await {
         Ok(resp) => {
             let status = resp.status().as_u16();
+            let success = (200..300).contains(&status);
             let body = resp.text().await.unwrap_or_default();
+            tracing::info!(
+                target: "webhook",
+                webhook_id = id,
+                operator = claims.sub,
+                status = status,
+                success = success,
+                "Webhook 测试调用完成"
+            );
             Ok(Json(json!({
-                "success": (200..300).contains(&status),
+                "success": success,
                 "status": status,
                 "body": body.chars().take(500).collect::<String>(),
             })))
         }
         Err(e) => {
+            tracing::warn!(
+                target: "webhook",
+                webhook_id = id,
+                operator = claims.sub,
+                err = %e,
+                "Webhook 测试调用失败（网络层）"
+            );
             Ok(Json(json!({
                 "success": false,
                 "error": e.to_string(),
@@ -274,23 +330,26 @@ pub async fn webhook_logs(
     require_admin_for_existing_webhook(&pool, &claims, id).await?;
     let rows = sqlx::query(
         "SELECT id, response_status, attempt, success, error_message, duration_ms, created_at \
-         FROM management.webhook_logs WHERE webhook_id = $1 ORDER BY created_at DESC LIMIT 50"
+         FROM management.webhook_logs WHERE webhook_id = $1 ORDER BY created_at DESC LIMIT 50",
     )
     .bind(id)
     .fetch_all(&pool)
     .await?;
 
-    let logs: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "id": r.get::<i64, _>("id"),
-            "response_status": r.get::<Option<i32>, _>("response_status"),
-            "attempt": r.get::<i32, _>("attempt"),
-            "success": r.get::<bool, _>("success"),
-            "error_message": r.get::<Option<String>, _>("error_message"),
-            "duration_ms": r.get::<i32, _>("duration_ms"),
-            "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
+    let logs: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<i64, _>("id"),
+                "response_status": r.get::<Option<i32>, _>("response_status"),
+                "attempt": r.get::<i32, _>("attempt"),
+                "success": r.get::<bool, _>("success"),
+                "error_message": r.get::<Option<String>, _>("error_message"),
+                "duration_ms": r.get::<i32, _>("duration_ms"),
+                "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({ "data": logs })))
 }

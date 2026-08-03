@@ -37,7 +37,10 @@ fn load_key() -> [u8; 32] {
         .decode(&raw)
         .expect("ENCRYPTION_KEY 不是合法 base64");
     if key.len() != 32 {
-        panic!("ENCRYPTION_KEY 解码后必须为 32 字节，实际 {} 字节", key.len());
+        panic!(
+            "ENCRYPTION_KEY 解码后必须为 32 字节，实际 {} 字节",
+            key.len()
+        );
     }
     let mut k = [0u8; 32];
     k.copy_from_slice(&key);
@@ -91,13 +94,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
-    let database_url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL 必须设置（或在 .env 中）");
+    let database_url =
+        std::env::var("DATABASE_URL").expect("DATABASE_URL 必须设置（或在 .env 中）");
 
     let key = load_key();
 

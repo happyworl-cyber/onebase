@@ -45,7 +45,10 @@ impl Watchdog {
                 match sqlx::query("SELECT 1").execute(&self.pool).await {
                     Ok(_) => {
                         if consecutive_db_failures > 0 {
-                            tracing::info!("管理库连接恢复正常（之前连续失败 {} 次）", consecutive_db_failures);
+                            tracing::info!(
+                                "管理库连接恢复正常（之前连续失败 {} 次）",
+                                consecutive_db_failures
+                            );
                         }
                         consecutive_db_failures = 0;
                     }
@@ -54,7 +57,8 @@ impl Watchdog {
                         if consecutive_db_failures >= 3 {
                             tracing::error!(
                                 "管理库连续探活失败 {} 次: {}",
-                                consecutive_db_failures, e
+                                consecutive_db_failures,
+                                e
                             );
                         } else {
                             tracing::warn!("管理库探活失败: {}", e);

@@ -106,10 +106,7 @@ impl CircuitBreaker {
             let mut s = self.write_state();
             if *s != CircuitState::Open {
                 *s = CircuitState::Open;
-                tracing::warn!(
-                    "熔断器触发！连续失败 {} 次，进入 Open 状态",
-                    count
-                );
+                tracing::warn!("熔断器触发！连续失败 {} 次，进入 Open 状态", count);
             }
         }
     }

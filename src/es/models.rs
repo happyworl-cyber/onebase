@@ -33,6 +33,7 @@ pub struct EsAccessToken {
     pub name: String,
     pub description: Option<String>,
     /// sha256(plain_token) 的 hex；**永远不出 handler 边界**
+    #[allow(dead_code)]
     #[serde(skip_serializing)]
     pub token_hash: String,
     /// 列表展示用：`cres_es_aB3c…`

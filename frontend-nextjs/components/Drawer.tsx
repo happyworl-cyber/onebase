@@ -73,7 +73,12 @@ export default function Drawer({
   if (!isVisible) return null
 
   const drawerContent = (
-    <div className="fixed inset-0 z-[9999]" style={{ top: 0, left: 0, right: 0, bottom: 0 }}>
+    // right 预留 AI 助手面板宽度（--ai-panel-offset，面板关闭时为 0），
+    // 让抽屉及其遮罩停在面板左侧，避免与右侧 AI 面板叠加冲突。
+    <div
+      className="fixed z-[9999]"
+      style={{ top: 0, left: 0, right: 'var(--ai-panel-offset, 0px)', bottom: 0 }}
+    >
       {/* 遮罩层 */}
       <div
         className={`absolute inset-0 bg-black/50 transition-opacity duration-300 ${

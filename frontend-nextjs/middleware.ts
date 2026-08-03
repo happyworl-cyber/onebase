@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
-import { TOKEN_COOKIE } from '@/lib/brand'
 
 /**
  * 受保护路由前缀：未登录用户访问会被 302 到 /login。
@@ -16,7 +15,9 @@ import { TOKEN_COOKIE } from '@/lib/brand'
  * middleware 的职责仅限"边缘剪枝"，不替代后端鉴权 —— 真正的 token 验签 +
  * 会话有效性（jti 是否被吊销、是否过期）仍由后端 `auth_middleware` 完成。
  */
-const PROTECTED_PREFIXES = ['/dashboard', '/platform'] as const
+const PROTECTED_PREFIXES = ['/dashboard', '/platform', '/workspace'] as const
+
+const TOKEN_COOKIE = 'onebase_token'
 
 function isProtected(pathname: string): boolean {
   return PROTECTED_PREFIXES.some(
@@ -90,9 +91,10 @@ export function middleware(req: NextRequest) {
 }
 
 /**
- * matcher 只匹配受保护的两棵子树，避免 middleware 在静态资源 / API rewrite
- * 路径（/api/*、/auth/*、/rest/* 等）上无谓地多跑一次。
+ * matcher 只匹配受保护的三棵子树（dashboard / platform / workspace），避免
+ * middleware 在静态资源 / API rewrite 路径（/api/*、/auth/*、/rest/* 等）上
+ * 无谓地多跑一次。/workspace 是 W2 引入的新业务前缀。
  */
 export const config = {
-  matcher: ['/dashboard/:path*', '/platform/:path*'],
+  matcher: ['/dashboard/:path*', '/platform/:path*', '/workspace/:path*'],
 }

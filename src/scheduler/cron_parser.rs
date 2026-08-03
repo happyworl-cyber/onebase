@@ -126,7 +126,13 @@ mod tests {
         let after = Utc.with_ymd_and_hms(2026, 5, 14, 0, 0, 0).unwrap();
         let times = preview("0 */6 * * *", "UTC", after, 4).unwrap();
         assert_eq!(times.len(), 4);
-        assert_eq!(times[0], Utc.with_ymd_and_hms(2026, 5, 14, 6, 0, 0).unwrap());
-        assert_eq!(times[3], Utc.with_ymd_and_hms(2026, 5, 15, 0, 0, 0).unwrap());
+        assert_eq!(
+            times[0],
+            Utc.with_ymd_and_hms(2026, 5, 14, 6, 0, 0).unwrap()
+        );
+        assert_eq!(
+            times[3],
+            Utc.with_ymd_and_hms(2026, 5, 15, 0, 0, 0).unwrap()
+        );
     }
 }

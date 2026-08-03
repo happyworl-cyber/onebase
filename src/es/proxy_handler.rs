@@ -14,7 +14,7 @@
 
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri},
     response::Response,
 };
@@ -29,20 +29,32 @@ use reqwest::header::{
 use reqwest::Method as ReqMethod;
 use sqlx::PgPool;
 
+use serde::Deserialize;
+
 use crate::error::AppError;
 use crate::es::admin_handlers::build_auth_header;
 use crate::es::proxy_common;
 
-/// 主入口：`/api/es/*es_path`。`Path` 抽出来的 `es_path` 不含开头 `/`，需要补上。
+/// 路由同时挂在 `/api/es/*es_path` 与 `/api/v1/:database_slug/es/*es_path`。
+/// 后者多一个 `database_slug` 参数；用具名结构体按 key 取 `es_path`，
+/// 多余的 `database_slug` 会被忽略，避免 `Path<String>` 因参数个数不匹配报错。
+#[derive(Debug, Deserialize)]
+pub struct ProxyPath {
+    es_path: String,
+}
+
+/// 主入口：`/api/es/*es_path` 或 `/api/v1/:database_slug/es/*es_path`。
+/// `Path` 抽出来的 `es_path` 不含开头 `/`，需要补上。
 pub async fn proxy(
     State(pool): State<PgPool>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
-    Path(es_path): Path<String>,
+    Path(ProxyPath { es_path }): Path<ProxyPath>,
+    scope: Option<Extension<proxy_common::EsTenantScope>>,
     body: axum::body::Bytes,
 ) -> Result<Response, AppError> {
-    let token = proxy_common::resolve_token(&pool, &headers).await?;
+    let token = proxy_common::resolve_token_for_request(&pool, &headers, scope).await?;
 
     let path_normalized = if es_path.starts_with('/') {
         es_path.clone()
@@ -224,7 +236,10 @@ mod tests {
     #[test]
     fn response_header_blacklist() {
         let mut h = ReqHeaderMap::new();
-        h.insert("content-type", ReqHeaderValue::from_static("application/json"));
+        h.insert(
+            "content-type",
+            ReqHeaderValue::from_static("application/json"),
+        );
         h.insert("transfer-encoding", ReqHeaderValue::from_static("chunked"));
         h.insert("content-length", ReqHeaderValue::from_static("12345"));
         let out = filter_response_headers(&h);

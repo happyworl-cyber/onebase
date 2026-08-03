@@ -1,10 +1,14 @@
 import type { Metadata } from 'next'
 import './globals.css'
-import { BRAND } from '@/lib/brand'
+import AiAssistantPanel from '@/components/AiAssistantPanel'
+import { AI_ASSISTANT_ENABLED } from '@/lib/embedBridge'
 
 export const metadata: Metadata = {
-  title: `${BRAND} - PostgreSQL 管理平台`,
+  title: 'OneBase - PostgreSQL 管理平台',
   description: 'Enterprise Database Management Platform',
+  icons: {
+    icon: '/icon.svg',
+  },
 }
 
 export default function RootLayout({
@@ -20,7 +24,10 @@ export default function RootLayout({
           href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
         />
       </head>
-      <body className="bg-gray-50 antialiased font-sans">{children}</body>
+      <body className="bg-gray-50 antialiased font-sans">
+        {children}
+        {AI_ASSISTANT_ENABLED && <AiAssistantPanel />}
+      </body>
     </html>
   )
 }

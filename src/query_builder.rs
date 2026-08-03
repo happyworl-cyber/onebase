@@ -1,8 +1,12 @@
 use crate::error::{AppError, Result};
+use dashmap::DashMap;
+use once_cell::sync::Lazy;
 use serde_json::Value;
 use sqlx::postgres::PgArguments;
 use sqlx::{Arguments, PgPool, Row};
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// 一个白名单：能"安全"作为 `$N::TYPE` cast 目标的 PostgreSQL `udt_name`。
 ///
@@ -11,27 +15,62 @@ use std::collections::HashMap;
 /// 之所以白名单，是因为像 `_int4`（数组的内部名）这种东西生成 `$1::_int4` 会出错。
 pub fn safe_cast_target(udt_name: &str) -> Option<&str> {
     match udt_name {
-        "int2" | "int4" | "int8"
-        | "float4" | "float8" | "numeric"
-        | "bool"
-        | "text" | "varchar" | "bpchar"
-        | "uuid"
-        | "date" | "time" | "timetz" | "timestamp" | "timestamptz"
-        | "json" | "jsonb"
-        | "bytea" => Some(udt_name),
+        "int2" | "int4" | "int8" | "float4" | "float8" | "numeric" | "bool" | "text"
+        | "varchar" | "bpchar" | "uuid" | "date" | "time" | "timetz" | "timestamp"
+        | "timestamptz" | "json" | "jsonb" | "bytea" => Some(udt_name),
         _ => None,
     }
+}
+
+type ColumnTypeCacheKey = (i32, String, String);
+
+struct ColumnTypeCacheEntry {
+    types: Arc<HashMap<String, String>>,
+    fetched_at: Instant,
+}
+
+static COLUMN_TYPE_CACHE: Lazy<DashMap<ColumnTypeCacheKey, ColumnTypeCacheEntry>> =
+    Lazy::new(DashMap::new);
+
+fn column_type_cache_ttl() -> Duration {
+    let secs = std::env::var("COLUMN_TYPE_CACHE_TTL_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(300)
+        .max(1);
+    Duration::from_secs(secs)
+}
+
+fn column_type_cache_key(database_id: i32, schema: &str, table: &str) -> ColumnTypeCacheKey {
+    (database_id, schema.to_string(), table.to_string())
+}
+
+/// DDL 成功后失效一张表的列类型缓存（多 pod 各清本地；跨 pod 靠 TTL 兜底）。
+pub fn invalidate_column_types(database_id: i32, schema: &str, table: &str) {
+    COLUMN_TYPE_CACHE.remove(&column_type_cache_key(database_id, schema, table));
 }
 
 /// 拉取一张表的「列名 → udt_name」映射，用来给占位符决定 cast 目标。
 ///
 /// 这是修复 `column "x" is of type bigint but expression is of type text` 的关键：
 /// 对每个占位符显式 cast 成列的真实类型，PG 才会调用对应类型的 input 函数。
+///
+/// 结果按 `(database_id, schema, table)` 进程内缓存，避免带 filter 的 list 每次
+/// 都打 `information_schema`（跨公网时约 2 RTT）。
 pub async fn fetch_column_types(
     pool: &PgPool,
+    database_id: i32,
     schema: &str,
     table: &str,
 ) -> Result<HashMap<String, String>> {
+    let key = column_type_cache_key(database_id, schema, table);
+    let ttl = column_type_cache_ttl();
+    if let Some(entry) = COLUMN_TYPE_CACHE.get(&key) {
+        if entry.fetched_at.elapsed() < ttl {
+            return Ok(entry.types.as_ref().clone());
+        }
+    }
+
     let rows = sqlx::query(
         r#"
         SELECT column_name, udt_name
@@ -44,7 +83,7 @@ pub async fn fetch_column_types(
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
+    let types: HashMap<String, String> = rows
         .into_iter()
         .map(|r| {
             (
@@ -52,7 +91,17 @@ pub async fn fetch_column_types(
                 r.get::<String, _>("udt_name"),
             )
         })
-        .collect())
+        .collect();
+
+    COLUMN_TYPE_CACHE.insert(
+        key,
+        ColumnTypeCacheEntry {
+            types: Arc::new(types.clone()),
+            fetched_at: Instant::now(),
+        },
+    );
+
+    Ok(types)
 }
 
 /// 按 cast 目标把 `serde_json::Value` 绑定到 `PgArguments`。
@@ -135,16 +184,16 @@ pub struct Filter {
 /// 过滤操作符
 #[derive(Debug, Clone)]
 pub enum FilterOperator {
-    Eq,          // 等于 (=)
-    Neq,         // 不等于 (!=)
-    Gt,          // 大于 (>)
-    Gte,         // 大于等于 (>=)
-    Lt,          // 小于 (<)
-    Lte,         // 小于等于 (<=)
-    Like,        // 模糊匹配 (LIKE)
-    Ilike,       // 不区分大小写模糊匹配 (ILIKE)
-    In,          // IN 查询
-    Is,          // IS (用于 NULL)
+    Eq,    // 等于 (=)
+    Neq,   // 不等于 (!=)
+    Gt,    // 大于 (>)
+    Gte,   // 大于等于 (>=)
+    Lt,    // 小于 (<)
+    Lte,   // 小于等于 (<=)
+    Like,  // 模糊匹配 (LIKE)
+    Ilike, // 不区分大小写模糊匹配 (ILIKE)
+    In,    // IN 查询
+    Is,    // IS (用于 NULL)
 }
 
 /// 排序方向
@@ -169,11 +218,10 @@ impl QueryParams {
                     );
                 }
                 "offset" => {
-                    params.offset = Some(
-                        value
-                            .parse()
-                            .map_err(|_| AppError::InvalidQuery("offset 必须是数字".to_string()))?,
-                    );
+                    params.offset =
+                        Some(value.parse().map_err(|_| {
+                            AppError::InvalidQuery("offset 必须是数字".to_string())
+                        })?);
                 }
                 "order" => {
                     params.order_by = Self::parse_order(value)?;
@@ -276,10 +324,7 @@ impl QueryParams {
             return Err(AppError::InvalidQuery("标识符不能为空".to_string()));
         }
 
-        if !ident
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_')
-        {
+        if !ident.chars().all(|c| c.is_alphanumeric() || c == '_') {
             return Err(AppError::InvalidQuery(format!(
                 "无效的标识符: {}. 只允许字母、数字和下划线",
                 ident
@@ -287,9 +332,7 @@ impl QueryParams {
         }
 
         if ident.starts_with(|c: char| c.is_ascii_digit()) {
-            return Err(AppError::InvalidQuery(
-                "标识符不能以数字开头".to_string(),
-            ));
+            return Err(AppError::InvalidQuery("标识符不能以数字开头".to_string()));
         }
 
         Ok(ident.to_string())
@@ -372,8 +415,15 @@ impl SqlBuilder {
                     // 把 query string 里的字符串值按列类型 cast 绑定。
                     // 对于 LIKE / ILIKE 这种文本比较运算符，强行 cast 到 int8 反而会出错；
                     // 因此这两个操作符一律按 text 处理（不带 cast，让 PG 自然推断）。
-                    let textual = matches!(filter.operator, FilterOperator::Like | FilterOperator::Ilike);
-                    let cast = if textual { None } else { self.cast_target(&filter.column) };
+                    let textual = matches!(
+                        filter.operator,
+                        FilterOperator::Like | FilterOperator::Ilike
+                    );
+                    let cast = if textual {
+                        None
+                    } else {
+                        self.cast_target(&filter.column)
+                    };
                     let placeholder = match cast {
                         Some(t) => format!("${}::{}", arg_index, t),
                         None => format!("${}", arg_index),
@@ -537,7 +587,11 @@ impl SqlBuilder {
         let mut set_clauses = Vec::new();
         for (key, value) in obj.iter() {
             QueryParams::sanitize_identifier(key)?;
-            set_clauses.push(format!("\"{}\" = {}", key, self.placeholder(arg_index, key)));
+            set_clauses.push(format!(
+                "\"{}\" = {}",
+                key,
+                self.placeholder(arg_index, key)
+            ));
             add_value_for_cast(&mut args, value, self.cast_target(key));
             arg_index += 1;
         }
@@ -622,3 +676,30 @@ impl SqlBuilder {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn column_type_cache_invalidate_removes_entry() {
+        let key = column_type_cache_key(42, "public", "t_cache");
+        COLUMN_TYPE_CACHE.insert(
+            key.clone(),
+            ColumnTypeCacheEntry {
+                types: Arc::new(HashMap::from([("id".into(), "int8".into())])),
+                fetched_at: Instant::now(),
+            },
+        );
+        assert!(COLUMN_TYPE_CACHE.contains_key(&key));
+        invalidate_column_types(42, "public", "t_cache");
+        assert!(!COLUMN_TYPE_CACHE.contains_key(&key));
+    }
+
+    #[test]
+    fn column_type_cache_key_isolates_databases() {
+        assert_ne!(
+            column_type_cache_key(1, "public", "t"),
+            column_type_cache_key(2, "public", "t")
+        );
+    }
+}
