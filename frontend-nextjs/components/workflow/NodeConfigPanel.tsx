@@ -112,7 +112,11 @@ export default function NodeConfigPanel({ node, workflowSlug, onChange, onClose,
   // （不选即默认库），不阻塞编辑。
   const params = useParams<{ projectId?: string }>()
   const [datasources, setDatasources] = useState<WfDatasource[]>([])
-  const isDbNode = node?.type === 'db_query' || node?.type === 'db_execute'
+  const isDbNode =
+    node?.type === 'db_query' ||
+    node?.type === 'db_execute' ||
+    node?.type === 'db_transaction' ||
+    node?.type === 'foreach'
   useEffect(() => {
     const pid = Number(params?.projectId)
     if (!isDbNode || !Number.isFinite(pid)) return
@@ -398,7 +402,10 @@ export default function NodeConfigPanel({ node, workflowSlug, onChange, onClose,
           )
         })()}
 
-        {(node.type === 'db_query' || node.type === 'db_execute') && (
+        {(node.type === 'db_query' ||
+          node.type === 'db_execute' ||
+          node.type === 'db_transaction' ||
+          node.type === 'foreach') && (
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">
               数据源
@@ -532,6 +539,46 @@ export default function NodeConfigPanel({ node, workflowSlug, onChange, onClose,
                 placeholder='["{{trigger.message}}"]'
               />
             </div>
+          </>
+        )}
+
+        {node.type === 'db_transaction' && (
+          <>
+            <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-2.5 text-xs text-emerald-700 leading-5">
+              <strong>数据库事务</strong>：下列语句在<strong>同一个事务</strong>内按顺序执行，全部成功才提交，任一失败整体回滚。仅支持 PostgreSQL。
+            </div>
+            <StatementsEditor node={node} updateConfig={updateConfig} />
+          </>
+        )}
+
+        {node.type === 'foreach' && (
+          <>
+            <div className="rounded-lg bg-green-50 border border-green-100 p-2.5 text-xs text-green-700 leading-5">
+              <strong>批量遍历</strong>：遍历数组每个元素，<strong>每个元素在独立事务</strong>内执行下列语句；语句中用 <code className="font-mono">{'{{'}{node.config.item_var || 'item'}.字段{'}}'}</code> 引用当前元素。仅支持 PostgreSQL。
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">遍历数组来源 *</label>
+              <input
+                value={node.config.items || ''}
+                onChange={e => updateConfig('items', e.target.value)}
+                className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
+                placeholder="q.rows"
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                上游数据路径，<strong>不含花括号</strong>（如 <code className="font-mono">q.rows</code>）；必须解析为数组。
+              </p>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">元素变量名 item_var</label>
+              <input
+                value={node.config.item_var ?? ''}
+                onChange={e => updateConfig('item_var', e.target.value)}
+                className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
+                placeholder="item"
+              />
+              <p className="text-xs text-gray-400 mt-1">留空默认 <code className="font-mono">item</code>，语句内以 <code className="font-mono">{'{{'}变量名.字段{'}}'}</code> 引用当前元素。</p>
+            </div>
+            <StatementsEditor node={node} updateConfig={updateConfig} />
           </>
         )}
 
@@ -1350,6 +1397,117 @@ export default function NodeConfigPanel({ node, workflowSlug, onChange, onClose,
           完成
         </button>
       </div>
+    </div>
+  )
+}
+
+// ── db_transaction / foreach 的 SQL 语句列表编辑 ────────────────────────
+//
+// statements 每条 = { sql, params }。后端按 params 为 JSON「数组」读取（as_array），
+// 存成字符串会被静默丢弃，所以这里提交的 params 一定是字符串数组。
+// 编辑期用本地草稿保留原始多行文本（含空行），提交前才 split→trim→去空行，
+// 既能顺畅换行加参数，又不会把空参数写进 config（多绑一个 $N 会让 SQL 报错）。
+
+interface StatementDraft {
+  sql: string
+  paramsText: string
+}
+
+function statementToDraft(stmt: any): StatementDraft {
+  return {
+    sql: typeof stmt?.sql === 'string' ? stmt.sql : '',
+    paramsText: Array.isArray(stmt?.params)
+      ? stmt.params.map((x: unknown) => (typeof x === 'string' ? x : JSON.stringify(x))).join('\n')
+      : typeof stmt?.params === 'string'
+        ? stmt.params
+        : '',
+  }
+}
+
+function StatementsEditor({
+  node,
+  updateConfig,
+}: {
+  node: WorkflowNodeData
+  updateConfig: (key: string, value: any) => void
+}) {
+  const buildInitial = (): StatementDraft[] => {
+    const arr = Array.isArray(node.config.statements) ? node.config.statements : []
+    return arr.length ? arr.map(statementToDraft) : [{ sql: '', paramsText: '' }]
+  }
+  const [drafts, setDrafts] = useState<StatementDraft[]>(buildInitial)
+
+  // 切换到别的节点时按新节点的 config 重建草稿
+  useEffect(() => {
+    setDrafts(buildInitial())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [node.id])
+
+  const commit = (next: StatementDraft[]) => {
+    setDrafts(next)
+    const statements = next.map((d) => ({
+      sql: d.sql,
+      params: d.paramsText
+        .split('\n')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    }))
+    updateConfig('statements', statements)
+  }
+
+  const updateDraft = (idx: number, key: keyof StatementDraft, value: string) => {
+    commit(drafts.map((d, i) => (i === idx ? { ...d, [key]: value } : d)))
+  }
+  const addStmt = () => commit([...drafts, { sql: '', paramsText: '' }])
+  const removeStmt = (idx: number) => commit(drafts.filter((_, i) => i !== idx))
+
+  return (
+    <div className="space-y-3">
+      <label className="block text-xs font-medium text-gray-500">SQL 语句（按顺序执行）</label>
+      {drafts.map((d, idx) => (
+        <div key={idx} className="rounded-lg border border-gray-200 p-2.5 space-y-2 bg-gray-50/40">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">语句 {idx + 1}</span>
+            <button
+              onClick={() => removeStmt(idx)}
+              disabled={drafts.length <= 1}
+              className="w-6 h-6 rounded-md text-gray-400 hover:bg-red-50 hover:text-red-500 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 text-base leading-none flex items-center justify-center shrink-0"
+              title={drafts.length <= 1 ? '至少保留一条语句' : '删除该语句'}
+            >
+              &times;
+            </button>
+          </div>
+          <textarea
+            value={d.sql}
+            onChange={(e) => updateDraft(idx, 'sql', e.target.value)}
+            className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
+            rows={4}
+            placeholder="UPDATE t SET x=$1 WHERE id=($2)::int"
+          />
+          <div>
+            <label className="block text-[11px] font-medium text-gray-500 mb-1">参数（每行一个，依次对应 $1、$2…）</label>
+            <textarea
+              value={d.paramsText}
+              onChange={(e) => updateDraft(idx, 'paramsText', e.target.value)}
+              className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
+              rows={Math.max(2, d.paramsText.split('\n').length)}
+              placeholder={'{{trigger.id}}\n{{trigger.hide_status}}'}
+            />
+            <p className="text-[11px] text-gray-400 mt-1">
+              支持模板 <code className="font-mono">{'{{trigger.x}}'}</code>、<code className="font-mono">{'{{nodeId.field}}'}</code>；空行忽略。
+            </p>
+          </div>
+        </div>
+      ))}
+      <button
+        onClick={addStmt}
+        className="w-full px-3 py-1.5 text-xs font-medium text-emerald-600 border border-dashed border-emerald-300 rounded-lg hover:bg-emerald-50"
+      >
+        + 添加 SQL 语句
+      </button>
+      <p className="text-xs text-gray-400">
+        禁止 DROP / TRUNCATE。SQL 里也可直接写 <code className="font-mono">{'{{...}}'}</code> 模板（会自动参数化防注入）。
+      </p>
     </div>
   )
 }

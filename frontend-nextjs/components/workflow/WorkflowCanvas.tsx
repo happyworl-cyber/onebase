@@ -87,7 +87,7 @@ function isReachableByNormalEdges(
 
 /** 添加节点面板分组（控制流 / 数据操作 / 集成 / 输出），loop 归控制流并与 condition 并列 */
 const NODE_PALETTE_GROUPS: { label: string; types: string[] }[] = [
-  { label: '数据操作', types: ['db_query', 'db_execute', 'transform', 'code'] },
+  { label: '数据操作', types: ['db_query', 'db_execute', 'db_transaction', 'foreach', 'transform', 'code'] },
   { label: '控制流', types: ['condition', 'loop'] },
   { label: '集成', types: ['http_call', 'email_send', 'sse_publish', 'call_workflow', 'redis', 'kafka'] },
   { label: '输出', types: ['response'] },
@@ -682,6 +682,8 @@ function getDefaultConfig(type: string): Record<string, unknown> {
     case 'code': return { code: 'function execute(ctx)\n  ctx.body = { ok = true }\nend' }
     case 'db_query': return { sql: '', params: '' }
     case 'db_execute': return { sql: '', params: '' }
+    case 'db_transaction': return { statements: [{ sql: '', params: [] }] }
+    case 'foreach': return { items: '', item_var: 'item', statements: [{ sql: '', params: [] }] }
     case 'http_call': return { method: 'GET', url: '', headers: '', body: '' }
     case 'email_send': return { from: '', to: '', cc: '', bcc: '', subject: '', text_body: '', html_body: '', smtp_host: '', smtp_port: 587, smtp_username: '', smtp_password: '', smtp_starttls: true }
     case 'condition': return { expression: '' }

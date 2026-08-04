@@ -8,6 +8,8 @@ export const NODE_TYPE_META: Record<string, { label: string; icon: string; color
   code: { label: '代码', icon: '{ }', color: 'bg-violet-50', borderColor: 'border-violet-300', accent: 'bg-violet-300', minimapColor: '#c4b5fd' },
   db_query: { label: '数据库查询', icon: '🔍', color: 'bg-blue-50', borderColor: 'border-blue-300', accent: 'bg-blue-300', minimapColor: '#93c5fd' },
   db_execute: { label: '数据库写入', icon: '💾', color: 'bg-emerald-50', borderColor: 'border-emerald-300', accent: 'bg-emerald-300', minimapColor: '#86efac' },
+  db_transaction: { label: '数据库事务', icon: '🧾', color: 'bg-emerald-50', borderColor: 'border-emerald-400', accent: 'bg-emerald-500', minimapColor: '#10b981' },
+  foreach: { label: '批量遍历', icon: '🔁', color: 'bg-green-50', borderColor: 'border-green-300', accent: 'bg-green-400', minimapColor: '#4ade80' },
   http_call: { label: 'HTTP 调用', icon: '🌐', color: 'bg-orange-50', borderColor: 'border-orange-300', accent: 'bg-orange-300', minimapColor: '#fdba74' },
   email_send: { label: '发送邮件', icon: '✉️', color: 'bg-sky-50', borderColor: 'border-sky-300', accent: 'bg-sky-300', minimapColor: '#7dd3fc' },
   condition: { label: '条件分支', icon: '⑊', color: 'bg-amber-50', borderColor: 'border-amber-300', accent: 'bg-amber-300', minimapColor: '#fcd34d' },
