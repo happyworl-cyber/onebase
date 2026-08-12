@@ -138,6 +138,14 @@ async fn main() -> anyhow::Result<()> {
     // 启动期 fail-fast：缺少 ENCRYPTION_KEY 直接 panic（与 JWT_SECRET 一致）
     crypto::ensure_initialized();
 
+    // 商用授权（License）加载：读取签名 License 文件并判定状态。
+    // - 默认 enforce=warn：只校验 + 告警，不拦截，兼容既有部署；
+    // - 客户交付镜像设 ONEBASE_LICENSE_ENFORCE=enforce 后，到期/无效将只读降级。
+    // 后台任务周期重载，续期换文件 / 到期迁移无需重启即可生效。
+    let license_state = onebase::license::LicenseState::init_from_env();
+    license_state.log_startup();
+    license_state.spawn_refresh();
+
     let pool = db::create_pool(&config.database_url).await?;
 
     // 启动期自动迁移：发版重启即同步管理库 schema，免去生产环境手动跑 migrate_all。
@@ -261,6 +269,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health_check))
         .route("/health/live", get(health_live))
         .route("/health/ready", get(health_ready))
+        .route("/api/license", get(license_status_handler))
         .route("/api/providers", get(idp_handlers::list_available_providers))
         .route(
             "/.well-known/openid-configuration",
@@ -1415,7 +1424,12 @@ async fn main() -> anyhow::Result<()> {
 
     // 内置 MCP 工作流创作端点：不挂 auth_middleware（那条链路只认 JWT / cr_ API Key），
     // handler 内自行调 pat_handlers::verify_pat 做 PAT 鉴权，详见 mcp_server.rs 模块注释。
-    let mcp_routes = Router::new().route("/mcp", post(mcp_server::mcp_endpoint));
+    // 模块闸门：MCP（智能体接入）属于「AI / MCP」加购模块。
+    let mcp_routes = Router::new()
+        .route("/mcp", post(mcp_server::mcp_endpoint))
+        .layer(axum_middleware::from_fn(|req, next| {
+            onebase::license::require_module(req, next, "ai")
+        }));
 
     // 工作流 Endpoint 触发器路由：GET/POST /workflow/:database_slug/*workflow_slug
     // 走 auth_middleware 认证（JWT 或 API Key），允许外部调用。
@@ -1619,6 +1633,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/admin/es-connections/:id/tokens/:token_id",
             patch(es::admin_handlers::update_token).delete(es::admin_handlers::delete_token),
         )
+        // 模块闸门：ES 属于「数据管道」加购模块。
+        .layer(axum_middleware::from_fn(|req, next| {
+            onebase::license::require_module(req, next, "pipeline")
+        }))
         .layer(axum_middleware::from_fn_with_state(
             pool.clone(),
             middleware::auth_middleware,
@@ -1694,6 +1712,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/kafka-connections/:id/exec",
             post(kafka_handlers::exec),
         )
+        // 模块闸门：Kafka 属于「数据管道」加购模块（enforce 模式下未授权即 402）。
+        .layer(axum_middleware::from_fn(|req, next| {
+            onebase::license::require_module(req, next, "pipeline")
+        }))
         .layer(axum_middleware::from_fn_with_state(
             pool.clone(),
             middleware::auth_middleware,
@@ -1715,7 +1737,11 @@ async fn main() -> anyhow::Result<()> {
                     pool.clone(),
                     es::proxy_common::es_tenant_scope_middleware,
                 )),
-        );
+        )
+        // 模块闸门：Kafka 数据面属于「数据管道」加购模块。
+        .layer(axum_middleware::from_fn(|req, next| {
+            onebase::license::require_module(req, next, "pipeline")
+        }));
 
     // 代理路由：不挂 auth_middleware（token 自鉴权）。注册所有 ES 用的 HTTP 方法。
     // 同时提供旧路径 `/api/es/*` 与项目 slug 路径 `/api/v1/:database_slug/es/*`。
@@ -1739,7 +1765,11 @@ async fn main() -> anyhow::Result<()> {
                     pool.clone(),
                     es::proxy_common::es_tenant_scope_middleware,
                 )),
-        );
+        )
+        // 模块闸门：ES 代理属于「数据管道」加购模块。
+        .layer(axum_middleware::from_fn(|req, next| {
+            onebase::license::require_module(req, next, "pipeline")
+        }));
 
     // ES 高层「应用」API：业务侧无需 ES DSL / SDK，直接发简化 JSON。
     // 复用与 proxy 同一套 `cres_es_xxx` token；handler 自鉴权，同样不走 auth_middleware。
@@ -1779,7 +1809,11 @@ async fn main() -> anyhow::Result<()> {
                     pool.clone(),
                     es::proxy_common::es_tenant_scope_middleware,
                 )),
-        );
+        )
+        // 模块闸门：ES 应用面属于「数据管道」加购模块。
+        .layer(axum_middleware::from_fn(|req, next| {
+            onebase::license::require_module(req, next, "pipeline")
+        }));
 
     // SSE / WebSocket 长连接：不挂全局 TimeoutLayer（默认 30s 会切断流）。
     let streaming_routes = Router::new()
@@ -1896,6 +1930,14 @@ async fn main() -> anyhow::Result<()> {
     // 才读得到）。任何挪动这两行顺序的修改都请保留这条不变式。
     app = app.layer(axum_middleware::from_fn(audit_middleware::audit_middleware));
     app = app.layer(axum::Extension(audit_middleware::AuditPool(pool.clone())));
+
+    // 商用授权强制中间件：enforce 模式下、授权到期/无效时拦截写操作（只读降级）。
+    // 与 audit 同款 layer 顺序不变式：先 .layer(中间件)（内层），再 .layer(Extension)
+    // （外层，请求一进 router 就注入 LicenseState，下游中间件才读得到）。
+    app = app.layer(axum_middleware::from_fn(
+        onebase::license::license_enforcement_middleware,
+    ));
+    app = app.layer(axum::Extension(license_state.clone()));
 
     // 熔断器（使用可配置阈值）
     let cb_config = circuit_breaker::CircuitBreakerConfig {
@@ -2186,6 +2228,17 @@ async fn root_handler() -> Result<Json<Value>, AppError> {
         },
         "documentation": "https://github.com/yourusername/onebase"
     })))
+}
+
+/// GET /api/license - 授权状态摘要（公开只读，供运维 / 客户查看到期与续保状态）
+async fn license_status_handler(
+    state: Option<axum::extract::Extension<onebase::license::LicenseState>>,
+) -> Json<Value> {
+    use serde_json::json;
+    match state {
+        Some(axum::extract::Extension(s)) => Json(s.summary_json()),
+        None => Json(json!({ "status": "unlicensed", "enforcement": "off" })),
+    }
 }
 
 /// SQL 查询执行端点

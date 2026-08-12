@@ -60,3 +60,9 @@ docker-data/
 
 # playwright-mcp 本地测试产物
 .playwright-mcp/
+
+# 授权（License）：私钥只留原厂、签发出的授权文件不入库。
+# 注意：src/license_public.pem 是公钥，需入库（include_str! 编译内嵌），故不在此忽略。
+license_private.pem
+*_private.pem
+*.lic

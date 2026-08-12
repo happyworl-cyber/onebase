@@ -27,6 +27,9 @@ pub mod error;
 /// 统一执行日志（执行索引层 + 保留清理）。被 lib crate 的 `scheduler` 与 bin crate 的
 /// handler 共用，故放在 lib；刻意不依赖 bin-only 的 `request_id` / `logging`。
 pub mod execution_log;
+/// 商用离线 License（授权 / 续保控制）。服务端中间件与 `license_tool` CLI 共用，
+/// 只依赖 rsa / sha2 / serde / chrono / axum，保持 lib-safe。
+pub mod license;
 pub mod lua_builtins;
 pub mod lua_engine;
 pub mod migrate;

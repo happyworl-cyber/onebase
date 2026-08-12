@@ -104,6 +104,10 @@ name = "onebase"
 path = "src/main.rs"
 
 [[bin]]
+name = "license_tool"
+path = "src/bin/license_tool.rs"
+
+[[bin]]
 name = "migrate"
 path = "src/bin/migrate.rs"
 
