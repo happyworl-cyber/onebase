@@ -109,3 +109,11 @@
 
 - 本设计文档。
 - `Dockerfile` 头部注释补充：需要 BuildKit、适用场景（代码变更后的增量加速）。
+
+## 后续修正（2026-08-11）
+
+1. **去掉正式构建的 `cargo clean -p onebase --release`**  
+   每次 clean 会毁掉本包增量；改为直接 `cargo build --release --bin onebase`，依赖仍由 stub 层缓存。若偶发 stub 指纹粘连，再临时加回窄清理。
+
+2. **对象存储不用 aws-sdk-s3**  
+   改用 `rusty-s3` + 现有 `reqwest`，避免 `aws-config` / `aws-lc-sys` 拉高冷依赖编译成本（本地与 Jenkins 在 `Cargo.toml` 变更时均受益）。

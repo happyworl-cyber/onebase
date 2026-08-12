@@ -1,5 +1,5 @@
 use crate::audit_middleware::set_audit_detail;
-use crate::auth::Claims;
+use crate::auth::{validate_email, validate_username, Claims};
 use crate::error::{AppError, Result};
 use crate::permissions;
 use crate::pool_manager::{DatabaseConfig, POOL_MANAGER};
@@ -2316,6 +2316,7 @@ fn member_row_to_json(row: &sqlx::postgres::PgRow) -> serde_json::Value {
         "username":      row.get::<String, _>("username"),
         "email":         row.get::<String, _>("email"),
         "is_superadmin": row.get::<bool, _>("is_superadmin"),
+        "is_active":     row.get::<bool, _>("is_active"),
         "role":          row.get::<String, _>("role"),
         "created_at":    crate::models::naive_to_utc_string(row.get::<chrono::NaiveDateTime, _>("created_at")),
     })
@@ -2334,6 +2335,39 @@ fn validate_tenant_role(role: &str) -> Result<()> {
     }
 }
 
+fn forbid_self(actor: i32, target: i32) -> bool {
+    actor == target
+}
+
+/// 项目 admin 可管理目标用户的前置条件。
+async fn require_manageable_project_member(
+    pool: &PgPool,
+    claims: &Claims,
+    project_id: i32,
+    target_user_id: i32,
+) -> Result<()> {
+    permissions::require_tenant_admin(pool, claims, project_id).await?;
+    if forbid_self(claims.sub, target_user_id) {
+        return Err(AppError::Forbidden(
+            "不能管理自己的账号；请使用「修改密码」或联系其他管理员".to_string(),
+        ));
+    }
+
+    let is_member: bool = sqlx::query_scalar(
+        "SELECT EXISTS(\
+           SELECT 1 FROM management.user_tenants \
+           WHERE tenant_id = $1 AND user_id = $2 AND is_active = true)",
+    )
+    .bind(project_id)
+    .bind(target_user_id)
+    .fetch_one(pool)
+    .await?;
+    if !is_member {
+        return Err(AppError::Forbidden("目标用户不是本项目成员".to_string()));
+    }
+    Ok(())
+}
+
 /// GET /api/projects/:id/members
 ///
 /// 列出指定项目的所有有效成员。鉴权：项目 admin/owner 或平台超管。
@@ -2349,6 +2383,7 @@ pub async fn list_project_members(
     let rows = sqlx::query(
         r#"
         SELECT u.id AS user_id, u.username, u.email, COALESCE(u.is_superadmin, false) AS is_superadmin,
+               COALESCE(u.is_active, true) AS is_active,
                ut.role, ut.created_at
         FROM management.user_tenants ut
         JOIN users u ON u.id = ut.user_id
@@ -2446,6 +2481,7 @@ pub async fn add_project_member(
     let row = sqlx::query(
         r#"
         SELECT u.id AS user_id, u.username, u.email, COALESCE(u.is_superadmin, false) AS is_superadmin,
+               COALESCE(u.is_active, true) AS is_active,
                ut.role, ut.created_at
         FROM management.user_tenants ut
         JOIN users u ON u.id = ut.user_id
@@ -2583,6 +2619,7 @@ pub async fn create_project_member(
     let row = sqlx::query(
         r#"
         SELECT u.id AS user_id, u.username, u.email, COALESCE(u.is_superadmin, false) AS is_superadmin,
+               COALESCE(u.is_active, true) AS is_active,
                ut.role, ut.created_at
         FROM management.user_tenants ut
         JOIN users u ON u.id = ut.user_id
@@ -2686,6 +2723,228 @@ pub async fn search_project_member_candidates(
     Ok(Json(result))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateMemberProfileRequest {
+    pub username: Option<String>,
+    pub email: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResetMemberPasswordRequest {
+    pub new_password: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateMemberStatusRequest {
+    pub is_active: bool,
+}
+
+fn validate_reset_member_password(password: &str) -> Result<()> {
+    crate::auth::validate_password(password)
+}
+
+/// PATCH /api/projects/:id/members/:user_id/status
+///
+/// 项目 admin/owner 或平台超管可停用或恢复项目成员的全局账号。
+/// 停用后吊销目标用户的全部会话。
+pub async fn update_project_member_status(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Path((project_id, target_user_id)): Path<(i32, i32)>,
+    Json(req): Json<UpdateMemberStatusRequest>,
+) -> Result<Json<serde_json::Value>> {
+    require_manageable_project_member(&pool, &claims, project_id, target_user_id).await?;
+
+    let result = sqlx::query("UPDATE users SET is_active = $1 WHERE id = $2")
+        .bind(req.is_active)
+        .bind(target_user_id)
+        .execute(&pool)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound(format!(
+            "用户 {} 不存在",
+            target_user_id
+        )));
+    }
+
+    if !req.is_active {
+        if let Err(error) = permissions::revoke_user_sessions(
+            &pool,
+            target_user_id,
+            "user_deactivated_by_project_admin",
+        )
+        .await
+        {
+            tracing::warn!(
+                user_id = target_user_id,
+                project_id,
+                %error,
+                "failed to revoke sessions after project-admin deactivation"
+            );
+        }
+    }
+
+    tracing::info!(
+        "user {} ({}) set active={} for user {} in project {}",
+        claims.sub,
+        claims.email,
+        req.is_active,
+        target_user_id,
+        project_id
+    );
+
+    Ok(Json(json!({
+        "ok": true,
+        "user_id": target_user_id,
+        "is_active": req.is_active,
+    })))
+}
+
+/// POST /api/projects/:id/members/:user_id/reset-password
+///
+/// 项目 admin/owner 或平台超管可重置项目成员密码。重置后吊销目标用户全部会话，
+/// 但不设置 must_change_password。
+pub async fn reset_project_member_password(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Path((project_id, target_user_id)): Path<(i32, i32)>,
+    Json(req): Json<ResetMemberPasswordRequest>,
+) -> Result<Json<serde_json::Value>> {
+    require_manageable_project_member(&pool, &claims, project_id, target_user_id).await?;
+    validate_reset_member_password(&req.new_password)?;
+
+    let new_hash = crate::auth::hash_password(&req.new_password)?;
+    let result = sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+        .bind(&new_hash)
+        .bind(target_user_id)
+        .execute(&pool)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound(format!(
+            "用户 {} 不存在",
+            target_user_id
+        )));
+    }
+
+    if let Err(error) =
+        permissions::revoke_user_sessions(&pool, target_user_id, "password_reset_by_project_admin")
+            .await
+    {
+        tracing::warn!(
+            user_id = target_user_id,
+            project_id,
+            %error,
+            "failed to revoke sessions after project-admin password reset"
+        );
+    }
+
+    tracing::info!(
+        "user {} ({}) reset password for user {} in project {}",
+        claims.sub,
+        claims.email,
+        target_user_id,
+        project_id
+    );
+
+    Ok(Json(json!({
+        "ok": true,
+        "message": "密码已重置，目标用户需要重新登录",
+    })))
+}
+
+/// PATCH /api/projects/:id/members/:user_id/profile
+///
+/// 项目 admin/owner 或平台超管可修改项目成员的用户名、邮箱。
+pub async fn update_project_member_profile(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Path((project_id, target_user_id)): Path<(i32, i32)>,
+    Json(req): Json<UpdateMemberProfileRequest>,
+) -> Result<Json<serde_json::Value>> {
+    require_manageable_project_member(&pool, &claims, project_id, target_user_id).await?;
+    if req.username.is_none() && req.email.is_none() {
+        return Err(AppError::InvalidQuery(
+            "请求体为空，至少需要 username 或 email".to_string(),
+        ));
+    }
+
+    let (current_username, current_email): (String, String) =
+        sqlx::query_as("SELECT username, email FROM users WHERE id = $1")
+            .bind(target_user_id)
+            .fetch_optional(&pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("用户 {} 不存在", target_user_id)))?;
+
+    let new_username = if let Some(ref username) = req.username {
+        validate_username(username)?;
+        Some(username.trim().to_string())
+    } else {
+        None
+    };
+    let new_email = if let Some(ref email) = req.email {
+        validate_email(email)?;
+        Some(email.trim().to_string())
+    } else {
+        None
+    };
+
+    if let Some(ref username) = new_username {
+        if username != &current_username {
+            let duplicate: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM users WHERE username = $1 AND id <> $2)",
+            )
+            .bind(username)
+            .bind(target_user_id)
+            .fetch_one(&pool)
+            .await?;
+            if duplicate {
+                return Err(AppError::InvalidQuery("用户名已被使用".to_string()));
+            }
+        }
+    }
+    if let Some(ref email) = new_email {
+        if email != &current_email {
+            let duplicate: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM users WHERE email = $1 AND id <> $2)",
+            )
+            .bind(email)
+            .bind(target_user_id)
+            .fetch_one(&pool)
+            .await?;
+            if duplicate {
+                return Err(AppError::InvalidQuery("邮箱已被使用".to_string()));
+            }
+        }
+    }
+
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET username = COALESCE($2, username),
+            email    = COALESCE($3, email)
+        WHERE id = $1
+        "#,
+    )
+    .bind(target_user_id)
+    .bind(new_username.as_deref())
+    .bind(new_email.as_deref())
+    .execute(&pool)
+    .await?;
+
+    let (username, email): (String, String) =
+        sqlx::query_as("SELECT username, email FROM users WHERE id = $1")
+            .bind(target_user_id)
+            .fetch_one(&pool)
+            .await?;
+
+    Ok(Json(json!({
+        "ok": true,
+        "user_id": target_user_id,
+        "username": username,
+        "email": email,
+    })))
+}
+
 /// PATCH /api/projects/:id/members/:user_id
 ///
 /// 改某成员的项目角色。鉴权：项目 admin/owner 或平台超管。
@@ -2767,6 +3026,7 @@ pub async fn update_project_member(
     let row = sqlx::query(
         r#"
         SELECT u.id AS user_id, u.username, u.email, COALESCE(u.is_superadmin, false) AS is_superadmin,
+               COALESCE(u.is_active, true) AS is_active,
                ut.role, ut.created_at
         FROM management.user_tenants ut
         JOIN users u ON u.id = ut.user_id
@@ -3920,6 +4180,23 @@ pub async fn public_rest_api_doc(
         // 走网关时接口文档隐藏 API Key 鉴权头（网关统一鉴权）。
         "gateway_mode": crate::public_base_settings::is_gateway_mode(&pool, tenant_id).await,
     })))
+}
+
+#[cfg(test)]
+mod member_admin_tests {
+    use super::*;
+
+    #[test]
+    fn forbid_self_when_same_id() {
+        assert!(forbid_self(3, 3));
+        assert!(!forbid_self(3, 4));
+    }
+
+    #[test]
+    fn reset_member_password_requires_strong_password() {
+        assert!(validate_reset_member_password("short").is_err());
+        assert!(validate_reset_member_password("NewPass12").is_ok());
+    }
 }
 
 #[cfg(test)]

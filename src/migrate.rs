@@ -297,6 +297,19 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "056 operation logs",
         include_str!("../migrations/056_operation_logs.sql"),
     ),
+    (
+        "057 object storage connections",
+        include_str!("../migrations/057_object_storage_connections.sql"),
+    ),
+    (
+        "058 object storage access tokens",
+        include_str!("../migrations/058_object_storage_access_tokens.sql"),
+    ),
+    (
+        // 与 feature/optimize 并行时曾占用 057；合并 develop 后改挂 059，避免与对象存储冲突。
+        "059 users is_active",
+        include_str!("../migrations/059_users_is_active.sql"),
+    ),
 ];
 
 /// API Keys 表（内联 SQL，历史上由独立的 migrate_api_keys 维护，这里随主序列一起跑）。

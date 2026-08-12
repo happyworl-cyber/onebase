@@ -459,7 +459,7 @@ export default function WorkflowDocContent({
           <ul className="list-disc pl-5 space-y-0.5">
             <li><strong>code</strong> Lua / JavaScript / Python 脚本 · <strong>db_query</strong> 只读 SQL · <strong>db_execute</strong> 写库</li>
             <li><strong>http_call</strong> 调外部接口 · <strong>email_send</strong> 发邮件 · <strong>sse_publish</strong> 推送</li>
-            <li><strong>redis</strong> Redis 读写 · <strong>kafka</strong> 生产消息 · <strong>call_workflow</strong> 调子工作流</li>
+            <li><strong>redis</strong> Redis 读写 · <strong>kafka</strong> 生产消息 · <strong>object_storage</strong> 对象存储 · <strong>call_workflow</strong> 调子工作流</li>
             <li><strong>condition</strong> 条件分支 · <strong>loop</strong> 循环 · <strong>transform</strong> 拼装 · <strong>response</strong> HTTP 返回体</li>
           </ul>
         </div>

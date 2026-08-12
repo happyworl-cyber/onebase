@@ -318,7 +318,8 @@ async fn finish_sso_login(
     .await?;
 
     let user_row = sqlx::query(
-        "SELECT username, email, role, COALESCE(is_superadmin, false) AS is_superadmin, created_at \
+        "SELECT username, email, role, COALESCE(is_superadmin, false) AS is_superadmin, \
+                COALESCE(is_active, true) AS is_active, created_at \
          FROM users WHERE id = $1",
     )
     .bind(user_id)
@@ -329,7 +330,10 @@ async fn finish_sso_login(
     let user_email: String = user_row.get("email");
     let user_role: String = user_row.get("role");
     let user_is_superadmin: bool = user_row.get("is_superadmin");
+    let user_is_active: bool = user_row.get("is_active");
     let user_created_at: chrono::NaiveDateTime = user_row.get("created_at");
+
+    crate::auth_handlers::require_active_user(user_is_active)?;
 
     let user_json = json!({
         "id": user_id,
@@ -884,5 +888,23 @@ mod tests {
             .decode(&encoded)
             .unwrap();
         assert_eq!(String::from_utf8(decoded).unwrap(), secret);
+    }
+
+    #[test]
+    fn sso_login_requires_active_user_before_token_generation() {
+        let source = include_str!("sso_handlers.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        let active_check = source
+            .find("auth_handlers::require_active_user(user_is_active)?;")
+            .expect("SSO login must reject inactive users");
+        let token_generation = source
+            .find("auth::generate_token(user_id")
+            .expect("SSO login token generation missing");
+        assert!(
+            active_check < token_generation,
+            "SSO active-user check must happen before token generation"
+        );
     }
 }

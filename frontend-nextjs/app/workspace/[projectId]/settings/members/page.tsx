@@ -25,6 +25,7 @@ import { useAppStore } from '@/lib/store'
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import { useNotification } from '@/hooks/useNotification'
 import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
+import Drawer from '@/components/Drawer'
 
 const ROLE_OPTIONS = ['owner', 'admin', 'member', 'viewer'] as const
 type RoleOption = typeof ROLE_OPTIONS[number]
@@ -35,6 +36,9 @@ const ROLE_BADGE: Record<string, string> = {
   member: 'bg-green-100 text-green-800',
   viewer: 'bg-gray-200 text-gray-700',
 }
+
+const isStrongPassword = (p: string) =>
+  p.length >= 8 && /[A-Z]/.test(p) && /[a-z]/.test(p) && /\d/.test(p)
 
 /** 添加成员对话框里的 4 张角色卡——名称 / 一句话职责。 */
 const ROLE_CARDS: Array<{ value: RoleOption; title: string; desc: string }> = [
@@ -70,7 +74,15 @@ export default function ProjectMembersPage() {
   // debounce 搜索：300ms 内连续敲键不发请求
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const load = async () => {
+  // 成员账号管理抽屉
+  const [manageTarget, setManageTarget] = useState<ProjectMember | null>(null)
+  const [profileForm, setProfileForm] = useState({ username: '', email: '' })
+  const [pwdForm, setPwdForm] = useState({ p1: '', p2: '' })
+  const [savingProfile, setSavingProfile] = useState(false)
+  const [resettingPwd, setResettingPwd] = useState(false)
+  const [togglingActive, setTogglingActive] = useState(false)
+
+  const loadMembers = async () => {
     setLoading(true)
     try {
       const res = await projectMembersAPI.list(projectId)
@@ -84,7 +96,7 @@ export default function ProjectMembersPage() {
   }
 
   useEffect(() => {
-    if (Number.isFinite(projectId) && caps.canManageMembers) load()
+    if (Number.isFinite(projectId) && caps.canManageMembers) loadMembers()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, caps.canManageMembers])
 
@@ -109,7 +121,7 @@ export default function ProjectMembersPage() {
     } catch (err: any) {
       notify.error(err)
       // 回滚 UI——重新拉一次最简单
-      await load()
+      await loadMembers()
     } finally {
       setRowSaving((s) => ({ ...s, [m.user_id]: false }))
     }
@@ -131,6 +143,94 @@ export default function ProjectMembersPage() {
       notify.error(err)
     } finally {
       setRowSaving((s) => ({ ...s, [m.user_id]: false }))
+    }
+  }
+
+  const openManage = (m: ProjectMember) => {
+    setManageTarget(m)
+    setProfileForm({ username: m.username, email: m.email })
+    setPwdForm({ p1: '', p2: '' })
+  }
+
+  const handleSaveProfile = async () => {
+    if (!manageTarget) return
+    const targetUserId = manageTarget.user_id
+    const username = profileForm.username.trim()
+    const email = profileForm.email.trim()
+    if (!username) return notify.warning('用户名不能为空')
+    if (!email || !email.includes('@')) return notify.warning('请输入合法邮箱')
+
+    setSavingProfile(true)
+    try {
+      const res = await projectMembersAPI.updateProfile(
+        projectId,
+        targetUserId,
+        { username, email },
+      )
+      setManageTarget((prev) => {
+        if (prev?.user_id !== targetUserId) return prev
+        setProfileForm({ username: res.data.username, email: res.data.email })
+        return { ...prev, username: res.data.username, email: res.data.email }
+      })
+      notify.success('用户资料已更新')
+      await loadMembers()
+    } catch (err: any) {
+      notify.error(err)
+    } finally {
+      setSavingProfile(false)
+    }
+  }
+
+  const handleResetPassword = async () => {
+    if (!manageTarget) return
+    const targetUserId = manageTarget.user_id
+    if (!isStrongPassword(pwdForm.p1))
+      return notify.warning('密码至少 8 位，且需包含大写字母、小写字母和数字')
+    if (pwdForm.p1 !== pwdForm.p2)
+      return notify.warning('两次输入的密码不一致')
+
+    setResettingPwd(true)
+    try {
+      await projectMembersAPI.resetPassword(
+        projectId,
+        targetUserId,
+        pwdForm.p1,
+      )
+      setManageTarget((prev) => {
+        if (prev?.user_id !== targetUserId) return prev
+        setPwdForm({ p1: '', p2: '' })
+        return prev
+      })
+      notify.success('密码已重置，对方需要重新登录')
+    } catch (err: any) {
+      notify.error(err)
+    } finally {
+      setResettingPwd(false)
+    }
+  }
+
+  const handleToggleActive = async () => {
+    if (!manageTarget) return
+    const targetUserId = manageTarget.user_id
+    const next = !manageTarget.is_active
+    const confirmMessage = next
+      ? `确认启用用户 "${manageTarget.email}" 吗？`
+      : `确认停用用户 "${manageTarget.email}" 吗？\n\n` +
+        '此操作全局生效：该用户将无法登录任何项目，所有会话立即失效。'
+    if (!window.confirm(confirmMessage)) return
+
+    setTogglingActive(true)
+    try {
+      await projectMembersAPI.updateStatus(projectId, targetUserId, next)
+      setManageTarget((prev) =>
+        prev?.user_id === targetUserId ? { ...prev, is_active: next } : prev,
+      )
+      notify.success(`用户已${next ? '启用' : '停用'}`)
+      await loadMembers()
+    } catch (err: any) {
+      notify.error(err)
+    } finally {
+      setTogglingActive(false)
     }
   }
 
@@ -295,7 +395,10 @@ export default function ProjectMembersPage() {
                 const disableRemove = isSelf || saving || isLastOwner
 
                 return (
-                  <tr key={m.user_id} className="hover:bg-gray-50/50">
+                  <tr
+                    key={m.user_id}
+                    className={`hover:bg-gray-50/50 ${!m.is_active ? 'opacity-60' : ''}`}
+                  >
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-white text-xs font-semibold">
@@ -307,6 +410,11 @@ export default function ProjectMembersPage() {
                             {isSelf && (
                               <span className="text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">
                                 你
+                              </span>
+                            )}
+                            {!m.is_active && (
+                              <span className="text-xs text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded">
+                                已停用
                               </span>
                             )}
                             {m.is_superadmin && (
@@ -356,27 +464,39 @@ export default function ProjectMembersPage() {
                       {m.created_at?.split('.')[0] ?? '—'}
                     </td>
                     <td className="px-5 py-3 text-right">
-                      <button
-                        onClick={() => handleRemove(m)}
-                        disabled={disableRemove}
-                        className="text-red-600 hover:text-red-800 text-sm disabled:opacity-40 disabled:hover:text-red-600"
-                        title={
-                          isSelf
-                            ? '不能移除自己'
-                            : isLastOwner
-                              ? '不能移除项目最后一个 owner'
-                              : '从项目移除该成员'
-                        }
-                      >
-                        {saving ? (
-                          <i className="fas fa-spinner fa-spin"></i>
-                        ) : (
-                          <>
-                            <i className="fas fa-user-minus mr-1"></i>
-                            移除
-                          </>
+                      <div className="inline-flex items-center gap-3">
+                        {!isSelf && (
+                          <button
+                            onClick={() => openManage(m)}
+                            disabled={saving}
+                            className="text-blue-600 hover:text-blue-800 text-sm disabled:opacity-40"
+                          >
+                            <i className="fas fa-user-cog mr-1"></i>
+                            管理
+                          </button>
                         )}
-                      </button>
+                        <button
+                          onClick={() => handleRemove(m)}
+                          disabled={disableRemove}
+                          className="text-red-600 hover:text-red-800 text-sm disabled:opacity-40 disabled:hover:text-red-600"
+                          title={
+                            isSelf
+                              ? '不能移除自己'
+                              : isLastOwner
+                                ? '不能移除项目最后一个 owner'
+                                : '从项目移除该成员'
+                          }
+                        >
+                          {saving ? (
+                            <i className="fas fa-spinner fa-spin"></i>
+                          ) : (
+                            <>
+                              <i className="fas fa-user-minus mr-1"></i>
+                              移除
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 )
@@ -384,6 +504,148 @@ export default function ProjectMembersPage() {
           </tbody>
         </table>
       </div>
+
+      <Drawer
+        isOpen={!!manageTarget}
+        onClose={() => setManageTarget(null)}
+        title={manageTarget ? `管理用户 · ${manageTarget.username}` : ''}
+        size="lg"
+      >
+        {manageTarget && (
+          <div className="space-y-6">
+            <p className="text-sm text-amber-700 bg-amber-50 border border-amber-100 rounded-lg p-3">
+              修改资料 / 密码 / 启停会影响该用户在所有项目中的账号。
+            </p>
+
+            <section>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">
+                资料
+              </h4>
+              <div className="border border-gray-200 rounded-lg p-4 space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                    用户名
+                  </label>
+                  <input
+                    type="text"
+                    value={profileForm.username}
+                    onChange={(e) =>
+                      setProfileForm((form) => ({ ...form, username: e.target.value }))
+                    }
+                    className="w-full input-base"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                    邮箱
+                  </label>
+                  <input
+                    type="email"
+                    value={profileForm.email}
+                    onChange={(e) =>
+                      setProfileForm((form) => ({ ...form, email: e.target.value }))
+                    }
+                    className="w-full input-base"
+                  />
+                </div>
+                <button
+                  onClick={handleSaveProfile}
+                  disabled={
+                    savingProfile ||
+                    !profileForm.username.trim() ||
+                    !profileForm.email.trim() ||
+                    (profileForm.username.trim() === manageTarget.username &&
+                      profileForm.email.trim() === manageTarget.email)
+                  }
+                  className="btn-primary w-full disabled:opacity-50"
+                >
+                  {savingProfile ? (
+                    <><i className="fas fa-spinner fa-spin mr-2"></i>保存中...</>
+                  ) : (
+                    '保存资料'
+                  )}
+                </button>
+              </div>
+            </section>
+
+            <section>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">
+                密码
+              </h4>
+              <div className="border border-gray-200 rounded-lg p-4 space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                    新密码
+                  </label>
+                  <input
+                    type="password"
+                    value={pwdForm.p1}
+                    onChange={(e) => setPwdForm((form) => ({ ...form, p1: e.target.value }))}
+                    placeholder="≥ 8 位，含大小写和数字"
+                    className="w-full input-base"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                    确认新密码
+                  </label>
+                  <input
+                    type="password"
+                    value={pwdForm.p2}
+                    onChange={(e) => setPwdForm((form) => ({ ...form, p2: e.target.value }))}
+                    placeholder="再次输入"
+                    className="w-full input-base"
+                  />
+                </div>
+                <button
+                  onClick={handleResetPassword}
+                  disabled={resettingPwd || !pwdForm.p1 || !pwdForm.p2}
+                  className="w-full h-10 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {resettingPwd ? (
+                    <><i className="fas fa-spinner fa-spin mr-2"></i>重置中...</>
+                  ) : (
+                    <><i className="fas fa-key mr-2"></i>重置密码</>
+                  )}
+                </button>
+              </div>
+            </section>
+
+            <section>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">
+                状态
+              </h4>
+              <div className="border border-gray-200 rounded-lg p-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">
+                      当前：{manageTarget.is_active ? '正常' : '已停用'}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      停用将禁止该账号登录所有项目，并立即吊销所有会话。
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleToggleActive}
+                    disabled={togglingActive}
+                    className={`shrink-0 text-xs px-3 py-2 rounded-lg text-white disabled:opacity-50 ${
+                      manageTarget.is_active
+                        ? 'bg-red-500 hover:bg-red-600'
+                        : 'bg-green-600 hover:bg-green-700'
+                    }`}
+                  >
+                    {togglingActive
+                      ? '处理中...'
+                      : manageTarget.is_active
+                        ? '停用用户'
+                        : '启用用户'}
+                  </button>
+                </div>
+              </div>
+            </section>
+          </div>
+        )}
+      </Drawer>
 
       {/* 添加成员对话框 —— 搜索 + 卡片选角色 */}
       {showAddDrawer && (

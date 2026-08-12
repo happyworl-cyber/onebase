@@ -8,6 +8,8 @@
 # 缓存策略：
 #   • Rust 依赖编译进镜像层（stub 阶段）。改 src/ 时复用该层，只重编 onebase，避免
 #     把 target 只放在 BuildKit cache mount 里——Jenkins cache 一旦丢失会变成全量冷编译。
+#   • 正式构建不再 `cargo clean -p onebase`，以便增量链接本包。
+#   • 对象存储用 rusty-s3（非 aws-sdk-s3），避免 aws-lc-sys 拖慢冷依赖层。
 #   • cargo registry/git 与 npm 使用 cache mount，加速 lockfile 变更时的下载。
 #   • syntax 镜像走 DaoCloud，避免每次从 docker.io 拉 dockerfile frontend。
 #
@@ -67,10 +69,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 
 COPY src/ src/
 COPY migrations/ migrations/
-# 清掉 stub 同名 crate，保留 deps；只重编 onebase。
+# 保留 stub 阶段编好的依赖层；直接重编 onebase，避免每次 cargo clean -p 毁掉增量。
+# 若偶发 stub 指纹粘连导致链接旧产物，可临时加回：cargo clean -p onebase --release
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
-    cargo clean -p onebase --release || true && \
     cargo build --release --bin onebase
 
 # 工作流 code 节点运行时 shim（JS / Python），随镜像分发；运行阶段拷到 /app 并用

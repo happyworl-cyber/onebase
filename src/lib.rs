@@ -45,6 +45,7 @@ pub mod raw_sql_guard;
 /// Redis 数据源：连接注册表 + 客户端缓存 + 精选命令。随 `workflow_engine` 编进 lib
 /// crate（`redis` 节点要用），刻意只依赖 crypto/error/redis/sqlx，保持 lib-safe。
 pub mod kafka_ds;
+pub mod object_storage_ds;
 pub mod redis_ds;
 pub mod redis_manager;
 pub mod rpc;

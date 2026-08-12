@@ -92,6 +92,13 @@ config: `{ "connection_id": 整数, "op": "produce", "topic": "主题（可模�
 - dry_run / 生产只读下不真实发消息，返回 mock；成功输出 `{ "op": "produce", "result": { "topic", "partition", "offset", "key" } }`
 - 消费侧请用 `trigger_type=kafka` 工作流触发器（非本节点）
 
+### object_storage（对象存储操作）
+config: `{ "connection_id": 整数, "op": "put|get|delete|list|presign", ...按 op 变化的参数 }`
+- `connection_id` 取自项目「集成 → 对象存储」登记的连接，按 `ctx.tenant_id` 校验
+- 常用参数：`key`（put/get/delete/presign）、`content`（put 正文，字符串或 base64）、`prefix`/`max_keys`（list）、`method`/`expires_in`（presign）、`keys`（delete 批量，数组）
+- 写操作（put/delete/presign PUT）在 dry_run / 生产只读下返回 mock；读操作照常执行
+- 输出 `{ "op": "...", "result": ... }`；body 上限等限额与数据 API 一致（见 object_storage_ds::commands）
+
 ### http_call（外部 HTTP）
 config: `{ "method": "GET|POST|PUT|PATCH|DELETE", "url": "https://...", "headers": {对象}, "body": 任意 }`
 - 禁止内网地址；超时 30s；输出 `{ "status", "headers", "body" }`

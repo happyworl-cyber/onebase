@@ -1,6 +1,6 @@
 //! 平台服务令牌管理端点（`/api/platform-tokens`）
 //!
-//! 仅 JWT 用户可管理（创建/列出/停用）自己的平台令牌；超管可管理所有令牌。
+//! **仅平台超管**可创建 / 列出 / 停用平台服务令牌。
 //! 为避免「令牌再造令牌」的提权链，**禁止用平台令牌（crp_）调用创建接口**。
 
 use axum::extract::{Extension, Path, State};
@@ -12,6 +12,16 @@ use sqlx::{PgPool, Row};
 use crate::auth::Claims;
 use crate::error::{AppError, Result};
 use crate::platform_token;
+
+fn require_platform_token_admin(claims: &Claims) -> Result<()> {
+    if claims.is_superadmin {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(
+            "仅平台超管可管理平台服务令牌".to_string(),
+        ))
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct CreatePlatformTokenRequest {
@@ -30,6 +40,7 @@ pub async fn create_platform_token(
     token_ctx: Option<Extension<platform_token::PlatformTokenContext>>,
     Json(req): Json<CreatePlatformTokenRequest>,
 ) -> Result<Json<Value>> {
+    require_platform_token_admin(&claims)?;
     // 禁止用平台令牌再创建平台令牌（防提权链）。
     if token_ctx.is_some() {
         return Err(AppError::Forbidden(
@@ -99,40 +110,24 @@ pub async fn create_platform_token(
     })))
 }
 
-/// GET /api/platform-tokens —— 列出令牌（普通用户看自己的，超管看全部）
+/// GET /api/platform-tokens —— 列出全部平台令牌（仅超管）
 pub async fn list_platform_tokens(
     State(pool): State<PgPool>,
     claims: Extension<Claims>,
 ) -> Result<Json<Value>> {
-    let rows = if claims.is_superadmin {
-        sqlx::query(
-            r#"
-            SELECT pt.id, pt.user_id, u.email AS user_email, pt.name, pt.token_prefix,
-                   pt.scopes, pt.is_active,
-                   pt.last_used_at::TEXT, pt.created_at::TEXT, pt.expires_at::TEXT
-            FROM management.platform_tokens pt
-            JOIN users u ON u.id = pt.user_id
-            ORDER BY pt.created_at DESC
-            "#,
-        )
-        .fetch_all(&pool)
-        .await
-    } else {
-        sqlx::query(
-            r#"
-            SELECT pt.id, pt.user_id, u.email AS user_email, pt.name, pt.token_prefix,
-                   pt.scopes, pt.is_active,
-                   pt.last_used_at::TEXT, pt.created_at::TEXT, pt.expires_at::TEXT
-            FROM management.platform_tokens pt
-            JOIN users u ON u.id = pt.user_id
-            WHERE pt.user_id = $1
-            ORDER BY pt.created_at DESC
-            "#,
-        )
-        .bind(claims.sub)
-        .fetch_all(&pool)
-        .await
-    }
+    require_platform_token_admin(&claims)?;
+    let rows = sqlx::query(
+        r#"
+        SELECT pt.id, pt.user_id, u.email AS user_email, pt.name, pt.token_prefix,
+               pt.scopes, pt.is_active,
+               pt.last_used_at::TEXT, pt.created_at::TEXT, pt.expires_at::TEXT
+        FROM management.platform_tokens pt
+        JOIN users u ON u.id = pt.user_id
+        ORDER BY pt.created_at DESC
+        "#,
+    )
+    .fetch_all(&pool)
+    .await
     .map_err(|e| AppError::Internal(format!("查询平台令牌失败: {}", e)))?;
 
     let tokens: Vec<Value> = rows
@@ -162,27 +157,40 @@ pub async fn delete_platform_token(
     claims: Extension<Claims>,
     Path(id): Path<i32>,
 ) -> Result<Json<Value>> {
-    // 普通用户只能停用自己的；超管不限。
-    let affected = if claims.is_superadmin {
-        sqlx::query("UPDATE management.platform_tokens SET is_active = false WHERE id = $1")
-            .bind(id)
-            .execute(&pool)
-            .await
-    } else {
-        sqlx::query(
-            "UPDATE management.platform_tokens SET is_active = false WHERE id = $1 AND user_id = $2",
-        )
+    require_platform_token_admin(&claims)?;
+    let affected = sqlx::query("UPDATE management.platform_tokens SET is_active = false WHERE id = $1")
         .bind(id)
-        .bind(claims.sub)
         .execute(&pool)
         .await
-    }
-    .map_err(|e| AppError::Internal(format!("停用平台令牌失败: {}", e)))?
-    .rows_affected();
+        .map_err(|e| AppError::Internal(format!("停用平台令牌失败: {}", e)))?
+        .rows_affected();
 
     if affected == 0 {
         return Err(AppError::NotFound("令牌不存在或无权操作".to_string()));
     }
 
     Ok(Json(json!({ "success": true, "id": id })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn claims(superadmin: bool) -> Claims {
+        Claims {
+            sub: 1,
+            email: "u@example.com".to_string(),
+            role: "user".to_string(),
+            is_superadmin: superadmin,
+            jti: "test".to_string(),
+            exp: 9_999_999_999,
+            iat: 0,
+        }
+    }
+
+    #[test]
+    fn platform_token_admin_allows_superadmin_only() {
+        assert!(require_platform_token_admin(&claims(true)).is_ok());
+        assert!(require_platform_token_admin(&claims(false)).is_err());
+    }
 }

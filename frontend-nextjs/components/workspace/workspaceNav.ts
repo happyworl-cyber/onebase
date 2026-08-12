@@ -111,6 +111,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'ES 代理', href: '/events/es-connections', icon: 'fas fa-search-plus' },
       { label: 'Redis', href: '/events/redis-connections', icon: 'fas fa-database' },
       { label: 'Kafka', href: '/events/kafka-connections', icon: 'fas fa-stream' },
+      { label: '对象存储', href: '/events/object-storage-connections', icon: 'fas fa-cloud' },
     ],
   },
   {

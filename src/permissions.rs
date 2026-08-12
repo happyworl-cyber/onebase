@@ -488,6 +488,45 @@ pub fn api_key_declares_readonly(permissions: &serde_json::Value) -> bool {
 
 const TENANT_ID_HEADER: &str = "x-tenant-id";
 
+/// 租户绑定资源（ES/Kafka/Redis 连接等）列表的过滤范围。
+///
+/// 与 webhook / sse-routes 一致：显式 `tenant_id` 必须生效，避免多项目 admin
+/// 在项目 A 工作空间里拿到项目 B 的连接与密钥。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TenantListFilter {
+    /// 超管且未指定租户：全平台。
+    All,
+    /// 指定单个租户（调用方需已通过 admin 校验，或本函数已校验）。
+    One(i32),
+    /// 非超管且未指定租户：其全部管辖租户（平台级总览用）。
+    Many(Vec<i32>),
+}
+
+/// 解析连接类列表的租户过滤范围。
+///
+/// - `requested = Some(t)`：只返回该租户；非超管必须是其 admin，否则 Forbidden。
+/// - `requested = None` + 超管：全平台。
+/// - `requested = None` + 非超管：其全部 admin 租户。
+pub fn resolve_tenant_list_filter(
+    is_superadmin: bool,
+    requested: Option<i32>,
+    admin_tenant_ids: &[i32],
+) -> Result<TenantListFilter> {
+    match requested {
+        Some(tid) => {
+            if is_superadmin || admin_tenant_ids.contains(&tid) {
+                Ok(TenantListFilter::One(tid))
+            } else {
+                Err(AppError::Forbidden(
+                    "仅超管或该租户 owner/admin 可查看此项目的连接".to_string(),
+                ))
+            }
+        }
+        None if is_superadmin => Ok(TenantListFilter::All),
+        None => Ok(TenantListFilter::Many(admin_tenant_ids.to_vec())),
+    }
+}
+
 /// 从 `X-Tenant-Id` 请求头或 query string `?tenant_id=N` 中解析显式 tenant_id。
 ///
 /// 两者都没有 → `None`；解析失败（非数字）→ `None`，由 `resolve_tenant_context`
@@ -967,5 +1006,34 @@ mod tests {
         assert_eq!(default_rbac_role_for_tenant_role("viewer"), Some("viewer"));
         assert_eq!(default_rbac_role_for_tenant_role("guest"), None);
         assert_eq!(default_rbac_role_for_tenant_role(""), None);
+    }
+
+    // ── resolve_tenant_list_filter ──
+    // 工作空间页会传 ?tenant_id=当前项目；多项目 admin 不得再拿到其它项目的连接/密钥。
+
+    #[test]
+    fn tenant_list_filter_honors_requested_tenant_for_multi_project_admin() {
+        let admins = vec![1, 2];
+        assert_eq!(
+            resolve_tenant_list_filter(false, Some(1), &admins).unwrap(),
+            TenantListFilter::One(1)
+        );
+        assert_eq!(
+            resolve_tenant_list_filter(false, None, &admins).unwrap(),
+            TenantListFilter::Many(vec![1, 2])
+        );
+        assert!(resolve_tenant_list_filter(false, Some(99), &admins).is_err());
+    }
+
+    #[test]
+    fn tenant_list_filter_superadmin_all_or_one() {
+        assert_eq!(
+            resolve_tenant_list_filter(true, None, &[]).unwrap(),
+            TenantListFilter::All
+        );
+        assert_eq!(
+            resolve_tenant_list_filter(true, Some(7), &[]).unwrap(),
+            TenantListFilter::One(7)
+        );
     }
 }

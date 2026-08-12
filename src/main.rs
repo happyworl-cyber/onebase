@@ -35,6 +35,9 @@ mod mcp_tools;
 mod middleware;
 mod models;
 mod monitor_handlers;
+mod object_storage_app_handlers;
+mod object_storage_ds;
+mod object_storage_handlers;
 mod operation_log;
 mod operation_log_handlers;
 mod pat_handlers;
@@ -598,6 +601,18 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/projects/:id/members/create-user",
             axum::routing::post(tenant_handlers::create_project_member),
+        )
+        .route(
+            "/api/projects/:id/members/:user_id/profile",
+            axum::routing::patch(tenant_handlers::update_project_member_profile),
+        )
+        .route(
+            "/api/projects/:id/members/:user_id/reset-password",
+            axum::routing::post(tenant_handlers::reset_project_member_password),
+        )
+        .route(
+            "/api/projects/:id/members/:user_id/status",
+            axum::routing::patch(tenant_handlers::update_project_member_status),
         )
         .route(
             "/api/projects/:id/members/:user_id",
@@ -1721,6 +1736,46 @@ async fn main() -> anyhow::Result<()> {
             middleware::auth_middleware,
         ));
 
+    // ─── 对象存储数据源（COS / OSS / MinIO，S3 兼容）─────────────────────
+    //
+    // JWT 面：
+    //  1) `/api/admin/object-storage-connections/*` — 连接 CRUD + health + tokens
+    //  2) `/api/object-storage-connections/:id/exec` — 租户成员数据读写
+    // 令牌面（见下方 object_storage_app_routes）：`cres_os_*` 自鉴权，不挂 JWT。
+    let object_storage_admin_routes = Router::new()
+        .route(
+            "/api/admin/object-storage-connections",
+            get(object_storage_handlers::list_connections)
+                .post(object_storage_handlers::create_connection),
+        )
+        .route(
+            "/api/admin/object-storage-connections/:id",
+            get(object_storage_handlers::get_connection)
+                .put(object_storage_handlers::update_connection)
+                .delete(object_storage_handlers::delete_connection),
+        )
+        .route(
+            "/api/admin/object-storage-connections/:id/health",
+            post(object_storage_handlers::health_check),
+        )
+        .route(
+            "/api/admin/object-storage-connections/:id/tokens",
+            get(object_storage_handlers::list_tokens).post(object_storage_handlers::create_token),
+        )
+        .route(
+            "/api/admin/object-storage-connections/:id/tokens/:token_id",
+            axum::routing::patch(object_storage_handlers::update_token)
+                .delete(object_storage_handlers::delete_token),
+        )
+        .route(
+            "/api/object-storage-connections/:id/exec",
+            post(object_storage_handlers::exec),
+        )
+        .layer(axum_middleware::from_fn_with_state(
+            pool.clone(),
+            middleware::auth_middleware,
+        ));
+
     // Kafka 令牌面 REST：cres_kafka_* 自鉴权，不挂 JWT。
     fn kafka_app_inner() -> Router<PgPool> {
         Router::new()
@@ -1742,6 +1797,26 @@ async fn main() -> anyhow::Result<()> {
         .layer(axum_middleware::from_fn(|req, next| {
             onebase::license::require_module(req, next, "pipeline")
         }));
+
+    // 对象存储令牌面 REST：cres_os_* 自鉴权，不挂 JWT。
+    fn object_storage_app_inner() -> Router<PgPool> {
+        Router::new()
+            .route("/:id/exec", post(object_storage_app_handlers::exec))
+            .route("/:id/health", get(object_storage_app_handlers::health))
+    }
+    let object_storage_app_routes = Router::new()
+        .nest("/api/object-storage", object_storage_app_inner())
+        .merge(
+            Router::new()
+                .nest(
+                    "/api/v1/:database_slug/object-storage",
+                    object_storage_app_inner(),
+                )
+                .route_layer(axum_middleware::from_fn_with_state(
+                    pool.clone(),
+                    es::proxy_common::es_tenant_scope_middleware,
+                )),
+        );
 
     // 代理路由：不挂 auth_middleware（token 自鉴权）。注册所有 ES 用的 HTTP 方法。
     // 同时提供旧路径 `/api/es/*` 与项目 slug 路径 `/api/v1/:database_slug/es/*`。
@@ -1871,6 +1946,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(es_admin_routes)
         .merge(redis_admin_routes)
         .merge(kafka_admin_routes)
+        .merge(object_storage_admin_routes)
+        .merge(object_storage_app_routes)
         .merge(kafka_app_routes)
         .merge(es_proxy_routes)
         .merge(es_app_routes)
@@ -2195,6 +2272,17 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// GET /api/license - 授权状态摘要（公开只读，供运维 / 客户查看到期与续保状态）
+async fn license_status_handler(
+    state: Option<axum::extract::Extension<onebase::license::LicenseState>>,
+) -> Json<Value> {
+    use serde_json::json;
+    match state {
+        Some(axum::extract::Extension(s)) => Json(s.summary_json()),
+        None => Json(json!({ "status": "unlicensed", "enforcement": "off" })),
+    }
+}
+
 /// 根路径处理器
 async fn root_handler() -> Result<Json<Value>, AppError> {
     use serde_json::json;
@@ -2228,17 +2316,6 @@ async fn root_handler() -> Result<Json<Value>, AppError> {
         },
         "documentation": "https://github.com/yourusername/onebase"
     })))
-}
-
-/// GET /api/license - 授权状态摘要（公开只读，供运维 / 客户查看到期与续保状态）
-async fn license_status_handler(
-    state: Option<axum::extract::Extension<onebase::license::LicenseState>>,
-) -> Json<Value> {
-    use serde_json::json;
-    match state {
-        Some(axum::extract::Extension(s)) => Json(s.summary_json()),
-        None => Json(json!({ "status": "unlicensed", "enforcement": "off" })),
-    }
 }
 
 /// SQL 查询执行端点

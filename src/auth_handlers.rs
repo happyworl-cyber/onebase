@@ -59,7 +59,17 @@ struct UserRow {
     role: String,
     is_superadmin: bool,
     must_change_password: bool,
+    is_active: bool,
     created_at: chrono::NaiveDateTime,
+}
+
+pub(crate) fn require_active_user(is_active: bool) -> Result<(), AppError> {
+    if !is_active {
+        return Err(AppError::Forbidden(
+            "账号已停用，请联系管理员".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(FromRow)]
@@ -214,6 +224,7 @@ pub async fn login(
         SELECT id, username, email, password_hash, role,
                COALESCE(is_superadmin, false) AS is_superadmin,
                COALESCE(must_change_password, false) AS must_change_password,
+               COALESCE(is_active, true) AS is_active,
                created_at
         FROM users
         WHERE email = $1
@@ -247,6 +258,8 @@ pub async fn login(
         );
         return Err(AppError::Unauthorized("邮箱或密码错误".to_string()));
     }
+
+    require_active_user(user.is_active)?;
 
     let (token, jti) = generate_token(user.id, &user.email, &user.role, user.is_superadmin)?;
 
@@ -469,4 +482,22 @@ pub async fn change_password(
         "message": "密码修改成功",
         "other_sessions_revoked": revoked_count
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inactive_accounts_are_forbidden() {
+        assert!(require_active_user(true).is_ok());
+
+        let error = require_active_user(false).unwrap_err();
+        match error {
+            AppError::Forbidden(message) => {
+                assert_eq!(message, "账号已停用，请联系管理员");
+            }
+            other => panic!("expected Forbidden, got {other:?}"),
+        }
+    }
 }

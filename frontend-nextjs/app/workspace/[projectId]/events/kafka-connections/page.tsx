@@ -71,12 +71,13 @@ function KafkaConnectionsManager({ tenantId }: { tenantId: number }) {
     setLoading(true)
     try {
       const res = await kafkaAPI.listConnections(tenantId)
-      setConnections(res.data)
+      const rows = res.data.filter((connection) => connection.tenant_id === tenantId)
+      setConnections(rows)
       setActiveId((previous) => {
-        if (previous !== null && res.data.some((connection) => connection.id === previous)) {
+        if (previous !== null && rows.some((connection) => connection.id === previous)) {
           return previous
         }
-        return res.data[0]?.id ?? null
+        return rows[0]?.id ?? null
       })
     } catch {
       // 全局拦截器展示错误。

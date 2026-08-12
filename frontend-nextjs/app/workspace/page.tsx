@@ -20,6 +20,7 @@ export default function WorkspacePickerPage() {
   const pathname = usePathname()
   const [projects, setProjects] = useState<Project[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [isSuperadmin, setIsSuperadmin] = useState(false)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -29,18 +30,20 @@ export default function WorkspacePickerPage() {
       return
     }
 
+    let superadmin = false
+    try {
+      const userStr = localStorage.getItem('current_user')
+      superadmin = !!(userStr && JSON.parse(userStr)?.is_superadmin)
+    } catch {
+      /* current_user 被污染时忽略 */
+    }
+    setIsSuperadmin(superadmin)
+
     // 超管统一走 /platform（带平台管理侧边栏），让 /workspace 与 /platform 体验一致。
     // 仅当当前不在 /platform 时重定向——/platform 复用本组件，若无此守卫会自我循环。
-    if (pathname !== '/platform') {
-      try {
-        const userStr = localStorage.getItem('current_user')
-        if (userStr && JSON.parse(userStr)?.is_superadmin) {
-          router.replace('/platform')
-          return
-        }
-      } catch {
-        /* current_user 被污染时忽略，继续走普通项目选择逻辑 */
-      }
+    if (pathname !== '/platform' && superadmin) {
+      router.replace('/platform')
+      return
     }
 
     api
@@ -102,14 +105,16 @@ export default function WorkspacePickerPage() {
             </p>
           </div>
           <div className="flex items-center gap-3 shrink-0">
-            <button
-              onClick={() => router.push('/workspace/platform-tokens')}
-              className="inline-flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
-              title="给机器 / AI 用的平台服务令牌（HTTP / MCP）"
-            >
-              <i className="fas fa-robot mr-2"></i>
-              平台服务令牌
-            </button>
+            {isSuperadmin && (
+              <button
+                onClick={() => router.push('/workspace/platform-tokens')}
+                className="inline-flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+                title="给机器 / AI 用的平台服务令牌（HTTP / MCP）"
+              >
+                <i className="fas fa-robot mr-2"></i>
+                平台服务令牌
+              </button>
+            )}
             <button
               onClick={() => router.push('/workspace/provision')}
               className="btn-primary"

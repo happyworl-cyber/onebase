@@ -6,6 +6,12 @@ import { NODE_TYPE_META } from './NodeTypes'
 import { wfDatasourceAPI, type WfDatasource } from '@/lib/api'
 import { redisAPI, REDIS_OPS, type RedisConnection, type RedisOp } from '@/lib/api'
 import { kafkaAPI, type KafkaConnection } from '@/lib/api'
+import {
+  objectStorageAPI,
+  OBJECT_STORAGE_OPS,
+  type ObjectStorageConnection,
+  type ObjectStorageOp,
+} from '@/lib/api'
 
 interface WorkflowNodeData {
   id: string
@@ -1362,6 +1368,10 @@ export default function NodeConfigPanel({ node, workflowSlug, onChange, onClose,
           <KafkaNodeConfig node={node} updateConfig={updateConfig} />
         )}
 
+        {node.type === 'object_storage' && (
+          <ObjectStorageNodeConfig node={node} updateConfig={updateConfig} />
+        )}
+
         {node.type !== 'response' && (
           <>
             <hr className="border-gray-100" />
@@ -1555,7 +1565,12 @@ function RedisNodeConfig({
     redisAPI
       .listConnections(Number.isNaN(tenantId) ? undefined : tenantId)
       .then((res) => {
-        if (alive) setConnections(res.data)
+        if (alive) {
+          const rows = Number.isNaN(tenantId)
+            ? res.data
+            : res.data.filter((c) => c.tenant_id === tenantId)
+          setConnections(rows)
+        }
       })
       .catch(() => {})
       .finally(() => {
@@ -1702,7 +1717,12 @@ function KafkaNodeConfig({
     kafkaAPI
       .listConnections(Number.isNaN(tenantId) ? undefined : tenantId)
       .then((res) => {
-        if (alive) setConnections(res.data)
+        if (alive) {
+          const rows = Number.isNaN(tenantId)
+            ? res.data
+            : res.data.filter((c) => c.tenant_id === tenantId)
+          setConnections(rows)
+        }
       })
       .catch(() => {})
       .finally(() => {
@@ -1806,6 +1826,211 @@ function KafkaNodeConfig({
       <p className="text-xs text-gray-400">
         Topic、Key、Value、Headers 支持模板：<code className="bg-gray-100 px-1 rounded">{'{{trigger.x}}'}</code>、
         <code className="bg-gray-100 px-1 rounded">{'{{nodeId.field}}'}</code>。
+      </p>
+    </>
+  )
+}
+
+// ── 对象存储节点配置 ────────────────────────────────────────────────────
+
+const OS_OP_FIELDS: Record<
+  ObjectStorageOp,
+  ReadonlyArray<'key' | 'content' | 'prefix' | 'max_keys' | 'method' | 'expires_secs' | 'keys'>
+> = {
+  put: ['key', 'content'],
+  get: ['key'],
+  delete: ['key', 'keys'],
+  list: ['prefix', 'max_keys'],
+  presign: ['key', 'method', 'expires_secs'],
+}
+
+function ObjectStorageNodeConfig({
+  node,
+  updateConfig,
+}: {
+  node: WorkflowNodeData
+  updateConfig: (key: string, value: any) => void
+}) {
+  const params = useParams<{ projectId: string }>()
+  const tenantId = parseInt(params?.projectId ?? '', 10)
+  const [connections, setConnections] = useState<ObjectStorageConnection[]>([])
+  const [loading, setLoading] = useState(true)
+  const op: ObjectStorageOp = (node.config.op as ObjectStorageOp) || 'get'
+  const fields = OS_OP_FIELDS[op] ?? ['key']
+  const connId = Number(node.config.connection_id) || 0
+
+  useEffect(() => {
+    let alive = true
+    setLoading(true)
+    objectStorageAPI
+      .listConnections(Number.isNaN(tenantId) ? undefined : tenantId)
+      .then((res) => {
+        if (alive) setConnections(res.data)
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (alive) setLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [tenantId])
+
+  return (
+    <>
+      <div>
+        <label className="block text-xs font-medium text-gray-500 mb-1">对象存储连接 *</label>
+        <select
+          value={connId}
+          onChange={(e) => updateConfig('connection_id', Number(e.target.value))}
+          className="w-full px-3 py-2 border rounded-lg text-sm"
+        >
+          <option value={0}>{loading ? '加载中…' : '请选择连接'}</option>
+          {connections.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.connection_name}（{c.bucket}）
+            </option>
+          ))}
+        </select>
+        {!loading && connections.length === 0 && (
+          <p className="text-xs text-amber-600 mt-1">
+            当前项目还没有对象存储连接，请先到「集成 → 对象存储」创建。
+          </p>
+        )}
+      </div>
+
+      <div>
+        <label className="block text-xs font-medium text-gray-500 mb-1">操作 *</label>
+        <select
+          value={op}
+          onChange={(e) => updateConfig('op', e.target.value)}
+          className="w-full px-3 py-2 border rounded-lg text-sm font-mono"
+        >
+          {OBJECT_STORAGE_OPS.map((o) => (
+            <option key={o} value={o}>
+              {o.toUpperCase()}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {fields.includes('key') && (
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">key *</label>
+          <input
+            value={node.config.key ?? ''}
+            onChange={(e) => updateConfig('key', e.target.value)}
+            className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
+            placeholder="uploads/{{trigger.id}}.txt"
+          />
+        </div>
+      )}
+
+      {fields.includes('content') && (
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">content</label>
+          <textarea
+            value={node.config.content ?? ''}
+            onChange={(e) => updateConfig('content', e.target.value)}
+            className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
+            rows={3}
+            placeholder="{{trigger.body}}"
+          />
+        </div>
+      )}
+
+      {fields.includes('keys') && (
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">
+            keys（可选，JSON 数组；优先于单个 key）
+          </label>
+          <textarea
+            value={
+              typeof node.config.keys === 'string'
+                ? node.config.keys
+                : node.config.keys
+                  ? JSON.stringify(node.config.keys, null, 2)
+                  : ''
+            }
+            onChange={(e) => {
+              const raw = e.target.value
+              try {
+                const parsed = raw.trim() ? JSON.parse(raw) : undefined
+                updateConfig('keys', parsed)
+              } catch {
+                updateConfig('keys', raw)
+              }
+            }}
+            className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
+            rows={2}
+            placeholder={'["a.txt", "b.txt"]'}
+          />
+        </div>
+      )}
+
+      {fields.includes('prefix') && (
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">prefix</label>
+          <input
+            value={node.config.prefix ?? ''}
+            onChange={(e) => updateConfig('prefix', e.target.value)}
+            className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
+            placeholder="uploads/"
+          />
+        </div>
+      )}
+
+      {fields.includes('max_keys') && (
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">max_keys</label>
+          <input
+            type="number"
+            value={node.config.max_keys ?? ''}
+            onChange={(e) =>
+              updateConfig('max_keys', e.target.value === '' ? undefined : Number(e.target.value))
+            }
+            className="w-full px-3 py-2 border rounded-lg text-sm"
+            placeholder="默认 100，上限 1000"
+          />
+        </div>
+      )}
+
+      {fields.includes('method') && (
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">presign method</label>
+          <select
+            value={node.config.method || 'PUT'}
+            onChange={(e) => updateConfig('method', e.target.value)}
+            className="w-full px-3 py-2 border rounded-lg text-sm font-mono"
+          >
+            <option value="PUT">PUT</option>
+            <option value="GET">GET</option>
+          </select>
+        </div>
+      )}
+
+      {fields.includes('expires_secs') && (
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">expires_secs</label>
+          <input
+            type="number"
+            value={node.config.expires_secs ?? ''}
+            onChange={(e) =>
+              updateConfig(
+                'expires_secs',
+                e.target.value === '' ? undefined : Number(e.target.value),
+              )
+            }
+            className="w-full px-3 py-2 border rounded-lg text-sm"
+            placeholder="默认 3600，上限 86400"
+          />
+        </div>
+      )}
+
+      <p className="text-xs text-gray-400">
+        文本字段支持模板：<code className="bg-gray-100 px-1 rounded">{'{{trigger.x}}'}</code>、
+        <code className="bg-gray-100 px-1 rounded">{'{{nodeId.field}}'}</code>。写操作在
+        dry_run / 生产只读调试下返回 mock，不落桶。
       </p>
     </>
   )

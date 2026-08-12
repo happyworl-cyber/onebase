@@ -159,6 +159,7 @@ pub async fn verify_pat(pool: &PgPool, token: &str) -> Result<Claims> {
            JOIN users u ON u.id = p.user_id
            WHERE p.token_hash = $1
              AND p.is_active = true
+             AND COALESCE(u.is_active, true) = true
              AND (p.expires_at IS NULL OR p.expires_at > NOW())"#,
     )
     .bind(hash_token(token))
@@ -217,5 +218,17 @@ mod tests {
         assert!(!PAT_PREFIX.starts_with("cr_"));
         assert_ne!(PAT_PREFIX, "cr_");
         assert_ne!(PAT_PREFIX, "crp_");
+    }
+
+    #[test]
+    fn pat_authentication_requires_active_user() {
+        let production_source = include_str!("pat_handlers.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(
+            production_source.contains("AND COALESCE(u.is_active, true) = true"),
+            "PAT lookup must reject globally inactive users"
+        );
     }
 }

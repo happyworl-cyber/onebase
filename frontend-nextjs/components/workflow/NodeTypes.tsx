@@ -19,6 +19,7 @@ export const NODE_TYPE_META: Record<string, { label: string; icon: string; color
   call_workflow: { label: '调用子工作流', icon: '🧩', color: 'bg-teal-50', borderColor: 'border-teal-300', accent: 'bg-teal-300', minimapColor: '#5eead4' },
   redis: { label: 'Redis 操作', icon: '⚡', color: 'bg-red-50', borderColor: 'border-red-300', accent: 'bg-red-300', minimapColor: '#fca5a5' },
   kafka: { label: 'Kafka 消息', icon: '📨', color: 'bg-lime-50', borderColor: 'border-lime-300', accent: 'bg-lime-300', minimapColor: '#bef264' },
+  object_storage: { label: '对象存储', icon: '☁', color: 'bg-sky-50', borderColor: 'border-sky-300', accent: 'bg-sky-300', minimapColor: '#7dd3fc' },
   loop: { label: '循环', icon: '↺', color: 'bg-fuchsia-50', borderColor: 'border-fuchsia-300', accent: 'bg-fuchsia-400', minimapColor: '#e879f9' },
 }
 
