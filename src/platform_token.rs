@@ -1,4 +1,4 @@
-//! 平台服务令牌（Platform Service Token, `crp_` 前缀）
+//! 平台服务令牌（Platform Service Token, `obp_` 前缀）
 //!
 //! 给「机器 / AI / 外部系统」一种长期有效、带 scope 的管理级凭证，用于通过纯 HTTP
 //! 调用原本「仅 JWT」的管理端点（如 `POST /api/projects/provision`、
@@ -7,7 +7,7 @@
 //! 设计要点：
 //! - 令牌绑定到一个**用户**(`user_id`)。鉴权时把令牌解析成该用户的 [`Claims`]，从而**完全
 //!   复用**现有 owner/admin/superadmin 权限校验，不必给每个端点单独开后门。
-//! - 与数据面 API Key（`cr_` 前缀、绑库、走 `rbac_middleware`）严格区分：`crp_` 前缀、
+//! - 与数据面 API Key（`ob_` 前缀、绑库、走 `rbac_middleware`）严格区分：`obp_` 前缀、
 //!   绑用户、在 `auth_middleware` 里就解析完成。
 //! - `scopes` 限定该令牌能做哪些管理动作；即使绑定的是超管用户，**scope 仍然生效**
 //!   （令牌就是要做最小权限收敛）。
@@ -17,9 +17,9 @@ use sqlx::{PgPool, Row};
 use crate::auth::Claims;
 use crate::error::{AppError, Result};
 
-/// 平台令牌明文前缀。注意与数据面 API Key 的 `cr_` 区分：`crp_` 不以 `cr_` 开头
-/// （前 3 字节是 `crp` 而非 `cr_`），所以 `auth_middleware` 里两个分支不会冲突。
-pub const TOKEN_PREFIX: &str = "crp_";
+/// 平台令牌明文前缀。注意与数据面 API Key 的 `ob_` 区分：`obp_` 不以 `ob_` 开头
+/// （前 3 字节是 `crp` 而非 `ob_`），所以 `auth_middleware` 里两个分支不会冲突。
+pub const TOKEN_PREFIX: &str = "obp_";
 
 /// 令牌可声明的管理动作 scope。
 pub const SCOPE_PROJECT_CREATE: &str = "project:create";
@@ -174,15 +174,15 @@ mod tests {
     #[test]
     fn test_generate_token_has_prefix() {
         let t = generate_token();
-        assert!(t.starts_with("crp_"));
-        // crp_ 不应被识别为数据面 cr_ key
-        assert!(!t.starts_with("cr_"));
+        assert!(t.starts_with("obp_"));
+        // obp_ 不应被识别为数据面 ob_ key
+        assert!(!t.starts_with("ob_"));
     }
 
     #[test]
     fn test_hash_token_deterministic() {
-        assert_eq!(hash_token("crp_abc"), hash_token("crp_abc"));
-        assert_ne!(hash_token("crp_abc"), hash_token("crp_def"));
+        assert_eq!(hash_token("obp_abc"), hash_token("obp_abc"));
+        assert_ne!(hash_token("obp_abc"), hash_token("obp_def"));
     }
 
     #[test]

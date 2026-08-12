@@ -1,8 +1,8 @@
 //! 个人访问令牌（PAT）管理 + 校验
 //!
 //! PAT 是 MCP（工作流创作）的鉴权凭证：绑定用户而非 database，审计可定位到人。
-//! 与 `management.api_keys`（`cr_*`，database 级、仅 endpoint 触发）及
-//! 平台服务令牌（`crp_*`）互不相干：PAT 前缀 `crm_`（MCP），哈希同款
+//! 与 `management.api_keys`（`ob_*`，database 级、仅 endpoint 触发）及
+//! 平台服务令牌（`obp_*`）互不相干：PAT 前缀 `obm_`（MCP），哈希同款
 //! sha256-hex 入库，明文仅创建时返回一次。
 //!
 //! 校验侧通过 [`verify_pat`] 把 PAT **合成为 [`Claims`]**，使
@@ -21,9 +21,9 @@ use sqlx::{PgPool, Row};
 use crate::auth::Claims;
 use crate::error::{AppError, Result};
 
-/// PAT 明文前缀（`crm_` = OneBase MCP）。区别于数据面 `cr_` 与平台令牌 `crp_`；
+/// PAT 明文前缀（`obm_` = OneBase MCP）。区别于数据面 `ob_` 与平台令牌 `obp_`；
 /// /mcp 不挂 auth_middleware，由 handler 自行调 [`verify_pat`]。
-pub const PAT_PREFIX: &str = "crm_";
+pub const PAT_PREFIX: &str = "obm_";
 
 /// sha256(token) 的 hex，64 字符——与 management.api_keys / es_proxy 同款入库格式。
 pub fn hash_token(token: &str) -> String {
@@ -214,10 +214,10 @@ mod tests {
 
     #[test]
     fn test_pat_prefix_distinct_from_other_token_prefixes() {
-        // crm_ 不与数据面 cr_ / 平台 crp_ 混淆；/mcp 自行校验，不依赖中间件。
-        assert!(!PAT_PREFIX.starts_with("cr_"));
-        assert_ne!(PAT_PREFIX, "cr_");
-        assert_ne!(PAT_PREFIX, "crp_");
+        // obm_ 不与数据面 ob_ / 平台 obp_ 混淆；/mcp 自行校验，不依赖中间件。
+        assert!(!PAT_PREFIX.starts_with("ob_"));
+        assert_ne!(PAT_PREFIX, "ob_");
+        assert_ne!(PAT_PREFIX, "obp_");
     }
 
     #[test]

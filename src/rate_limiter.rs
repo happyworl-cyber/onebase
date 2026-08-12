@@ -759,7 +759,7 @@ pub async fn rate_limit_middleware(
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
         .and_then(|h| h.strip_prefix("Bearer "))
-        .filter(|t| !t.starts_with("cr_"))
+        .filter(|t| !t.starts_with("ob_"))
         .and_then(|t| verify_token(t).ok())
         .map(|c| c.sub);
 

@@ -2,10 +2,10 @@
 //!
 //! ## Token 格式
 //!
-//! `cres_es_<43 字符 base64url>`，固定 8 + 43 = 51 字符。前缀让运维一眼能辨别
-//! token 类型（与 management.api_keys 的 `cr_` 前缀同思路；之所以叫 `cres_es_`
-//! 是因为 `cr_` 已被 Auto API 占用，且 `cres_es_` 不会被 rbac_middleware 的
-//! `s.starts_with("cr_")` 误判）。
+//! `obes_es_<43 字符 base64url>`，固定 8 + 43 = 51 字符。前缀让运维一眼能辨别
+//! token 类型（与 management.api_keys 的 `ob_` 前缀同思路；之所以叫 `obes_es_`
+//! 是因为 `ob_` 已被 Auto API 占用，且 `obes_es_` 不会被 rbac_middleware 的
+//! `s.starts_with("ob_")` 误判）。
 //!
 //! 32 字节随机熵 → base64url no-padding（避免 URL/JSON 字符串特殊字符），
 //! 大约 256 bits 熵 —— 远高于 NIST 推荐的 128 bits。
@@ -35,7 +35,7 @@ pub fn generate_token() -> String {
     let mut buf = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut buf);
     let body = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf);
-    format!("cres_es_{}", body)
+    format!("obes_es_{}", body)
 }
 
 /// 计算 token 的 sha256 hex（64 字符）。用于 DB 入库 / 查找。
@@ -45,7 +45,7 @@ pub fn hash_token(token: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// 给 token 截前 16 字符做"预览"。`cres_es_aB3c1234`。
+/// 给 token 截前 16 字符做"预览"。`obes_es_aB3c1234`。
 ///
 /// 不参与鉴权；唯一目的是让 UI / 审计日志能区分多个 token 而不用泄露完整明文。
 pub fn token_prefix(token: &str) -> String {
@@ -55,31 +55,31 @@ pub fn token_prefix(token: &str) -> String {
 /// 从 `Authorization` header 里抠出 token 明文。
 ///
 /// 支持三种形式（兼容主流 ES client 的默认行为）：
-///   - `Authorization: ApiKey cres_es_xxxxx`   ES 官方 client 默认
-///   - `Authorization: Bearer cres_es_xxxxx`   通用 HTTP client 默认
-///   - `Authorization: cres_es_xxxxx`          裸 token（curl 一行命令场景）
+///   - `Authorization: ApiKey obes_es_xxxxx`   ES 官方 client 默认
+///   - `Authorization: Bearer obes_es_xxxxx`   通用 HTTP client 默认
+///   - `Authorization: obes_es_xxxxx`          裸 token（curl 一行命令场景）
 ///
 /// 还接受 `X-Es-Token` 作为 fallback，方便业务端不动 Authorization 链路。
 pub fn extract_token(headers: &axum::http::HeaderMap) -> Option<String> {
     if let Some(val) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
         let v = val.trim();
         // 大小写不敏感的前缀剥离；ES 官方文档 "ApiKey" 是 case-sensitive，但代理层
-        // 宽松一点不会引入歧义（token 自带 `cres_es_` 不会和其它 scheme 撞）。
+        // 宽松一点不会引入歧义（token 自带 `obes_es_` 不会和其它 scheme 撞）。
         for prefix in ["ApiKey ", "Bearer ", "ApiKey  ", "Bearer  "] {
             if let Some(rest) = v.strip_prefix(prefix) {
                 let t = rest.trim();
-                if t.starts_with("cres_es_") {
+                if t.starts_with("obes_es_") {
                     return Some(t.to_string());
                 }
             }
         }
-        if v.starts_with("cres_es_") {
+        if v.starts_with("obes_es_") {
             return Some(v.to_string());
         }
     }
     if let Some(val) = headers.get("x-es-token").and_then(|v| v.to_str().ok()) {
         let v = val.trim();
-        if v.starts_with("cres_es_") {
+        if v.starts_with("obes_es_") {
             return Some(v.to_string());
         }
     }
@@ -215,7 +215,7 @@ mod tests {
     #[test]
     fn token_format_and_hash() {
         let t = generate_token();
-        assert!(t.starts_with("cres_es_"));
+        assert!(t.starts_with("obes_es_"));
         // 8 (前缀) + 43 (base64url no-padding 32 bytes) = 51
         assert_eq!(t.len(), 51, "token={}", t);
         // 同一个 token 多次 hash 结果相同；不同 token hash 不同
@@ -239,26 +239,26 @@ mod tests {
         };
         // ApiKey
         assert_eq!(
-            extract_token(&mk("authorization", "ApiKey cres_es_abc")),
-            Some("cres_es_abc".to_string())
+            extract_token(&mk("authorization", "ApiKey obes_es_abc")),
+            Some("obes_es_abc".to_string())
         );
         // Bearer
         assert_eq!(
-            extract_token(&mk("authorization", "Bearer cres_es_xyz")),
-            Some("cres_es_xyz".to_string())
+            extract_token(&mk("authorization", "Bearer obes_es_xyz")),
+            Some("obes_es_xyz".to_string())
         );
         // 裸 token
         assert_eq!(
-            extract_token(&mk("authorization", "cres_es_naked")),
-            Some("cres_es_naked".to_string())
+            extract_token(&mk("authorization", "obes_es_naked")),
+            Some("obes_es_naked".to_string())
         );
         // X-Es-Token
         assert_eq!(
-            extract_token(&mk("x-es-token", "cres_es_xeT")),
-            Some("cres_es_xeT".to_string())
+            extract_token(&mk("x-es-token", "obes_es_xeT")),
+            Some("obes_es_xeT".to_string())
         );
         // 错前缀（不是我们的 token）→ 不抓
-        assert_eq!(extract_token(&mk("authorization", "Bearer cr_other")), None);
+        assert_eq!(extract_token(&mk("authorization", "Bearer ob_other")), None);
         // 空 header
         assert_eq!(extract_token(&HeaderMap::new()), None);
     }

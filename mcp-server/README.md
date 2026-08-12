@@ -5,7 +5,7 @@
 - 用 PG 池里的库**开通新项目**（`create_project`）
 - **创建 / 更新 / 调试 / 运行工作流**（`*_workflow`）
 
-底层通过 **平台服务令牌（`crp_` 前缀）** 鉴权——令牌在 OneBase 后端被解析成绑定用户的身份，并受令牌 scope 约束。
+底层通过 **平台服务令牌（`obp_` 前缀）** 鉴权——令牌在 OneBase 后端被解析成绑定用户的身份，并受令牌 scope 约束。
 
 ## 前置：拿到平台令牌
 
@@ -32,13 +32,13 @@ curl -s -X POST "$ONEBASE_BASE_URL/api/platform-tokens" \
   -H "Authorization: Bearer $JWT" \
   -H "Content-Type: application/json" \
   -d '{"name":"mcp-bot","scopes":["project:create","workflow:read","workflow:write","workflow:run"],"expires_in_days":90}'
-# → { "token": "crp_....", ... }   保存好 token
+# → { "token": "obp_....", ... }   保存好 token
 ```
 
 可选 scope：`project:create`、`workflow:read`、`workflow:write`、`workflow:run`，或 `*`（全部）。
 不传 `scopes` 默认给全部；不传 `expires_in_days` 表示永不过期。
 
-> 注意：创建令牌只认 JWT（登录用户），不能用 `crp_` 令牌再创建令牌（防提权）。
+> 注意：创建令牌只认 JWT（登录用户），不能用 `obp_` 令牌再创建令牌（防提权）。
 
 ## 构建
 
@@ -53,7 +53,7 @@ npm run build
 | 变量 | 说明 |
 |------|------|
 | `ONEBASE_BASE_URL` | 后端基址，如 `http://10.0.5.11:31088` |
-| `ONEBASE_TOKEN` | 平台令牌明文，`crp_` 开头 |
+| `ONEBASE_TOKEN` | 平台令牌明文，`obp_` 开头 |
 
 ## 接入 MCP 客户端
 
@@ -67,7 +67,7 @@ npm run build
       "args": ["/绝对路径/onebase/mcp-server/dist/index.js"],
       "env": {
         "ONEBASE_BASE_URL": "http://10.0.5.11:31088",
-        "ONEBASE_TOKEN": "crp_xxxxxxxx"
+        "ONEBASE_TOKEN": "obp_xxxxxxxx"
       }
     }
   }

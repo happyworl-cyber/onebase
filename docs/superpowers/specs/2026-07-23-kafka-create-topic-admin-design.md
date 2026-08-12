@@ -21,7 +21,7 @@
 
 | 不做 | 说明 |
 |---|---|
-| `cres_kafka_*` 令牌 create | 本次明确选 A，不扩 ops 白名单 |
+| `obes_kafka_*` 令牌 create | 本次明确选 A，不扩 ops 白名单 |
 | 工作流 Kafka 节点 `create_topic` | 同上 |
 | 删除 topic / 改分区 / 改配置 | YAGNI；高级 config 键值对不做 |
 | 依赖 broker `auto.create.topics.enable` | 显式 Admin API 创建，行为可预期 |

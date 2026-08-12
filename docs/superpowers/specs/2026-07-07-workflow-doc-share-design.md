@@ -78,7 +78,7 @@ ALTER TABLE management.workflows
 - 一个工作流对应一条公开链接。
 - `doc_share_token`：开启分享时若为空则生成一次（`ds_` 前缀 + 32 字节随机 → hex，长度 < 64），一经生成永久保留。
 - `doc_share_enabled`：开关。关闭仅置 `false`（token 保留），重新开启复用同一 token，因此“撤销”后如果再次开启是同一个链接——符合用户「可撤销，不需要重新生成」的选择。
-- token 与 API Key（`cr_` / `crp_`）命名空间独立，泄露 token **不泄露任何调用凭证**。
+- token 与 API Key（`ob_` / `obp_`）命名空间独立，泄露 token **不泄露任何调用凭证**。
 
 migration 编号 046（当前最大为 045，046 为下一个可用编号；见迁移注册处 `src/migrate.rs`）。
 

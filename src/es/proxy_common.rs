@@ -179,7 +179,7 @@ pub(crate) async fn resolve_token(
 ) -> Result<ResolvedToken, AppError> {
     let token_plain = es_auth::extract_token(headers).ok_or_else(|| {
         AppError::Unauthorized(
-            "缺少 ES 代理 token；请用 `Authorization: ApiKey cres_es_xxx`".to_string(),
+            "缺少 ES 代理 token；请用 `Authorization: ApiKey obes_es_xxx`".to_string(),
         )
     })?;
     let token_hash = es_auth::hash_token(&token_plain);

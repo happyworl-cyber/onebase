@@ -1,4 +1,4 @@
--- 对象存储访问令牌：外部系统用 cres_os_* 调 put/get/delete/list/presign/health，无需平台登录。
+-- 对象存储访问令牌：外部系统用 obes_os_* 调 put/get/delete/list/presign/health，无需平台登录。
 -- 对齐 053_kafka_access_tokens；ACL 为 allowed_ops + key_prefix_allowlist。
 
 CREATE TABLE IF NOT EXISTS management.object_storage_access_tokens (

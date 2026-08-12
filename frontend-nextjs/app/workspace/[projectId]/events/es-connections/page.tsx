@@ -10,7 +10,7 @@
  *
  * 安全要点：
  *   - 凭据明文（ApiKey / basic 密码）**仅在创建/更新表单提交瞬间**经过前端
- *   - 代理 token 明文（cres_es_xxx）**只在创建成功一次性弹窗**显示
+ *   - 代理 token 明文（obes_es_xxx）**只在创建成功一次性弹窗**显示
  *   - "接入指南"动态生成当前 origin 下的代理 URL + curl / Python / Node 示例
  *
  * tenantId 来自 URL 的 projectId（W2：projectId === tenant.id）。注意 projectId
@@ -106,7 +106,7 @@ function EsConnectionsManager({ tenantId }: { tenantId: number }) {
             Elasticsearch 反向代理
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            平台保管 ES 真实地址 / ApiKey；业务端用平台代理 URL + cres_es_* token 访问，
+            平台保管 ES 真实地址 / ApiKey；业务端用平台代理 URL + obes_es_* token 访问，
             避免把生产凭据散落到各业务端。
           </p>
         </div>
@@ -363,7 +363,7 @@ function UsageTab({ connection }: { connection: EsConnection }) {
             @elastic/elasticsearch 等官方 SDK 用，适合需要 scroll / KNN / 复杂 agg 的场景。
           </li>
           <li>
-            两种模式共用同一个 <code className="bg-white px-1 rounded">cres_es_xxx</code> token，
+            两种模式共用同一个 <code className="bg-white px-1 rounded">obes_es_xxx</code> token，
             按 method / index 白名单约束。
           </li>
         </ul>
@@ -411,26 +411,26 @@ function AppApiGuide({
 }) {
   const createDoc = `# 创建文档（auto id；body 里写 "_id" 则按指定 id upsert）
 curl -X POST "${base}/orders/docs" \\
-  -H "Authorization: ApiKey cres_es_<your_token>" \\
+  -H "Authorization: ApiKey obes_es_<your_token>" \\
   -H "Content-Type: application/json" \\
   -d '{"order_id":"ORD-1001","amount":199.9,"status":"paid"}'`
 
   const getDoc = `# 按 id 获取（找不到返回 404 + {"found": false}）
 curl "${base}/orders/docs/ORD-1001" \\
-  -H "Authorization: ApiKey cres_es_<your_token>"`
+  -H "Authorization: ApiKey obes_es_<your_token>"`
 
   const patchDoc = `# 部分更新（裸字段 = {"doc": {...}} 的语法糖）
 curl -X PATCH "${base}/orders/docs/ORD-1001" \\
-  -H "Authorization: ApiKey cres_es_<your_token>" \\
+  -H "Authorization: ApiKey obes_es_<your_token>" \\
   -H "Content-Type: application/json" \\
   -d '{"status":"refunded"}'`
 
   const deleteDoc = `curl -X DELETE "${base}/orders/docs/ORD-1001" \\
-  -H "Authorization: ApiKey cres_es_<your_token>"`
+  -H "Authorization: ApiKey obes_es_<your_token>"`
 
   const searchDoc = `# 搜索：扁平的 where + q + sort + page/size + select
 curl -X POST "${base}/orders/search" \\
-  -H "Authorization: ApiKey cres_es_<your_token>" \\
+  -H "Authorization: ApiKey obes_es_<your_token>" \\
   -H "Content-Type: application/json" \\
   -d '{
     "where": {
@@ -453,7 +453,7 @@ curl -X POST "${base}/orders/search" \\
 
   const aggregateDoc = `# terms 聚合：先按 where 过滤，再按字段分桶
 curl -X POST "${base}/articles/search" \\
-  -H "Authorization: ApiKey cres_es_<your_token>" \\
+  -H "Authorization: ApiKey obes_es_<your_token>" \\
   -H "Content-Type: application/json" \\
   -d '{
     "where": {"article_type": 0, "delete_status": 0},
@@ -470,7 +470,7 @@ curl -X POST "${base}/articles/search" \\
 
 # composite 聚合：完整遍历高基数字段；首屏省略 after
 curl -X POST "${base}/articles/search" \\
-  -H "Authorization: ApiKey cres_es_<your_token>" \\
+  -H "Authorization: ApiKey obes_es_<your_token>" \\
   -H "Content-Type: application/json" \\
   -d '{
     "where": {"article_type": 0, "delete_status": 0},
@@ -492,7 +492,7 @@ curl -X POST "${base}/articles/search" \\
 
   const bulkDoc = `# 批量：一次最多 1000 条；results 与 operations 顺序一致
 curl -X POST "${base}/orders/bulk" \\
-  -H "Authorization: ApiKey cres_es_<your_token>" \\
+  -H "Authorization: ApiKey obes_es_<your_token>" \\
   -H "Content-Type: application/json" \\
   -d '{
     "operations": [
@@ -504,7 +504,7 @@ curl -X POST "${base}/orders/bulk" \\
 
   const initIndex = `# 简化建表：直接给字段类型字典；shards/replicas 是 ES number_of_* 的别名
 curl -X POST "${base}/orders/_init" \\
-  -H "Authorization: ApiKey cres_es_<your_token>" \\
+  -H "Authorization: ApiKey obes_es_<your_token>" \\
   -H "Content-Type: application/json" \\
   -d '{
     "if_not_exists": true,
@@ -522,7 +522,7 @@ curl -X POST "${base}/orders/_init" \\
 import requests
 
 BASE = "${base}"
-HEADERS = {"Authorization": "ApiKey cres_es_<your_token>"}
+HEADERS = {"Authorization": "ApiKey obes_es_<your_token>"}
 
 # 创建
 r = requests.post(f"{BASE}/orders/docs", json={
@@ -545,7 +545,7 @@ requests.patch(f"{BASE}/orders/docs/ORD-1001",
   const nodeExample = `// 不需要 @elastic/elasticsearch；用 fetch / axios 即可
 const BASE = '${base}'
 const headers = {
-  'Authorization': 'ApiKey cres_es_<your_token>',
+  'Authorization': 'ApiKey obes_es_<your_token>',
   'Content-Type': 'application/json',
 }
 
@@ -622,7 +622,7 @@ function ProxyGuide({
   base: string
   copy: (text: string, label: string) => void
 }) {
-  const curlExample = `curl -H "Authorization: ApiKey cres_es_<your_token>" \\
+  const curlExample = `curl -H "Authorization: ApiKey obes_es_<your_token>" \\
      ${base}/_cluster/health`
 
   const pythonExample = `# pip install elasticsearch
@@ -630,7 +630,7 @@ from elasticsearch import Elasticsearch
 
 es = Elasticsearch(
     "${base}",
-    api_key="cres_es_<your_token>",
+    api_key="obes_es_<your_token>",
 )
 print(es.info())`
 
@@ -639,7 +639,7 @@ import { Client } from '@elastic/elasticsearch'
 
 const es = new Client({
   node: '${base}',
-  auth: { apiKey: 'cres_es_<your_token>' },
+  auth: { apiKey: 'obes_es_<your_token>' },
 })
 console.log(await es.info())`
 

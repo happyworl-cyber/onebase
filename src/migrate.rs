@@ -329,7 +329,7 @@ const API_KEYS_SQL: &str = r#"
         created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
         UNIQUE(key_hash)
     );
-    -- 存量表补列：记录 Key 创建者，cr_ 鉴权时把作者归属到创建者而非租户 owner/admin
+    -- 存量表补列：记录 Key 创建者，ob_ 鉴权时把作者归属到创建者而非租户 owner/admin
     ALTER TABLE management.api_keys ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
     CREATE INDEX IF NOT EXISTS idx_api_keys_created_by ON management.api_keys(created_by);
     CREATE INDEX IF NOT EXISTS idx_api_keys_database_id ON management.api_keys(database_id);

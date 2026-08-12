@@ -1,7 +1,7 @@
 //! 平台服务令牌管理端点（`/api/platform-tokens`）
 //!
 //! **仅平台超管**可创建 / 列出 / 停用平台服务令牌。
-//! 为避免「令牌再造令牌」的提权链，**禁止用平台令牌（crp_）调用创建接口**。
+//! 为避免「令牌再造令牌」的提权链，**禁止用平台令牌（obp_）调用创建接口**。
 
 use axum::extract::{Extension, Path, State};
 use axum::Json;
@@ -66,7 +66,7 @@ pub async fn create_platform_token(
 
     let raw = platform_token::generate_token();
     let token_hash = platform_token::hash_token(&raw);
-    let token_prefix = format!("{}...", &raw[..10]); // crp_xxxxx...
+    let token_prefix = format!("{}...", &raw[..10]); // obp_xxxxx...
     let scopes_json = serde_json::to_value(&scopes).unwrap_or(json!([]));
 
     let row = sqlx::query(

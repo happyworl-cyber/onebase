@@ -10,11 +10,11 @@ use crate::auth::{verify_token, Claims};
 use crate::error::AppError;
 use crate::pool_manager::{DatabaseConfig, POOL_MANAGER};
 
-/// 数据面 API Key（`cr_`）鉴权后的上下文。
+/// 数据面 API Key（`ob_`）鉴权后的上下文。
 ///
-/// 由 [`auth_middleware`] 在校验 `cr_` 成功后注入请求扩展。下游必须复用此上下文，
+/// 由 [`auth_middleware`] 在校验 `ob_` 成功后注入请求扩展。下游必须复用此上下文，
 /// 不得在同一请求中重新查询 `api_keys`。管理端 handler 可据此自动补全
-/// `tenant_id` / `database_id`；数据面 `rbac_middleware` 见到 `cr_` 时仍走 Key scope
+/// `tenant_id` / `database_id`；数据面 `rbac_middleware` 见到 `ob_` 时仍走 Key scope
 /// 路径（不因同时注入了 Claims 而改走用户 RBAC）。
 #[derive(Debug, Clone)]
 pub struct ApiKeyContext {
@@ -26,7 +26,7 @@ pub struct ApiKeyContext {
     pub bound_slug: String,
 }
 
-/// 校验 `cr_` API Key，并合成用户 Claims：**优先 Key 创建者**（`created_by`），
+/// 校验 `ob_` API Key，并合成用户 Claims：**优先 Key 创建者**（`created_by`），
 /// 让 MCP/AI 拿 Key 创建、修改工作流时作者归属到真人。
 ///
 /// 创建者路径的两条安全约束：
@@ -212,8 +212,8 @@ async fn resolve_database_id_from_slug(
         .and_then(|v| v.strip_prefix("Bearer "));
     let apikey = headers.get("apikey").and_then(|h| h.to_str().ok());
     let api_key = bearer
-        .filter(|v| v.starts_with("cr_"))
-        .or_else(|| apikey.filter(|v| v.starts_with("cr_")));
+        .filter(|v| v.starts_with("ob_"))
+        .or_else(|| apikey.filter(|v| v.starts_with("ob_")));
     if let Some(key) = api_key {
         // 先按 key 本身定位（不带 slug 条件），便于把"key 无效/过期"与
         // "key 有效但绑定到别的库"两类错误分开报，避免误导排查方向。
@@ -425,9 +425,9 @@ pub async fn auth_middleware(
         }
     };
 
-    // 平台服务令牌（crp_ 前缀）：解析成绑定用户的 Claims，复用既有权限体系，
-    // 让机器/AI 能通过纯 HTTP 调用「仅 JWT」的管理端点。必须排在 cr_ 分支之前
-    // （虽然 crp_ 不以 cr_ 开头，但语义上先处理更清晰）。
+    // 平台服务令牌（obp_ 前缀）：解析成绑定用户的 Claims，复用既有权限体系，
+    // 让机器/AI 能通过纯 HTTP 调用「仅 JWT」的管理端点。必须排在 ob_ 分支之前
+    // （虽然 obp_ 不以 ob_ 开头，但语义上先处理更清晰）。
     if token.starts_with(crate::platform_token::TOKEN_PREFIX) {
         let (claims, ctx) = crate::platform_token::authenticate(&pool, token)
             .await
@@ -451,13 +451,13 @@ pub async fn auth_middleware(
         return Ok(response);
     }
 
-    // 数据面 API Key（cr_ 前缀）：校验 Key，并合成所属租户 owner/admin 的 Claims，
+    // 数据面 API Key（ob_ 前缀）：校验 Key，并合成所属租户 owner/admin 的 Claims，
     // 从而也能调用「仅 JWT」的管理端（如 scheduled-tasks）。同时注入 ApiKeyContext，
     // 供 handler 自动补全 tenant_id / database_id。
     //
-    // 数据面 Auto API 的 rbac_middleware 见到 cr_ 时仍优先走 Key scope 路径，
+    // 数据面 Auto API 的 rbac_middleware 见到 ob_ 时仍优先走 Key scope 路径，
     // 不会因为这里注入了 Claims 就改成用户 RBAC（避免破坏仅靠 Key permissions 的调用）。
-    if token.starts_with("cr_") {
+    if token.starts_with("ob_") {
         let (claims, ctx) = authenticate_cr_api_key(&pool, token).await.map_err(|e| {
             tracing::warn!(
                 target: "auth",
@@ -599,7 +599,7 @@ pub async fn auth_middleware(
 
 /// 平台令牌 scope 校验。
 ///
-/// 仅对「带平台令牌（crp_）」的请求生效：若请求扩展里有 [`PlatformTokenContext`]，
+/// 仅对「带平台令牌（obp_）」的请求生效：若请求扩展里有 [`PlatformTokenContext`]，
 /// 则要求其 scope 覆盖 `required`，否则 403。普通 JWT 用户没有该扩展，直接放行
 /// （他们的权限由各 handler 的 owner/admin/superadmin 校验把关）。
 ///

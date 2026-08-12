@@ -34,8 +34,8 @@ const VALID_PROVIDER_TYPES: &[&str] = &[
     "mind",
 ];
 const DEFAULT_ALLOWED_SCOPES: &[&str] = &["openid", "email", "profile"];
-const CLIENT_ID_PREFIX: &str = "cr_live_";
-const CLIENT_SECRET_PREFIX: &str = "crs_live_";
+const CLIENT_ID_PREFIX: &str = "ob_live_";
+const CLIENT_SECRET_PREFIX: &str = "obs_live_";
 const MAX_REDIRECT_URIS: usize = 20;
 const MAX_SCOPE_COUNT: usize = 20;
 

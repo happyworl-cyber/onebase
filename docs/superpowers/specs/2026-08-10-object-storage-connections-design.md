@@ -280,7 +280,7 @@ pub async fn execute(
 
 ## 11. 后续扩展钩子
 
-- 第二期（已实现）：`object_storage_access_tokens`（`cres_os_*`）+
+- 第二期（已实现）：`object_storage_access_tokens`（`obes_os_*`）+
   `/api/object-storage/:id/{exec,health}` 与 `/api/v1/:slug/object-storage/...`；
   Admin token CRUD；ACL = `allowed_ops` + `key_prefix_allowlist`
 - 第三期：见 `2026-08-11-object-storage-workflow-node-design.md`（工作流 `object_storage` 节点）

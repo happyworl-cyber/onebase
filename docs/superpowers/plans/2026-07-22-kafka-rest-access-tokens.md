@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 为 Kafka 连接增加 `cres_kafka_*` 访问令牌与路径式 REST（produce/topics/health），含 `/api/v1/:slug/kafka/...`，对齐 ES 对外接入方式。
+**Goal:** 为 Kafka 连接增加 `obes_kafka_*` 访问令牌与路径式 REST（produce/topics/health），含 `/api/v1/:slug/kafka/...`，对齐 ES 对外接入方式。
 
 **Architecture:** 新增 `kafka_access_tokens` 表；`kafka_ds/auth` 负责令牌生成/校验与 ops/topic ACL；`kafka_handlers` 扩展 JWT token CRUD；新建 `kafka_app_handlers` 提供无 JWT 的对外 REST，复用 `kafka_ds::commands`。保留现有 JWT `exec`。
 
@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Token 前缀 `cres_kafka_`（sha256 入库；明文仅创建时返回）
+- Token 前缀 `obes_kafka_`（sha256 入库；明文仅创建时返回）
 - 对外路径：`POST/GET /api/kafka/:id/{produce|topics|health}` + `/api/v1/:database_slug/kafka/:id/...`
 - ACL：`allowed_ops` + `topic_allowlist`（glob，复用 ES `glob_match` 逻辑或复制到 kafka_ds/auth）
 - 保留 JWT `/api/kafka-connections/:id/exec` 与 admin CRUD
@@ -43,7 +43,7 @@
 
 - [ ] Migration mirrors `es_access_tokens` but with `allowed_ops TEXT[] DEFAULT ARRAY['produce','list_topics','health']` and `topic_allowlist TEXT[] DEFAULT ARRAY['*']`（无 path_denylist）
 - [ ] `KafkaAccessToken` model with `token_hash` skip_serializing
-- [ ] `auth.rs`: `generate_token` → `cres_kafka_...`; `hash_token`; `token_prefix`; `extract_token`; `op_allowed`; `topic_allowed` (glob); unit tests
+- [ ] `auth.rs`: `generate_token` → `obes_kafka_...`; `hash_token`; `token_prefix`; `extract_token`; `op_allowed`; `topic_allowed` (glob); unit tests
 - [ ] Register migration `"053 kafka access tokens"`
 - [ ] `cargo test --lib kafka_ds::auth` PASS; commit
 

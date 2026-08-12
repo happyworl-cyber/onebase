@@ -1,8 +1,8 @@
 //! ES「应用」API：把 Elasticsearch 包装成业务侧无需写 DSL / 不需要 ES SDK 的 HTTP 接口。
 //!
 //! 路由前缀 `/api/es-app/` 或 `/api/v1/:database_slug/es-app/`；与 `/api/es/*` /
-//! `/api/v1/:database_slug/es/*` 透传层共用同一套 `cres_es_xxx` token 鉴权。
-//! `Authorization: ApiKey cres_es_xxx` token，所以一份 token 同时可用于两种模式。
+//! `/api/v1/:database_slug/es/*` 透传层共用同一套 `obes_es_xxx` token 鉴权。
+//! `Authorization: ApiKey obes_es_xxx` token，所以一份 token 同时可用于两种模式。
 //!
 //! ## 提供的高层操作
 //!

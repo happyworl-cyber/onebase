@@ -373,14 +373,14 @@ function NodeResultList({ results }: { results: NodeResultItem[] }) {
 function McpGuideModal({ onClose }: { onClose: () => void }) {
   const base = typeof window !== 'undefined' ? window.location.origin : ''
   const mcpUrl = `${base}/mcp`
-  const claudeCmd = `claude mcp add --transport http onebase ${mcpUrl} --header "Authorization: Bearer crm_你的令牌"`
+  const claudeCmd = `claude mcp add --transport http onebase ${mcpUrl} --header "Authorization: Bearer obm_你的令牌"`
   const genericConfig = JSON.stringify(
     {
       mcpServers: {
         onebase: {
           type: 'http',
           url: mcpUrl,
-          headers: { Authorization: 'Bearer crm_你的令牌' },
+          headers: { Authorization: 'Bearer obm_你的令牌' },
         },
       },
     },
@@ -400,7 +400,7 @@ function McpGuideModal({ onClose }: { onClose: () => void }) {
     '> 测试与生产独立部署：在哪个环境打开页面，地址即指向该环境。非生产实例 AI 可真实增删改查调试；生产实例仅允许干跑 + 只读查询，写操作被引擎拦截。',
     '',
     '## 第一步 · 生成个人访问令牌（PAT）',
-    '前往「安全 → API Key」页面底部「个人访问令牌」区块，点「生成令牌」。令牌以 `crm_` 开头（MCP 专用，区别于平台令牌的 `crp_`），明文只显示一次，请立即复制；可随时吊销。',
+    '前往「安全 → API Key」页面底部「个人访问令牌」区块，点「生成令牌」。令牌以 `obm_` 开头（MCP 专用，区别于平台令牌的 `obp_`），明文只显示一次，请立即复制；可随时吊销。',
     '',
     '## 第二步 · 接入 AI 客户端',
     '',
@@ -468,7 +468,7 @@ function McpGuideModal({ onClose }: { onClose: () => void }) {
             <h4 className="font-semibold text-gray-900 mb-2">第一步 · 生成个人访问令牌（PAT）</h4>
             <p className="text-xs text-gray-600 leading-relaxed">
               前往 <strong>安全 → API Key</strong> 页面底部的「<strong>个人访问令牌</strong>」区块，点「生成令牌」。
-              令牌为 <code className="bg-gray-100 px-1 rounded font-mono">crm_</code> 开头（MCP 专用，区别于平台令牌的 <code className="bg-gray-100 px-1 rounded font-mono">crp_</code>），<strong>明文只显示一次</strong>，
+              令牌为 <code className="bg-gray-100 px-1 rounded font-mono">obm_</code> 开头（MCP 专用，区别于平台令牌的 <code className="bg-gray-100 px-1 rounded font-mono">obp_</code>），<strong>明文只显示一次</strong>，
               请立即复制；泄露或不用了可随时在同一页面吊销。
             </p>
           </section>

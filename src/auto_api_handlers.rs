@@ -619,10 +619,10 @@ async fn validate_auth(
         return auth_from_api_key_context(ctx, path_database_id);
     }
 
-    // 优先检查 API Key（以 "cr_" 前缀区分于 JWT）
+    // 优先检查 API Key（以 "ob_" 前缀区分于 JWT）
     if let Some(auth_header) = headers.get("Authorization") {
         if let Ok(auth_str) = auth_header.to_str() {
-            if auth_str.starts_with("Bearer cr_") {
+            if auth_str.starts_with("Bearer ob_") {
                 let api_key = &auth_str[7..];
 
                 let key_record = sqlx::query(
@@ -2935,7 +2935,7 @@ fn generate_api_key() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();
     let random_bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
-    format!("cr_{}", hex::encode(random_bytes))
+    format!("ob_{}", hex::encode(random_bytes))
 }
 
 /// API Key 信息
@@ -3020,7 +3020,7 @@ pub async fn create_api_key(
 
     // 生成 API Key
     let api_key = generate_api_key();
-    let key_prefix = format!("{}...", &api_key[..8]); // cr_xxxxx...
+    let key_prefix = format!("{}...", &api_key[..8]); // ob_xxxxx...
 
     // 计算 SHA256 哈希
     use sha2::{Digest, Sha256};

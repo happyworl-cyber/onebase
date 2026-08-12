@@ -656,7 +656,7 @@ async fn tool_workflow_api_doc(pool: &PgPool, claims: &Claims, args: &Value) -> 
         ("endpoint", Some(db)) => {
             let url = format!("/workflow/{}/{}", db, slug);
             let curl = format!(
-                "curl -X POST '{{BASE_URL}}{}' \\\n  -H 'Authorization: Bearer cr_你的APIKey' \\\n  -H 'Content-Type: application/json' \\\n  -d '{}'",
+                "curl -X POST '{{BASE_URL}}{}' \\\n  -H 'Authorization: Bearer ob_你的APIKey' \\\n  -H 'Content-Type: application/json' \\\n  -d '{}'",
                 url,
                 serde_json::to_string(&sample_body).unwrap_or_default()
             );

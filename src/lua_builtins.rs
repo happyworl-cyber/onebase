@@ -1155,7 +1155,7 @@ mQIDAQAB\n\
 
         // 唯一临时目录 + 唯一盐，避免与其它测试/并发冲突
         let salt = format!("test-salt-{}", uuid::Uuid::new_v4());
-        let dir = std::env::temp_dir().join(format!("cr_fcm_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("ob_fcm_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let project = "myproject";

@@ -1,4 +1,4 @@
--- Kafka 访问令牌：外部系统用 cres_kafka_* 调 produce / topics / health，无需平台登录。
+-- Kafka 访问令牌：外部系统用 obes_kafka_* 调 produce / topics / health，无需平台登录。
 -- 对齐 016_es_proxy.sql 的 es_access_tokens；ACL 为 allowed_ops + topic_allowlist。
 
 CREATE TABLE IF NOT EXISTS management.kafka_access_tokens (

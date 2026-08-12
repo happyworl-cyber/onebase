@@ -1,12 +1,12 @@
 //! Kafka 访问令牌工具 + ops / topic ACL。
 //!
-//! Token 格式：`cres_kafka_<43 字符 base64url>`（避免被 `cr_` API Key 中间件误判）。
+//! Token 格式：`obes_kafka_<43 字符 base64url>`（避免被 `ob_` API Key 中间件误判）。
 
 use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
 
-pub const TOKEN_PREFIX: &str = "cres_kafka_";
+pub const TOKEN_PREFIX: &str = "obes_kafka_";
 
 pub const DEFAULT_OPS: &[&str] = &["produce", "list_topics", "health"];
 
@@ -134,18 +134,18 @@ mod tests {
         let t = generate_token();
         assert!(t.starts_with(TOKEN_PREFIX));
         assert_eq!(hash_token(&t).len(), 64);
-        assert!(token_prefix(&t).starts_with("cres_kafka_"));
+        assert!(token_prefix(&t).starts_with("obes_kafka_"));
     }
 
     #[test]
     fn extract_api_key_and_x_header() {
         let mut h = HeaderMap::new();
-        h.insert("authorization", "ApiKey cres_kafka_abc".parse().unwrap());
-        assert_eq!(extract_token(&h).as_deref(), Some("cres_kafka_abc"));
+        h.insert("authorization", "ApiKey obes_kafka_abc".parse().unwrap());
+        assert_eq!(extract_token(&h).as_deref(), Some("obes_kafka_abc"));
 
         let mut h2 = HeaderMap::new();
-        h2.insert("x-kafka-token", "cres_kafka_xyz".parse().unwrap());
-        assert_eq!(extract_token(&h2).as_deref(), Some("cres_kafka_xyz"));
+        h2.insert("x-kafka-token", "obes_kafka_xyz".parse().unwrap());
+        assert_eq!(extract_token(&h2).as_deref(), Some("obes_kafka_xyz"));
     }
 
     #[test]

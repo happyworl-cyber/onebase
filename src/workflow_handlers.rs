@@ -2634,8 +2634,8 @@ async fn resolve_endpoint_caller(
         .and_then(|v| v.strip_prefix("Bearer "));
     let apikey = headers.get("apikey").and_then(|h| h.to_str().ok());
     let api_key = bearer
-        .filter(|v| v.starts_with("cr_"))
-        .or_else(|| apikey.filter(|v| v.starts_with("cr_")));
+        .filter(|v| v.starts_with("ob_"))
+        .or_else(|| apikey.filter(|v| v.starts_with("ob_")));
 
     if let Some(key) = api_key {
         let row = sqlx::query(
@@ -2940,7 +2940,7 @@ async fn run_workflow_detached(
     out
 }
 
-/// 依据请求所带网关 cr_ key 的 `permissions` 与 `WORKFLOW_APIKEY_RW_GUARD` 档位，推导本次
+/// 依据请求所带网关 ob_ key 的 `permissions` 与 `WORKFLOW_APIKEY_RW_GUARD` 档位，推导本次
 /// endpoint 执行的 DB 写护栏状态。
 ///
 /// - mode=off / 无 key / 读写 key → `Off`（不拦，维持现状）。
@@ -2952,8 +2952,8 @@ async fn run_workflow_detached(
 /// - `ApiKeyContext` 由 `auth_middleware` 注入，只认 `Authorization: Bearer` 与 `?token=`；
 /// - `EndpointCaller::ApiKey` 由 `resolve_endpoint_caller` 解析，额外认 `apikey` 请求头。
 ///
-/// 只看前者，`apikey: cr_只读key` + 另一个 Bearer（JWT/crp_）就能让护栏静默失效，而工作流
-/// 却已按这把只读 key 的 database 在跑；只看后者，`?token=cr_只读key` 又会漏。取并集后
+/// 只看前者，`apikey: ob_只读key` + 另一个 Bearer（JWT/obp_）就能让护栏静默失效，而工作流
+/// 却已按这把只读 key 的 database 在跑；只看后者，`?token=ob_只读key` 又会漏。取并集后
 /// 任一路径认出的只读 key 都能生效，且两条路径指向同一把 key 时结论一致。
 fn resolve_apikey_write_guard(
     api_key_ctx: Option<&axum::Extension<ApiKeyContext>>,
@@ -3879,7 +3879,7 @@ fn map_workflow_write_err(e: sqlx::Error) -> AppError {
 // 公开接口只返回「文档必需」的字段（DocModel），不下发 nodes/edges，避免暴露节点内部配置。
 
 /// 公开文档链接 token：`ds_` 前缀 + 24 字节随机 hex（共 51 字符，< VARCHAR(64)）。
-/// 与 API Key（`cr_`/`crp_`）命名空间独立，泄露它不泄露任何调用凭证。
+/// 与 API Key（`ob_`/`obp_`）命名空间独立，泄露它不泄露任何调用凭证。
 fn generate_doc_share_token() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();
@@ -4163,7 +4163,7 @@ mod tests {
         let rw = json!({ "read": true, "write": true, "delete": true });
         let empty = json!({});
 
-        // 任一来源声明只读即生效——覆盖 `apikey: cr_只读key` + `Bearer <JWT>` 这条
+        // 任一来源声明只读即生效——覆盖 `apikey: ob_只读key` + `Bearer <JWT>` 这条
         // 绕过路径（ApiKeyContext 缺席，只有 caller 侧解析出只读 key）。
         assert_eq!(
             apikey_write_guard_for(ApiKeyWriteGuard::Enforce, &[&rw, &ro]),

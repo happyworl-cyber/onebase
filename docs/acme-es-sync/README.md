@@ -8,12 +8,12 @@
 flowchart LR
   ST["定时任务<br/>kind=rpc, cron */5min"] -->|"SELECT gamesq.es_sync_all(args)"| FN["plpgsql 函数<br/>(install.sql 部署在 gamesq)"]
   FN -->|"读"| PG[("gamesq.article<br/>project_list<br/>sq_users")]
-  FN -->|"POST /api/es-app/:idx/bulk<br/>Authorization: ApiKey cres_es_*<br/>via http 扩展"| CR["onebase<br/>应用 API"]
+  FN -->|"POST /api/es-app/:idx/bulk<br/>Authorization: ApiKey obes_es_*<br/>via http 扩展"| CR["onebase<br/>应用 API"]
   CR -->|"_bulk NDJSON"| ES[("Elasticsearch")]
   FE["前端 / 业务后端"] -->|"POST /api/es-app/:idx/search<br/>或 /api/es/* 反代"| CR
 ```
 
-**关键点**：ES 的真实 URL / 账密**只配在 onebase【ES 反向代理】里一份**；PG 这边只需要知道 onebase 在哪、以及一个 `cres_es_*` token。同步、删除、查询都走 onebase 应用 API，token 自带 method/index 白名单审计。
+**关键点**：ES 的真实 URL / 账密**只配在 onebase【ES 反向代理】里一份**；PG 这边只需要知道 onebase 在哪、以及一个 `obes_es_*` token。同步、删除、查询都走 onebase 应用 API，token 自带 method/index 白名单审计。
 
 ---
 
@@ -47,7 +47,7 @@ WHERE extname = 'http';
    - **methods_allow**：`GET, POST, PUT, DELETE`（_init 用 POST，bulk 用 POST，delete index 用 DELETE）
    - **indices_allow**：`way_article_search_main, way_community_search, way_user_search`
    - **path_denylist**：保持默认（拦掉 `_cluster`、`_security` 等）
-3. 拷贝出来的 `cres_es_xxxxxxxxxxxx`，下一步要用。token 只在新建时显示一次。
+3. 拷贝出来的 `obes_es_xxxxxxxxxxxx`，下一步要用。token 只在新建时显示一次。
 
 > 这个 token 只给"PG 调 onebase"用，与给前端用的 token 是分开的两份（前端的可以只给 `GET`/`POST`，indices 限定一样）。
 
@@ -79,7 +79,7 @@ WHERE extname = 'http';
 UPDATE gamesq._es_sync_config SET value = 'http://127.0.0.1:3006' WHERE key = 'onebase_base_url';
 
 -- 第 1 步拿到的 token
-UPDATE gamesq._es_sync_config SET value = 'cres_es_粘贴你拿到的真实 token' WHERE key = 'onebase_es_token';
+UPDATE gamesq._es_sync_config SET value = 'obes_es_粘贴你拿到的真实 token' WHERE key = 'onebase_es_token';
 
 -- 索引名、batch 默认就是参考程序那一套；如需覆盖再 UPDATE
 -- UPDATE gamesq._es_sync_config SET value = 'way_article_search_main' WHERE key = 'article_index';
@@ -234,7 +234,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_sq_users_last_active    ON gamesq.sq
 ```http
 POST /api/es-app/way_community_search/search
 Content-Type: application/json
-Authorization: ApiKey cres_es_业务端的查询 token   或   Bearer <JWT>
+Authorization: ApiKey obes_es_业务端的查询 token   或   Bearer <JWT>
 
 {
   "q": "矩阵",
@@ -249,7 +249,7 @@ Authorization: ApiKey cres_es_业务端的查询 token   或   Bearer <JWT>
 
 ```http
 POST /api/es-app/way_user_search/search
-Authorization: ApiKey cres_es_xxx
+Authorization: ApiKey obes_es_xxx
 Content-Type: application/json
 
 {
@@ -268,7 +268,7 @@ Content-Type: application/json
 ```http
 POST /api/es/way_article_search_main/_search
 Content-Type: application/json
-Authorization: ApiKey cres_es_xxx
+Authorization: ApiKey obes_es_xxx
 
 {
   "from": 0, "size": 10,
@@ -320,7 +320,7 @@ Authorization: ApiKey cres_es_xxx
 | 在 SQL 编辑器跑 `es_sync_all(60)` 报 `timeout of 30000ms exceeded` | onebase SQL 编辑器写死 30s 上限，不是脚本问题。换用第 4.2 节的 `es_health()` 验通路 + 第 4.3 节单实体小窗口验数据形状；真正运行去第 5 步配调度任务 |
 | apply `install.sql` 时 `extension "http" must be installed by superuser` | RDS 上让 DBA 在控制台勾装；自建 PG 用 `postgres` 角色装 |
 | `gamesq._es_sync_config.onebase_base_url 未配置` | 第 3 步的 UPDATE 没跑，或写到了别的库 |
-| `gamesq._es_sync_config.onebase_es_token 未配置或仍是占位值` | 同上，token 还是 `cres_es_REPLACE_ME` |
+| `gamesq._es_sync_config.onebase_es_token 未配置或仍是占位值` | 同上，token 还是 `obes_es_REPLACE_ME` |
 | `bulk way_xxx failed: status=401 body={"error":"invalid token"}` | token 拼错；或者 onebase 那边把 token 删了；回第 1 步重新申请 |
 | `bulk way_xxx failed: status=403` | token 的 `methods_allow` / `indices_allow` 不包含本次调用；去【ES 反向代理 → 代理 Token】扩白名单 |
 | `bulk way_xxx failed: status=502/503/timeout` | onebase 不可达或挂了；检查 `onebase_base_url` 在 PG 这台机器上能不能 `curl` 通；公网 RDS + 内网 onebase 要走反代/公网入口 |
