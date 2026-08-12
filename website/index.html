@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OneBase — 建库即得数据后端，私有部署、随时可交付</title>
+  <meta name="description" content="OneBase：关系数据库自动生成 REST / 实时 API，内置权限、工作流与 AI（MCP）接入。私有化部署，数据留在你自己的机房，省掉 6–12 个月自研。" />
+  <style>
+    :root {
+      --bg: #ffffff;
+      --bg-soft: #f6f7f9;
+      --ink: #0f172a;
+      --ink-soft: #475569;
+      --ink-mute: #94a3b8;
+      --line: #e6e8ec;
+      --accent: #4f46e5;
+      --accent-ink: #ffffff;
+      --radius: 12px;
+      --maxw: 1080px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; text-decoration: none; }
+    .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+    .muted { color: var(--ink-soft); }
+
+    /* Header */
+    header {
+      position: sticky; top: 0; z-index: 10;
+      background: rgba(255,255,255,.86);
+      backdrop-filter: saturate(180%) blur(8px);
+      border-bottom: 1px solid var(--line);
+    }
+    .nav { display: flex; align-items: center; gap: 24px; height: 62px; }
+    .brand { font-weight: 700; letter-spacing: .2px; font-size: 18px; }
+    .brand span { color: var(--accent); }
+    .nav-links { display: flex; gap: 22px; margin-left: 8px; }
+    .nav-links a { color: var(--ink-soft); font-size: 14px; }
+    .nav-links a:hover { color: var(--ink); }
+    .nav-spacer { flex: 1; }
+    .btn {
+      display: inline-block; border-radius: 999px; font-size: 14px; font-weight: 600;
+      padding: 9px 18px; border: 1px solid var(--accent); cursor: pointer; white-space: nowrap;
+    }
+    .btn-primary { background: var(--accent); color: var(--accent-ink); }
+    .btn-primary:hover { background: #4338ca; border-color: #4338ca; }
+    .btn-ghost { background: transparent; color: var(--accent); }
+    .btn-ghost:hover { background: #eef0fe; }
+    @media (max-width: 720px) { .nav-links { display: none; } }
+
+    /* Hero */
+    .hero { padding: 78px 0 56px; }
+    .eyebrow {
+      display: inline-block; font-size: 13px; font-weight: 600; color: var(--accent);
+      background: #eef0fe; border-radius: 999px; padding: 5px 12px; margin-bottom: 18px;
+    }
+    h1 { font-size: 42px; line-height: 1.18; margin: 0 0 18px; letter-spacing: -.5px; }
+    .sub { font-size: 18px; color: var(--ink-soft); max-width: 720px; margin: 0 0 28px; }
+    .cta-row { display: flex; gap: 12px; flex-wrap: wrap; }
+    @media (max-width: 640px) { h1 { font-size: 32px; } }
+
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 46px; }
+    .stat { border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; background: var(--bg-soft); }
+    .stat .n { font-size: 26px; font-weight: 700; color: var(--ink); }
+    .stat .l { font-size: 13.5px; color: var(--ink-soft); margin-top: 4px; }
+    @media (max-width: 720px) { .stats { grid-template-columns: 1fr; } }
+
+    /* Sections */
+    section.block { padding: 62px 0; border-top: 1px solid var(--line); }
+    .kicker { font-size: 13px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: .8px; }
+    h2 { font-size: 28px; margin: 8px 0 8px; letter-spacing: -.3px; }
+    .lead { color: var(--ink-soft); max-width: 680px; margin: 0 0 28px; }
+
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+    @media (max-width: 820px) { .grid-3, .grid-2 { grid-template-columns: 1fr; } }
+
+    .card { border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; background: #fff; }
+    .card h3 { margin: 0 0 8px; font-size: 17px; }
+    .card p { margin: 0; color: var(--ink-soft); font-size: 14.5px; }
+    .card .tag { font-size: 12.5px; font-weight: 600; color: var(--accent); }
+
+    /* Table */
+    .cmp { width: 100%; border-collapse: collapse; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; font-size: 14.5px; }
+    .cmp th, .cmp td { text-align: left; padding: 13px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    .cmp thead th { background: var(--bg-soft); font-size: 13.5px; color: var(--ink-soft); }
+    .cmp td:first-child { font-weight: 600; }
+    .cmp .ob { color: var(--accent); font-weight: 600; }
+    .cmp tr:last-child td { border-bottom: none; }
+    .cmp-wrap { overflow-x: auto; }
+
+    /* Secure list */
+    .checks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+    .check { display: flex; gap: 12px; align-items: flex-start; }
+    .dot { flex: none; width: 22px; height: 22px; border-radius: 999px; background: #eef0fe; color: var(--accent); display: grid; place-items: center; font-size: 13px; font-weight: 700; margin-top: 2px; }
+    .check strong { display: block; font-size: 15px; }
+    .check span { color: var(--ink-soft); font-size: 14px; }
+    @media (max-width: 820px) { .checks { grid-template-columns: 1fr; } }
+
+    /* CTA band */
+    .band { background: var(--ink); color: #fff; border-radius: 16px; padding: 40px; text-align: center; }
+    .band h2 { color: #fff; margin: 0 0 8px; }
+    .band p { color: #cbd5e1; margin: 0 0 22px; }
+    .band .btn-primary { border-color: #fff; }
+
+    /* Footer */
+    footer { border-top: 1px solid var(--line); padding: 34px 0; color: var(--ink-mute); font-size: 13.5px; }
+    .foot { display: flex; gap: 16px; justify-content: space-between; flex-wrap: wrap; }
+    footer a { color: var(--ink-soft); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap nav">
+      <div class="brand">One<span>Base</span></div>
+      <nav class="nav-links">
+        <a href="#capabilities">核心能力</a>
+        <a href="#compare">对比</a>
+        <a href="#who">适用团队</a>
+        <a href="#secure">部署与安全</a>
+      </nav>
+      <div class="nav-spacer"></div>
+      <a class="btn btn-primary" href="#contact">预约演示</a>
+    </div>
+  </header>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="wrap">
+      <span class="eyebrow">私有化 · 一体化数据后端</span>
+      <h1>建库即得数据后端，<br />私有部署、随时可交付</h1>
+      <p class="sub">
+        关系数据库自动生成 REST / 实时 API，内置权限、工作流与 AI（MCP）接入。
+        把 Supabase 级的开发效率装进你自己的机房——省掉 6–12 个月自研，还能打包私有交付给你的客户。
+      </p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#contact">预约演示</a>
+        <a class="btn btn-ghost" href="#contact">联系渠道</a>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><div class="n">6–12 个月</div><div class="l">省下的后端自研周期</div></div>
+        <div class="stat"><div class="n">100% 内网</div><div class="l">数据留在自己机房 · 私有可交付</div></div>
+        <div class="stat"><div class="n">4–5 合 1</div><div class="l">替代 API 网关 + 权限 + 实时 + 编排 + 存储接入</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Pain points -->
+  <section class="block" id="pain">
+    <div class="wrap">
+      <div class="kicker">你是否也在经历</div>
+      <h2>后端，正在拖慢你的交付</h2>
+      <p class="lead">不是缺功能，而是每次都要为「数据 + 接口 + 权限 + 实时 + 编排」重新拼一套、自己扛运维。</p>
+      <div class="grid-3">
+        <div class="card"><h3>每个项目都在重造后端</h3><p>建表、写 API、配权限、接实时——重复劳动，交付慢、维护重。</p></div>
+        <div class="card"><h3>数据必须留在自己机房</h3><p>合规或客户要求数据不出内网，但自建一套要 6–12 个月。</p></div>
+        <div class="card"><h3>AI 要接数据和工具</h3><p>自己拼数据层 + 工具层又慢又不可控，难以规模化。</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Capabilities -->
+  <section class="block" id="capabilities">
+    <div class="wrap">
+      <div class="kicker">核心能力</div>
+      <h2>一套数据底座，覆盖后端该有的一切</h2>
+      <p class="lead">从建库到上线，OneBase 把散落的后端组件收敛成一个可私有化、可交付的底座。</p>
+      <div class="grid-3">
+        <div class="card"><h3>关系库自动 API</h3><p>建表即得 REST 与实时接口，无需手写 CRUD 后端。</p></div>
+        <div class="card"><h3>权限与安全</h3><p>RBAC / SSO / 行级权限 / 操作审计，开箱即用。</p></div>
+        <div class="card"><h3>工作流自动化</h3><p>可视化编排，打通内部系统与外部服务。</p></div>
+        <div class="card"><h3>AI / MCP 接入</h3><p>让 AI 应用直接、安全地连上你的业务数据与工具。</p></div>
+        <div class="card"><h3>实时订阅</h3><p>数据变更实时推送，前端与下游即时感知。</p></div>
+        <div class="card"><h3>私有化交付</h3><p>Docker / K8s 一键部署，License 离线可控。</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Compare -->
+  <section class="block" id="compare">
+    <div class="wrap">
+      <div class="kicker">为什么选 OneBase</div>
+      <h2>比自建更快，比公有 BaaS 更可控</h2>
+      <p class="lead">同样是「一体化数据后端」，差别在于上线速度、数据主权和可交付性。</p>
+      <div class="cmp-wrap">
+        <table class="cmp">
+          <thead>
+            <tr><th>维度</th><th>自建后端</th><th>公有云 BaaS</th><th>OneBase</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>上线周期</td><td>6–12 个月</td><td>快，但受平台约束</td><td class="ob">建库即得，快速上线</td></tr>
+            <tr><td>数据主权</td><td>在自己机房</td><td>在厂商云上</td><td class="ob">私有化 · 数据不出内网</td></tr>
+            <tr><td>维护成本</td><td>高（多组件自运维）</td><td>低，但受制于人</td><td class="ob">一套底座，统一维护</td></tr>
+            <tr><td>可私有交付</td><td>可以，但慢</td><td>否</td><td class="ob">是，可打包交付给客户</td></tr>
+            <tr><td>售后与可控</td><td>自负其责</td><td>依赖平台</td><td class="ob">原厂 + 渠道 · License 可控</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Who -->
+  <section class="block" id="who">
+    <div class="wrap">
+      <div class="kicker">适用团队</div>
+      <h2>为这三类团队而建</h2>
+      <div class="grid-3">
+        <div class="card">
+          <div class="tag">软件公司 / SI / 外包</div>
+          <h3>把后端做成标准底座</h3>
+          <p>建库即得 API、私有交付给甲方，一套方法交付 N 个项目。</p>
+        </div>
+        <div class="card">
+          <div class="tag">传统企业 IT / 数字化</div>
+          <h3>不扩团队也能快上线</h3>
+          <p>快速上线内部数据服务，数据 100% 留在自己内网。</p>
+        </div>
+        <div class="card">
+          <div class="tag">AI 应用团队 / ISV</div>
+          <h3>现成的数据 + 工具层</h3>
+          <p>私有可控的数据 + MCP 工具层，让 AI 应用直接连业务数据。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Secure -->
+  <section class="block" id="secure">
+    <div class="wrap">
+      <div class="kicker">部署与安全</div>
+      <h2>装进你的机房，交付即可控</h2>
+      <div class="checks">
+        <div class="check"><div class="dot">✓</div><div><strong>私有化部署</strong><span>Docker / K8s 一键部署，数据 100% 留在你的内网。</span></div></div>
+        <div class="check"><div class="dot">✓</div><div><strong>离线 License</strong><span>离线授权、可控可审计，续期换文件、不停机。</span></div></div>
+        <div class="check"><div class="dot">✓</div><div><strong>双重售后</strong><span>原厂 + 授权渠道，交付与运维有人兜底。</span></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="block" id="contact">
+    <div class="wrap">
+      <div class="band">
+        <h2>先在你的内网跑一次 POC</h2>
+        <p>用真实数据验证，再决定采购。预约演示或联系你就近的授权渠道。</p>
+        <div class="cta-row" style="justify-content:center">
+          <a class="btn btn-primary" href="mailto:contact@onebase.example?subject=OneBase%20演示预约">预约演示</a>
+          <a class="btn btn-ghost" style="color:#fff;border-color:#fff" href="mailto:contact@onebase.example?subject=OneBase%20渠道合作">联系渠道</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap foot">
+      <div>© <span id="y"></span> OneBase · 私有化的一体化数据后端</div>
+      <div>联系：<a href="mailto:contact@onebase.example">contact@onebase.example</a></div>
+    </div>
+  </footer>
+
+  <script>
+    document.getElementById("y").textContent = new Date().getFullYear();
+  </script>
+</body>
+</html>
