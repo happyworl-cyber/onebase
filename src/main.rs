@@ -1683,6 +1683,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/redis-connections/:id/exec",
             post(redis_handlers::exec),
         )
+        // 模块闸门：Redis 属于「数据管道」加购模块。
+        .layer(axum_middleware::from_fn(|req, next| {
+            onebase::license::require_module(req, next, "pipeline")
+        }))
         .layer(axum_middleware::from_fn_with_state(
             pool.clone(),
             middleware::auth_middleware,
@@ -1771,6 +1775,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/object-storage-connections/:id/exec",
             post(object_storage_handlers::exec),
         )
+        // 模块闸门：对象存储属于「数据管道」加购模块。
+        .layer(axum_middleware::from_fn(|req, next| {
+            onebase::license::require_module(req, next, "pipeline")
+        }))
         .layer(axum_middleware::from_fn_with_state(
             pool.clone(),
             middleware::auth_middleware,
@@ -1816,7 +1824,11 @@ async fn main() -> anyhow::Result<()> {
                     pool.clone(),
                     es::proxy_common::es_tenant_scope_middleware,
                 )),
-        );
+        )
+        // 模块闸门：对象存储数据面属于「数据管道」加购模块。
+        .layer(axum_middleware::from_fn(|req, next| {
+            onebase::license::require_module(req, next, "pipeline")
+        }));
 
     // 代理路由：不挂 auth_middleware（token 自鉴权）。注册所有 ES 用的 HTTP 方法。
     // 同时提供旧路径 `/api/es/*` 与项目 slug 路径 `/api/v1/:database_slug/es/*`。

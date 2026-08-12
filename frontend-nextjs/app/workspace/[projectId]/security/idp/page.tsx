@@ -1587,7 +1587,7 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                 value={appForm.displayName}
                 onChange={(e) => setAppForm((prev) => ({ ...prev, displayName: e.target.value }))}
                 className="w-full input-base"
-                placeholder="例如：ShireHub Web"
+                placeholder="例如：Acme Web"
               />
             </div>
 
@@ -1600,7 +1600,7 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                 value={appForm.redirectUrisText}
                 onChange={(e) => setAppForm((prev) => ({ ...prev, redirectUrisText: e.target.value }))}
                 className="w-full input-base"
-                placeholder={'每行一个，例如：\nhttps://shirehub.com/auth/callback'}
+                placeholder={'每行一个，例如：\nhttps://acme.com/auth/callback'}
               />
               <p className="mt-1 text-xs text-gray-400">每行一个，精确匹配，不支持通配符。</p>
             </div>

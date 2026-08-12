@@ -888,7 +888,7 @@ mod tests {
 
     #[test]
     fn declares_readonly_needs_explicit_permissions() {
-        // 显式只读（线上 shirehub-workflow-readonly 就是这个形状）→ 只读。
+        // 显式只读（线上 acme-workflow-readonly 就是这个形状）→ 只读。
         assert!(api_key_declares_readonly(
             &json!({ "read": true, "write": false, "delete": false })
         ));

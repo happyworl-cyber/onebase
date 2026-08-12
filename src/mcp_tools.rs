@@ -250,7 +250,7 @@ pub fn tool_definitions() -> Value {
             "inputSchema": { "type": "object", "properties": {
                 "database_id": { "type": "integer", "description": "按数据库筛选" },
                 "tenant_id": { "type": "integer", "description": "按租户筛选" },
-                "department": { "type": "string", "description": "服务/部门精确匹配（树第一级，如 共享/Shirehub/shirehub-central）" },
+                "department": { "type": "string", "description": "服务/部门精确匹配（树第一级，如 共享/Acme/acme-central）" },
                 "category": { "type": "string", "description": "分类精确匹配（树第二级，业务领域）" },
                 "search": { "type": "string", "description": "name/slug/description 模糊匹配" }
             } }
@@ -269,7 +269,7 @@ pub fn tool_definitions() -> Value {
                 "name": { "type": "string" },
                 "slug": { "type": "string", "description": "小写字母/数字/连字符" },
                 "description": { "type": "string" },
-                "department": { "type": "string", "description": "服务/部门（树第一级）。只用已有值（先 list_workflows 看现有 department 取值，如 共享/Shirehub/shirehub-central）；跨项目复用的归「共享」；要新增服务名必须先与人确认，不许随手造新值" },
+                "department": { "type": "string", "description": "服务/部门（树第一级）。只用已有值（先 list_workflows 看现有 department 取值，如 共享/Acme/acme-central）；跨项目复用的归「共享」；要新增服务名必须先与人确认，不许随手造新值" },
                 "category": { "type": "string", "description": "分类（树第二级），按业务领域命名（如 发帖/帖子列表/登录），不按技术来源命名（禁止「xx迁移」这类）。优先复用该 department 下已有分类，避免新造同义词；APP/web 行为差异不用分类区分，用 slug 后缀（-app/-web）区分" },
                 "database_id": { "type": "integer", "description": "绑定的数据库（endpoint 路径用其 slug）" },
                 "tenant_id": { "type": "integer" },

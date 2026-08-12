@@ -1,6 +1,6 @@
 # Stripe 订单处理工作流（admin 异常订单处理）
 
-> 配合 shirehub-central `/finance` 订单处理功能。本文是**部署清单 + 节点设计**，
+> 配合 acme-central `/finance` 订单处理功能。本文是**部署清单 + 节点设计**，
 > 需用 PATCH 工作流 API 灌入 onebase DB（仓库无源文件，工作流存库）。
 > ⚠️ 这些定义未经引擎实跑校验，部署后须用 Stripe 沙盒逐个联调（尤其 WF-B 退款）。
 

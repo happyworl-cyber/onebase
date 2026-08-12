@@ -943,11 +943,11 @@ fn parse_filters_from_query(query_string: &str) -> Vec<(String, String, String)>
 
 /// Auto API 的 `database_id` 权威来源是 `X-Database-Id` 请求头。
 ///
-/// 路由里第一段是 `:database_slug`（可能是 slug 如 `shirehub`，也可能是数字
+/// 路由里第一段是 `:database_slug`（可能是 slug 如 `acme`，也可能是数字
 /// id 如 `5`）。axum 的路由匹配（path 参数捕获）发生在 `Router::layer` 中间件
 /// **之前**，所以 `auto_api_database_slug_middleware` 改写 URI 对 handler 的
 /// `Path<(i32, ...)>` 提取是无效的——捕获到的仍是原始 slug 字符串，直接当 i32
-/// 解析会 400（`Cannot parse "shirehub" to i32`）。因此 handler 不能从 path 段
+/// 解析会 400（`Cannot parse "acme" to i32`）。因此 handler 不能从 path 段
 /// 取 database_id，必须读中间件已解析好并覆盖写入的 `X-Database-Id` 头（与 RPC
 /// 路径同款做法）。
 fn database_id_from_headers(headers: &HeaderMap) -> Result<i32> {

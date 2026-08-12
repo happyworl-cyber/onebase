@@ -575,7 +575,7 @@ export default function SessionRulesPage() {
               type="text"
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="例：shirehub-headers"
+              placeholder="例：acme-headers"
               className="w-full input-base"
               maxLength={100}
             />

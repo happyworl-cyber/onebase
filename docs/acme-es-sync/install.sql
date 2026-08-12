@@ -1,9 +1,9 @@
 -- =====================================================================
--- ShireHub → Elasticsearch 同步：纯 SQL 方案
+-- Acme → Elasticsearch 同步：纯 SQL 方案
 --   PG http 扩展 ──> onebase /api/es-app/* ──> Elasticsearch
 -- =====================================================================
 --
--- 在 onebase 的【SQL 编辑器】里按 `shirehub_test` (库=supabase, schema=gamesq)
+-- 在 onebase 的【SQL 编辑器】里按 `acme_test` (库=supabase, schema=gamesq)
 -- 整段 paste & run。需要超管权限。
 --
 -- 设计要点：
