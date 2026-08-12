@@ -1,4 +1,4 @@
-# ShireHub → Elasticsearch 同步与搜索（纯配置方案）
+# Acme → Elasticsearch 同步与搜索（纯配置方案）
 
 把 `gamesq.article` / `gamesq.project_list` / `gamesq.sq_users` 三张表周期性同步到 Elasticsearch，再让业务通过 HTTP 关键词检索——**全程不修改 onebase 代码、不部署外部脚本**。
 
@@ -53,7 +53,7 @@ WHERE extname = 'http';
 
 ## 第 2 步：apply `install.sql`
 
-打开 onebase 控制台 → 左侧【SQL 查询】→ **左上角连接选 `shirehub_test`（库 supabase, schema gamesq）**，把 `docs/shirehub-es-sync/install.sql` 整份复制进去，点执行。
+打开 onebase 控制台 → 左侧【SQL 查询】→ **左上角连接选 `acme_test`（库 supabase, schema gamesq）**，把 `docs/acme-es-sync/install.sql` 整份复制进去，点执行。
 
 脚本完全幂等：`CREATE OR REPLACE FUNCTION` + `CREATE TABLE IF NOT EXISTS` + `INSERT ON CONFLICT DO NOTHING`，可以反复 apply。
 
@@ -179,13 +179,13 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_sq_users_last_active    ON gamesq.sq
 
 ## 第 5 步：在【定时任务】UI 里建两条 rpc 任务
 
-进 onebase【定时任务】→ 新建。**左上角连接确保选的是 `shirehub_test`**（决定任务的 `database_id`，rpc 在该库执行）。
+进 onebase【定时任务】→ 新建。**左上角连接确保选的是 `acme_test`**（决定任务的 `database_id`，rpc 在该库执行）。
 
 ### 5.1 增量同步（每 5 分钟）
 
 | 字段 | 值 |
 | --- | --- |
-| 名称 | `ShireHub ES 增量同步` |
+| 名称 | `Acme ES 增量同步` |
 | 描述 | `每 5min 回看 10min，同步新数据 + 清理软删` |
 | 任务类型 | `RPC 调用` |
 | cron 表达式 | `*/5 * * * *` |
@@ -193,7 +193,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_sq_users_last_active    ON gamesq.sq
 | overlap_policy | `skip` |
 | 超时 (秒) | `120` |
 | 最大重试 | `0` |
-| 连接 / database_id | `shirehub_test` |
+| 连接 / database_id | `acme_test` |
 | schema | `gamesq` |
 | 函数名 | `es_sync_all` |
 | 实参 (rpc_args) | 见下方 |
@@ -211,7 +211,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_sq_users_last_active    ON gamesq.sq
 
 | 字段 | 值 |
 | --- | --- |
-| 名称 | `ShireHub ES 全量同步` |
+| 名称 | `Acme ES 全量同步` |
 | cron 表达式 | `0 3 * * *`（UTC，对应北京时间 11:00） |
 | 超时 (秒) | `1800`（按表行数调） |
 | schema / 函数名 | `gamesq` / `es_sync_all` |
@@ -333,7 +333,7 @@ Authorization: ApiKey cres_es_xxx
 ## 文件清单
 
 ```
-docs/shirehub-es-sync/
+docs/acme-es-sync/
 ├── README.md         本文件
 └── install.sql       PG 函数 / 设置表 / 索引 mapping（一次性 apply）
 ```

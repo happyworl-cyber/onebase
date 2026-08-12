@@ -3,7 +3,7 @@
 ## 运行环境
 
 - 服务器：`http://127.0.0.1:3000`
-- 数据库 slug：`shirehub-test`（`database_id=2`, `tenant_id=4`）
+- 数据库 slug：`acme-test`（`database_id=2`, `tenant_id=4`）
 - gamesq schema 存放所有插件业务表
 - 工作流通过 OneBase 引擎执行，节点类型：`code`(Lua 5.4)、`db_query`、`db_execute`、`db_transaction`、`condition`、`response`、`http_call`、`foreach`
 
@@ -17,7 +17,7 @@ PLUGIN_BASE_URL=https://yourapp.com         # 用于拼 success_url/cancel_url
 
 本地开发调试 webhook：
 ```bash
-stripe listen --forward-to http://localhost:3000/pub/workflow/shirehub-test/stripe-webhook
+stripe listen --forward-to http://localhost:3000/pub/workflow/acme-test/stripe-webhook
 # 记下输出的 whsec_xxx 设置到 PLUGIN_STRIPE_WEBHOOK_SECRET
 stripe events resend <evt_id>   # 重放事件
 ```
@@ -106,7 +106,7 @@ created_at
 
 ---
 
-### WF11 — stripe-cancel（POST /workflow/shirehub-test/stripe-cancel）
+### WF11 — stripe-cancel（POST /workflow/acme-test/stripe-cancel）
 取消订阅，设置 cancel_at = expires_at。
 
 **入参（body）**：`project_id`, `way_uid`, `plugin_key`
@@ -117,7 +117,7 @@ created_at
 
 ---
 
-### WF12 — stripe-get-order（POST /workflow/shirehub-test/stripe-get-order）
+### WF12 — stripe-get-order（POST /workflow/acme-test/stripe-get-order）
 查单个订单状态，前端支付结果页轮询用。
 
 **入参**：`provider_session_id`, `way_uid`
@@ -131,7 +131,7 @@ created_at
 
 ---
 
-### WF13 — stripe-list-subscriptions（POST /workflow/shirehub-test/stripe-list-subscriptions）
+### WF13 — stripe-list-subscriptions（POST /workflow/acme-test/stripe-list-subscriptions）
 列出某项目的所有订阅。
 
 **入参**：`project_id`, `way_uid`
@@ -140,14 +140,14 @@ created_at
 
 ---
 
-### WF14 — stripe-list-orders（POST /workflow/shirehub-test/stripe-list-orders）
+### WF14 — stripe-list-orders（POST /workflow/acme-test/stripe-list-orders）
 分页查订单历史。
 
 **入参**：`project_id`, `way_uid`, `page`（可选，默认1）, `page_size`（可选，默认10）
 
 ---
 
-### WF15 — stripe-checkout（POST /workflow/shirehub-test/stripe-checkout）
+### WF15 — stripe-checkout（POST /workflow/acme-test/stripe-checkout）
 新购插件，创建 Stripe Checkout Session。
 
 **入参**：
@@ -186,7 +186,7 @@ ownership_check → auth
 
 ---
 
-### WF17 — stripe-renew（POST /workflow/shirehub-test/stripe-renew）
+### WF17 — stripe-renew（POST /workflow/acme-test/stripe-renew）
 已有订阅续费，流程与 WF15 基本相同。
 
 **差异**：
@@ -203,7 +203,7 @@ ownership_check → auth
 
 ---
 
-### WF20 — stripe-webhook（POST /pub/workflow/shirehub-test/stripe-webhook）
+### WF20 — stripe-webhook（POST /pub/workflow/acme-test/stripe-webhook）
 Stripe webhook 接收处理，**无鉴权**，通过 HMAC 验签保证安全。
 
 **流程**：

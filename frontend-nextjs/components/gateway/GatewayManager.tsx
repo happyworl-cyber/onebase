@@ -1327,7 +1327,7 @@ export default function GatewayManager({
                   }
                   rows={3}
                   spellCheck={false}
-                  placeholder="onebase-auth.shirehub.net"
+                  placeholder="onebase-auth.acme.net"
                   className="mt-1 w-full border border-gray-200 rounded-md px-3 py-2 text-sm font-mono bg-white"
                 />
               </label>
@@ -2175,7 +2175,7 @@ export default function GatewayManager({
           <div className="p-5 space-y-5">
             <form onSubmit={createCliToken} className="border border-gray-200 rounded-lg p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
               <h3 className="md:col-span-2 text-sm font-semibold text-gray-900">创建 CLI Token</h3>
-              <input value={cliTokenForm.name} onChange={(event) => setCliTokenForm((p) => ({ ...p, name: event.target.value }))} placeholder="Token 名称，如 shirehub-release-bot" className="border border-gray-200 rounded-md px-3 py-2 text-sm" />
+              <input value={cliTokenForm.name} onChange={(event) => setCliTokenForm((p) => ({ ...p, name: event.target.value }))} placeholder="Token 名称，如 acme-release-bot" className="border border-gray-200 rounded-md px-3 py-2 text-sm" />
               <input value={cliTokenForm.username} onChange={(event) => setCliTokenForm((p) => ({ ...p, username: event.target.value }))} placeholder="归属人 / 机器人名称" className="border border-gray-200 rounded-md px-3 py-2 text-sm" />
               <input value={cliTokenForm.email} onChange={(event) => setCliTokenForm((p) => ({ ...p, email: event.target.value }))} placeholder="邮箱（可选）" className="border border-gray-200 rounded-md px-3 py-2 text-sm" />
               <input value={cliTokenForm.scopes} onChange={(event) => setCliTokenForm((p) => ({ ...p, scopes: event.target.value }))} placeholder="scopes，逗号分隔" className="border border-gray-200 rounded-md px-3 py-2 text-sm font-mono" />

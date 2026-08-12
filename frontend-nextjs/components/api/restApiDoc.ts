@@ -21,7 +21,7 @@ export interface DocEndpoint {
 export interface RestApiDocInput {
   /** 后端基址（可为空，公开页用 '' → 由浏览器 origin 决定）。 */
   apiBaseUrl: string
-  /** REST 路径段：tenant_databases.slug（如 shirehub-test）。 */
+  /** REST 路径段：tenant_databases.slug（如 acme-test）。 */
   databaseSlug: string
   /** 当前 schema（如 gamesq / public）。 */
   schema: string

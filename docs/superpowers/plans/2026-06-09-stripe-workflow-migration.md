@@ -272,7 +272,7 @@ curl -s -X POST http://127.0.0.1:3000/api/admin/workflows \
 
 ```bash
 # 替换 project_id/way_uid 为真实测试数据
-curl -s -X POST "http://127.0.0.1:3000/workflow/shirehub-test-primary/stripe-cancel" \
+curl -s -X POST "http://127.0.0.1:3000/workflow/acme-test-primary/stripe-cancel" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"project_id": 1, "plugin_key": "test-plugin", "way_uid": "test_uid"}'
@@ -283,7 +283,7 @@ Expected（有权限时）: `{"code":0,"message":"ok","data":{"cancelled":true}}
 - [ ] **Step 2.3：测试鉴权拒绝路径**
 
 ```bash
-curl -s -X POST "http://127.0.0.1:3000/workflow/shirehub-test-primary/stripe-cancel" \
+curl -s -X POST "http://127.0.0.1:3000/workflow/acme-test-primary/stripe-cancel" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"project_id": 999999, "plugin_key": "x", "way_uid": "nobody"}'
@@ -382,7 +382,7 @@ curl -s -X POST http://127.0.0.1:3000/api/admin/workflows \
 - [ ] **Step 3.2：测试不存在的 session_id**
 
 ```bash
-curl -s -X POST "http://127.0.0.1:3000/workflow/shirehub-test-primary/stripe-get-order" \
+curl -s -X POST "http://127.0.0.1:3000/workflow/acme-test-primary/stripe-get-order" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"provider_session_id": "cs_test_nonexistent", "way_uid": "test"}'
@@ -464,7 +464,7 @@ curl -s -X POST http://127.0.0.1:3000/api/admin/workflows \
 - [ ] **Step 4.2：测试无权限**
 
 ```bash
-curl -s -X POST "http://127.0.0.1:3000/workflow/shirehub-test-primary/stripe-list-subscriptions" \
+curl -s -X POST "http://127.0.0.1:3000/workflow/acme-test-primary/stripe-list-subscriptions" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"project_id": 999999, "way_uid": "nobody"}'
@@ -556,7 +556,7 @@ curl -s -X POST http://127.0.0.1:3000/api/admin/workflows \
 - [ ] **Step 5.2：测试分页查询**
 
 ```bash
-curl -s -X POST "http://127.0.0.1:3000/workflow/shirehub-test-primary/stripe-list-orders" \
+curl -s -X POST "http://127.0.0.1:3000/workflow/acme-test-primary/stripe-list-orders" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"project_id": 999999, "way_uid": "nobody", "page": 1, "page_size": 20, "offset": 0}'
@@ -785,7 +785,7 @@ Expected: `nodes: 15 edges: 17`
 - [ ] **Step 6.3：测试无权限**
 
 ```bash
-curl -s -X POST "http://127.0.0.1:3000/workflow/shirehub-test-primary/stripe-checkout" \
+curl -s -X POST "http://127.0.0.1:3000/workflow/acme-test-primary/stripe-checkout" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"project_id": 999999, "plugin_key": "x", "plan_key": "monthly", "idempotency_key": "test_k1", "way_uid": "nobody"}'
@@ -796,7 +796,7 @@ Expected: `{"code":403,"message":"PAYMENT_PROJECT_FORBIDDEN"}`
 - [ ] **Step 6.4：测试插件不存在**
 
 ```bash
-curl -s -X POST "http://127.0.0.1:3000/workflow/shirehub-test-primary/stripe-checkout" \
+curl -s -X POST "http://127.0.0.1:3000/workflow/acme-test-primary/stripe-checkout" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"project_id": 1, "plugin_key": "nonexistent-plugin-xyz", "plan_key": "monthly", "idempotency_key": "test_k2", "way_uid": "valid_uid"}'
@@ -1280,7 +1280,7 @@ curl -s -X POST http://127.0.0.1:3000/api/admin/workflows \
   }'
 
 # 触发
-curl -s -X POST "http://127.0.0.1:3000/workflow/shirehub-test-primary/test-hmac-tmp" \
+curl -s -X POST "http://127.0.0.1:3000/workflow/acme-test-primary/test-hmac-tmp" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{}'
 ```
 
@@ -1408,7 +1408,7 @@ Expected: 无输出（无编译错误）
 - [ ] **Step 10.4：测试 raw body 可访问**
 
 ```bash
-curl -s -X POST "http://127.0.0.1:3000/workflow/shirehub-test-primary/test-raw-tmp" \
+curl -s -X POST "http://127.0.0.1:3000/workflow/acme-test-primary/test-raw-tmp" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"hello":"world"}'
@@ -1835,7 +1835,7 @@ curl -s -X POST http://127.0.0.1:3000/api/admin/workflows \
 - [ ] **Step 14.2：测试签名验证失败被拒绝**
 
 ```bash
-curl -s -X POST "http://127.0.0.1:3000/workflow/shirehub-test-primary/stripe-webhook" \
+curl -s -X POST "http://127.0.0.1:3000/workflow/acme-test-primary/stripe-webhook" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "stripe-signature: t=1234,v1=badsig" \

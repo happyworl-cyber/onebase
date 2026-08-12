@@ -2,7 +2,7 @@
 
 > 状态：design 待 user review（2026-05-27，合并 dev_lua_plugins 分支后第 2 次修订）。
 >
-> 上游背景：当前 `src/session_hooks.rs` 已落地 API Key 级声明式 hook（仅写在 `api_keys.permissions` JSON 里，无 UI）；shirehub 项目验证可用。本设计把它**升级**为项目级显式资源，带 CRUD UI，是 v1 阶段。
+> 上游背景：当前 `src/session_hooks.rs` 已落地 API Key 级声明式 hook（仅写在 `api_keys.permissions` JSON 里，无 UI）；acme 项目验证可用。本设计把它**升级**为项目级显式资源，带 CRUD UI，是 v1 阶段。
 >
 > 显式不做：Lua / 脚本钩子。**注意**：这次合并已经把另一条产品线"DAG 工作流引擎 + Lua 沙盒"落地（`src/workflow_engine.rs` + `workflow_handlers.rs` + `workflow_trigger.rs` + `lua_engine.rs`），覆盖**异步**触发场景（hook on Auto API CRUD 事件、HTTP endpoint trigger、manual、cron）。session_rules 与之**显式不重叠**——边界见 §1.3。
 
@@ -60,7 +60,7 @@
 | 主体范围 | 仅 **API Key** 主体 | JWT 已可信，覆盖语义错乱；headers 投喂仅对网关链路有意义 |
 | 规则类型 | 仅 **header → PG GUC** | 复用 `session_hooks::SessionHook` 已有类型 |
 | 多规则合并顺序 | 按 `id` 升序合并，同 GUC 写后者覆盖前者 | 简单、可预测；UI 列表也以 id 排序 |
-| 与 api_key 级 hooks 关系 | **api_key > project**（细覆盖粗） | 现存 shirehub key 不影响；project 提供项目默认 |
+| 与 api_key 级 hooks 关系 | **api_key > project**（细覆盖粗） | 现存 acme key 不影响；project 提供项目默认 |
 | 审计 | 规则 CRUD 写 audit_logs；规则执行不写 | 写规则是高危低频；执行是低危高频，不可入 audit |
 | 权限 | 超管 / 该 tenant 的 owner-admin | 与 scheduler / webhook 同档；不下放给普通成员 |
 

@@ -29,10 +29,10 @@
 
 HTTP 端点类型的工作流，外部调用地址为：
 ```
-POST /workflow/shirehub-test-primary/{slug}
+POST /workflow/acme-test-primary/{slug}
 Content-Type: application/json
 ```
-`shirehub-test-primary` 对应 UI 数据库下拉框里选的那个数据库名。  
+`acme-test-primary` 对应 UI 数据库下拉框里选的那个数据库名。  
 Cron 定时工作流不需要外部调用，引擎自动按时间触发。
 
 ### 1.3 条件分支连线
@@ -180,7 +180,7 @@ end
 - 名称：`订阅到期失效`
 - Slug：`stripe-expiry-job`
 - 触发：`Cron`，表达式 `0 * * * *`（每小时整点触发）
-- 数据库：shirehub-test-primary
+- 数据库：acme-test-primary
 
 **节点：只需 1 个**
 
@@ -214,11 +214,11 @@ WHERE status = 'active'           -- 只处理当前激活的订阅
 - 名称：`取消订阅`
 - Slug：`stripe-cancel`
 - 触发：`HTTP 端点`
-- 数据库：shirehub-test-primary
+- 数据库：acme-test-primary
 
 **前端调用方式：**
 ```json
-POST /workflow/shirehub-test-primary/stripe-cancel
+POST /workflow/acme-test-primary/stripe-cancel
 {
   "project_id": 123,
   "plugin_key": "ai-bot",
@@ -346,7 +346,7 @@ WHERE project_id = $1::int    -- $1 = project_id
 
 **前端调用方式：**
 ```json
-POST /workflow/shirehub-test-primary/stripe-get-order
+POST /workflow/acme-test-primary/stripe-get-order
 {
   "provider_session_id": "cs_test_xxx",
   "way_uid": "456"
@@ -455,7 +455,7 @@ LIMIT 1
 
 **前端调用：**
 ```json
-POST /workflow/shirehub-test-primary/stripe-list-subscriptions
+POST /workflow/acme-test-primary/stripe-list-subscriptions
 { "project_id": 123, "way_uid": "456" }
 ```
 
@@ -516,7 +516,7 @@ WHERE project_id = $1::int
 
 **前端调用：**
 ```json
-POST /workflow/shirehub-test-primary/stripe-list-orders
+POST /workflow/acme-test-primary/stripe-list-orders
 {
   "project_id": 123,
   "way_uid": "456",
@@ -594,7 +594,7 @@ OFFSET $3::int                    -- $3 = offset，跳过多少条
 
 **前端调用：**
 ```json
-POST /workflow/shirehub-test-primary/stripe-checkout
+POST /workflow/acme-test-primary/stripe-checkout
 {
   "project_id": 123,
   "plugin_key": "ai-bot",
