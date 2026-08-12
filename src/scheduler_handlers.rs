@@ -253,6 +253,40 @@ fn fill_from_api_key_context(
     }
 }
 
+/// 定时任务**管理操作**打点（建/改/删/启停/立即触发）。
+/// - 平台级任务（`tenant_id = None`）无租户归属 → 跳过（对齐工作流）。
+/// - 任务的**自动定时执行**不在此打点（太频繁），其可观测性由执行日志 / task_runs 覆盖。
+fn record_task_op(
+    pool: &PgPool,
+    claims: &Claims,
+    tenant_id: Option<i32>,
+    action: &str,
+    task_id: i64,
+    task_name: &str,
+    summary: String,
+    high_risk: Option<bool>,
+) {
+    let tenant_id = match tenant_id {
+        Some(t) => t,
+        None => return,
+    };
+    let mut input = crate::operation_log::OperationLogInput::new(
+        tenant_id,
+        crate::operation_log::Actor::from_claims(claims),
+        crate::operation_log::Source::Console,
+        action,
+        summary,
+        crate::operation_log::Status::Success,
+    )
+    .resource(
+        crate::operation_log::resource_type::SCHEDULED_TASK,
+        task_name.to_string(),
+        Some(task_id.to_string()),
+    );
+    input.high_risk = high_risk;
+    crate::operation_log::record(pool, input);
+}
+
 pub async fn create_task(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
@@ -375,6 +409,17 @@ pub async fn create_task(
         name = %req.name,
         operator = claims.sub,
         "创建定时任务"
+    );
+
+    record_task_op(
+        &pool,
+        &claims,
+        row.tenant_id,
+        crate::operation_log::action::CREATE,
+        row.id,
+        &row.name,
+        format!("创建定时任务「{}」（{}）", row.name, kind),
+        None,
     );
 
     Ok(Json(redact_secret(row)))
@@ -613,6 +658,17 @@ pub async fn update_task(
         "更新定时任务"
     );
 
+    record_task_op(
+        &pool,
+        &claims,
+        row.tenant_id,
+        crate::operation_log::action::UPDATE,
+        row.id,
+        &row.name,
+        format!("修改定时任务「{}」", row.name),
+        None,
+    );
+
     Ok(Json(redact_secret(row)))
 }
 
@@ -634,6 +690,16 @@ pub async fn delete_task(
         tenant_id = ?task.tenant_id,
         operator = claims.sub,
         "删除定时任务"
+    );
+    record_task_op(
+        &pool,
+        &claims,
+        task.tenant_id,
+        crate::operation_log::action::DELETE,
+        id,
+        &task.name,
+        format!("删除定时任务「{}」", task.name),
+        None,
     );
     Ok(Json(json!({"deleted": true, "id": id})))
 }
@@ -695,6 +761,16 @@ async fn set_active(
         "{}定时任务",
         if active { "恢复" } else { "暂停" }
     );
+    record_task_op(
+        pool,
+        claims,
+        task.tenant_id,
+        crate::operation_log::action::UPDATE,
+        id,
+        &task.name,
+        format!("{}定时任务「{}」", if active { "启用" } else { "停用" }, task.name),
+        None,
+    );
     Ok(Json(json!({"id": id, "is_active": active})))
 }
 
@@ -721,6 +797,17 @@ pub async fn run_now(
         kind = %task.kind,
         operator = claims.sub,
         "手动触发定时任务（run-now）"
+    );
+    // 人工「立即运行」是低频主动操作，打点（区别于自动定时触发——后者不打点）。
+    record_task_op(
+        &pool,
+        &claims,
+        task.tenant_id,
+        crate::operation_log::action::TRIGGER,
+        id,
+        &task.name,
+        format!("手动触发定时任务「{}」", task.name),
+        None,
     );
     // trigger_now 签名是 `pub async fn trigger_now(self: Arc<Self>, task)`——
     // 这里 clone Arc 出来传所有权；不要直接 `runner.trigger_now(...)`。

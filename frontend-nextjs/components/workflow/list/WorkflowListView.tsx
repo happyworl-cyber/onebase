@@ -676,9 +676,21 @@ export default function WorkflowListView({
                 return { ...s, trigs, page: 1 }
               })
             }
+            onClearTrigs={() => setState((s) => ({ ...s, trigs: new Set(), page: 1 }))}
             onSetAuthor={(author) => setState((s) => ({ ...s, author, page: 1 }))}
             onSetSort={(sort) => setState((s) => ({ ...s, sort, page: 1 }))}
             onSetView={(view) => setState((s) => ({ ...s, view, page: 1 }))}
+            onResetFilters={() =>
+              setState((s) => ({
+                ...s,
+                search: '',
+                globalSearch: false,
+                trigs: new Set(),
+                author: null,
+                status: 'all',
+                page: 1,
+              }))
+            }
           />
 
           <WorkflowBatchBanner

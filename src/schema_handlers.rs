@@ -1,6 +1,7 @@
 use crate::auth::Claims;
 use crate::error::{AppError, Result};
 use crate::middleware::CurrentDatabaseId;
+use crate::operation_log::{self, Actor, Source, Status};
 use crate::permissions;
 use axum::{
     extract::{Path, State},
@@ -229,6 +230,22 @@ pub async fn create_schema(
 
     tracing::info!("创建了新 schema: {}", schema_name);
 
+    operation_log::record_db_op(
+        &main_pool,
+        database_id,
+        Actor::from_claims(&claims),
+        Source::Console,
+        operation_log::action::CREATE,
+        operation_log::resource_type::SCHEMA,
+        Some(schema_name.to_string()),
+        None,
+        format!("创建 Schema「{}」", schema_name),
+        Status::Success,
+        None,
+        None,
+        None,
+    );
+
     Ok(Json(serde_json::json!({
         "success": true,
         "message": format!("Schema '{}' 创建成功", schema_name),
@@ -325,6 +342,25 @@ pub async fn drop_schema(
     })?;
 
     tracing::info!("删除了 schema: {} (cascade={})", schema, cascade);
+
+    operation_log::record_db_op(
+        &main_pool,
+        database_id,
+        Actor::from_claims(&claims),
+        Source::Console,
+        operation_log::action::DELETE,
+        operation_log::resource_type::SCHEMA,
+        Some(schema.clone()),
+        None,
+        format!("删除 Schema「{}」{}", schema, if cascade { "（级联）" } else { "" }),
+        Status::Success,
+        None, // derive_high_risk → 高危
+        Some(serde_json::json!({
+            "v": 1, "kind": "deleted",
+            "fields": { "级联删除": cascade }
+        })),
+        None,
+    );
 
     Ok(Json(serde_json::json!({
         "success": true,

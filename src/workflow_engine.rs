@@ -144,6 +144,70 @@ pub fn stale_grace_secs() -> i64 {
     })
 }
 
+/// 网关 cr_ API Key 只读护栏的档位。
+///
+/// 既是环境变量 `WORKFLOW_APIKEY_RW_GUARD` 的解析结果，也是运行时存入
+/// [`ExecutionContext::apikey_write_guard`] 的状态：
+/// - `Off`：不启用（等于历史行为）。也用于「无 key / 读写 key / mode=off」时的运行时状态。
+/// - `LogOnly`：只读 key 命中 DB 写节点时**不拦**，仅打审计日志（灰度观测）。
+/// - `Enforce`：只读 key 命中 DB 写节点时真正拦截（返回 blocked mock）。
+///
+/// 用单一枚举同时承载「配置档位」与「运行时状态」：`bool` 无法区分 `log_only`
+/// （不拦但要打影子日志）与 `off`（什么都不做），故用三态枚举。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ApiKeyWriteGuard {
+    #[default]
+    Off,
+    LogOnly,
+    Enforce,
+}
+
+impl ApiKeyWriteGuard {
+    /// 是否应真正拦截 DB 写（仅 `Enforce`）。
+    pub fn should_block_db_write(self) -> bool {
+        matches!(self, ApiKeyWriteGuard::Enforce)
+    }
+
+    /// 命中 DB 写节点时是否应记审计日志（`LogOnly` 影子命中 + `Enforce` 真拦）。
+    pub fn should_log_db_write(self) -> bool {
+        matches!(self, ApiKeyWriteGuard::LogOnly | ApiKeyWriteGuard::Enforce)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ApiKeyWriteGuard::Off => "off",
+            ApiKeyWriteGuard::LogOnly => "log_only",
+            ApiKeyWriteGuard::Enforce => "enforce",
+        }
+    }
+}
+
+/// 解析 `WORKFLOW_APIKEY_RW_GUARD` 配置档位。默认 `log_only`（先观测，最安全）；
+/// 脏值告警并回退默认。仅在进程首次读取时求值一次（OnceLock 缓存）。
+pub fn apikey_rw_guard_mode() -> ApiKeyWriteGuard {
+    static V: OnceLock<ApiKeyWriteGuard> = OnceLock::new();
+    *V.get_or_init(|| parse_apikey_rw_guard(std::env::var("WORKFLOW_APIKEY_RW_GUARD").ok().as_deref()))
+}
+
+/// 纯解析（可注入，便于单测）：缺失 → 默认 `log_only`；脏值告警后回退 `log_only`。
+pub fn parse_apikey_rw_guard(raw: Option<&str>) -> ApiKeyWriteGuard {
+    match raw {
+        None => ApiKeyWriteGuard::LogOnly,
+        Some(raw) => match raw.trim().to_ascii_lowercase().as_str() {
+            "off" => ApiKeyWriteGuard::Off,
+            "log_only" | "logonly" | "log" => ApiKeyWriteGuard::LogOnly,
+            "enforce" | "block" | "on" => ApiKeyWriteGuard::Enforce,
+            other => {
+                tracing::warn!(
+                    "WORKFLOW_APIKEY_RW_GUARD={:?} 无效，回退默认 log_only",
+                    other
+                );
+                ApiKeyWriteGuard::LogOnly
+            }
+        },
+    }
+}
+
 // ─── DAG 数据模型 ─────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -289,6 +353,24 @@ pub struct ExecutionContext {
     /// 生产实例（RUST_ENV 非 development/staging/test）置 true，其余路径恒为 false，
     /// 线上运行时行为不变。
     pub prod_readonly: bool,
+    /// 网关 cr_ API Key 只读护栏（DB 写维度）。仅 `endpoint` 触发时按请求所带 cr_ key 的
+    /// `permissions` 与 `WORKFLOW_APIKEY_RW_GUARD` 档位推导；其余触发路径恒 `Off`。
+    ///
+    /// 与 `prod_readonly` 的区别：本标志**只**约束 DB 写（db_execute / db_transaction /
+    /// foreach 走 blocked mock，db_query 走 READ ONLY 事务），**不**动 http/email/sse。
+    pub apikey_write_guard: ApiKeyWriteGuard,
+}
+
+impl ExecutionContext {
+    /// 是否应真正拦截本次执行的 DB 写节点（只读 key + enforce 档）。
+    pub fn should_block_db_write(&self) -> bool {
+        self.apikey_write_guard.should_block_db_write()
+    }
+
+    /// 命中 DB 写节点时是否应记只读护栏审计日志（log_only 影子 + enforce 真拦）。
+    pub fn should_log_db_write(&self) -> bool {
+        self.apikey_write_guard.should_log_db_write()
+    }
 }
 
 /// 手写 Debug：`env_vars` 只打印数量，绝不打印键值，防止密钥经 `{:?}` 泄漏。
@@ -310,6 +392,7 @@ impl std::fmt::Debug for ExecutionContext {
             .field("workflow_dependencies", &self.workflow_dependencies)
             .field("dry_run", &self.dry_run)
             .field("prod_readonly", &self.prod_readonly)
+            .field("apikey_write_guard", &self.apikey_write_guard)
             .finish()
     }
 }
@@ -1899,7 +1982,7 @@ pub async fn resolve_datasource_conn(
                 username: meta.username,
                 password: meta.password,
                 max_connections: crate::pool_manager::DEFAULT_TENANT_MAX_CONNECTIONS,
-                connection_timeout: 30,
+                connection_timeout: crate::pool_manager::DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS,
             };
             Ok(DatasourceConn::Pg(
                 POOL_MANAGER.get_or_create_pool(config).await?,
@@ -2150,7 +2233,12 @@ impl DagEngine {
                         // 容错节点（allow_failure: true）：捕获**所有**节点级错误，
                         // 不区分错误来源（HTTP 4xx/5xx、超时、连接失败、URL 构建失败、
                         // 内网拦截、参数缺失等都在覆盖范围内），记录失败后继续执行后续节点。
-                        let allow_failure = config_allow_failure(&config);
+                        //
+                        // 唯一例外是只读 API Key 护栏：它是权限拒绝，不是"这次调用不巧失败了"。
+                        // 若让 allow_failure 吞掉，工作流会带着"写被拒绝"继续跑完下游并对外
+                        // 返回成功，只读 key 的约束就成了摆设——所以强制不可容错。
+                        let allow_failure = config_allow_failure(&config)
+                            && !is_api_key_readonly_block_message(&err_msg);
                         if allow_failure {
                             failed_count += 1;
                             tracing::warn!(
@@ -2260,6 +2348,47 @@ impl DagEngine {
                 return Ok((mock, None));
             }
         }
+
+        // 网关只读 API Key 护栏（DB-only）：与 dry_run/prod_readonly 分开收口——本护栏**只**
+        // 拦 DB 写，不动 http/email/sse，故不能复用 side_effect_mock（那会误伤后三者）。
+        // 覆盖两类写：
+        //   1. 显式写节点 db_execute / db_transaction / foreach（is_db_write_node）；
+        //   2. db_query 里伪装成读的数据修改型 CTE（WITH x AS (INSERT/UPDATE/DELETE ...)）。
+        // 两类统一在此记日志 + 拦截，保证 log_only 观察到的命中集合与 enforce 会拦的完全一致。
+        // log_only 档只记日志不拦；enforce 档直接让节点失败（硬失败语义见 api_key_readonly_block_error）。
+        if ctx.should_log_db_write() {
+            let write_kind = if is_db_write_node(&node.node_type) {
+                Some("db_write_node")
+            } else if matches!(node.node_type, NodeType::DbQuery)
+                && db_query_has_data_modifying_cte(config)
+            {
+                Some("data_modifying_cte")
+            } else {
+                None
+            };
+            if let Some(kind) = write_kind {
+                tracing::warn!(
+                    target: "authz",
+                    event = "wf_apikey_readonly_block",
+                    workflow_id = ctx.workflow_id,
+                    run_id = ctx.run_id,
+                    node_id = %node.id,
+                    node_type = ?node.node_type,
+                    detected_by = kind,
+                    database_id = ?ctx.database_id,
+                    mode = ctx.apikey_write_guard.as_str(),
+                    blocked = ctx.should_block_db_write(),
+                    "只读网关 API Key 触发的工作流命中 DB 写操作"
+                );
+                if ctx.should_block_db_write() {
+                    return Err(api_key_readonly_block_error(
+                        &node.id,
+                        &node_type_label(&node.node_type),
+                    ));
+                }
+            }
+        }
+
         match node.node_type {
             NodeType::Code => self.exec_code_node(config, ctx).await,
             NodeType::DbQuery => self.exec_db_query_node(config, ctx).await,
@@ -2812,6 +2941,8 @@ impl DagEngine {
             workflow_dependencies,
             dry_run: ctx.dry_run,
             prod_readonly: ctx.prod_readonly,
+            // 子流程沿用父级只读护栏（与 dry_run/prod_readonly 一致），使只读 key 的写拦截穿透到 call_workflow。
+            apikey_write_guard: ctx.apikey_write_guard,
         };
 
         // 把"当前工作流"压入调用链后传给子流程，供更深层继续检测环。
@@ -3169,9 +3300,12 @@ end
                 let policy = workflow_db_raw_sql_policy();
                 crate::raw_sql_guard::apply_session_guards(&mut conn, policy).await?;
                 let rows_result = async {
-                    // 生产只读护栏：READ ONLY 事务由 PostgreSQL 拒绝任何写入，
-                    // 防止数据修改型 CTE（WITH x AS (INSERT ... RETURNING *) SELECT）绕过首词检查。
-                    if ctx.prod_readonly {
+                    // 只读护栏：READ ONLY 事务由 PostgreSQL 拒绝任何写入，防止数据修改型 CTE
+                    // （WITH x AS (INSERT ... RETURNING *) SELECT）绕过首词检查。
+                    // enforce 下数据修改型 CTE 已在 execute_node 前置识别并 403 短路，正常到不了这里；
+                    // 此处 READ ONLY 作为**兜底**：静态正则漏判的 CTE 由 PG 运行时拒绝（报错而非静默写），
+                    // 同时覆盖生产只读（prod_readonly）。log_only 档不改行为（只观测，不 READ ONLY）。
+                    if ctx.prod_readonly || ctx.should_block_db_write() {
                         use sqlx::Connection;
                         let mut tx = conn.begin().await?;
                         sqlx::query("SET TRANSACTION READ ONLY")
@@ -3574,7 +3708,8 @@ end
                 as u32,
             connection_timeout: row
                 .get::<Option<i32>, _>("connection_timeout")
-                .unwrap_or(30) as u64,
+                .unwrap_or(crate::pool_manager::DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS as i32)
+                as u64,
         };
 
         POOL_MANAGER.get_or_create_pool(config).await
@@ -4069,9 +4204,15 @@ end
 /// 仍需真实执行（无副作用或决定流程走向）。
 /// `prod_readonly=true` 时标记 `blocked_by:production_readonly`，否则标 `dry_run:true`——
 /// 单一构造点，新增副作用节点类型只需改这一处，两种拦截语义自动一致。
+///
+/// 覆盖 db_execute / db_transaction / foreach / http_call / email_send / sse_publish。
+/// 其中 db_transaction / foreach 此前遗漏——dry_run 调试 / prod_readonly 只读下会真写库，
+/// 这里补齐（与 db_execute 同语义），杜绝干跑时穿透写库。
 fn side_effect_mock(node_type: &NodeType, prod_readonly: bool) -> Option<JsonValue> {
     let base = match node_type {
         NodeType::DbExecute => json!({ "rows_affected": 0 }),
+        NodeType::DbTransaction => json!({ "rows_affected": 0, "statements_count": 0 }),
+        NodeType::ForEach => json!({ "processed": 0, "rows_affected": 0 }),
         NodeType::HttpCall => json!({ "status": 0, "headers": {}, "body": null }),
         NodeType::EmailSend => json!({ "sent": false, "accepted": 0 }),
         NodeType::SsePublish => json!({ "delivered": 0 }),
@@ -4089,6 +4230,73 @@ fn side_effect_mock(node_type: &NodeType, prod_readonly: bool) -> Option<JsonVal
         }
     }
     Some(mock)
+}
+
+/// 是否为「数据库写」节点——受网关只读 API Key 护栏（DB-only）约束的节点集合。
+fn is_db_write_node(node_type: &NodeType) -> bool {
+    matches!(
+        node_type,
+        NodeType::DbExecute | NodeType::DbTransaction | NodeType::ForEach
+    )
+}
+
+/// 数据修改型 CTE 探测：`db_query` 首词被限定为 SELECT/WITH，真正的写只能藏在 CTE 体里
+/// （`WITH x AS (INSERT/UPDATE/DELETE/MERGE ...)`）——这类「伪装成读的写」不属于
+/// [`is_db_write_node`]，需单独识别后同样纳入只读护栏。
+///
+/// 只匹配 `AS (` 后紧跟写语句的形态，因此：
+/// - `SELECT ... FOR UPDATE`（只读行锁）不会被误判——它不以 `AS (` 引出；
+/// - `WITH x AS (SELECT ...) SELECT`（只读 CTE）不匹配；
+/// - 关键字藏在注释或字符串字面量里的先被 [`strip_sql_literals_and_comments`] 剥掉，不误判。
+static DATA_MODIFYING_CTE_RE: once_cell::sync::Lazy<regex::Regex> =
+    once_cell::sync::Lazy::new(|| {
+        regex::Regex::new(
+            r"(?i)\bas\s*(?:not\s+materialized\s+|materialized\s+)?\(\s*(?:insert|update|delete|merge)\b",
+        )
+        .expect("数据修改型 CTE 正则应当合法")
+    });
+
+/// 剥掉 SQL 里的块注释 / 行注释 / 单引号字符串字面量（含 `''` 转义），
+/// 避免写关键字藏在注释或字面量里造成误判。替换成空格以保持词边界。
+fn strip_sql_literals_and_comments(sql: &str) -> String {
+    static NOISE_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+        regex::Regex::new(r"(?s)/\*.*?\*/|--[^\n]*|'(?:[^']|'')*'")
+            .expect("SQL 噪音剥离正则应当合法")
+    });
+    NOISE_RE.replace_all(sql, " ").into_owned()
+}
+
+/// 该 `db_query` 节点的 SQL 是否为数据修改型 CTE（伪装成读的写）。
+/// 动态 SQL 场景下对**未渲染的模板**做检测：写关键字通常是模板里的字面量，
+/// 检测意图足够；万一被 `{{}}` 完全动态拼出而漏判，`exec_db_query_node` 的
+/// READ ONLY 事务在 enforce 下仍会兜底由 PostgreSQL 拒绝。
+fn db_query_has_data_modifying_cte(config: &JsonValue) -> bool {
+    let Some(sql) = config.get("sql").and_then(|v| v.as_str()) else {
+        return false;
+    };
+    let cleaned = strip_sql_literals_and_comments(sql);
+    DATA_MODIFYING_CTE_RE.is_match(&cleaned)
+}
+
+/// 只读护栏拦截错误的稳定标识。嵌在错误文案里跨层传递：`execute_dag` 据此拒绝容错，
+/// HTTP 层据此把节点失败映射成 403。做成常量而非匹配中文文案，避免改文案就失效。
+pub const API_KEY_READONLY_BLOCK_CODE: &str = "api_key_readonly_write_blocked";
+
+/// 只读 key 命中 DB 写节点时抛的硬失败。
+///
+/// 这里刻意**不**返回 mock 成功：写节点被静默跳过时，依赖它输出的下游节点会拿着
+/// 「0 行受影响」继续跑，把一次本该被拒绝的调用变成看起来成功、实则数据不一致的
+/// 结果。宁可整条工作流以 403 中断，也不制造这种静默错误。
+pub fn api_key_readonly_block_error(node_id: &str, node_type: &str) -> AppError {
+    AppError::Forbidden(format!(
+        "{}: 只读 API Key 不允许执行数据库写操作，节点 '{}'（{}）已被拒绝",
+        API_KEY_READONLY_BLOCK_CODE, node_id, node_type
+    ))
+}
+
+/// 错误是否由只读护栏抛出（`execute_dag` / HTTP 层共用的判定）。
+pub fn is_api_key_readonly_block_message(message: &str) -> bool {
+    message.contains(API_KEY_READONLY_BLOCK_CODE)
 }
 
 /// 批量推送派发模式。
@@ -4912,6 +5120,288 @@ pub fn validate_definition(def: &WorkflowDefinition) -> Result<()> {
 mod tests {
     use super::*;
 
+    // ── 网关只读 API Key 护栏 ──
+
+    #[test]
+    fn parse_apikey_rw_guard_modes() {
+        assert_eq!(parse_apikey_rw_guard(None), ApiKeyWriteGuard::LogOnly);
+        assert_eq!(parse_apikey_rw_guard(Some("off")), ApiKeyWriteGuard::Off);
+        assert_eq!(
+            parse_apikey_rw_guard(Some("log_only")),
+            ApiKeyWriteGuard::LogOnly
+        );
+        assert_eq!(
+            parse_apikey_rw_guard(Some("  ENFORCE ")),
+            ApiKeyWriteGuard::Enforce
+        );
+        // 脏值回退默认 log_only。
+        assert_eq!(
+            parse_apikey_rw_guard(Some("garbage")),
+            ApiKeyWriteGuard::LogOnly
+        );
+    }
+
+    #[test]
+    fn guard_block_and_log_semantics() {
+        assert!(!ApiKeyWriteGuard::Off.should_block_db_write());
+        assert!(!ApiKeyWriteGuard::Off.should_log_db_write());
+        // log_only：不拦但要记日志。
+        assert!(!ApiKeyWriteGuard::LogOnly.should_block_db_write());
+        assert!(ApiKeyWriteGuard::LogOnly.should_log_db_write());
+        // enforce：既拦又记。
+        assert!(ApiKeyWriteGuard::Enforce.should_block_db_write());
+        assert!(ApiKeyWriteGuard::Enforce.should_log_db_write());
+    }
+
+    #[test]
+    fn is_db_write_node_covers_write_nodes_only() {
+        assert!(is_db_write_node(&NodeType::DbExecute));
+        assert!(is_db_write_node(&NodeType::DbTransaction));
+        assert!(is_db_write_node(&NodeType::ForEach));
+        // 读 / 无副作用节点不算写。
+        assert!(!is_db_write_node(&NodeType::DbQuery));
+        assert!(!is_db_write_node(&NodeType::HttpCall));
+        assert!(!is_db_write_node(&NodeType::Code));
+    }
+
+    #[test]
+    fn api_key_readonly_block_error_is_forbidden_and_marked() {
+        let err = api_key_readonly_block_error("save_order", "db_execute");
+        // 必须是 Forbidden：HTTP 层据此回 403，而不是 5xx。
+        assert!(matches!(err, AppError::Forbidden(_)));
+
+        let msg = err.to_string();
+        assert!(is_api_key_readonly_block_message(&msg));
+        // 文案带上节点身份，排查时不用再翻日志找是哪个节点被拒。
+        assert!(msg.contains("save_order"));
+        assert!(msg.contains("db_execute"));
+    }
+
+    #[test]
+    fn readonly_block_marker_does_not_match_unrelated_errors() {
+        assert!(!is_api_key_readonly_block_message(""));
+        assert!(!is_api_key_readonly_block_message(
+            "db_execute 节点执行失败: connection reset by peer"
+        ));
+        // 近似文案也不能误判——判定只认稳定标识。
+        assert!(!is_api_key_readonly_block_message("只读 API Key 不允许写"));
+    }
+
+    /// 用不可达连接池（`lazy_engine` 指向 127.0.0.1:1）验证护栏在**触库之前**短路：
+    /// 若护栏未生效，同一用例会因连不上库而报连接错误，从而暴露漏拦。
+    #[tokio::test]
+    async fn enforce_blocks_db_write_nodes_before_touching_database() {
+        for node_type in [NodeType::DbExecute, NodeType::DbTransaction, NodeType::ForEach] {
+            let label = node_type_label(&node_type);
+            let node = WorkflowNode {
+                id: "write_step".to_string(),
+                node_type,
+                label: None,
+                config: json!({ "sql": "INSERT INTO t(a) VALUES (1)" }),
+            };
+            let ctx = ExecutionContext {
+                apikey_write_guard: ApiKeyWriteGuard::Enforce,
+                ..exec_ctx()
+            };
+
+            let err = lazy_engine()
+                .execute_node(&node, &node.config, &ctx, &[])
+                .await
+                .expect_err("只读 key + enforce 应拒绝 DB 写节点");
+
+            assert!(
+                is_api_key_readonly_block_message(&err.to_string()),
+                "{label} 未被护栏拦截，实际错误：{err}"
+            );
+            assert!(matches!(err, AppError::Forbidden(_)));
+        }
+    }
+
+    #[tokio::test]
+    async fn log_only_and_off_do_not_block_db_write_nodes() {
+        // 反向断言：不该拦的档位下必须真的走到执行阶段（因连接池不可达而报连接错误），
+        // 以此证明护栏没有过度触发、log_only 确实零行为变更。
+        //
+        // 这里不用 lazy_engine：它沿用默认 acquire 超时（30s），本用例故意让获取连接失败，
+        // 会把单测拖到一分钟。改用短超时的专用池，语义相同但秒级返回。
+        let fast_fail_engine = || {
+            let pool = sqlx::postgres::PgPoolOptions::new()
+                .acquire_timeout(std::time::Duration::from_millis(200))
+                .connect_lazy("postgresql://onebase:onebase@127.0.0.1:1/onebase")
+                .expect("lazy pool should not connect during setup");
+            DagEngine::new(pool)
+        };
+
+        for guard in [ApiKeyWriteGuard::Off, ApiKeyWriteGuard::LogOnly] {
+            let node = WorkflowNode {
+                id: "write_step".to_string(),
+                node_type: NodeType::DbExecute,
+                label: None,
+                config: json!({ "sql": "INSERT INTO t(a) VALUES (1)" }),
+            };
+            let ctx = ExecutionContext {
+                apikey_write_guard: guard,
+                ..exec_ctx()
+            };
+
+            let err = fast_fail_engine()
+                .execute_node(&node, &node.config, &ctx, &[])
+                .await
+                .expect_err("连接池不可达，应以连接错误告终");
+
+            assert!(
+                !is_api_key_readonly_block_message(&err.to_string()),
+                "{} 档不应拦截，却命中了护栏",
+                guard.as_str()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn enforce_leaves_non_db_write_nodes_alone() {
+        // 护栏是 DB-only：transform 这类无副作用节点即便在 enforce 下也照常执行。
+        let node = WorkflowNode {
+            id: "shape".to_string(),
+            node_type: NodeType::Transform,
+            label: None,
+            config: json!({ "output": { "ok": true } }),
+        };
+        let ctx = ExecutionContext {
+            apikey_write_guard: ApiKeyWriteGuard::Enforce,
+            ..exec_ctx()
+        };
+
+        let (output, _) = lazy_engine()
+            .execute_node(&node, &node.config, &ctx, &[])
+            .await
+            .expect("transform 节点不受只读护栏影响");
+        assert_eq!(output, json!({ "ok": true }));
+    }
+
+    #[test]
+    fn data_modifying_cte_detection_is_precise() {
+        // 命中：写语句藏在 CTE 体里，含 MATERIALIZED / 大小写 / 无空格等变体。
+        for sql in [
+            "WITH x AS (INSERT INTO t(a) VALUES (1) RETURNING id) SELECT * FROM x",
+            "with x as (update t set a=1 where id=2 returning id) select * from x",
+            "WITH x AS ( DELETE FROM t WHERE id=1 RETURNING * ) SELECT * FROM x",
+            "WITH x AS MATERIALIZED (INSERT INTO t VALUES (1) RETURNING *) SELECT * FROM x",
+            "WITH x AS NOT MATERIALIZED (INSERT INTO t VALUES (1)) SELECT 1",
+            "WITH x AS(INSERT INTO t VALUES(1) RETURNING id) SELECT * FROM x",
+            "WITH a AS (SELECT 1), b AS (DELETE FROM t RETURNING *) SELECT * FROM b",
+        ] {
+            assert!(
+                db_query_has_data_modifying_cte(&json!({ "sql": sql })),
+                "应识别为数据修改型 CTE：{sql}"
+            );
+        }
+
+        // 不命中：纯读、只读锁、以及关键字仅出现在注释/字符串里的情形。
+        for sql in [
+            "SELECT * FROM t WHERE a = 1",
+            "SELECT * FROM t FOR UPDATE",
+            "WITH x AS (SELECT * FROM t) SELECT * FROM x",
+            "SELECT * FROM t WHERE note = 'as (insert into evil ...)'",
+            "SELECT * FROM t -- as (insert into t values(1))\n WHERE a=1",
+            "SELECT * FROM t /* WITH x AS (DELETE FROM t) */ WHERE a=1",
+        ] {
+            assert!(
+                !db_query_has_data_modifying_cte(&json!({ "sql": sql })),
+                "不应被误判为写：{sql}"
+            );
+        }
+
+        // 缺 sql 字段：安全默认为否。
+        assert!(!db_query_has_data_modifying_cte(&json!({})));
+    }
+
+    #[tokio::test]
+    async fn enforce_blocks_data_modifying_cte_in_db_query() {
+        // db_query 里的数据修改型 CTE 必须与显式写节点一样在触库前被 enforce 硬失败拦下。
+        let node = WorkflowNode {
+            id: "cte_write".to_string(),
+            node_type: NodeType::DbQuery,
+            label: None,
+            config: json!({
+                "sql": "WITH x AS (INSERT INTO t(a) VALUES (1) RETURNING id) SELECT * FROM x"
+            }),
+        };
+        let ctx = ExecutionContext {
+            apikey_write_guard: ApiKeyWriteGuard::Enforce,
+            ..exec_ctx()
+        };
+
+        let err = lazy_engine()
+            .execute_node(&node, &node.config, &ctx, &[])
+            .await
+            .expect_err("只读 key + enforce 应拒绝数据修改型 CTE");
+
+        assert!(
+            is_api_key_readonly_block_message(&err.to_string()),
+            "数据修改型 CTE 未被护栏拦截，实际错误：{err}"
+        );
+        assert!(matches!(err, AppError::Forbidden(_)));
+    }
+
+    #[tokio::test]
+    async fn enforce_allows_plain_select_db_query_through_guard() {
+        // 纯读 db_query 不该被护栏短路——它应越过护栏、真正走到执行阶段
+        // （因连接池不可达而报连接错误，以此证明护栏没有过度触发）。
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(200))
+            .connect_lazy("postgresql://onebase:onebase@127.0.0.1:1/onebase")
+            .expect("lazy pool should not connect during setup");
+        let engine = DagEngine::new(pool);
+
+        let node = WorkflowNode {
+            id: "read_step".to_string(),
+            node_type: NodeType::DbQuery,
+            label: None,
+            config: json!({ "sql": "SELECT * FROM t WHERE a = 1" }),
+        };
+        let ctx = ExecutionContext {
+            apikey_write_guard: ApiKeyWriteGuard::Enforce,
+            ..exec_ctx()
+        };
+
+        let err = engine
+            .execute_node(&node, &node.config, &ctx, &[])
+            .await
+            .expect_err("连接池不可达，纯读应以连接错误告终而非护栏拦截");
+
+        assert!(
+            !is_api_key_readonly_block_message(&err.to_string()),
+            "纯读 db_query 被护栏误拦：{err}"
+        );
+    }
+
+    #[test]
+    fn readonly_block_is_not_swallowed_by_allow_failure() {
+        // execute_dag 的容错开关：allow_failure 为真，但只读护栏错误必须强制不可容错，
+        // 否则工作流会带着「写被拒绝」跑完下游并对外返回成功。
+        let config = json!({ "allow_failure": true });
+        let block_msg = api_key_readonly_block_error("save_order", "db_execute").to_string();
+        let other_msg = "connection reset by peer".to_string();
+
+        let effective =
+            |msg: &str| config_allow_failure(&config) && !is_api_key_readonly_block_message(msg);
+
+        assert!(!effective(&block_msg));
+        // 其它错误照旧可被容错，不受影响。
+        assert!(effective(&other_msg));
+    }
+
+    #[test]
+    fn side_effect_mock_now_covers_db_transaction_and_foreach() {
+        // 回归：db_transaction / foreach 此前遗漏，现在 dry_run / prod_readonly 下也被拦。
+        let m = side_effect_mock(&NodeType::DbTransaction, false).expect("db_transaction 应被 mock");
+        assert_eq!(m["dry_run"], json!(true));
+        let m = side_effect_mock(&NodeType::ForEach, true).expect("foreach 应被 mock");
+        assert_eq!(m["blocked_by"], json!("production_readonly"));
+        // db_query 仍不在副作用 mock 集合（走 READ ONLY 真执行）。
+        assert!(side_effect_mock(&NodeType::DbQuery, true).is_none());
+    }
+
     #[test]
     fn workflow_db_statement_timeout_ms_defaults_and_env() {
         assert_eq!(workflow_db_statement_timeout_ms_from(None), 30_000);
@@ -5001,6 +5491,7 @@ mod tests {
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
+            apikey_write_guard: ApiKeyWriteGuard::Off,
         };
         ctx.node_outputs
             .insert("fetch".to_string(), json!({"count": 42, "data": {"id": 7}}));
@@ -5045,6 +5536,7 @@ mod tests {
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
+            apikey_write_guard: ApiKeyWriteGuard::Off,
         };
 
         // 裸数值模板 → 裸字面量
@@ -5097,6 +5589,7 @@ mod tests {
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
+            apikey_write_guard: ApiKeyWriteGuard::Off,
         };
 
         // 既支持裸 {{}}（数值/标识），也支持被单引号包裹的 '{{}}'（字符串）。
@@ -5130,6 +5623,7 @@ mod tests {
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
+            apikey_write_guard: ApiKeyWriteGuard::Off,
         };
         let raw = "SELECT * FROM t WHERE tenant = $1 AND status = {{trigger.status}}";
         let (sql, binds) = parameterize_sql_templates(raw, &ctx, 2);
@@ -5154,6 +5648,7 @@ mod tests {
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
+            apikey_write_guard: ApiKeyWriteGuard::Off,
         };
 
         // LIKE 通配符
@@ -5206,6 +5701,7 @@ mod tests {
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
+            apikey_write_guard: ApiKeyWriteGuard::Off,
         };
 
         // 裸整数字符串 → 数值
@@ -5304,6 +5800,7 @@ mod tests {
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
+            apikey_write_guard: ApiKeyWriteGuard::Off,
         };
 
         // 不含模板的字面量原样保留，包括 '' 转义，不会被误改写。
@@ -5337,6 +5834,7 @@ mod tests {
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
+            apikey_write_guard: ApiKeyWriteGuard::Off,
         };
         let config = json!({
             "sql": "SELECT * FROM t WHERE email = '{{trigger.email}}'",
@@ -5371,6 +5869,7 @@ mod tests {
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
+            apikey_write_guard: ApiKeyWriteGuard::Off,
         };
 
         let err = engine
@@ -5404,6 +5903,7 @@ mod tests {
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
+            apikey_write_guard: ApiKeyWriteGuard::Off,
         };
         ctx.node_outputs.insert(
             "offer".to_string(),
@@ -5471,6 +5971,7 @@ mod tests {
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
+            apikey_write_guard: ApiKeyWriteGuard::Off,
         }
     }
 
@@ -5698,6 +6199,7 @@ mod tests {
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
+            apikey_write_guard: ApiKeyWriteGuard::Off,
         };
         assert_eq!(
             resolve_sse_topic("db:{database_id}:workflow:{workflow_id}:run:{run_id}", &ctx),
@@ -5725,6 +6227,7 @@ mod tests {
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
+            apikey_write_guard: ApiKeyWriteGuard::Off,
         }
     }
 
@@ -5952,6 +6455,7 @@ mod tests {
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
+            apikey_write_guard: ApiKeyWriteGuard::Off,
         };
         ctx.env_vars.insert(
             "PLUGIN_STRIPE_SECRET_KEY".to_string(),
@@ -6037,6 +6541,7 @@ mod tests {
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
+            apikey_write_guard: ApiKeyWriteGuard::Off,
         };
         ctx.node_outputs
             .insert("check".to_string(), json!({"count": 5}));

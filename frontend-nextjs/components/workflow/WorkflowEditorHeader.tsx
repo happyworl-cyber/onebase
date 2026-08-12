@@ -894,7 +894,7 @@ export default function WorkflowEditorHeader({
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[7px] text-xs font-medium border border-slate-200 text-slate-600 bg-white hover:bg-slate-50 shrink-0"
           >
             <i className="fas fa-link text-[10px] text-slate-400" />
-            分享链接
+            复制编辑链接
           </button>
         )}
         {onExport && (

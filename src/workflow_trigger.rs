@@ -173,6 +173,7 @@ async fn trigger_workflow_for_event(pool: &PgPool, workflow: &Workflow, event: &
             "hook",
             &trigger_data,
             None,
+            crate::workflow_engine::ApiKeyWriteGuard::Off,
         )
         .await
         {

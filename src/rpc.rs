@@ -32,12 +32,13 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::HashMap;
 
 use crate::auth::{verify_token, Claims};
 use crate::error::AppError;
+use crate::operation_log::{self, Actor, OperationLogInput, Source, Status};
 use crate::permission_cache::PermissionCache;
 use crate::query_builder::QueryParams;
 use crate::rbac_handlers::query_user_permissions;
@@ -1496,6 +1497,34 @@ pub struct RevokeAclQuery {
     pub role_id: i32,
 }
 
+fn record_rpc_acl_op(
+    pool: &PgPool,
+    claims: &Claims,
+    tenant_id: i32,
+    action: &str,
+    permission_id: i32,
+    resource: &str,
+    summary: String,
+    change: Value,
+) {
+    let mut input = OperationLogInput::new(
+        tenant_id,
+        Actor::from_claims(claims),
+        Source::Console,
+        action,
+        summary,
+        Status::Success,
+    )
+    .resource(
+        operation_log::resource_type::RPC_ACL,
+        resource.to_string(),
+        Some(permission_id.to_string()),
+    )
+    .change(change);
+    input.high_risk = Some(true);
+    operation_log::record(pool, input);
+}
+
 /// 把 database_id 解析成 (tenant_id)，并校验调用方对该 tenant 有管理员权限。
 ///
 /// 复用已有的 `user_tenants.role` 概念（owner / admin），保持和 RBAC 写操作
@@ -1667,6 +1696,25 @@ pub async fn grant_rpc_acl(
         PermissionCache::invalidate_tenant(&r, tenant_id).await;
     }
 
+    record_rpc_acl_op(
+        &pool,
+        &claims,
+        tenant_id,
+        operation_log::action::CREATE,
+        perm_id,
+        &resource,
+        format!("授予角色「{}」执行 RPC「{}」的权限", role_name, resource),
+        json!({
+            "v": 1,
+            "kind": "created",
+            "fields": {
+                "角色": role_name,
+                "Schema": schema,
+                "函数": function_name,
+            }
+        }),
+    );
+
     Ok(Json(RpcAclEntry {
         permission_id: perm_id,
         schema,
@@ -1691,13 +1739,13 @@ pub async fn revoke_rpc_acl(
     Query(req): Query<RevokeAclQuery>,
 ) -> Result<StatusCode, AppError> {
     // 用 permission_id 反查 tenant_id，再校验调用者是该租户管理员。
-    let tenant_row = sqlx::query("SELECT tenant_id FROM management.permissions WHERE id = $1")
+    let tenant_row = sqlx::query("SELECT tenant_id, resource FROM management.permissions WHERE id = $1")
         .bind(req.permission_id)
         .fetch_optional(&pool)
         .await?;
-    let tenant_id: i32 = tenant_row
-        .ok_or_else(|| AppError::NotFound("权限不存在".to_string()))?
-        .get("tenant_id");
+    let tenant_row = tenant_row.ok_or_else(|| AppError::NotFound("权限不存在".to_string()))?;
+    let tenant_id: i32 = tenant_row.get("tenant_id");
+    let resource: String = tenant_row.get("resource");
 
     if !claims.is_superadmin {
         let role_row = sqlx::query(
@@ -1732,6 +1780,33 @@ pub async fn revoke_rpc_acl(
     if let Some(Extension(r)) = redis {
         PermissionCache::invalidate_tenant(&r, tenant_id).await;
     }
+
+    let role_name: String =
+        sqlx::query("SELECT name FROM management.roles WHERE id = $1 AND tenant_id = $2")
+            .bind(req.role_id)
+            .bind(tenant_id)
+            .fetch_optional(&pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound("角色不存在".to_string()))?
+            .get("name");
+
+    record_rpc_acl_op(
+        &pool,
+        &claims,
+        tenant_id,
+        operation_log::action::DELETE,
+        req.permission_id,
+        &resource,
+        format!("撤销角色「{}」执行 RPC「{}」的权限", role_name, resource),
+        json!({
+            "v": 1,
+            "kind": "deleted",
+            "fields": {
+                "角色": role_name,
+                "资源": resource,
+            }
+        }),
+    );
 
     Ok(StatusCode::NO_CONTENT)
 }

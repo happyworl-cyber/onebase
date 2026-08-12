@@ -33,6 +33,7 @@ use std::collections::HashMap;
 use crate::auth::Claims;
 use crate::crypto;
 use crate::error::{AppError, Result};
+use crate::operation_log::{self, Actor, OperationLogInput, Source, Status};
 use crate::permissions;
 
 /// 变量名校验规则：以字母或下划线开头，后接字母/数字/下划线。
@@ -56,6 +57,45 @@ pub struct EnvVarRequest {
     pub value: String,
     #[serde(default)]
     pub description: Option<String>,
+}
+
+fn redacted_value_label(value: &str) -> String {
+    format!("已脱敏（{} 字符）", value.chars().count())
+}
+
+fn opt_text(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("—")
+        .to_string()
+}
+
+fn record_env_var_op(
+    pool: &PgPool,
+    claims: &Claims,
+    tenant_id: i32,
+    action: &str,
+    env_var_id: i32,
+    env_var_name: &str,
+    summary: String,
+    change: serde_json::Value,
+) {
+    let input = OperationLogInput::new(
+        tenant_id,
+        Actor::from_claims(claims),
+        Source::Console,
+        action,
+        summary,
+        Status::Success,
+    )
+    .resource(
+        operation_log::resource_type::ENV_VAR,
+        env_var_name.to_string(),
+        Some(env_var_id.to_string()),
+    )
+    .change(change);
+    operation_log::record(pool, input);
 }
 
 /// 变量值大小上限：防误用/盗号塞超大值撑爆存储与执行期内存（全量解密装入 HashMap）
@@ -265,6 +305,25 @@ pub async fn create_env_var(
         "env var created"
     );
 
+    record_env_var_op(
+        &pool,
+        &claims,
+        project_id,
+        operation_log::action::CREATE,
+        row.get("id"),
+        &req.name,
+        format!("创建环境变量「{}」", req.name),
+        json!({
+            "v": 1,
+            "kind": "created",
+            "fields": {
+                "名称": req.name,
+                "值": redacted_value_label(&req.value),
+                "描述": opt_text(req.description.as_deref()),
+            }
+        }),
+    );
+
     Ok(Json(row_to_json(&row)))
 }
 
@@ -278,6 +337,17 @@ pub async fn update_env_var(
     permissions::require_tenant_admin(&pool, &claims, project_id).await?;
     validate_var_name(&req.name)?;
     validate_value(&req.value)?;
+
+    let existing = sqlx::query(
+        "SELECT name, description FROM management.project_env_vars WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(var_id)
+    .bind(project_id)
+    .fetch_optional(&pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("环境变量 {} 不存在", var_id)))?;
+    let old_name: String = existing.get("name");
+    let old_description: Option<String> = existing.get("description");
 
     let value_encrypted = crypto::encrypt_secret(&req.value)?;
 
@@ -309,6 +379,28 @@ pub async fn update_env_var(
         "env var updated"
     );
 
+    record_env_var_op(
+        &pool,
+        &claims,
+        project_id,
+        operation_log::action::UPDATE,
+        var_id,
+        &req.name,
+        format!("更新环境变量「{}」", req.name),
+        json!({
+            "v": 1,
+            "kind": "modified",
+            "modified": [{
+                "node": "环境变量",
+                "fields": [
+                    { "field": "名称", "old": old_name, "new": req.name },
+                    { "field": "描述", "old": opt_text(old_description.as_deref()), "new": opt_text(req.description.as_deref()) },
+                    { "field": "值", "old": "已脱敏（原值）", "new": redacted_value_label(&req.value) }
+                ]
+            }]
+        }),
+    );
+
     Ok(Json(row_to_json(&row)))
 }
 
@@ -319,6 +411,17 @@ pub async fn delete_env_var(
     Path((project_id, var_id)): Path<(i32, i32)>,
 ) -> Result<Json<serde_json::Value>> {
     permissions::require_tenant_admin(&pool, &claims, project_id).await?;
+
+    let existing = sqlx::query(
+        "SELECT name, description FROM management.project_env_vars WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(var_id)
+    .bind(project_id)
+    .fetch_optional(&pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("环境变量 {} 不存在", var_id)))?;
+    let env_var_name: String = existing.get("name");
+    let description: Option<String> = existing.get("description");
 
     let affected = sqlx::query(
         "DELETE FROM management.project_env_vars WHERE id = $1 AND tenant_id = $2",
@@ -338,6 +441,25 @@ pub async fn delete_env_var(
         tenant_id = project_id,
         var_id = var_id,
         "env var deleted"
+    );
+
+    record_env_var_op(
+        &pool,
+        &claims,
+        project_id,
+        operation_log::action::DELETE,
+        var_id,
+        &env_var_name,
+        format!("删除环境变量「{}」", env_var_name),
+        json!({
+            "v": 1,
+            "kind": "deleted",
+            "fields": {
+                "名称": env_var_name,
+                "描述": opt_text(description.as_deref()),
+                "值": "已脱敏",
+            }
+        }),
     );
 
     Ok(Json(json!({ "deleted": true })))

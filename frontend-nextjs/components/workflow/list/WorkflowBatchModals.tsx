@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
-import { downloadWorkflowJsonBatch } from './exportUtils'
+import { downloadWorkflowJsonBatch, auditWorkflowExport } from './exportUtils'
 import { batchDeleteWorkflows, batchSetWorkflowEnabled } from './batchApi'
 import { showToast } from '@/components/Toast'
 import type { WorkflowListItem } from './types'
@@ -92,6 +92,7 @@ function BatchExportModal({
       setPct(100)
       setCurrentFile('导出完成！')
       setDone(true)
+      auditWorkflowExport(workflows.map((w) => w.id))
       window.setTimeout(() => {
         showToast('success', `已成功导出 ${workflows.length} 个工作流（JSON）`)
         onComplete()

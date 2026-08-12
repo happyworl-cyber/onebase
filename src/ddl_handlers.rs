@@ -22,6 +22,7 @@
 use crate::auth::Claims;
 use crate::error::{AppError, Result};
 use crate::middleware::CurrentDatabaseId;
+use crate::operation_log::{self, Actor, Source, Status};
 use crate::permissions;
 use crate::query_builder::invalidate_column_types;
 use axum::{
@@ -702,6 +703,30 @@ pub async fn create_table(
         req.columns.len(),
         req.indexes.len(),
     );
+    let col_names: Vec<&str> = req.columns.iter().map(|c| c.name.as_str()).collect();
+    operation_log::record_db_op(
+        &main_pool,
+        database_id,
+        Actor::from_claims(&claims),
+        Source::Console,
+        operation_log::action::CREATE,
+        operation_log::resource_type::TABLE,
+        Some(format!("{}.{}", req.schema, req.table)),
+        None,
+        format!("创建数据表「{}.{}」", req.schema, req.table),
+        Status::Success,
+        None,
+        Some(json!({
+            "v": 1, "kind": "created",
+            "fields": {
+                "Schema": req.schema,
+                "列": col_names.join(", "),
+                "列数": req.columns.len(),
+                "索引数": req.indexes.len(),
+            }
+        })),
+        None,
+    );
     Ok(Json(result))
 }
 
@@ -728,6 +753,55 @@ pub async fn v1_create_table(
         req.table,
     );
     Ok(Json(result))
+}
+
+// ─── 操作日志（operation_logs）打点辅助 ─────────────────────────────
+
+/// 把结构化 ALTER 操作集整理成 [`operation_log::format_change`] 认识的
+/// `{v,kind:"modified",added,modified,removed}` 事实。无操作则 `None`。
+fn alter_ops_to_change(table: &str, ops: &[AlterOp]) -> Option<Value> {
+    let mut added: Vec<Value> = Vec::new();
+    let mut removed: Vec<Value> = Vec::new();
+    let mut modified: Vec<Value> = Vec::new();
+    for op in ops {
+        match op {
+            AlterOp::AddColumn { column } => {
+                added.push(json!({ "node": column.name, "node_type": column.data_type }));
+            }
+            AlterOp::DropColumn { name, .. } => {
+                removed.push(json!({ "node": name, "node_type": "列" }));
+            }
+            AlterOp::RenameTable { new_name } => {
+                modified.push(json!({ "node": table, "field": "表名", "old": table, "new": new_name }));
+            }
+            AlterOp::RenameColumn { old_name, new_name } => {
+                modified.push(json!({ "node": old_name, "field": "列名", "old": old_name, "new": new_name }));
+            }
+            AlterOp::AlterColumnType { name, column } => {
+                modified.push(json!({ "node": name, "field": "类型", "old": "—", "new": column.data_type }));
+            }
+            AlterOp::SetNotNull { name, value } => {
+                modified.push(json!({ "node": name, "field": "NOT NULL", "old": "—", "new": if *value { "是" } else { "否" } }));
+            }
+            AlterOp::SetDefault { name, value } => {
+                let nv = value.clone().unwrap_or_else(|| "(无)".to_string());
+                modified.push(json!({ "node": name, "field": "默认值", "old": "—", "new": nv }));
+            }
+            AlterOp::AddUnique { name } => {
+                modified.push(json!({ "node": name, "field": "唯一约束", "old": "—", "new": "UNIQUE" }));
+            }
+        }
+    }
+    if added.is_empty() && removed.is_empty() && modified.is_empty() {
+        return None;
+    }
+    Some(json!({ "v": 1, "kind": "modified", "added": added, "modified": modified, "removed": removed }))
+}
+
+/// 破坏性 ALTER 判定：**删列 = 列及其数据不可逆丢失 → 高危**。
+/// 加列 / 改名 / 改类型 / 加约束等非破坏性，不算高危。
+fn alter_ops_high_risk(ops: &[AlterOp]) -> bool {
+    ops.iter().any(|op| matches!(op, AlterOp::DropColumn { .. }))
 }
 
 async fn create_table_inner(pool: &PgPool, req: &CreateTableRequest) -> Result<Value> {
@@ -826,6 +900,24 @@ pub async fn drop_table(
         table,
         q.cascade,
     );
+    operation_log::record_db_op(
+        &main_pool,
+        database_id,
+        Actor::from_claims(&claims),
+        Source::Console,
+        operation_log::action::DELETE,
+        operation_log::resource_type::TABLE,
+        Some(format!("{}.{}", schema, table)),
+        None,
+        format!("删除数据表「{}.{}」", schema, table),
+        Status::Success,
+        None, // 由 derive_high_risk 判定为高危
+        Some(json!({
+            "v": 1, "kind": "deleted",
+            "fields": { "Schema": schema, "级联删除": q.cascade }
+        })),
+        None,
+    );
     Ok(Json(result))
 }
 
@@ -901,6 +993,27 @@ pub async fn alter_table(
         schema,
         table,
         req.operations.len(),
+    );
+    let destructive = alter_ops_high_risk(&req.operations);
+    let summary = if destructive {
+        format!("修改数据表「{}.{}」结构（含删列）", schema, table)
+    } else {
+        format!("修改数据表「{}.{}」结构", schema, table)
+    };
+    operation_log::record_db_op(
+        &main_pool,
+        database_id,
+        Actor::from_claims(&claims),
+        Source::Console,
+        operation_log::action::UPDATE,
+        operation_log::resource_type::TABLE,
+        Some(format!("{}.{}", schema, table)),
+        None,
+        summary,
+        Status::Success,
+        destructive.then_some(true),
+        alter_ops_to_change(&table, &req.operations),
+        None,
     );
     Ok(Json(result))
 }
@@ -1171,5 +1284,74 @@ mod tests {
             render_alter_op("public", "posts", &unique).unwrap(),
             r#"ALTER TABLE "public"."posts" ADD CONSTRAINT "posts_headline_key" UNIQUE ("headline")"#
         );
+    }
+
+    #[test]
+    fn alter_ops_change_maps_add_drop_modify() {
+        let ops = vec![
+            AlterOp::AddColumn {
+                column: ColumnDef {
+                    name: "views".into(),
+                    data_type: "integer".into(),
+                    length: None,
+                    precision: None,
+                    scale: None,
+                    nullable: true,
+                    default_value: None,
+                    is_primary_key: false,
+                    is_unique: false,
+                    references: None,
+                },
+            },
+            AlterOp::DropColumn {
+                name: "legacy".into(),
+                cascade: false,
+            },
+            AlterOp::RenameColumn {
+                old_name: "title".into(),
+                new_name: "headline".into(),
+            },
+            AlterOp::RenameTable {
+                new_name: "articles".into(),
+            },
+        ];
+        let change = alter_ops_to_change("posts", &ops).unwrap();
+        assert_eq!(change["kind"], "modified");
+        assert_eq!(change["added"][0]["node"], "views");
+        assert_eq!(change["added"][0]["node_type"], "integer");
+        assert_eq!(change["removed"][0]["node"], "legacy");
+        // 改列名 + 改表名都归到 modified
+        let modified = change["modified"].as_array().unwrap();
+        assert!(modified.iter().any(|m| m["field"] == "列名" && m["new"] == "headline"));
+        assert!(modified.iter().any(|m| m["field"] == "表名" && m["old"] == "posts" && m["new"] == "articles"));
+
+        // 空操作 → None
+        assert!(alter_ops_to_change("posts", &[]).is_none());
+    }
+
+    #[test]
+    fn alter_high_risk_only_on_drop_column() {
+        // 删列 = 高危
+        assert!(alter_ops_high_risk(&[AlterOp::DropColumn {
+            name: "val".into(),
+            cascade: false,
+        }]));
+        // 混入删列也算高危
+        assert!(alter_ops_high_risk(&[
+            AlterOp::RenameTable { new_name: "t2".into() },
+            AlterOp::DropColumn { name: "old".into(), cascade: true },
+        ]));
+        // 纯非破坏性 → 非高危
+        assert!(!alter_ops_high_risk(&[
+            AlterOp::AddColumn {
+                column: ColumnDef {
+                    name: "c".into(), data_type: "text".into(), length: None, precision: None,
+                    scale: None, nullable: true, default_value: None, is_primary_key: false,
+                    is_unique: false, references: None,
+                },
+            },
+            AlterOp::RenameColumn { old_name: "a".into(), new_name: "b".into() },
+        ]));
+        assert!(!alter_ops_high_risk(&[]));
     }
 }

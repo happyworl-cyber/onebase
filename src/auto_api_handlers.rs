@@ -329,7 +329,7 @@ fn row_to_db_config(row: &sqlx::postgres::PgRow) -> crate::pool_manager::Databas
         username: row.get("db_user"),
         password: decrypt_db_password(&encrypted),
         max_connections: crate::pool_manager::DEFAULT_TENANT_MAX_CONNECTIONS,
-        connection_timeout: 30,
+        connection_timeout: crate::pool_manager::DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS,
     }
 }
 
@@ -348,6 +348,25 @@ fn check_circuit_breaker(
         }
     }
     Ok(())
+}
+
+/// 进程内业务池已打满时立刻 503，避免 AutoAPI 在 sqlx 内部 acquire 上干等满超时。
+fn reject_if_pool_saturated(database_id: i32, source: &str) -> Result<()> {
+    if let Some(wm) = POOL_MANAGER.primary_watermark(database_id) {
+        crate::pool_metrics::fail_fast_if_saturated(&wm, Some(database_id), source)
+            .map_err(AppError::Database)?;
+    }
+    Ok(())
+}
+
+/// 熔断 + 池饱和准入（AutoAPI 入口统一调用）。
+fn check_admission(
+    cb_mgr: &Option<axum::extract::Extension<CircuitBreakerManager>>,
+    database_id: i32,
+    source: &str,
+) -> Result<()> {
+    check_circuit_breaker(cb_mgr, database_id)?;
+    reject_if_pool_saturated(database_id, source)
 }
 
 /// 记录熔断器成功
@@ -976,7 +995,7 @@ pub async fn list_records(
         api_key_ctx.as_ref().map(|e| &e.0),
     )
     .await?;
-    check_circuit_breaker(&cb_mgr, database_id)?;
+    check_admission(&cb_mgr, database_id, "auto_api")?;
 
     let perm = rbac.map(|e| e.0);
     let row_conditions = perm
@@ -1429,7 +1448,7 @@ pub async fn get_record(
         api_key_ctx.as_ref().map(|e| &e.0),
     )
     .await?;
-    check_circuit_breaker(&cb_mgr, database_id)?;
+    check_admission(&cb_mgr, database_id, "auto_api")?;
 
     let perm = rbac.map(|e| e.0);
     let allowed_columns = perm.as_ref().and_then(|p| p.allowed_columns.clone());
@@ -1823,7 +1842,7 @@ pub async fn create_record(
         api_key_ctx.as_ref().map(|e| &e.0),
     )
     .await?;
-    check_circuit_breaker(&cb_mgr, database_id)?;
+    check_admission(&cb_mgr, database_id, "auto_api")?;
 
     let perm = rbac.map(|e| e.0);
 
@@ -2014,7 +2033,7 @@ pub async fn update_record(
         api_key_ctx.as_ref().map(|e| &e.0),
     )
     .await?;
-    check_circuit_breaker(&cb_mgr, database_id)?;
+    check_admission(&cb_mgr, database_id, "auto_api")?;
 
     let perm = rbac.map(|e| e.0);
     let pool = match get_write_pool(&main_pool, database_id).await {
@@ -2176,7 +2195,7 @@ pub async fn delete_record(
         api_key_ctx.as_ref().map(|e| &e.0),
     )
     .await?;
-    check_circuit_breaker(&cb_mgr, database_id)?;
+    check_admission(&cb_mgr, database_id, "auto_api")?;
 
     let perm = rbac.map(|e| e.0);
     let pool = match get_write_pool(&main_pool, database_id).await {
@@ -2305,7 +2324,7 @@ pub async fn update_records(
         api_key_ctx.as_ref().map(|e| &e.0),
     )
     .await?;
-    check_circuit_breaker(&cb_mgr, database_id)?;
+    check_admission(&cb_mgr, database_id, "auto_api")?;
 
     let perm = rbac.map(|e| e.0);
 
@@ -2548,7 +2567,7 @@ pub async fn delete_records(
         api_key_ctx.as_ref().map(|e| &e.0),
     )
     .await?;
-    check_circuit_breaker(&cb_mgr, database_id)?;
+    check_admission(&cb_mgr, database_id, "auto_api")?;
 
     let perm = rbac.map(|e| e.0);
 
@@ -3032,9 +3051,9 @@ pub async fn create_api_key(
 
     let row = sqlx::query(
         r#"
-        INSERT INTO management.api_keys 
-        (tenant_id, database_id, name, key_hash, key_prefix, permissions, expires_at)
-        VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $7::BIGINT IS NOT NULL THEN NOW() + ($7::BIGINT || ' days')::INTERVAL ELSE NULL END)
+        INSERT INTO management.api_keys
+        (tenant_id, database_id, name, key_hash, key_prefix, permissions, expires_at, created_by)
+        VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $7::BIGINT IS NOT NULL THEN NOW() + ($7::BIGINT || ' days')::INTERVAL ELSE NULL END, $8)
         RETURNING id, created_at::TEXT
         "#,
     )
@@ -3045,6 +3064,7 @@ pub async fn create_api_key(
     .bind(&key_prefix)
     .bind(&permissions)
     .bind(expires_in_days)
+    .bind(claims.sub)
     .fetch_one(&pool)
     .await?;
 

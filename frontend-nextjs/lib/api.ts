@@ -2728,3 +2728,124 @@ export const idpAPI = {
     ),
 }
 
+// ─── 操作日志（项目级 admin+）────────────────────────────────────────
+//
+// 后端 src/operation_log_handlers.rs：list / detail / stats / actors / export。
+// 变更内容「写事实、读格式化」：detail 接口返回后端已渲染好的 change_view。
+
+export interface OperationLogRow {
+  id: number
+  actor_type: string
+  actor_id: number | null
+  actor_name: string | null
+  actor_role: string | null
+  source: string
+  action: string
+  resource_type: string | null
+  resource_name: string | null
+  resource_id: string | null
+  summary: string
+  status: 'success' | 'failed'
+  high_risk: boolean
+  ip: string | null
+  created_at: string
+}
+
+export interface OperationLogListResp {
+  data: OperationLogRow[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface OperationLogStats {
+  total: number
+  today: number
+  active_users: number
+  failed: number
+  high_risk: number
+  mine: number
+}
+
+/** 后端 format_change 输出的视图：created/deleted 用 summary；modified 用 groups；imported 用 items。 */
+export interface OperationChangeView {
+  kind: 'created' | 'deleted' | 'modified' | 'imported' | 'sql'
+  summary?: { label: string; value: string }[]
+  groups?: {
+    op: 'add' | 'modify' | 'delete'
+    title: string
+    items: {
+      name: string
+      type?: string
+      fields?: { key: string; old: string; new: string }[]
+    }[]
+  }[]
+  /** kind='imported'：批量导入的工作流列表 */
+  items?: { name?: string; slug?: string; action?: string }[]
+  /** kind='sql'：原始 SQL / 事务执行 */
+  sql?: string
+  sql_type?: string
+  rows?: number | null
+  statements?: { op?: string; table?: string }[]
+}
+
+export interface OperationLogDetail extends OperationLogRow {
+  tenant_id: number
+  user_agent: string | null
+  session_id: string | null
+  trace_id: string | null
+  duration_ms: number | null
+  detail: Record<string, unknown> | null
+  change_view: OperationChangeView | null
+}
+
+export interface OperationLogFilterParams {
+  actor_name?: string
+  actor_id?: number
+  action?: string
+  resource_type?: string
+  q_resource?: string
+  source?: string
+  status?: string
+  start_date?: string
+  end_date?: string
+  tab?: 'all' | 'failed' | 'highRisk' | 'mine'
+  limit?: number
+  offset?: number
+}
+
+export interface OperationLogActor {
+  actor_name: string | null
+  actor_type: string | null
+  actor_id: number | null
+}
+
+export const operationLogAPI = {
+  list: (projectId: number, params: OperationLogFilterParams = {}) =>
+    api.get<OperationLogListResp>(`/api/projects/${projectId}/operation-logs`, { params }),
+
+  detail: (projectId: number, logId: number) =>
+    api.get<OperationLogDetail>(`/api/projects/${projectId}/operation-logs/${logId}`),
+
+  stats: (projectId: number, params: OperationLogFilterParams = {}) =>
+    api.get<OperationLogStats>(`/api/projects/${projectId}/operation-logs/stats`, { params }),
+
+  actors: (projectId: number, q?: string) =>
+    api.get<{ data: OperationLogActor[] }>(
+      `/api/projects/${projectId}/operation-logs/actors`,
+      { params: q ? { q } : undefined },
+    ),
+
+  /** 筛选项数据源：数据里真实出现过的动作 / 资源类型（用于收敛下拉选项）。 */
+  facets: (projectId: number) =>
+    api.get<{ actions: string[]; resource_types: string[] }>(
+      `/api/projects/${projectId}/operation-logs/facets`,
+    ),
+
+  export: (projectId: number, params: OperationLogFilterParams = {}) =>
+    api.get<Blob>(`/api/projects/${projectId}/operation-logs/export`, {
+      params,
+      responseType: 'blob',
+    }),
+}
+

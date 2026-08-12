@@ -309,7 +309,7 @@ pub async fn v1_execute_raw_ddl(
     }
 
     let policy = raw_sql_guard::policy();
-    raw_sql_guard::run_raw_script_autocommit(pool, sql, policy)
+    raw_sql_guard::run_raw_script_autocommit(pool, sql, policy, Some(database_id))
         .await
         .map_err(raw_sql_guard::map_user_sql_err)?;
 

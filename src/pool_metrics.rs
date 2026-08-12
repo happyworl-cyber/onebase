@@ -14,8 +14,8 @@
 //! - **不记录 SQL 文本**，只记 `source` 标签（节点类型 / `http`）+ 时间戳 +
 //!   database_id，避免监控接口成为业务数据泄露面。
 //!
-//! lib-safe：只依赖 sqlx / chrono / serde / dashmap / once_cell，可同时编进
-//! lib crate 与 bin crate（`workflow_engine` 在两侧都会用到）。
+//! lib-safe：依赖 sqlx / chrono / serde / dashmap / once_cell / `pool_manager`
+//!（仅读水位，无环依赖），可同时编进 lib crate 与 bin crate。
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -27,6 +27,8 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use sqlx::pool::PoolConnection;
 use sqlx::{PgPool, Postgres};
+
+use crate::pool_manager::{self, PoolWaterMark};
 
 /// 最近事件环形缓冲容量。够看清「是刚开始还是持续了一阵」，又不至于占内存。
 const RECENT_CAPACITY: usize = 20;
@@ -102,15 +104,31 @@ pub fn snapshot() -> PoolTimeoutSnapshot {
     }
 }
 
-/// `pool.acquire()` 的薄包装：仅在 `PoolTimedOut` 时计数，其它错误原样透出。
+/// 池已打满时立刻拒绝，避免排队到满 `acquire_timeout`（雪崩指纹：精确 30s 倍数）。
 ///
-/// 用在工作流 Postgres 节点上——那里的 acquire 失败会被记进节点错误，未必冒泡到
-/// HTTP 层，光靠 `error.rs` 的兜底埋点会漏掉。
+/// 纯函数便于单测；`acquire_traced` 在真正 `pool.acquire()` 前调用。
+pub fn fail_fast_if_saturated(
+    wm: &PoolWaterMark,
+    database_id: Option<i32>,
+    source: &str,
+) -> Result<(), sqlx::Error> {
+    if wm.is_saturated() {
+        record_timeout(database_id, source);
+        return Err(sqlx::Error::PoolTimedOut);
+    }
+    Ok(())
+}
+
+/// `pool.acquire()` 的薄包装：饱和 fail-fast + `PoolTimedOut` 计数。
+///
+/// 用在工作流 Postgres 节点、SQL 编辑器、事务等租户路径上——acquire 失败会被记进
+/// 节点错误或 HTTP 层，光靠 `error.rs` 的兜底埋点会漏掉。
 pub async fn acquire_traced(
     pool: &PgPool,
     database_id: Option<i32>,
     source: &str,
 ) -> Result<PoolConnection<Postgres>, sqlx::Error> {
+    fail_fast_if_saturated(&pool_manager::watermark(pool), database_id, source)?;
     match pool.acquire().await {
         Ok(conn) => Ok(conn),
         Err(e) => {
@@ -171,5 +189,34 @@ mod tests {
     #[test]
     fn snapshot_for_unknown_database_is_zero() {
         assert_eq!(snapshot().for_database(i32::MIN), 0);
+    }
+
+    fn wm(max: u32, size: u32, idle: u32) -> PoolWaterMark {
+        PoolWaterMark {
+            max,
+            min: 1,
+            size,
+            idle,
+            in_use: size.saturating_sub(idle),
+            acquire_timeout_secs: 8,
+        }
+    }
+
+    #[test]
+    fn fail_fast_when_saturated_records_and_returns_pool_timed_out() {
+        let before = baseline();
+        let err = fail_fast_if_saturated(&wm(10, 10, 0), Some(-3001), "unit_fail_fast")
+            .expect_err("saturated pool must fail fast");
+        assert!(matches!(err, sqlx::Error::PoolTimedOut));
+        assert!(snapshot().total >= before + 1);
+        assert_eq!(snapshot().for_database(-3001), 1);
+    }
+
+    #[test]
+    fn fail_fast_skips_when_not_saturated() {
+        fail_fast_if_saturated(&wm(10, 5, 2), Some(-3002), "unit_ok")
+            .expect("idle slots must allow acquire");
+        // 未饱和不得记超时；用独占 database_id，避免并行测试干扰 TOTAL
+        assert_eq!(snapshot().for_database(-3002), 0);
     }
 }

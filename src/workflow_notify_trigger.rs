@@ -280,6 +280,7 @@ async fn trigger_matching_workflows(
                 "notify",
                 &trigger_data,
                 None,
+                crate::workflow_engine::ApiKeyWriteGuard::Off,
             )
             .await
             {

@@ -146,6 +146,12 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: 'fas fa-stream',
         visibleIf: (caps) => caps.canManageSecurity,
       },
+      {
+        label: '操作日志',
+        href: '/operation-logs',
+        icon: 'fas fa-clipboard-list',
+        visibleIf: (caps) => caps.canManageSecurity,
+      },
       { label: '语句分析', href: '/database/query-analyzer', icon: 'fas fa-tachometer-alt' },
       { label: '慢查询', href: '/database/slow-queries', icon: 'fas fa-hourglass-half' },
       { label: '锁与阻塞', href: '/database/locks', icon: 'fas fa-lock' },

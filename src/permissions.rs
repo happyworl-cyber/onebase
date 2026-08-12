@@ -394,6 +394,83 @@ pub async fn count_platform_superadmins(pool: &PgPool) -> Result<i64> {
     Ok(n)
 }
 
+// ───── 4.5 数据面 API Key 读写 scope 判定（Auto API / 工作流共用）─────
+//
+// **单一事实来源**：`rbac_middleware::check_api_key_scope` 的 action 分支与工作流只读
+// 护栏（`ExecutionContext.apikey_write_guard`）都复用 `api_key_action_allowed`，避免同
+// 一把 key 在两条路上判权口径漂移。护栏走 `api_key_declares_readonly` 入口，只在「空
+// permissions」这一处放宽（见其文档注释）。
+//
+// 只判「动作类别（读/写）」，**不看 `allowed_resources`**——资源限制与读写正交，逐表
+// 逐动作校验属二期。permissions JSONB 支持两种格式：
+// - 新格式：`{ "allowed_actions": ["SELECT","INSERT",...] }`；空数组 / 缺失 = 不限（放行）。
+// - 旧格式：`{ "read":bool, "write":bool, "delete":bool }`；read=SELECT，write=INSERT|UPDATE，
+//   delete=DELETE。空对象 `{}` 落旧格式且三个字段皆缺 → 一律不允许。
+
+/// 该 key 是否允许执行给定 SQL 动作。`action` 传大写 `SELECT`/`INSERT`/`UPDATE`/`DELETE`。
+///
+/// 语义与 `check_api_key_scope` 的 action 分支**逐条对齐**（本函数即其抽取结果）。
+pub fn api_key_action_allowed(permissions: &serde_json::Value, action: &str) -> bool {
+    // 新格式优先：出现 allowed_actions / allowed_resources 任一即视为新格式。
+    let new_format = permissions.get("allowed_actions").is_some()
+        || permissions.get("allowed_resources").is_some();
+
+    if new_format {
+        let actions = permissions
+            .get("allowed_actions")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_uppercase))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        // 空 allowed_actions 视为不限（与 check_api_key_scope 一致）。
+        return actions.is_empty()
+            || actions
+                .iter()
+                .any(|a| a == "*" || a == action || a == "ALL");
+    }
+
+    // 旧格式：仅按 action 类别校验。
+    match action {
+        "SELECT" => permissions
+            .get("read")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        "INSERT" | "UPDATE" => permissions
+            .get("write")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        "DELETE" => permissions
+            .get("delete")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// 该 key 是否允许**任一**写动作（INSERT / UPDATE / DELETE）。
+pub fn api_key_write_allowed(permissions: &serde_json::Value) -> bool {
+    api_key_action_allowed(permissions, "INSERT")
+        || api_key_action_allowed(permissions, "UPDATE")
+        || api_key_action_allowed(permissions, "DELETE")
+}
+
+/// 该 key 是否**显式声明**了自己只读——工作流只读护栏的判定入口。
+///
+/// 与 `api_key_write_allowed` 的差别只在空值语义，且这个差别是刻意的：
+/// `permissions` 为空对象或非对象（建表默认值是全权限，出现空值意味着有人清过或
+/// 数据异常）时无从判断意图，护栏按**不限制**处理，不拦也不报错；只有显式声明过
+/// 权限且不含任何写动作的 key 才算只读。若此处跟着 `api_key_write_allowed` 把空值
+/// 判成只读，enforce 一开，所有 permissions 被清空的存量 key 触发的写工作流会立刻
+/// 403。数据面 RBAC（`check_api_key_scope`）仍走 `api_key_action_allowed` 的严格
+/// 语义，不受这里放宽的影响。
+pub fn api_key_declares_readonly(permissions: &serde_json::Value) -> bool {
+    let declared = permissions.as_object().is_some_and(|o| !o.is_empty());
+    declared && !api_key_write_allowed(permissions)
+}
+
 // ───── 5. 租户上下文解析 ────────────────────────────────────
 //
 // 旧逻辑（`resolve_tenant_id`）做"用户加入的第一个租户"兜底，
@@ -706,6 +783,103 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    // ── api_key_action_allowed / api_key_write_allowed ──
+    // 语义必须与 rbac_middleware::check_api_key_scope 的 action 分支逐条一致。
+
+    #[test]
+    fn write_allowed_old_format() {
+        // 只读 key：仅 read。
+        let ro = json!({ "read": true, "write": false, "delete": false });
+        assert!(api_key_action_allowed(&ro, "SELECT"));
+        assert!(!api_key_action_allowed(&ro, "INSERT"));
+        assert!(!api_key_action_allowed(&ro, "UPDATE"));
+        assert!(!api_key_action_allowed(&ro, "DELETE"));
+        assert!(!api_key_write_allowed(&ro));
+
+        // 读写 key（DB 默认值）。
+        let rw = json!({ "read": true, "write": true, "delete": true });
+        assert!(api_key_write_allowed(&rw));
+        assert!(api_key_action_allowed(&rw, "INSERT"));
+
+        // 仅 delete：write_allowed 也应为真（delete 属写动作之一）。
+        let del = json!({ "read": true, "write": false, "delete": true });
+        assert!(api_key_write_allowed(&del));
+        assert!(!api_key_action_allowed(&del, "INSERT"));
+        assert!(api_key_action_allowed(&del, "DELETE"));
+    }
+
+    #[test]
+    fn write_allowed_new_format() {
+        // allowed_actions 空 → 视为不限（允许所有动作）。
+        let unlimited = json!({ "allowed_actions": [] });
+        assert!(api_key_write_allowed(&unlimited));
+        assert!(api_key_action_allowed(&unlimited, "INSERT"));
+
+        // 仅 SELECT → 只读。
+        let ro = json!({ "allowed_actions": ["SELECT"] });
+        assert!(api_key_action_allowed(&ro, "SELECT"));
+        assert!(!api_key_write_allowed(&ro));
+
+        // 含 INSERT → 允许写。
+        let with_insert = json!({ "allowed_actions": ["SELECT", "INSERT"] });
+        assert!(api_key_write_allowed(&with_insert));
+
+        // 通配 *。
+        let star = json!({ "allowed_actions": ["*"] });
+        assert!(api_key_write_allowed(&star));
+        // 大小写不敏感。
+        let lower = json!({ "allowed_actions": ["insert"] });
+        assert!(api_key_write_allowed(&lower));
+
+        // 仅 allowed_resources（无 allowed_actions）→ action 不限，视为允许写。
+        let res_only = json!({ "allowed_resources": ["public.posts"] });
+        assert!(api_key_write_allowed(&res_only));
+    }
+
+    #[test]
+    fn write_allowed_empty_object_denies() {
+        // 空对象落旧格式，三字段皆缺 → 一律不允许（与 check_api_key_scope 一致）。
+        let empty = json!({});
+        assert!(!api_key_write_allowed(&empty));
+        assert!(!api_key_action_allowed(&empty, "SELECT"));
+        assert!(!api_key_action_allowed(&empty, "INSERT"));
+    }
+
+    #[test]
+    fn declares_readonly_needs_explicit_permissions() {
+        // 显式只读（线上 shirehub-workflow-readonly 就是这个形状）→ 只读。
+        assert!(api_key_declares_readonly(
+            &json!({ "read": true, "write": false, "delete": false })
+        ));
+        assert!(api_key_declares_readonly(
+            &json!({ "allowed_actions": ["SELECT"] })
+        ));
+
+        // 允许任一写动作 → 非只读。
+        assert!(!api_key_declares_readonly(
+            &json!({ "read": true, "write": true, "delete": true })
+        ));
+        assert!(!api_key_declares_readonly(
+            &json!({ "read": true, "write": false, "delete": true })
+        ));
+        assert!(!api_key_declares_readonly(
+            &json!({ "allowed_actions": ["SELECT", "INSERT"] })
+        ));
+
+        // 关键差异：空对象 / NULL / 非对象在护栏侧 fail-open，不判只读，
+        // 与 api_key_write_allowed 的严格语义刻意分道。
+        assert!(!api_key_declares_readonly(&json!({})));
+        assert!(!api_key_write_allowed(&json!({})));
+        assert!(!api_key_declares_readonly(&json!(null)));
+        assert!(!api_key_declares_readonly(&json!("readonly")));
+
+        // allowed_actions 为空数组同样是「不限」，不算只读。
+        assert!(!api_key_declares_readonly(
+            &json!({ "allowed_actions": [] })
+        ));
+    }
 
     fn claims(superadmin: bool) -> Claims {
         Claims {

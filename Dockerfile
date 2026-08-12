@@ -45,7 +45,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY Cargo.toml Cargo.lock* ./
-# 依赖预热：产物写入镜像层（不是 cache mount），后续 COPY src 后仍可复用 deps。
+# 依赖预热：stub 必须覆盖 Cargo.toml 全部 [[bin]]（缺文件会导致 cargo 直接失败）；
+# 产物写入镜像层。失败必须暴露，禁止 || true 假成功，否则正式编译会变成冷编。
+# 只编 --bin onebase：拉齐主服务依赖即可，不必链接其余 migrate bin。
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     mkdir src && echo "fn main() {}" > src/main.rs && \
@@ -58,10 +60,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     echo "fn main() {}" > src/bin/migrate_sso.rs && \
     echo "fn main() {}" > src/bin/migrate_all.rs && \
     echo "fn main() {}" > src/bin/migrate_passwords.rs && \
-    echo "fn main() {}" > src/bin/create_admin.rs && \
-    echo "fn main() {}" > src/bin/fix_users.rs && \
-    echo "fn main() {}" > src/bin/setup_multi_tenant.rs && \
-    cargo build --release 2>/dev/null || true && \
+    echo "fn main() {}" > src/bin/migrate_scheduled_tasks.rs && \
+    echo "fn main() {}" > src/bin/migrate_workflow.rs && \
+    cargo build --release --bin onebase && \
     rm -rf src
 
 COPY src/ src/

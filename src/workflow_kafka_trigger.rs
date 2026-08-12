@@ -230,6 +230,7 @@ async fn run_consumer(main_pool: PgPool, workflow_id: i32, config: KafkaTriggerC
             "kafka",
             &trigger_data,
             None,
+            crate::workflow_engine::ApiKeyWriteGuard::Off,
         )
         .await
         {

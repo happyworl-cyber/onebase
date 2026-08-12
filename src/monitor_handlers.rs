@@ -10,6 +10,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 
 /// 选择目标连接池：`dynamic_db_middleware` 注入的优先；没注入回退到管理库。
@@ -563,6 +564,27 @@ pub struct PgConnInfo {
     pub waiting_on_locks: i64,
     pub longest_active_seconds: Option<f64>,
     pub longest_idle_in_transaction_seconds: Option<f64>,
+    /// false：因应用池饱和跳过，或短超时未拿到 `pg_stat_activity`；数值不可信。
+    pub sampled: bool,
+}
+
+impl PgConnInfo {
+    fn unknown() -> Self {
+        Self {
+            max_connections: 0,
+            instance_backends: 0,
+            database_backends: 0,
+            active: 0,
+            idle: 0,
+            idle_in_transaction: 0,
+            idle_in_transaction_aborted: 0,
+            listen_sessions: 0,
+            waiting_on_locks: 0,
+            longest_active_seconds: None,
+            longest_idle_in_transaction_seconds: None,
+            sampled: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -624,17 +646,18 @@ pub fn diagnose(input: &VerdictInput) -> Verdict {
 
     if saturated {
         let mut hints = vec![
+            "先执行 POST /api/monitor/pool-reset?reload=true（监控页「重置连接池」）踢掉打满的进程内池，无需重启 OneBase".into(),
             "去「PG 会话」页找 idle in transaction / 长查询，确认是否有慢 SQL 占连接".into(),
             "确认 WORKFLOW_DB_STATEMENT_TIMEOUT_MS 已生效（默认 30s）".into(),
         ];
         if let Some(env) = input.env_override {
             hints.insert(
-                0,
+                1,
                 format!("当前 TENANT_DB_MAX_CONNECTIONS={}，可调大后重启进程", env),
             );
         } else {
             hints.insert(
-                0,
+                1,
                 format!(
                     "可设 TENANT_DB_MAX_CONNECTIONS（当前池 max={}）后重启进程抬池",
                     input.app_max
@@ -847,75 +870,103 @@ pub async fn get_pool_health(
             .collect(),
     };
 
-    let pg_row = sqlx::query(
-        r#"
-        SELECT
-            (SELECT setting::int FROM pg_settings WHERE name = 'max_connections') AS max_conn,
-            COUNT(*) FILTER (WHERE backend_type = 'client backend')::bigint AS instance_backends,
-            COUNT(*) FILTER (
-                WHERE backend_type = 'client backend'
-                  AND datname = current_database()
-            )::bigint AS database_backends,
-            COUNT(*) FILTER (
-                WHERE backend_type = 'client backend'
-                  AND datname = current_database()
-                  AND state = 'active'
-            )::bigint AS active,
-            COUNT(*) FILTER (
-                WHERE backend_type = 'client backend'
-                  AND datname = current_database()
-                  AND state = 'idle'
-            )::bigint AS idle,
-            COUNT(*) FILTER (
-                WHERE backend_type = 'client backend'
-                  AND datname = current_database()
-                  AND state = 'idle in transaction'
-            )::bigint AS idle_in_xact,
-            COUNT(*) FILTER (
-                WHERE backend_type = 'client backend'
-                  AND datname = current_database()
-                  AND state = 'idle in transaction (aborted)'
-            )::bigint AS idle_in_xact_aborted,
-            COUNT(*) FILTER (
-                WHERE backend_type = 'client backend'
-                  AND datname = current_database()
-                  AND COALESCE(query, '') ILIKE 'LISTEN%'
-            )::bigint AS listen_sessions,
-            COUNT(*) FILTER (
-                WHERE backend_type = 'client backend'
-                  AND datname = current_database()
-                  AND wait_event_type = 'Lock'
-            )::bigint AS waiting_on_locks,
-            (MAX(EXTRACT(EPOCH FROM (now() - query_start))) FILTER (
-                WHERE backend_type = 'client backend'
-                  AND datname = current_database()
-                  AND state = 'active'
-                  AND pid <> pg_backend_pid()
-            ))::float8 AS longest_active,
-            (MAX(EXTRACT(EPOCH FROM (now() - xact_start))) FILTER (
-                WHERE backend_type = 'client backend'
-                  AND datname = current_database()
-                  AND state IN ('idle in transaction', 'idle in transaction (aborted)')
-                  AND pid <> pg_backend_pid()
-            ))::float8 AS longest_idle_in_xact
-        FROM pg_stat_activity
-        "#,
-    )
-    .fetch_one(tenant_pool)
-    .await?;
+    // 应用池已打满时绝不能再走同一租户池查 pg_stat_activity（会再排队满 acquire_timeout）。
+    // 未打满时也包 2s 短超时，避免诊断接口本身成为雪崩放大器。
+    const PG_SAMPLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+    let app_saturated = loaded && wm.is_saturated();
+    let pg = if app_saturated {
+        tracing::warn!(
+            database_id,
+            "pool-health 跳过 PG 采样：应用池已饱和 {}/{}",
+            wm.in_use,
+            wm.max
+        );
+        PgConnInfo::unknown()
+    } else {
+        let pg_fut = sqlx::query(
+            r#"
+            SELECT
+                (SELECT setting::int FROM pg_settings WHERE name = 'max_connections') AS max_conn,
+                COUNT(*) FILTER (WHERE backend_type = 'client backend')::bigint AS instance_backends,
+                COUNT(*) FILTER (
+                    WHERE backend_type = 'client backend'
+                      AND datname = current_database()
+                )::bigint AS database_backends,
+                COUNT(*) FILTER (
+                    WHERE backend_type = 'client backend'
+                      AND datname = current_database()
+                      AND state = 'active'
+                )::bigint AS active,
+                COUNT(*) FILTER (
+                    WHERE backend_type = 'client backend'
+                      AND datname = current_database()
+                      AND state = 'idle'
+                )::bigint AS idle,
+                COUNT(*) FILTER (
+                    WHERE backend_type = 'client backend'
+                      AND datname = current_database()
+                      AND state = 'idle in transaction'
+                )::bigint AS idle_in_xact,
+                COUNT(*) FILTER (
+                    WHERE backend_type = 'client backend'
+                      AND datname = current_database()
+                      AND state = 'idle in transaction (aborted)'
+                )::bigint AS idle_in_xact_aborted,
+                COUNT(*) FILTER (
+                    WHERE backend_type = 'client backend'
+                      AND datname = current_database()
+                      AND COALESCE(query, '') ILIKE 'LISTEN%'
+                )::bigint AS listen_sessions,
+                COUNT(*) FILTER (
+                    WHERE backend_type = 'client backend'
+                      AND datname = current_database()
+                      AND wait_event_type = 'Lock'
+                )::bigint AS waiting_on_locks,
+                (MAX(EXTRACT(EPOCH FROM (now() - query_start))) FILTER (
+                    WHERE backend_type = 'client backend'
+                      AND datname = current_database()
+                      AND state = 'active'
+                      AND pid <> pg_backend_pid()
+                ))::float8 AS longest_active,
+                (MAX(EXTRACT(EPOCH FROM (now() - xact_start))) FILTER (
+                    WHERE backend_type = 'client backend'
+                      AND datname = current_database()
+                      AND state IN ('idle in transaction', 'idle in transaction (aborted)')
+                      AND pid <> pg_backend_pid()
+                ))::float8 AS longest_idle_in_xact
+            FROM pg_stat_activity
+            "#,
+        )
+        .fetch_one(tenant_pool);
 
-    let pg = PgConnInfo {
-        max_connections: pg_row.try_get("max_conn").unwrap_or(0),
-        instance_backends: pg_row.try_get("instance_backends").unwrap_or(0),
-        database_backends: pg_row.try_get("database_backends").unwrap_or(0),
-        active: pg_row.try_get("active").unwrap_or(0),
-        idle: pg_row.try_get("idle").unwrap_or(0),
-        idle_in_transaction: pg_row.try_get("idle_in_xact").unwrap_or(0),
-        idle_in_transaction_aborted: pg_row.try_get("idle_in_xact_aborted").unwrap_or(0),
-        listen_sessions: pg_row.try_get("listen_sessions").unwrap_or(0),
-        waiting_on_locks: pg_row.try_get("waiting_on_locks").unwrap_or(0),
-        longest_active_seconds: pg_row.try_get("longest_active").ok(),
-        longest_idle_in_transaction_seconds: pg_row.try_get("longest_idle_in_xact").ok(),
+        match tokio::time::timeout(PG_SAMPLE_TIMEOUT, pg_fut).await {
+            Ok(Ok(pg_row)) => PgConnInfo {
+                max_connections: pg_row.try_get("max_conn").unwrap_or(0),
+                instance_backends: pg_row.try_get("instance_backends").unwrap_or(0),
+                database_backends: pg_row.try_get("database_backends").unwrap_or(0),
+                active: pg_row.try_get("active").unwrap_or(0),
+                idle: pg_row.try_get("idle").unwrap_or(0),
+                idle_in_transaction: pg_row.try_get("idle_in_xact").unwrap_or(0),
+                idle_in_transaction_aborted: pg_row.try_get("idle_in_xact_aborted").unwrap_or(0),
+                listen_sessions: pg_row.try_get("listen_sessions").unwrap_or(0),
+                waiting_on_locks: pg_row.try_get("waiting_on_locks").unwrap_or(0),
+                longest_active_seconds: pg_row.try_get("longest_active").ok(),
+                longest_idle_in_transaction_seconds: pg_row.try_get("longest_idle_in_xact").ok(),
+                sampled: true,
+            },
+            Ok(Err(e)) => {
+                tracing::warn!(database_id, error = %e, "pool-health PG 采样失败");
+                PgConnInfo::unknown()
+            }
+            Err(_) => {
+                tracing::warn!(
+                    database_id,
+                    "pool-health PG 采样超时（{}ms）",
+                    PG_SAMPLE_TIMEOUT.as_millis()
+                );
+                PgConnInfo::unknown()
+            }
+        }
     };
 
     let verdict = diagnose(&VerdictInput {
@@ -958,6 +1009,53 @@ pub async fn get_pool_health(
     }))
 }
 
+/// POST /api/monitor/pool-reset — 踢掉当前库的进程内业务池，下次请求按配置重建。
+///
+/// 用于「应用池打满 / acquire 超时」且直连 PG 仍健康时的软恢复：不必重启整个 OneBase。
+/// 鉴权与 `pool-health` 相同（`X-Database-Id` + database admin / 超管）。
+///
+/// Query `reload=true`：踢池后立刻 `ensure_pool_loaded` 预热，避免下一次业务请求冷启动。
+#[derive(Debug, Deserialize, Default)]
+pub struct PoolResetQuery {
+    #[serde(default)]
+    pub reload: bool,
+}
+
+pub async fn reset_tenant_pool(
+    State(main_pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    db_id: Option<Extension<CurrentDatabaseId>>,
+    Query(q): Query<PoolResetQuery>,
+) -> Result<Json<Value>> {
+    let database_id = require_monitor_access(&main_pool, &claims, db_id).await?;
+    let before = POOL_MANAGER.primary_watermark(database_id);
+
+    POOL_MANAGER.remove_pool(database_id).await;
+
+    let mut reloaded = false;
+    if q.reload {
+        crate::auto_api_handlers::ensure_pool_loaded(&main_pool, database_id).await?;
+        reloaded = true;
+    }
+
+    let after = POOL_MANAGER.primary_watermark(database_id);
+    tracing::warn!(
+        user = claims.sub,
+        database_id,
+        was_loaded = before.is_some(),
+        reload = reloaded,
+        "管理员重置租户连接池"
+    );
+
+    Ok(Json(json!({
+        "database_id": database_id,
+        "was_loaded": before.is_some(),
+        "before": before,
+        "after": after,
+        "reloaded": reloaded,
+    })))
+}
+
 #[cfg(test)]
 mod pool_health_tests {
     use super::*;
@@ -994,6 +1092,11 @@ mod pool_health_tests {
         assert_eq!(v.level, VerdictLevel::Critical);
         assert!(v.summary.contains("瓶颈在 OneBase 池"));
         assert!(!v.hints.is_empty());
+        assert!(
+            v.hints.iter().any(|h| h.contains("pool-reset")),
+            "饱和 hints 必须指引 pool-reset: {:?}",
+            v.hints
+        );
     }
 
     #[test]

@@ -35,9 +35,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             last_used_at TIMESTAMP,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             expires_at TIMESTAMP,
+            created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
             UNIQUE(key_hash)
         )
     "#)
+    .execute(&pool)
+    .await?;
+
+    // 存量表补列：记录 Key 创建者（与 migrate.rs 的 API_KEYS_SQL 保持一致）
+    sqlx::query(
+        "ALTER TABLE management.api_keys ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users(id) ON DELETE SET NULL",
+    )
     .execute(&pool)
     .await?;
 

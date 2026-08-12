@@ -172,7 +172,8 @@ async fn resolve_database_pool(main_pool: &PgPool, database_id: i32) -> Result<P
             as u32,
         connection_timeout: row
             .get::<Option<i32>, _>("connection_timeout")
-            .unwrap_or(30) as u64,
+            .unwrap_or(crate::pool_manager::DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS as i32)
+            as u64,
     };
 
     POOL_MANAGER

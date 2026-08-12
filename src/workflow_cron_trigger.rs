@@ -118,6 +118,10 @@ async fn fire_due_workflows(
         }
 
         tracing::info!(workflow_id = wf.id, slug = %wf.slug, "Cron 触发工作流");
+
+        // 注意：Cron 自动触发**不打操作日志**——定时工作流可能每分钟触发，量大会淹没审计。
+        // 触发行为的可观测性由执行日志 / workflow_runs 覆盖；operation_logs 只记人工触发。
+
         let pool_clone = pool.clone();
         let fired_at = fired_minute.to_rfc3339();
         // 并发闸门：拿不到 permit 就等，避免同一分钟大批到期工作流一次抢光管理库连接池。
@@ -133,6 +137,7 @@ async fn fire_due_workflows(
                 "cron",
                 &serde_json::json!({ "fired_at": fired_at }),
                 None,
+                crate::workflow_engine::ApiKeyWriteGuard::Off,
             )
             .await
             {

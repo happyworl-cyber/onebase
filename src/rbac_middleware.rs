@@ -372,32 +372,18 @@ fn check_api_key_scope(
     action: &str,
     schema: &str,
 ) -> Result<(), AppError> {
-    // 新格式优先
+    // action 判定复用单一事实来源（与工作流只读护栏同源，杜绝口径漂移）。
+    if !crate::permissions::api_key_action_allowed(permissions, action) {
+        return Err(AppError::Forbidden(format!(
+            "API Key 不允许执行 {} 操作",
+            action
+        )));
+    }
+
+    // resource 校验仅新格式且 allowed_resources 非空时生效（旧格式视为通配，保持历史行为）。
     let new_format = permissions.get("allowed_actions").is_some()
         || permissions.get("allowed_resources").is_some();
-
     if new_format {
-        let actions = permissions
-            .get("allowed_actions")
-            .and_then(|v| v.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|x| x.as_str().map(str::to_uppercase))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-
-        if !actions.is_empty()
-            && !actions
-                .iter()
-                .any(|a| a == "*" || a == action || a == "ALL")
-        {
-            return Err(AppError::Forbidden(format!(
-                "API Key 不允许执行 {} 操作",
-                action
-            )));
-        }
-
         let resources = permissions
             .get("allowed_resources")
             .and_then(|v| v.as_array())
@@ -420,30 +406,6 @@ fn check_api_key_scope(
                 )));
             }
         }
-        return Ok(());
-    }
-
-    // 旧格式（仅按 action 类别校验）
-    let allow_action = match action {
-        "SELECT" => permissions
-            .get("read")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        "INSERT" | "UPDATE" => permissions
-            .get("write")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        "DELETE" => permissions
-            .get("delete")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        _ => false,
-    };
-    if !allow_action {
-        return Err(AppError::Forbidden(format!(
-            "API Key 不允许执行 {} 操作",
-            action
-        )));
     }
     Ok(())
 }

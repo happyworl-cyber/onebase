@@ -108,7 +108,7 @@ export default function RowMenu({
           </MenuItem>
           <MenuItem onClick={onShare} close={() => setMenuOpen(false)}>
             <i className="fas fa-link text-[10px] w-3.5 text-slate-400" />
-            分享链接
+            复制编辑链接
           </MenuItem>
           <MenuItem onClick={onExport} close={() => setMenuOpen(false)}>
             <i className="fas fa-download text-[10px] w-3.5 text-slate-400" />

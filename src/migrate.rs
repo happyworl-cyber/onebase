@@ -293,6 +293,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "055 workflow search index",
         include_str!("../migrations/055_workflow_search_index.sql"),
     ),
+    (
+        "056 operation logs",
+        include_str!("../migrations/056_operation_logs.sql"),
+    ),
 ];
 
 /// API Keys 表（内联 SQL，历史上由独立的 migrate_api_keys 维护，这里随主序列一起跑）。
@@ -309,8 +313,12 @@ const API_KEYS_SQL: &str = r#"
         last_used_at TIMESTAMP,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         expires_at TIMESTAMP,
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
         UNIQUE(key_hash)
     );
+    -- 存量表补列：记录 Key 创建者，cr_ 鉴权时把作者归属到创建者而非租户 owner/admin
+    ALTER TABLE management.api_keys ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_api_keys_created_by ON management.api_keys(created_by);
     CREATE INDEX IF NOT EXISTS idx_api_keys_database_id ON management.api_keys(database_id);
     CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash   ON management.api_keys(key_hash);
     CREATE INDEX IF NOT EXISTS idx_api_keys_active     ON management.api_keys(is_active) WHERE is_active = true;

@@ -30,10 +30,11 @@ pub mod execution_log;
 pub mod lua_builtins;
 pub mod lua_engine;
 pub mod migrate;
+pub mod operation_log;
 pub mod pg_row_json;
 pub mod pool_manager;
-/// 连接池 acquire 超时计数。`workflow_engine` 的 Postgres 节点埋点要用，故随其编进
-/// lib crate；只依赖 sqlx/chrono/serde/dashmap，保持 lib-safe。
+/// 连接池 acquire 超时计数 + 饱和 fail-fast。`workflow_engine` 的 Postgres 节点埋点
+/// 要用，故随其编进 lib crate；依赖 sqlx/chrono/serde/dashmap/pool_manager。
 pub mod pool_metrics;
 /// 工作流 Postgres 节点复用其 `apply_session_guards` / `reset_session_guards`；
 /// 与 bin 侧超管 raw SQL 通道同源文件，lib 只依赖 error/sqlx，保持 lib-safe。

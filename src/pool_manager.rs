@@ -12,6 +12,13 @@ pub static POOL_MANAGER: Lazy<PoolManager> = Lazy::new(PoolManager::new);
 /// 新建 / NULL 回退时的租户库 `max_connections` 默认值。
 pub const DEFAULT_TENANT_MAX_CONNECTIONS: u32 = 20;
 
+/// 新建 / NULL 回退时的租户库 `connection_timeout`（acquire 超时，秒）。
+/// 从 30 降到 8，缩短满池排队墙钟，避免「精确 30s 倍数」雪崩指纹放大。
+pub const DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS: u64 = 8;
+
+/// 与 tenant API 校验一致的单库 `connection_timeout` 上限（秒）。
+pub const TENANT_ACQUIRE_TIMEOUT_CAP_SECS: u64 = 600;
+
 /// 与 tenant API / 连接预算校验一致的单库上限。
 pub const TENANT_MAX_CONNECTIONS_CAP: u32 = 50;
 
@@ -56,6 +63,47 @@ impl DatabaseConfig {
 /// - 最终 clamp 到 `1..=TENANT_MAX_CONNECTIONS_CAP`
 pub fn effective_max_connections(db_value: u32) -> u32 {
     effective_max_connections_from(db_value, std::env::var("TENANT_DB_MAX_CONNECTIONS").ok())
+}
+
+/// 解析建池用的有效 acquire 超时（秒）。
+///
+/// - `TENANT_DB_ACQUIRE_TIMEOUT` 合法（1..=600）时**完全覆盖** `db_value`
+/// - 非法 env：warn 后回退 `db_value`
+/// - 最终 clamp 到 `1..=TENANT_ACQUIRE_TIMEOUT_CAP_SECS`；`db_value==0` 回退默认 8
+pub fn effective_acquire_timeout(db_value: u64) -> u64 {
+    effective_acquire_timeout_from(db_value, std::env::var("TENANT_DB_ACQUIRE_TIMEOUT").ok())
+}
+
+/// 可注入 env，便于单测。
+pub fn effective_acquire_timeout_from(db_value: u64, env: Option<String>) -> u64 {
+    let fallback = if db_value == 0 {
+        DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS
+    } else {
+        db_value.clamp(1, TENANT_ACQUIRE_TIMEOUT_CAP_SECS)
+    };
+    match env {
+        None => fallback,
+        Some(raw) => match raw.trim().parse::<u64>() {
+            Ok(v) if (1..=TENANT_ACQUIRE_TIMEOUT_CAP_SECS).contains(&v) => v,
+            Ok(v) => {
+                tracing::warn!(
+                    "TENANT_DB_ACQUIRE_TIMEOUT={} 超出 1..={}，回退 db 值 {}",
+                    v,
+                    TENANT_ACQUIRE_TIMEOUT_CAP_SECS,
+                    fallback
+                );
+                fallback
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "TENANT_DB_ACQUIRE_TIMEOUT={:?} 无效，回退 db 值 {}",
+                    raw,
+                    fallback
+                );
+                fallback
+            }
+        },
+    }
 }
 
 /// 可注入 env，便于单测。
@@ -470,19 +518,46 @@ impl PoolManager {
         out
     }
 
+    /// 从进程内缓存摘除指定租户池，后台关闭旧连接。
+    ///
+    /// **不能**对主池同步 `close().await`：sqlx 的 close 会等到所有借出连接归还。
+    /// 池已打满 / 连接卡在慢 SQL 或 `idle in transaction` 时，同步 close 会把踢池请求
+    /// 本身挂死，业务只能靠重启进程恢复。先 `remove` 再 `spawn(close)`，新请求可立刻
+    /// `get_or_create_pool` 建新池；旧连接随归还或后端超时逐渐释放。
     pub async fn remove_pool(&self, database_id: i32) {
-        if let Some((_, pool)) = self.pools.remove(&database_id) {
-            pool.close().await;
+        let primary = self.pools.remove(&database_id).map(|(_, p)| p);
+        let (group_primary, replica_pools) =
+            if let Some((_, group)) = self.groups.remove(&database_id) {
+                (
+                    Some(group.primary),
+                    group
+                        .replicas
+                        .into_iter()
+                        .map(|r| r.pool)
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                (None, Vec::new())
+            };
+
+        let to_close = primary
+            .into_iter()
+            .chain(group_primary)
+            .chain(replica_pools)
+            .collect::<Vec<_>>();
+        if to_close.is_empty() {
+            return;
         }
-        // 关掉 group 里所有副本池
-        let replica_pools: Vec<PgPool> = if let Some((_, group)) = self.groups.remove(&database_id)
-        {
-            group.replicas.into_iter().map(|r| r.pool).collect()
-        } else {
-            vec![]
-        };
-        for p in replica_pools {
-            tokio::spawn(async move { p.close().await });
+
+        tracing::warn!(
+            database_id,
+            pools = to_close.len(),
+            "租户连接池已从缓存摘除，后台关闭旧连接"
+        );
+        for pool in to_close {
+            tokio::spawn(async move {
+                pool.close().await;
+            });
         }
     }
 
@@ -527,12 +602,17 @@ impl PoolManager {
         let min_connections = pool_opts.clamped_min(max_connections);
         let env_override = std::env::var("TENANT_DB_MAX_CONNECTIONS").ok();
 
+        let acquire_timeout_secs = effective_acquire_timeout(config.connection_timeout);
+        let acquire_env_override = std::env::var("TENANT_DB_ACQUIRE_TIMEOUT").ok();
+
         tracing::info!(
-            "租户池参数: id={}, db_max={}, effective_max={}, env_override={:?}, min={}, idle_timeout={}s, max_lifetime={}s",
+            "租户池参数: id={}, db_max={}, effective_max={}, env_override={:?}, acquire_timeout={}s, acquire_env={:?}, min={}, idle_timeout={}s, max_lifetime={}s",
             config.id,
             db_max,
             max_connections,
             env_override,
+            acquire_timeout_secs,
+            acquire_env_override,
             min_connections,
             pool_opts.idle_timeout_secs,
             pool_opts.max_lifetime_secs
@@ -541,7 +621,7 @@ impl PoolManager {
         let pool = PgPoolOptions::new()
             .max_connections(max_connections)
             .min_connections(min_connections)
-            .acquire_timeout(Duration::from_secs(config.connection_timeout))
+            .acquire_timeout(Duration::from_secs(acquire_timeout_secs))
             .idle_timeout(Some(Duration::from_secs(pool_opts.idle_timeout_secs)))
             .max_lifetime(Some(Duration::from_secs(pool_opts.max_lifetime_secs)))
             .connect_with(opts)
@@ -618,11 +698,52 @@ mod tests {
             username: "user".to_string(),
             password: "pass".to_string(),
             max_connections: DEFAULT_TENANT_MAX_CONNECTIONS,
-            connection_timeout: 30,
+            connection_timeout: DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS,
         };
         assert_eq!(
             config.connection_url(),
             "postgresql://user:pass@localhost:5432/mydb"
+        );
+    }
+
+    #[test]
+    fn effective_acquire_timeout_uses_db_when_no_env() {
+        assert_eq!(effective_acquire_timeout_from(8, None), 8);
+        assert_eq!(
+            effective_acquire_timeout_from(0, None),
+            DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS
+        );
+        assert_eq!(
+            effective_acquire_timeout_from(9999, None),
+            TENANT_ACQUIRE_TIMEOUT_CAP_SECS
+        );
+    }
+
+    #[test]
+    fn effective_acquire_timeout_env_overrides_db() {
+        assert_eq!(
+            effective_acquire_timeout_from(30, Some("5".into())),
+            5
+        );
+        assert_eq!(
+            effective_acquire_timeout_from(8, Some("60".into())),
+            60
+        );
+    }
+
+    #[test]
+    fn effective_acquire_timeout_invalid_env_falls_back() {
+        assert_eq!(
+            effective_acquire_timeout_from(8, Some("0".into())),
+            8
+        );
+        assert_eq!(
+            effective_acquire_timeout_from(8, Some("601".into())),
+            8
+        );
+        assert_eq!(
+            effective_acquire_timeout_from(8, Some("abc".into())),
+            8
         );
     }
 
@@ -746,5 +867,33 @@ mod tests {
         assert_eq!(opts.clamped_min(10), 8);
         assert_eq!(opts.clamped_min(2), 2);
         assert_eq!(opts.clamped_min(0), 1);
+    }
+
+    /// 饱和池场景下 `PgPool::close().await` 会等到借出连接归还才返回。
+    /// `remove_pool` 必须先摘掉缓存再后台 close，否则运维「踢池」本身会卡死，
+    /// 业务侧只能等进程重启——这正是 database_id=7 一类事故无法自愈的原因之一。
+    #[tokio::test]
+    async fn remove_pool_unregisters_without_awaiting_close() {
+        let mgr = PoolManager::new();
+        let opts = PgConnectOptions::new()
+            .host("127.0.0.1")
+            .port(1)
+            .database("onebase_pool_test")
+            .username("u")
+            .password("p");
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy_with(opts);
+        mgr.pools.insert(7, pool.clone());
+        mgr.groups.insert(7, PoolGroup::new(pool));
+        assert!(mgr.primary_watermark(7).is_some());
+
+        tokio::time::timeout(Duration::from_millis(200), mgr.remove_pool(7))
+            .await
+            .expect("remove_pool must return promptly (must not await saturated close)");
+
+        assert!(mgr.primary_watermark(7).is_none());
+        assert_eq!(mgr.active_pools_count(), 0);
+        assert!(mgr.get_write_pool(7).is_none());
     }
 }

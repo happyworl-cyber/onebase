@@ -1,5 +1,19 @@
 import type { WorkflowListItem } from './types'
 import { resolveWorkflowTaxonomy } from './utils'
+import api, { type ApiRequestConfig } from '@/lib/api'
+
+/**
+ * 导出审计回执：工作流导出是前端本地生成 JSON（无后端调用），
+ * 因此在触发下载后 fire-and-forget 通知后端记 EXPORT 打点。
+ * 审计失败不影响导出体验（suppressErrorToast + 吞掉异常）。
+ */
+export function auditWorkflowExport(ids: Array<number | null | undefined>) {
+  const valid = ids.filter((id): id is number => typeof id === 'number' && Number.isFinite(id) && id > 0)
+  if (valid.length === 0) return
+  api
+    .post('/api/admin/workflows/export-audit', { ids: valid }, { suppressErrorToast: true } as ApiRequestConfig)
+    .catch(() => {})
+}
 
 export const WORKFLOW_EXPORT_FORMAT = 'onebase.workflow'
 export const WORKFLOW_EXPORT_VERSION = 1

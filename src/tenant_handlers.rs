@@ -428,7 +428,9 @@ pub async fn create_database_connection(
     let max_connections = req
         .max_connections
         .unwrap_or(crate::pool_manager::DEFAULT_TENANT_MAX_CONNECTIONS as i32);
-    let connection_timeout = req.connection_timeout.unwrap_or(30);
+    let connection_timeout = req
+        .connection_timeout
+        .unwrap_or(crate::pool_manager::DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS as i32);
     ensure_connection_budget(
         &pool,
         &req.db_host,
@@ -779,7 +781,8 @@ pub async fn switch_connection(
             as u32,
         connection_timeout: row
             .get::<Option<i32>, _>("connection_timeout")
-            .unwrap_or(30) as u64,
+            .unwrap_or(crate::pool_manager::DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS as i32)
+            as u64,
     };
 
     // 创建或获取连接池
@@ -1455,7 +1458,7 @@ pub async fn add_tenant_replica(
         .get("connection_timeout")
         .and_then(|v| v.as_i64())
         .map(|v| v as i32)
-        .unwrap_or(30);
+        .unwrap_or(crate::pool_manager::DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS as i32);
 
     ensure_connection_budget(&pool, db_host, db_port, None, max_connections).await?;
 
@@ -1656,7 +1659,8 @@ pub async fn update_tenant_replica(
                         username: row.get("db_user"),
                         password: plain_pwd,
                         max_connections: crate::pool_manager::DEFAULT_TENANT_MAX_CONNECTIONS,
-                        connection_timeout: 30,
+                        connection_timeout:
+                            crate::pool_manager::DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS,
                     };
                     let w: i32 = row.get("weight");
                     if let Err(e) = POOL_MANAGER

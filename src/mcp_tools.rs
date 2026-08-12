@@ -472,6 +472,9 @@ async fn tool_create_workflow(pool: &PgPool, claims: &Claims, args: &Value) -> R
         State(pool.clone()),
         axum::Extension(claims.clone()),
         None,
+        Some(axum::Extension(crate::operation_log::OpSourceHint(
+            crate::operation_log::Source::Mcp,
+        ))),
         axum::Json(req),
     )
     .await?;
@@ -493,6 +496,9 @@ async fn tool_duplicate_workflow(pool: &PgPool, claims: &Claims, args: &Value) -
         Path(id),
         axum::Extension(claims.clone()),
         None,
+        Some(axum::Extension(crate::operation_log::OpSourceHint(
+            crate::operation_log::Source::Mcp,
+        ))),
     )
     .await?;
     let mut out = resp.0;
@@ -517,6 +523,9 @@ async fn tool_update_workflow(pool: &PgPool, claims: &Claims, args: &Value) -> R
         Path(id),
         axum::Extension(claims.clone()),
         None,
+        Some(axum::Extension(crate::operation_log::OpSourceHint(
+            crate::operation_log::Source::Mcp,
+        ))),
         axum::Json(req),
     )
     .await?;

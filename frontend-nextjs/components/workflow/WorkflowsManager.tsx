@@ -44,7 +44,7 @@ import {
   type WorkflowGroupCount,
 } from '@/components/workflow/list/utils'
 import { fetchWorkflowSummary, fetchWorkflowsByCategory } from '@/components/workflow/list/listApi'
-import { downloadWorkflowJson } from '@/components/workflow/list/exportUtils'
+import { downloadWorkflowJson, auditWorkflowExport } from '@/components/workflow/list/exportUtils'
 import { fetchApiFolders, type ApiWorkflowFolder } from '@/components/workflow/list/folderApi'
 import { UNCATEGORIZED_FOLDER_NAME } from '@/components/workflow/list/types'
 
@@ -701,11 +701,11 @@ function WorkflowDocModal({
 export interface WorkflowsManagerProps {
   /** workspace 场景下传入当前项目的 database_id，用于列表过滤和新建预填。 */
   defaultDatabaseId?: number | null
-  /** workspace 的 projectId（tenants.id），用于拼分享深链。 */
+  /** workspace 的 projectId（tenants.id），用于拼编辑深链。 */
   projectId?: number | null
 }
 
-function buildWorkflowShareUrl(projectId: number, workflowId: number): string {
+function buildWorkflowEditorUrl(projectId: number, workflowId: number): string {
   return `${window.location.origin}/workspace/${projectId}/automation/workflows?workflowId=${workflowId}`
 }
 
@@ -1026,16 +1026,16 @@ export default function WorkflowsManager({
     setView('editor')
   }
 
-  const handleShareWorkflow = useCallback(
+  const handleCopyWorkflowLink = useCallback(
     async (workflowId: number) => {
       if (projectId == null || !Number.isFinite(projectId)) {
-        showToast('error', '无法生成分享链接：缺少项目信息')
+        showToast('error', '无法复制编辑链接：缺少项目信息')
         return
       }
-      const url = buildWorkflowShareUrl(projectId, workflowId)
+      const url = buildWorkflowEditorUrl(projectId, workflowId)
       const ok = await copyTextToClipboard(url)
-      if (ok) showToast('success', '链接已复制')
-      else showToast('error', '复制失败，请手动复制地址栏链接')
+      if (ok) showToast('success', '编辑链接已复制')
+      else showToast('error', '复制失败，请手动复制地址栏中的编辑链接')
     },
     [projectId],
   )
@@ -1390,6 +1390,7 @@ export default function WorkflowsManager({
   // 导出：可移植 JSON 信封；保留 nodes/edges 与服务(department)/分类(category)，剥掉 id / database_id 等环境字段。
   const handleExport = (wf: Workflow) => {
     downloadWorkflowJson(wf)
+    auditWorkflowExport([wf.id])
   }
 
   // 详情页导出：以「当前编辑器里的定义」为准（含未保存改动），trigger_config 由字符串解析为对象。
@@ -1427,6 +1428,8 @@ export default function WorkflowsManager({
       alert_webhook_template: (formMeta.alert_webhook_url ?? '').trim() ? alertWebhookTemplate : null,
       alert_throttle_hours: formMeta.alert_throttle_hours,
     })
+    // 编辑器导出：仅在编辑已存在工作流时可审计（新建未保存无 id，auditWorkflowExport 会自动跳过）。
+    auditWorkflowExport([editing?.id])
   }
 
   const editorEndpointPath =
@@ -1449,7 +1452,7 @@ export default function WorkflowsManager({
           onRun={(wf) => handleTrigger(wf.id)}
           onShowRuns={(wf) => loadRuns(wf.id)}
           onDuplicate={(wf) => handleDuplicate(wf.id)}
-          onShare={(wf) => void handleShareWorkflow(wf.id)}
+          onShare={(wf) => void handleCopyWorkflowLink(wf.id)}
           onExport={(wf) => handleExport(wf as Workflow)}
           onDelete={handleDeleteRequest}
           onCleanupRuns={handleCleanupRuns}
@@ -1499,7 +1502,7 @@ export default function WorkflowsManager({
           onShowVersions={editing ? openVersions : undefined}
           onShowRuns={editing ? () => loadRuns(editing.id) : undefined}
           onToggleEnabled={editing ? handleToggleEditing : undefined}
-          onShare={editing ? () => void handleShareWorkflow(editing.id) : undefined}
+          onShare={editing ? () => void handleCopyWorkflowLink(editing.id) : undefined}
           onExport={handleExportEditor}
           onDepartmentChange={(department) => {
             setFormMeta((f) => {

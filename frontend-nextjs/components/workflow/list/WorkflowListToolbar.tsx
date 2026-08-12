@@ -12,9 +12,11 @@ interface WorkflowListToolbarProps {
   onToggleGlobalSearch: () => void
   onSetStatus: (status: WorkflowListPageState['status']) => void
   onToggleTrig: (key: string, checked: boolean) => void
+  onClearTrigs: () => void
   onSetAuthor: (author: string | null) => void
   onSetSort: (sort: WorkflowListSort) => void
   onSetView: (view: WorkflowListView) => void
+  onResetFilters: () => void
 }
 
 function FilterChip({
@@ -45,6 +47,32 @@ function FilterChip({
   )
 }
 
+/** 激活筛选 chip 内的行内「清除」小按钮（用 span+role 以避免 button 嵌套 button）。 */
+function ChipClear({ label, onClear }: { label: string; onClear: () => void }) {
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      aria-label={label}
+      title={label}
+      onClick={(e) => {
+        e.stopPropagation()
+        onClear()
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          e.stopPropagation()
+          onClear()
+        }
+      }}
+      className="ml-0.5 -mr-0.5 w-4 h-4 flex items-center justify-center rounded-full text-indigo-400 hover:text-indigo-700 hover:bg-indigo-100"
+    >
+      <i className="fas fa-xmark text-[10px]" />
+    </span>
+  )
+}
+
 export default function WorkflowListToolbar({
   state,
   authors,
@@ -52,9 +80,11 @@ export default function WorkflowListToolbar({
   onToggleGlobalSearch,
   onSetStatus,
   onToggleTrig,
+  onClearTrigs,
   onSetAuthor,
   onSetSort,
   onSetView,
+  onResetFilters,
 }: WorkflowListToolbarProps) {
   const [openDrop, setOpenDrop] = useState<'trig' | 'author' | 'sort' | null>(null)
   const [authorSearch, setAuthorSearch] = useState('')
@@ -92,6 +122,13 @@ export default function WorkflowListToolbar({
     : authors
 
   const sortLabel = { updated_at: '最近修改', created_at: '创建时间', name: '名称 A→Z' }[state.sort]
+
+  const hasActiveFilters =
+    !!state.search ||
+    state.globalSearch ||
+    state.trigs.size > 0 ||
+    !!state.author ||
+    state.status !== 'all'
 
   return (
     <div className="px-5 py-2 border-b border-slate-100 flex items-center gap-2 shrink-0 flex-wrap">
@@ -150,7 +187,11 @@ export default function WorkflowListToolbar({
         >
           <i className="fas fa-bolt text-slate-400 text-[10px]" />
           {state.trigs.size ? `触发 (${state.trigs.size})` : '触发方式'}
-          <i className="fas fa-chevron-down text-slate-300 text-[9px]" />
+          {state.trigs.size ? (
+            <ChipClear label="清除触发方式筛选" onClear={onClearTrigs} />
+          ) : (
+            <i className="fas fa-chevron-down text-slate-300 text-[9px]" />
+          )}
         </button>
         {openDrop === 'trig' && (
           <div className="absolute top-full mt-1 left-0 bg-white border border-slate-200 rounded-xl py-1.5 z-30 w-44 shadow-lg">
@@ -190,7 +231,11 @@ export default function WorkflowListToolbar({
         >
           <i className="fas fa-user text-slate-400 text-[10px]" />
           {state.author || '作者'}
-          <i className="fas fa-chevron-down text-slate-300 text-[9px]" />
+          {state.author ? (
+            <ChipClear label="清除作者筛选" onClear={() => onSetAuthor(null)} />
+          ) : (
+            <i className="fas fa-chevron-down text-slate-300 text-[9px]" />
+          )}
         </button>
         {openDrop === 'author' && (
           <div
@@ -252,6 +297,18 @@ export default function WorkflowListToolbar({
           </div>
         )}
       </div>
+
+      {hasActiveFilters && (
+        <button
+          type="button"
+          onClick={onResetFilters}
+          title="清空全部筛选条件"
+          className="flex items-center gap-1.5 px-2.5 py-2 text-sm text-slate-500 rounded-lg border border-transparent hover:border-slate-200 hover:bg-slate-50 hover:text-slate-700"
+        >
+          <i className="fas fa-filter-circle-xmark text-[11px]" />
+          清空筛选
+        </button>
+      )}
 
       <div className="flex items-center gap-1 ml-auto">
         <FilterChip active={state.status === 'all'} onClick={() => onSetStatus('all')}>

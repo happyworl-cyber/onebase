@@ -56,7 +56,7 @@ pub struct TransactionResponse {
 
 /// 执行事务
 pub async fn execute_transaction(
-    State(_main_pool): State<PgPool>,
+    State(main_pool): State<PgPool>,
     dynamic_pool: Option<Extension<PgPool>>,
     db_id: Option<Extension<crate::middleware::CurrentDatabaseId>>,
     claims: Option<Extension<crate::auth::Claims>>,
@@ -123,7 +123,10 @@ pub async fn execute_transaction(
     // 单独 acquire 一条连接，先 `SET statement_timeout`，然后开事务跑 N 条 SQL，
     // 整个事务结束后 RESET 把连接还干净。与 /query 同套策略——所有 raw_sql 通道
     // 都被 PG 服务端的 statement_timeout 兜底，跑飞了 PG 会主动 abort。
-    let mut conn = pool.acquire().await.map_err(AppError::Database)?;
+    // 走 acquire_traced：池饱和时 fail-fast，避免干等满 connection_timeout。
+    let mut conn = crate::pool_metrics::acquire_traced(pool, Some(target_db_id), "transaction")
+        .await
+        .map_err(AppError::Database)?;
     crate::raw_sql_guard::apply_session_guards(&mut conn, policy).await?;
 
     use sqlx::Connection;
@@ -177,6 +180,40 @@ pub async fn execute_transaction(
     let elapsed = start.elapsed().as_millis();
 
     tracing::info!("事务执行成功: {} 个操作，耗时 {}ms", results.len(), elapsed);
+
+    // 操作日志打点：事务是一组参数化写操作（INSERT/UPDATE/DELETE），逐条列出表与动作。
+    // tenant 由 record_db_op 按 target_db_id 反查；反查不到（管理库/无头）自动跳过。
+    if target_db_id > 0 {
+        if let Some(Extension(ref c)) = claims {
+            let statements: Vec<Value> = req
+                .operations
+                .iter()
+                .map(|op| {
+                    let verb = match op.method {
+                        OperationType::Post => "INSERT",
+                        OperationType::Patch => "UPDATE",
+                        OperationType::Delete => "DELETE",
+                    };
+                    serde_json::json!({ "op": verb, "table": format!("{}.{}", op.schema, op.table) })
+                })
+                .collect();
+            crate::operation_log::record_db_op(
+                &main_pool,
+                target_db_id,
+                crate::operation_log::Actor::from_claims(c),
+                crate::operation_log::Source::Console,
+                crate::operation_log::action::EXECUTE,
+                crate::operation_log::resource_type::DATABASE,
+                None,
+                None,
+                format!("执行事务（{} 个操作）", op_count),
+                crate::operation_log::Status::Success,
+                None,
+                Some(serde_json::json!({ "v": 1, "kind": "sql", "statements": statements })),
+                None,
+            );
+        }
+    }
 
     Ok((
         StatusCode::OK,

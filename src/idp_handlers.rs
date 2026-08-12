@@ -22,6 +22,7 @@ use sqlx::{PgPool, Row};
 use crate::auth::Claims;
 use crate::crypto;
 use crate::error::{AppError, Result};
+use crate::operation_log::{self, Actor, OperationLogInput, Source, Status};
 use crate::permissions;
 
 const VALID_PROVIDER_TYPES: &[&str] = &[
@@ -265,6 +266,104 @@ async fn assert_client_belongs_to_project(
     Ok(())
 }
 
+fn opt_text(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("—")
+        .to_string()
+}
+
+fn mask_identifier(value: &str) -> String {
+    let chars: Vec<char> = value.chars().collect();
+    if chars.len() <= 8 {
+        return "已脱敏".to_string();
+    }
+    let prefix: String = chars.iter().take(4).collect();
+    let suffix: String = chars
+        .iter()
+        .rev()
+        .take(4)
+        .copied()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{}***{}", prefix, suffix)
+}
+
+fn value_keys(value: Option<&Value>) -> String {
+    match value.and_then(|v| v.as_object()) {
+        Some(map) if !map.is_empty() => {
+            let mut keys: Vec<&str> = map.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            keys.join(", ")
+        }
+        _ => "—".to_string(),
+    }
+}
+
+fn bool_text(value: bool) -> &'static str {
+    if value { "是" } else { "否" }
+}
+
+fn record_idp_op(
+    pool: &PgPool,
+    claims: &Claims,
+    tenant_id: i32,
+    action: &str,
+    resource_name: &str,
+    resource_id: String,
+    summary: String,
+    change: Value,
+    high_risk: bool,
+) {
+    let mut input = OperationLogInput::new(
+        tenant_id,
+        Actor::from_claims(claims),
+        Source::Console,
+        action,
+        summary,
+        Status::Success,
+    )
+    .resource(
+        operation_log::resource_type::IDP,
+        resource_name.to_string(),
+        Some(resource_id),
+    )
+    .change(change);
+    input.high_risk = Some(high_risk);
+    operation_log::record(pool, input);
+}
+
+fn record_oauth_client_op(
+    pool: &PgPool,
+    claims: &Claims,
+    tenant_id: i32,
+    action: &str,
+    client_id: &str,
+    summary: String,
+    change: Value,
+    high_risk: bool,
+) {
+    let mut input = OperationLogInput::new(
+        tenant_id,
+        Actor::from_claims(claims),
+        Source::Console,
+        action,
+        summary,
+        Status::Success,
+    )
+    .resource(
+        operation_log::resource_type::OAUTH2_CLIENT,
+        client_id.to_string(),
+        Some(client_id.to_string()),
+    )
+    .change(change);
+    input.high_risk = Some(high_risk);
+    operation_log::record(pool, input);
+}
+
 /// GET /api/providers?client_id=...
 pub async fn list_available_providers(
     State(pool): State<PgPool>,
@@ -418,8 +517,36 @@ pub async fn create_project_idp_provider(
     .await?;
 
     let provider_type: String = row.get("provider_type");
+    let provider_id: i32 = row.get("id");
+    let display_name_for_log = row
+        .get::<Option<String>, _>("display_name")
+        .unwrap_or_else(|| provider_default_label(&req.provider_type));
+    let enabled = row.get::<bool, _>("is_enabled");
+    let config_value = row.get::<Option<serde_json::Value>, _>("provider_config");
+    record_idp_op(
+        &pool,
+        &claims,
+        project_id,
+        operation_log::action::CREATE,
+        &display_name_for_log,
+        provider_id.to_string(),
+        format!("创建身份提供方「{}」", display_name_for_log),
+        json!({
+            "v": 1,
+            "kind": "created",
+            "fields": {
+                "provider_type": provider_type,
+                "display_name": display_name_for_log,
+                "client_id": mask_identifier(client_id),
+                "client_secret": "已配置（脱敏）",
+                "is_enabled": bool_text(enabled),
+                "provider_config_keys": value_keys(config_value.as_ref()),
+            }
+        }),
+        false,
+    );
     Ok(Json(json!({
-        "id": row.get::<i32, _>("id"),
+        "id": provider_id,
         "provider_type": provider_type,
         "display_name": row.get::<Option<String>, _>("display_name")
             .unwrap_or_else(|| provider_default_label(&req.provider_type)),
@@ -441,6 +568,21 @@ pub async fn update_project_idp_provider(
 ) -> Result<Json<Value>> {
     assert_project_admin(&pool, &claims, project_id).await?;
     validate_provider_type(&provider_type)?;
+
+    let existing = sqlx::query(
+        "SELECT id, display_name, client_id, provider_config, is_enabled \
+         FROM management.project_idp_providers WHERE tenant_id = $1 AND provider_type = $2",
+    )
+    .bind(project_id)
+    .bind(&provider_type)
+    .fetch_optional(&pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("项目 {} 未配置 provider {}", project_id, provider_type)))?;
+    let provider_id: i32 = existing.get("id");
+    let old_display_name: Option<String> = existing.get("display_name");
+    let old_client_id: String = existing.get("client_id");
+    let old_provider_config: Option<serde_json::Value> = existing.get("provider_config");
+    let old_enabled: bool = existing.get("is_enabled");
 
     if let Some(client_id) = &req.client_id {
         if client_id.trim().is_empty() {
@@ -482,8 +624,39 @@ pub async fn update_project_idp_provider(
     .await?
     .ok_or_else(|| AppError::NotFound(format!("项目 {} 未配置 provider {}", project_id, provider_type)))?;
 
+    let new_display_name = row
+        .get::<Option<String>, _>("display_name")
+        .unwrap_or_else(|| provider_default_label(&provider_type));
+    let new_client_id: String = row.get("client_id");
+    let new_provider_config = row.get::<Option<serde_json::Value>, _>("provider_config");
+    let new_enabled: bool = row.get("is_enabled");
+    record_idp_op(
+        &pool,
+        &claims,
+        project_id,
+        operation_log::action::UPDATE,
+        &new_display_name,
+        provider_id.to_string(),
+        format!("更新身份提供方「{}」", new_display_name),
+        json!({
+            "v": 1,
+            "kind": "modified",
+            "modified": [{
+                "node": "身份提供方",
+                "fields": [
+                    { "field": "display_name", "old": opt_text(old_display_name.as_deref()), "new": new_display_name },
+                    { "field": "client_id", "old": mask_identifier(&old_client_id), "new": mask_identifier(&new_client_id) },
+                    { "field": "client_secret", "old": "已配置（脱敏）", "new": if req.client_secret.is_some() { "已更新（脱敏）" } else { "未修改" } },
+                    { "field": "is_enabled", "old": bool_text(old_enabled), "new": bool_text(new_enabled) },
+                    { "field": "provider_config_keys", "old": value_keys(old_provider_config.as_ref()), "new": value_keys(new_provider_config.as_ref()) }
+                ]
+            }]
+        }),
+        false,
+    );
+
     Ok(Json(json!({
-        "id": row.get::<i32, _>("id"),
+        "id": provider_id,
         "provider_type": row.get::<String, _>("provider_type"),
         "display_name": row.get::<Option<String>, _>("display_name")
             .unwrap_or_else(|| provider_default_label(&provider_type)),
@@ -598,6 +771,29 @@ pub async fn create_oauth2_client(
     .fetch_one(&pool)
     .await?;
 
+    record_oauth_client_op(
+        &pool,
+        &claims,
+        project_id,
+        operation_log::action::CREATE,
+        &client_id,
+        format!("创建 OAuth2 Client「{}」", display_name),
+        json!({
+            "v": 1,
+            "kind": "created",
+            "fields": {
+                "client_id": client_id,
+                "display_name": display_name,
+                "redirect_uri_count": req.redirect_uris.len().to_string(),
+                "scope_count": allowed_scopes.len().to_string(),
+                "require_pkce": bool_text(req.require_pkce.unwrap_or(true)),
+                "is_active": bool_text(req.is_active.unwrap_or(true)),
+                "client_secret": "已生成（脱敏）",
+            }
+        }),
+        false,
+    );
+
     Ok(Json(json!({
         "client_id": client_id,
         "client_secret": client_secret,
@@ -625,6 +821,22 @@ pub async fn update_oauth2_client(
 ) -> Result<Json<Value>> {
     assert_project_admin(&pool, &claims, project_id).await?;
     assert_client_belongs_to_project(&pool, project_id, &client_id).await?;
+
+    let existing = sqlx::query(
+        "SELECT display_name, redirect_uris, allowed_scopes, access_token_ttl, refresh_token_ttl, require_pkce, is_active \
+         FROM management.oauth2_clients WHERE tenant_id = $1 AND client_id = $2",
+    )
+    .bind(project_id)
+    .bind(&client_id)
+    .fetch_one(&pool)
+    .await?;
+    let old_display_name: String = existing.get("display_name");
+    let old_redirect_uris: Vec<String> = existing.get("redirect_uris");
+    let old_allowed_scopes: Vec<String> = existing.get("allowed_scopes");
+    let old_access_token_ttl: i32 = existing.get("access_token_ttl");
+    let old_refresh_token_ttl: i32 = existing.get("refresh_token_ttl");
+    let old_require_pkce: bool = existing.get("require_pkce");
+    let old_is_active: bool = existing.get("is_active");
 
     if let Some(display_name) = &req.display_name {
         if display_name.trim().is_empty() {
@@ -700,6 +912,39 @@ pub async fn update_oauth2_client(
         ))
     })?;
 
+    let new_display_name: String = row.get("display_name");
+    let new_redirect_uris: Vec<String> = row.get("redirect_uris");
+    let new_allowed_scopes: Vec<String> = row.get("allowed_scopes");
+    let new_access_token_ttl: i32 = row.get("access_token_ttl");
+    let new_refresh_token_ttl: i32 = row.get("refresh_token_ttl");
+    let new_require_pkce: bool = row.get("require_pkce");
+    let new_is_active: bool = row.get("is_active");
+    record_oauth_client_op(
+        &pool,
+        &claims,
+        project_id,
+        operation_log::action::UPDATE,
+        &client_id,
+        format!("更新 OAuth2 Client「{}」", client_id),
+        json!({
+            "v": 1,
+            "kind": "modified",
+            "modified": [{
+                "node": "OAuth2 Client",
+                "fields": [
+                    { "field": "display_name", "old": old_display_name, "new": new_display_name },
+                    { "field": "redirect_uri_count", "old": old_redirect_uris.len().to_string(), "new": new_redirect_uris.len().to_string() },
+                    { "field": "scope_count", "old": old_allowed_scopes.len().to_string(), "new": new_allowed_scopes.len().to_string() },
+                    { "field": "access_token_ttl", "old": old_access_token_ttl.to_string(), "new": new_access_token_ttl.to_string() },
+                    { "field": "refresh_token_ttl", "old": old_refresh_token_ttl.to_string(), "new": new_refresh_token_ttl.to_string() },
+                    { "field": "require_pkce", "old": bool_text(old_require_pkce), "new": bool_text(new_require_pkce) },
+                    { "field": "is_active", "old": bool_text(old_is_active), "new": bool_text(new_is_active) }
+                ]
+            }]
+        }),
+        false,
+    );
+
     Ok(Json(json!({
         "id": row.get::<i32, _>("id"),
         "client_id": row.get::<String, _>("client_id"),
@@ -746,6 +991,26 @@ pub async fn rotate_oauth2_client_secret(
             project_id, client_id
         )));
     }
+
+    record_oauth_client_op(
+        &pool,
+        &claims,
+        project_id,
+        operation_log::action::UPDATE,
+        &client_id,
+        format!("轮换 OAuth2 Client「{}」密钥", client_id),
+        json!({
+            "v": 1,
+            "kind": "modified",
+            "modified": [{
+                "node": "OAuth2 Client",
+                "fields": [
+                    { "field": "client_secret", "old": "旧密钥（脱敏）", "new": "新密钥已生成（脱敏）" }
+                ]
+            }]
+        }),
+        true,
+    );
 
     Ok(Json(json!({
         "client_id": client_id,
@@ -849,6 +1114,16 @@ pub async fn replace_oauth2_client_providers(
         }
     }
 
+    let old_enabled: Vec<String> = sqlx::query(
+        "SELECT provider_type FROM management.oauth2_client_providers WHERE client_id = $1 AND is_enabled = true ORDER BY provider_type",
+    )
+    .bind(&client_id)
+    .fetch_all(&pool)
+    .await?
+    .iter()
+    .map(|row| row.get::<String, _>("provider_type"))
+    .collect();
+
     let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM management.oauth2_client_providers WHERE client_id = $1")
         .bind(&client_id)
@@ -870,6 +1145,33 @@ pub async fn replace_oauth2_client_providers(
         .await?;
     }
     tx.commit().await?;
+    let new_enabled: Vec<String> = req
+        .providers
+        .iter()
+        .filter(|p| p.is_enabled)
+        .map(|p| p.provider_type.clone())
+        .collect();
+
+    record_oauth_client_op(
+        &pool,
+        &claims,
+        project_id,
+        operation_log::action::UPDATE,
+        &client_id,
+        format!("更新 OAuth2 Client「{}」的 Provider 绑定", client_id),
+        json!({
+            "v": 1,
+            "kind": "modified",
+            "modified": [{
+                "node": "OAuth2 Client Provider 绑定",
+                "fields": [
+                    { "field": "启用 Provider", "old": if old_enabled.is_empty() { "—".to_string() } else { old_enabled.join(", ") }, "new": if new_enabled.is_empty() { "—".to_string() } else { new_enabled.join(", ") } },
+                    { "field": "Provider 数量", "old": old_enabled.len().to_string(), "new": new_enabled.len().to_string() }
+                ]
+            }]
+        }),
+        true,
+    );
 
     Ok(Json(json!({
         "client_id": client_id,

@@ -106,6 +106,8 @@ interface PoolHealth {
     waiting_on_locks: number
     longest_active_seconds: number | null
     longest_idle_in_transaction_seconds: number | null
+    /** false：因应用池饱和跳过或短超时，数值不可信 */
+    sampled?: boolean
   }
   verdict: {
     level: 'ok' | 'warn' | 'critical'
@@ -135,6 +137,8 @@ export default function MonitorPage() {
   const [tab, setTab] = useState<Tab>('diagnose')
   const [samples, setSamples] = useState<SamplePoint[]>([])
   const samplesRef = useRef<SamplePoint[]>([])
+  const [resettingPool, setResettingPool] = useState(false)
+  const [resetMsg, setResetMsg] = useState<string | null>(null)
 
   const pushSample = useCallback((h: PoolHealth) => {
     const next: SamplePoint = {
@@ -180,6 +184,22 @@ export default function MonitorPage() {
     const timer = setInterval(loadAll, 5000)
     return () => clearInterval(timer)
   }, [autoRefresh, loadAll])
+
+  const resetPool = useCallback(async () => {
+    if (resettingPool) return
+    setResettingPool(true)
+    setResetMsg(null)
+    try {
+      await api.post('/api/monitor/pool-reset', null, { params: { reload: true } })
+      setResetMsg('连接池已重置并预热，正在刷新指标…')
+      await loadAll()
+    } catch (err) {
+      console.error('重置连接池失败:', err)
+      setResetMsg('重置失败，请稍后重试或检查权限')
+    } finally {
+      setResettingPool(false)
+    }
+  }, [loadAll, resettingPool])
 
   const formatUptime = (s: number) => {
     const d = Math.floor(s / 86400)
@@ -242,7 +262,23 @@ export default function MonitorPage() {
           <div className="flex items-start gap-3">
             <i className={`fas ${verdictIcon(health.verdict.level)} text-2xl mt-0.5`}></i>
             <div className="min-w-0 flex-1">
-              <p className="text-base font-semibold leading-snug">{health.verdict.summary}</p>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <p className="text-base font-semibold leading-snug">{health.verdict.summary}</p>
+                {(health.verdict.level === 'critical' ||
+                  (health.app_pool.loaded &&
+                    health.app_pool.idle === 0 &&
+                    health.app_pool.in_use >= health.app_pool.max)) && (
+                  <button
+                    type="button"
+                    onClick={resetPool}
+                    disabled={resettingPool}
+                    className="shrink-0 rounded-md border border-red-400 bg-white px-3 py-1.5 text-sm font-medium text-red-800 hover:bg-red-50 disabled:opacity-60"
+                  >
+                    <i className={`fas fa-redo-alt mr-1 ${resettingPool ? 'fa-spin' : ''}`}></i>
+                    {resettingPool ? '重置中…' : '重置连接池'}
+                  </button>
+                )}
+              </div>
               {health.verdict.hints.length > 0 && (
                 <ul className="mt-2 space-y-1 text-sm opacity-90">
                   {health.verdict.hints.map((h, i) => (
@@ -252,6 +288,14 @@ export default function MonitorPage() {
                     </li>
                   ))}
                 </ul>
+              )}
+              {resetMsg && (
+                <p className="mt-2 text-sm font-medium">{resetMsg}</p>
+              )}
+              {health.pg.sampled === false && (
+                <p className="mt-2 text-xs opacity-75">
+                  PG 会话指标未采样（应用池饱和或短超时），以应用池水位为准
+                </p>
               )}
               {health.verdict.level !== 'ok' && !autoRefresh && (
                 <p className="mt-3 text-xs opacity-75">

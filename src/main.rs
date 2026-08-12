@@ -35,6 +35,8 @@ mod mcp_tools;
 mod middleware;
 mod models;
 mod monitor_handlers;
+mod operation_log;
+mod operation_log_handlers;
 mod pat_handlers;
 mod permission_cache;
 mod permissions;
@@ -472,6 +474,10 @@ async fn main() -> anyhow::Result<()> {
             get(monitor_handlers::get_pool_health),
         )
         .route(
+            "/api/monitor/pool-reset",
+            post(monitor_handlers::reset_tenant_pool),
+        )
+        .route(
             "/api/monitor/tables",
             get(monitor_handlers::get_table_sizes),
         )
@@ -667,6 +673,33 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/projects/:id/idp/logs",
             get(idp_handlers::list_idp_login_logs),
+        )
+        // 操作日志（项目/租户级，admin+）：list/detail/stats/actors/export。
+        // 静态段路由（stats/actors/export）必须注册在 `/:log_id` 之前，否则 axum 会把
+        // "stats" 当成 log_id 路径参数（与上面 members/search 同款惯例）。
+        .route(
+            "/api/projects/:id/operation-logs",
+            get(operation_log_handlers::list_operation_logs),
+        )
+        .route(
+            "/api/projects/:id/operation-logs/stats",
+            get(operation_log_handlers::operation_log_stats),
+        )
+        .route(
+            "/api/projects/:id/operation-logs/actors",
+            get(operation_log_handlers::list_operation_log_actors),
+        )
+        .route(
+            "/api/projects/:id/operation-logs/facets",
+            get(operation_log_handlers::operation_log_facets),
+        )
+        .route(
+            "/api/projects/:id/operation-logs/export",
+            get(operation_log_handlers::export_operation_logs),
+        )
+        .route(
+            "/api/projects/:id/operation-logs/:log_id",
+            get(operation_log_handlers::get_operation_log),
         )
         // M6 项目级简化大盘：6 个聚合指标 + 24h hourly bucket（供 sparkline）+ sanitized
         // 最近活动 feed。鉴权 = 租户任意角色（含 viewer）；纯只读、纯聚合数字，无行级业务数据。
@@ -1269,6 +1302,11 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/admin/workflows/import",
             post(workflow_handlers::import_workflows),
+        )
+        // 导出审计回执（前端本地下载后回调记 EXPORT 打点）；静态段，须在 `/:id` 之前。
+        .route(
+            "/api/admin/workflows/export-audit",
+            post(workflow_handlers::export_workflows_audit),
         )
         .route(
             "/api/admin/workflows/:id",
@@ -2179,7 +2217,7 @@ mod sql_type_tests {
 }
 
 async fn execute_sql_query(
-    State(_main_pool): State<PgPool>,
+    State(main_pool): State<PgPool>,
     dynamic_pool: Option<axum::extract::Extension<PgPool>>,
     db_id: Option<axum::extract::Extension<middleware::CurrentDatabaseId>>,
     claims: Option<axum::extract::Extension<crate::auth::Claims>>,
@@ -2274,7 +2312,9 @@ async fn execute_sql_query(
 
     // ─── E2：单独 acquire 一条连接，设 statement_timeout，结束 RESET ───
     let policy = raw_sql_guard::policy();
-    let mut conn = pool.acquire().await.map_err(AppError::Database)?;
+    let mut conn = pool_metrics::acquire_traced(pool, Some(target_db_id), "query")
+        .await
+        .map_err(AppError::Database)?;
     raw_sql_guard::apply_session_guards(&mut conn, policy).await?;
     let max_rows = policy.max_returned_rows;
 
@@ -2396,6 +2436,39 @@ async fn execute_sql_query(
         obj.insert("elapsed_ms".into(), json!(start.elapsed().as_millis()));
     }
     push_audit("raw_sql_query_done", None);
+
+    // 操作日志打点：原始 SQL 通道。**只记写/DDL**——纯 SELECT 属于"查询"，按产品约定不打点。
+    // tenant 由 record_db_op 按 target_db_id 反查；反查不到（管理库/无头）则自动跳过。
+    if sql_type != "SELECT" && target_db_id > 0 {
+        if let Some(axum::extract::Extension(ref c)) = claims {
+            let rows = value
+                .get("rows_affected")
+                .or_else(|| value.get("row_count"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            let high_risk = matches!(sql_type, "DROP" | "ALTER" | "TRUNCATE");
+            operation_log::record_db_op(
+                &main_pool,
+                target_db_id,
+                operation_log::Actor::from_claims(c),
+                operation_log::Source::Console,
+                operation_log::action::EXECUTE,
+                operation_log::resource_type::DATABASE,
+                None, // 用数据库连接名兜底
+                None,
+                format!("执行 SQL（{}）", sql_type),
+                operation_log::Status::Success,
+                Some(high_risk),
+                Some(json!({
+                    "v": 1, "kind": "sql",
+                    "sql": req.sql,
+                    "sql_type": sql_type,
+                    "rows": rows,
+                })),
+                None,
+            );
+        }
+    }
     Ok(Json(value))
 }
 

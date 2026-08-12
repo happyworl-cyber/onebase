@@ -14,8 +14,12 @@ use std::sync::Arc;
 use crate::audit_middleware::{set_audit_detail, AuditDetailSink};
 use crate::auth::Claims;
 use crate::error::{AppError, Result};
+use crate::middleware::ApiKeyContext;
+use crate::operation_log::{self, Actor, OpSourceHint, OperationLogInput, Source, Status};
+use std::collections::BTreeMap;
 use crate::workflow_engine::{
-    self, DagEngine, ExecutionContext, NodeExecutionResult, NodeStatus, WorkflowDefinition,
+    self, ApiKeyWriteGuard, DagEngine, ExecutionContext, NodeExecutionResult, NodeStatus,
+    WorkflowDefinition,
 };
 use crate::workflow_taxonomy::{self, WorkflowTaxonomy};
 
@@ -42,6 +46,251 @@ fn audit_workflow(
         }
     }
     set_audit_detail(sink, kind, detail);
+}
+
+// ─── 操作日志（operation_logs）打点辅助 ─────────────────────────────
+//
+// 设计见 docs/superpowers/specs/2026-08-04-operation-logs-design.md：
+// 写入时存"结构化事实"（change），读取时由后端 format_change 渲染。
+// 这里的 diff 负责把新旧工作流定义整理成机器可读的 added/modified/removed 事实。
+
+/// 来源解析：HTTP 路由无此提示 → Console；MCP 直接调用会传 Some(Mcp)。
+fn op_source_of(hint: &Option<axum::Extension<OpSourceHint>>) -> Source {
+    hint.as_ref().map(|axum::Extension(h)| h.0).unwrap_or(Source::Console)
+}
+
+fn nodes_count(nodes: &Value) -> usize {
+    nodes.as_array().map(|a| a.len()).unwrap_or(0)
+}
+
+fn scalar_str(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Null => "null".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// 布局 / 画布内部字段（节点坐标、尺寸、选中态等）：不算业务变更，diff 时忽略。
+/// 例如前端画布给节点带的 `_position: {x,y}` —— 挪动位置不应产生一条"修改"记录。
+fn is_ignorable_node_key(k: &str) -> bool {
+    if k.starts_with('_') {
+        return true;
+    }
+    matches!(
+        k.to_ascii_lowercase().as_str(),
+        "position" | "positionabsolute" | "x" | "y" | "width" | "height" | "selected" | "dragging" | "zindex"
+    )
+}
+
+/// 把一个节点对象拍平成 field→value（含 config 下钻一层），用于字段级 diff。
+/// 会跳过布局/内部字段（见 [`is_ignorable_node_key`]），避免坐标改动污染变更内容。
+fn flat_node_fields(node: &Value) -> BTreeMap<String, String> {
+    let mut m = BTreeMap::new();
+    if let Some(obj) = node.as_object() {
+        for (k, v) in obj {
+            if k == "id" || is_ignorable_node_key(k) {
+                continue;
+            }
+            if k == "config" {
+                if let Some(cfg) = v.as_object() {
+                    for (ck, cv) in cfg {
+                        if is_ignorable_node_key(ck) {
+                            continue;
+                        }
+                        m.insert(ck.clone(), scalar_str(cv));
+                    }
+                }
+            } else {
+                m.insert(k.clone(), scalar_str(v));
+            }
+        }
+    }
+    m
+}
+
+fn node_id(node: &Value) -> Option<String> {
+    node.get("id").and_then(|x| x.as_str()).map(String::from)
+}
+
+fn node_type_of(node: &Value) -> Option<String> {
+    node.get("type")
+        .or_else(|| node.get("node_type"))
+        .and_then(|x| x.as_str())
+        .map(String::from)
+}
+
+fn edge_key(edge: &Value) -> String {
+    let from = edge.get("from").and_then(|x| x.as_str()).unwrap_or("?");
+    let to = edge.get("to").and_then(|x| x.as_str()).unwrap_or("?");
+    match edge.get("branch").and_then(|x| x.as_str()) {
+        Some(b) if !b.is_empty() => format!("{from} --{b}--> {to}"),
+        _ => format!("{from} -> {to}"),
+    }
+}
+
+/// 生成工作流 update 的结构化变更事实（`{v,kind:"modified",added,modified,removed}`）。
+/// 返回 `None` 表示无实质变更（不产出变更内容）。
+fn workflow_change_diff(old: &Workflow, new: &Workflow) -> Option<Value> {
+    diff_definition(&old.nodes, &old.edges, &new.nodes, &new.edges)
+}
+
+/// 工作流"配置级"字段 diff（非 nodes/edges）：启用状态 / 名称 / 超时 / 重试 / 描述 等标量字段。
+/// enable/disable、改名这类列表页局部更新用它产出变更内容，避免"更新配置"详情空白。
+/// 返回 `{v,kind:"modified",modified:[{node,fields:[{field,old,new}]}]}`，无变化则 `None`。
+fn workflow_config_diff(old: &Workflow, new: &Workflow) -> Option<Value> {
+    let en = |b: bool| if b { "启用" } else { "停用" };
+    let mut fields: Vec<Value> = Vec::new();
+    if old.is_enabled != new.is_enabled {
+        fields.push(json!({ "field": "启用状态", "old": en(old.is_enabled), "new": en(new.is_enabled) }));
+    }
+    if old.name != new.name {
+        fields.push(json!({ "field": "名称", "old": old.name, "new": new.name }));
+    }
+    if old.timeout_ms != new.timeout_ms {
+        fields.push(json!({ "field": "超时(ms)", "old": old.timeout_ms, "new": new.timeout_ms }));
+    }
+    if old.max_retries != new.max_retries {
+        fields.push(json!({ "field": "最大重试", "old": old.max_retries, "new": new.max_retries }));
+    }
+    if old.description != new.description {
+        fields.push(json!({
+            "field": "描述",
+            "old": old.description.clone().unwrap_or_default(),
+            "new": new.description.clone().unwrap_or_default(),
+        }));
+    }
+    if fields.is_empty() {
+        return None;
+    }
+    Some(json!({ "v": 1, "kind": "modified", "modified": [ { "node": new.name, "fields": fields } ] }))
+}
+
+/// 纯函数版：对新旧 nodes/edges（JSON 数组）做 diff。抽出便于单测。
+fn diff_definition(
+    old_nodes_v: &Value,
+    old_edges_v: &Value,
+    new_nodes_v: &Value,
+    new_edges_v: &Value,
+) -> Option<Value> {
+    let empty: Vec<Value> = vec![];
+    let old_nodes = old_nodes_v.as_array().unwrap_or(&empty);
+    let new_nodes = new_nodes_v.as_array().unwrap_or(&empty);
+    let old_edges = old_edges_v.as_array().unwrap_or(&empty);
+    let new_edges = new_edges_v.as_array().unwrap_or(&empty);
+
+    let old_node_map: BTreeMap<String, &Value> =
+        old_nodes.iter().filter_map(|n| node_id(n).map(|id| (id, n))).collect();
+    let new_node_map: BTreeMap<String, &Value> =
+        new_nodes.iter().filter_map(|n| node_id(n).map(|id| (id, n))).collect();
+
+    let mut added: Vec<Value> = Vec::new();
+    let mut removed: Vec<Value> = Vec::new();
+    let mut modified: Vec<Value> = Vec::new();
+
+    for (id, node) in &new_node_map {
+        if !old_node_map.contains_key(id) {
+            added.push(json!({ "node": id, "node_type": node_type_of(node) }));
+        }
+    }
+    for (id, node) in &old_node_map {
+        if !new_node_map.contains_key(id) {
+            removed.push(json!({ "node": id, "node_type": node_type_of(node) }));
+        }
+    }
+    for (id, new_node) in &new_node_map {
+        if let Some(old_node) = old_node_map.get(id) {
+            let of = flat_node_fields(old_node);
+            let nf = flat_node_fields(new_node);
+            let mut keys: Vec<&String> = of.keys().chain(nf.keys()).collect();
+            keys.sort();
+            keys.dedup();
+            for key in keys {
+                let ov = of.get(key);
+                let nv = nf.get(key);
+                if ov != nv {
+                    modified.push(json!({
+                        "node": id,
+                        "field": key,
+                        "old": ov.cloned().unwrap_or_else(|| "—".to_string()),
+                        "new": nv.cloned().unwrap_or_else(|| "—".to_string()),
+                    }));
+                }
+            }
+        }
+    }
+
+    // 连线：仅增删（用 from/to/branch 作 key）。
+    let old_edge_keys: std::collections::BTreeSet<String> =
+        old_edges.iter().map(edge_key).collect();
+    let new_edge_keys: std::collections::BTreeSet<String> =
+        new_edges.iter().map(edge_key).collect();
+    for k in new_edge_keys.difference(&old_edge_keys) {
+        added.push(json!({ "edge": k }));
+    }
+    for k in old_edge_keys.difference(&new_edge_keys) {
+        removed.push(json!({ "edge": k }));
+    }
+
+    if added.is_empty() && removed.is_empty() && modified.is_empty() {
+        return None;
+    }
+    Some(json!({
+        "v": 1, "kind": "modified",
+        "added": added, "modified": modified, "removed": removed,
+    }))
+}
+
+fn workflow_snapshot_fields(wf: &Workflow, kind: &str) -> Value {
+    json!({
+        "v": 1,
+        "kind": kind,
+        "fields": {
+            "id": wf.id,
+            "slug": wf.slug,
+            "nodes": nodes_count(&wf.nodes),
+            "trigger_type": wf.trigger_type,
+            "enabled": wf.is_enabled,
+        }
+    })
+}
+
+/// 统一打点：工作流操作 → operation_logs。tenant_id 缺失（平台共享工作流）则跳过。
+fn record_workflow_op(
+    pool: &PgPool,
+    claims: &Claims,
+    source: Source,
+    action: &str,
+    wf: &Workflow,
+    summary: String,
+    change: Option<Value>,
+) {
+    let tenant_id = match wf.tenant_id {
+        Some(t) => t,
+        None => return,
+    };
+    let mut input = OperationLogInput::new(
+        tenant_id,
+        Actor::User {
+            id: claims.sub,
+            name: claims.email.clone(),
+            role: None,
+        },
+        source,
+        action,
+        summary,
+        Status::Success,
+    )
+    .resource(
+        operation_log::resource_type::WORKFLOW,
+        wf.name.clone(),
+        Some(wf.id.to_string()),
+    )
+    .detail(json!({ "slug": wf.slug, "database_id": wf.database_id }));
+    if let Some(c) = change {
+        input = input.change(c);
+    }
+    operation_log::record(pool, input);
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -813,6 +1062,7 @@ pub async fn create_workflow(
     State(pool): State<PgPool>,
     axum::Extension(claims): axum::Extension<Claims>,
     audit_sink: Option<axum::Extension<AuditDetailSink>>,
+    op_source: Option<axum::Extension<OpSourceHint>>,
     Json(req): Json<CreateWorkflowRequest>,
 ) -> Result<(StatusCode, Json<Value>)> {
     if req.name.is_empty() {
@@ -904,6 +1154,21 @@ pub async fn create_workflow(
         json!({ "database_id": workflow.database_id }),
     );
 
+    let source = op_source_of(&op_source);
+    let summary = match source {
+        Source::Mcp => format!("通过 MCP 创建工作流「{}」", workflow.name),
+        _ => format!("创建工作流「{}」", workflow.name),
+    };
+    record_workflow_op(
+        &pool,
+        &claims,
+        source,
+        operation_log::action::CREATE,
+        &workflow,
+        summary,
+        Some(workflow_snapshot_fields(&workflow, "created")),
+    );
+
     Ok((StatusCode::CREATED, Json(json!({ "workflow": workflow }))))
 }
 
@@ -913,6 +1178,7 @@ pub async fn update_workflow(
     Path(id): Path<i32>,
     axum::Extension(claims): axum::Extension<Claims>,
     audit_sink: Option<axum::Extension<AuditDetailSink>>,
+    op_source: Option<axum::Extension<OpSourceHint>>,
     Json(mut req): Json<UpdateWorkflowRequest>,
 ) -> Result<Json<Value>> {
     let existing = fetch_workflow_for_admin(&pool, &claims, id).await?;
@@ -1094,6 +1360,37 @@ pub async fn update_workflow(
         }),
     );
 
+    // 变更事实：定义（nodes/edges）改动走节点级 diff；否则走配置级 diff（启用状态/名称/超时/重试/描述）。
+    // 这样 enable/disable、改名等列表页局部更新也有可读的变更内容，不再是空详情。
+    let def_changed = req.nodes.is_some() || req.edges.is_some();
+    let change = if def_changed {
+        workflow_change_diff(&existing, &workflow)
+    } else {
+        workflow_config_diff(&existing, &workflow)
+    };
+    let source = op_source_of(&op_source);
+    // 摘要：定义改动=「修改」；纯启用/停用切换=「启用/停用」；其余配置改动=「更新配置」。
+    let summary = if def_changed {
+        format!("修改工作流「{}」", workflow.name)
+    } else if existing.is_enabled != workflow.is_enabled {
+        format!(
+            "{}工作流「{}」",
+            if workflow.is_enabled { "启用" } else { "停用" },
+            workflow.name
+        )
+    } else {
+        format!("更新工作流「{}」配置", workflow.name)
+    };
+    record_workflow_op(
+        &pool,
+        &claims,
+        source,
+        operation_log::action::UPDATE,
+        &workflow,
+        summary,
+        change,
+    );
+
     Ok(Json(json!({ "workflow": workflow })))
 }
 
@@ -1121,6 +1418,17 @@ pub async fn delete_workflow(
         &workflow.name,
         &workflow.slug,
         json!({}),
+    );
+
+    // 工作流删除 = 高危（derive_high_risk 自动打标）。
+    record_workflow_op(
+        &pool,
+        &claims,
+        Source::Console,
+        operation_log::action::DELETE,
+        &workflow,
+        format!("删除工作流「{}」", workflow.name),
+        Some(workflow_snapshot_fields(&workflow, "deleted")),
     );
 
     tracing::info!(workflow_id = id, "工作流已删除");
@@ -1213,6 +1521,51 @@ pub async fn batch_workflows(
             .map_err(map_workflow_write_err)?,
             _ => unreachable!(),
         };
+    }
+
+    // 操作日志打点：批量操作逐条记录（enable/disable=UPDATE，delete=DELETE 由规则标高危）。
+    for id in &succeeded {
+        if let Some(wf) = found.get(id) {
+            let (act, verb) = match action {
+                "enable" => (operation_log::action::UPDATE, "启用"),
+                "disable" => (operation_log::action::UPDATE, "禁用"),
+                "delete" => (operation_log::action::DELETE, "删除"),
+                _ => unreachable!(),
+            };
+            // 变更内容：删除记快照；启用/停用**仅在状态确有翻转时**记切换
+            // （wf 为更新前状态）。对"已是目标态"的批量操作不产生误导性的 X→X。
+            let change = match action {
+                "delete" => Some(workflow_snapshot_fields(wf, "deleted")),
+                "enable" | "disable" => {
+                    let want = action == "enable";
+                    if wf.is_enabled == want {
+                        None
+                    } else {
+                        Some(json!({
+                            "v": 1, "kind": "modified",
+                            "modified": [ {
+                                "node": wf.name,
+                                "fields": [ {
+                                    "field": "启用状态",
+                                    "old": if wf.is_enabled { "启用" } else { "停用" },
+                                    "new": if want { "启用" } else { "停用" },
+                                } ]
+                            } ]
+                        }))
+                    }
+                }
+                _ => None,
+            };
+            record_workflow_op(
+                &pool,
+                &claims,
+                Source::Console,
+                act,
+                wf,
+                format!("{}工作流「{}」（批量）", verb, wf.name),
+                change,
+            );
+        }
     }
 
     tracing::info!(
@@ -1322,6 +1675,65 @@ pub async fn import_workflows(
         "工作流批量导入完成"
     );
 
+    // 操作日志打点：批量导入记一条聚合记录（来源=控制台，操作者=真实用户）。
+    // tenant_id 为 Option（平台共享导入可能无租户）——无租户则跳过打点。
+    if let (false, Some(tid)) = (succeeded.is_empty(), tenant_id) {
+        // 导入项明细：供详情「导入内容」逐条展示（名称 / slug / 动作 create|overwrite|rename）。
+        let items: Vec<Value> = succeeded
+            .iter()
+            .map(|v| {
+                json!({
+                    "name": v.get("name").and_then(|x| x.as_str()).unwrap_or(""),
+                    "slug": v.get("slug").and_then(|x| x.as_str()).unwrap_or(""),
+                    "action": v.get("action").and_then(|x| x.as_str()).unwrap_or("create"),
+                })
+            })
+            .collect();
+        // 列表「资源对象」：单个→工作流名；多个→「首个 等 N 个」。
+        let first_name = succeeded
+            .first()
+            .and_then(|v| {
+                v.get("name")
+                    .and_then(|x| x.as_str())
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| v.get("slug").and_then(|x| x.as_str()))
+            })
+            .unwrap_or("工作流")
+            .to_string();
+        let resource_name = if succeeded.len() == 1 {
+            first_name
+        } else {
+            format!("{} 等 {} 个", first_name, succeeded.len())
+        };
+        operation_log::record(
+            &pool,
+            OperationLogInput::new(
+                tid,
+                Actor::User {
+                    id: claims.sub,
+                    name: claims.email.clone(),
+                    role: None,
+                },
+                Source::Console,
+                operation_log::action::IMPORT,
+                format!(
+                    "批量导入工作流（成功 {} / 失败 {}，共 {}）",
+                    succeeded.len(),
+                    failed.len(),
+                    req.items.len()
+                ),
+                Status::Success,
+            )
+            .resource(operation_log::resource_type::WORKFLOW, resource_name, None)
+            .change(json!({ "v": 1, "kind": "imported", "items": items }))
+            .detail(json!({
+                "succeeded": succeeded.len(),
+                "failed": failed.len(),
+                "total": req.items.len(),
+            })),
+        );
+    }
+
     Ok(Json(json!({
         "total": req.items.len(),
         "succeeded": succeeded,
@@ -1329,6 +1741,41 @@ pub async fn import_workflows(
         "failed": failed,
         "failed_count": failed.len(),
     })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExportAuditRequest {
+    /// 本次导出的工作流 id 列表（单个导出传 1 个）。
+    pub ids: Vec<i32>,
+}
+
+/// POST /api/admin/workflows/export-audit
+///
+/// 工作流导出在前端本地生成 JSON 下载（无后端调用），故导出无法自动落审计。
+/// 前端在触发下载后调用本端点回执，由后端按 id 校验可管理权限并逐个记 EXPORT 打点
+/// （来源=控制台，操作者=真实用户）。纯审计用途，不返回工作流内容。
+pub async fn export_workflows_audit(
+    State(pool): State<PgPool>,
+    axum::Extension(claims): axum::Extension<Claims>,
+    Json(req): Json<ExportAuditRequest>,
+) -> Result<Json<Value>> {
+    let mut recorded = 0usize;
+    for id in req.ids.into_iter().take(500) {
+        // 复用管理员校验；无权限/不存在的静默跳过（导出回执不应报错打断）。
+        if let Ok(wf) = fetch_workflow_for_admin(&pool, &claims, id).await {
+            record_workflow_op(
+                &pool,
+                &claims,
+                Source::Console,
+                operation_log::action::EXPORT,
+                &wf,
+                format!("导出工作流「{}」", wf.name),
+                None,
+            );
+            recorded += 1;
+        }
+    }
+    Ok(Json(json!({ "recorded": recorded })))
 }
 
 /// 覆盖导入时保留目标环境的「连接类配置」（数据源引用、Redis 连接）。
@@ -1702,6 +2149,7 @@ pub async fn duplicate_workflow(
     Path(id): Path<i32>,
     axum::Extension(claims): axum::Extension<Claims>,
     audit_sink: Option<axum::Extension<AuditDetailSink>>,
+    op_source: Option<axum::Extension<OpSourceHint>>,
 ) -> Result<(StatusCode, Json<Value>)> {
     let src = fetch_workflow_for_admin(&pool, &claims, id).await?;
 
@@ -1753,6 +2201,17 @@ pub async fn duplicate_workflow(
         &workflow.slug,
         json!({ "source_workflow_id": id }),
     );
+
+    record_workflow_op(
+        &pool,
+        &claims,
+        op_source_of(&op_source),
+        operation_log::action::CREATE,
+        &workflow,
+        format!("复制工作流为「{}」", workflow.name),
+        Some(workflow_snapshot_fields(&workflow, "created")),
+    );
+
     Ok((StatusCode::CREATED, Json(json!({ "workflow": workflow }))))
 }
 
@@ -1770,13 +2229,31 @@ pub async fn trigger_workflow(
         return Err(AppError::InvalidQuery("工作流已禁用，无法触发".to_string()));
     }
 
+    // 手动触发打点（source=console）。cron 自动触发的打点在调度侧另行接入。
+    record_workflow_op(
+        &pool,
+        &claims,
+        Source::Console,
+        operation_log::action::TRIGGER,
+        &workflow,
+        format!("手动触发工作流「{}」", workflow.name),
+        None,
+    );
+
     let data = trigger_data.unwrap_or(json!({}));
     let pool_clone = pool.clone();
     let wf = workflow.clone();
 
     tokio::spawn(async move {
-        if let Err(e) =
-            execute_workflow_internal(&pool_clone, &wf, "manual", &data, Some(claims.sub)).await
+        if let Err(e) = execute_workflow_internal(
+            &pool_clone,
+            &wf,
+            "manual",
+            &data,
+            Some(claims.sub),
+            ApiKeyWriteGuard::Off,
+        )
+        .await
         {
             tracing::error!(workflow_id = wf.id, error = %e, "手动触发工作流执行失败");
         }
@@ -1853,6 +2330,8 @@ pub async fn debug_workflow(
         workflow_dependencies: json!({}),
         dry_run: req.dry_run.unwrap_or(false),
         prod_readonly: req.prod_readonly,
+        // 调试路径不接网关 key 维度护栏（无 ApiKeyContext）；保持历史行为。
+        apikey_write_guard: ApiKeyWriteGuard::Off,
     };
 
     let timeout_ms = match req.timeout_ms {
@@ -2051,7 +2530,7 @@ pub async fn restore_workflow_version(
     axum::Extension(claims): axum::Extension<Claims>,
     audit_sink: Option<axum::Extension<AuditDetailSink>>,
 ) -> Result<Json<Value>> {
-    let _existing = fetch_workflow_for_admin(&pool, &claims, id).await?;
+    let existing = fetch_workflow_for_admin(&pool, &claims, id).await?;
 
     let snapshot = sqlx::query_as::<_, WorkflowVersion>(
         r#"SELECT v.* FROM management.workflow_versions v
@@ -2109,6 +2588,18 @@ pub async fn restore_workflow_version(
         json!({ "restored_from": version, "new_version": new_version }),
     );
 
+    // 操作日志打点：恢复版本本质是把定义覆盖为历史快照，记为 UPDATE，并 diff 出实际变化。
+    let change = workflow_change_diff(&existing, &workflow);
+    record_workflow_op(
+        &pool,
+        &claims,
+        Source::Console,
+        operation_log::action::UPDATE,
+        &workflow,
+        format!("恢复工作流「{}」到版本 v{}", workflow.name, version),
+        change,
+    );
+
     Ok(Json(json!({
         "workflow": workflow,
         "restored_from": version,
@@ -2123,7 +2614,12 @@ pub async fn restore_workflow_version(
 
 enum EndpointCaller {
     User(Claims),
-    ApiKey { database_id: i32 },
+    ApiKey {
+        database_id: i32,
+        /// 这把 key 的 permissions JSONB。随身份一起带出来，让只读护栏判定的就是
+        /// **实际认下调用方的那把 key**，而不是另一条路上解析出的 key。
+        permissions: Value,
+    },
     Anonymous,
 }
 
@@ -2144,7 +2640,7 @@ async fn resolve_endpoint_caller(
     if let Some(key) = api_key {
         let row = sqlx::query(
             r#"
-            SELECT database_id
+            SELECT database_id, permissions
             FROM management.api_keys
             WHERE key_hash = encode(sha256($1::bytea), 'hex')
               AND is_active = true
@@ -2156,8 +2652,10 @@ async fn resolve_endpoint_caller(
         .await?;
         let row = row.ok_or_else(|| AppError::Unauthorized("API Key 无效或已过期".to_string()))?;
         let key_database_id: i32 = row.get("database_id");
+        let permissions: Value = row.try_get("permissions").unwrap_or_else(|_| json!({}));
         return Ok(EndpointCaller::ApiKey {
             database_id: key_database_id,
+            permissions,
         });
     }
 
@@ -2178,6 +2676,7 @@ async fn resolve_database_for_caller(
     match caller {
         EndpointCaller::ApiKey {
             database_id: key_database_id,
+            ..
         } => {
             let row = sqlx::query(
                 r#"
@@ -2257,13 +2756,22 @@ async fn resolve_database_for_caller(
     }
 }
 
+/// 该节点错误是否为只读 API Key 护栏的拦截结果。
+///
+/// 节点失败经 `NodeExecutionResult.error` 降级成字符串后才到达这里，类型信息已丢失，
+/// 只能靠 `API_KEY_READONLY_BLOCK_CODE` 这个稳定标识回认。
+fn is_api_key_readonly_block(error: &str) -> bool {
+    workflow_engine::is_api_key_readonly_block_message(error)
+}
+
 /// 把一次 endpoint 工作流执行结果收敛为对外 HTTP 响应。
 ///
 /// 三个 endpoint 入口（POST 鉴权 / GET / 公开 POST）共用此收口，保证行为一致：
 /// - 命中 response 节点：返回其 body。
 /// - 全部成功但无 response 节点：返回末节点输出（或 `{"ok": true}`）。
 /// - 出现硬失败（`NodeStatus::Failed`）或整体超时/取消（`result` 为 `Err`）：
-///   - 默认维持原语义，向上抛 `AppError`（对外 HTTP 5xx）。
+///   - 默认维持原语义，向上抛 `AppError`（对外 HTTP 5xx）；只读 API Key 护栏拦截是
+///     例外，抛 `Forbidden`（403），因为那是权限拒绝而非服务端故障。
 ///   - 若 `workflow.trigger_config.graceful_error_response == true`：改为返回 **HTTP 200** +
 ///     结构化错误体 `{ ok:false, error, failed_node? }`，让外部调用方（如其它项目）始终
 ///     拿到可解析的 JSON 而不是连接层错误。`ok:false` 明确标失败，不构成「假成功」。
@@ -2310,6 +2818,11 @@ fn finalize_endpoint_response(
                         "failed_node": failed.node_id,
                     })));
                 }
+                // 只读 API Key 护栏拦截是权限问题而非服务端故障，映射成 403 让调用方
+                // 一眼看出是「这把 key 不许写」，而不是以为后端挂了去重试。
+                if is_api_key_readonly_block(&err) {
+                    return Err(AppError::Forbidden(err));
+                }
                 // 工作流节点失败且没有 response 节点被执行，返回 5xx 而不是假成功
                 return Err(AppError::Internal(err));
             }
@@ -2352,6 +2865,7 @@ async fn run_workflow_detached(
     trigger_type: &'static str,
     trigger_data: Value,
     user_id: Option<i32>,
+    apikey_write_guard: ApiKeyWriteGuard,
 ) -> Result<Vec<NodeExecutionResult>> {
     let started = std::time::Instant::now();
     let wf_id = workflow.id;
@@ -2366,7 +2880,15 @@ async fn run_workflow_detached(
     );
 
     let handle = tokio::spawn(async move {
-        execute_workflow_internal(&pool, &workflow, trigger_type, &trigger_data, user_id).await
+        execute_workflow_internal(
+            &pool,
+            &workflow,
+            trigger_type,
+            &trigger_data,
+            user_id,
+            apikey_write_guard,
+        )
+        .await
     });
 
     // 请求侧取消探针：handler future 在 join 完成前被 drop（客户端/ingress/axios 断连）时触发。
@@ -2418,14 +2940,62 @@ async fn run_workflow_detached(
     out
 }
 
+/// 依据请求所带网关 cr_ key 的 `permissions` 与 `WORKFLOW_APIKEY_RW_GUARD` 档位，推导本次
+/// endpoint 执行的 DB 写护栏状态。
+///
+/// - mode=off / 无 key / 读写 key → `Off`（不拦，维持现状）。
+/// - 只读 key（`api_key_declares_readonly`）→ 采用配置档位（`log_only` 影子 / `enforce` 拦截）。
+///
+/// 与「调用者是机器还是 SSO 用户」无关：只认请求里那把 key（网关对两类请求都挂同一把）。
+///
+/// **两个来源都要看**，因为请求里的 key 有两条互不重合的进入路径：
+/// - `ApiKeyContext` 由 `auth_middleware` 注入，只认 `Authorization: Bearer` 与 `?token=`；
+/// - `EndpointCaller::ApiKey` 由 `resolve_endpoint_caller` 解析，额外认 `apikey` 请求头。
+///
+/// 只看前者，`apikey: cr_只读key` + 另一个 Bearer（JWT/crp_）就能让护栏静默失效，而工作流
+/// 却已按这把只读 key 的 database 在跑；只看后者，`?token=cr_只读key` 又会漏。取并集后
+/// 任一路径认出的只读 key 都能生效，且两条路径指向同一把 key 时结论一致。
+fn resolve_apikey_write_guard(
+    api_key_ctx: Option<&axum::Extension<ApiKeyContext>>,
+    caller: &EndpointCaller,
+) -> ApiKeyWriteGuard {
+    let caller_permissions = match caller {
+        EndpointCaller::ApiKey { permissions, .. } => Some(permissions),
+        _ => None,
+    };
+    let sources: Vec<&Value> = [api_key_ctx.map(|ctx| &ctx.permissions), caller_permissions]
+        .into_iter()
+        .flatten()
+        .collect();
+    apikey_write_guard_for(workflow_engine::apikey_rw_guard_mode(), &sources)
+}
+
+/// 纯组合逻辑（可注入 mode / permissions，便于单测）：mode=off、无 key、或所有来源都是
+/// 读写 key → Off；**任一**来源声明只读 → 采用 mode（log_only / enforce）。
+fn apikey_write_guard_for(mode: ApiKeyWriteGuard, permissions: &[&Value]) -> ApiKeyWriteGuard {
+    if mode == ApiKeyWriteGuard::Off {
+        return ApiKeyWriteGuard::Off;
+    }
+    if permissions
+        .iter()
+        .any(|p| crate::permissions::api_key_declares_readonly(p))
+    {
+        mode
+    } else {
+        ApiKeyWriteGuard::Off
+    }
+}
+
 pub async fn endpoint_trigger(
     State(pool): State<PgPool>,
     Path((database_slug, workflow_slug)): Path<(String, String)>,
     headers: HeaderMap,
     claims: Option<axum::Extension<Claims>>,
+    api_key_ctx: Option<axum::Extension<ApiKeyContext>>,
     body_bytes: Bytes,
 ) -> Result<Json<Value>> {
     let caller = resolve_endpoint_caller(&pool, &headers, claims.as_ref()).await?;
+    let apikey_write_guard = resolve_apikey_write_guard(api_key_ctx.as_ref(), &caller);
     let (resolved_database_id, _tenant_id) =
         resolve_database_for_caller(&pool, &caller, &database_slug).await?;
 
@@ -2473,6 +3043,7 @@ pub async fn endpoint_trigger(
         "endpoint",
         trigger_data,
         user_id,
+        apikey_write_guard,
     )
     .await;
     finalize_endpoint_response(&workflow, result)
@@ -2485,9 +3056,11 @@ pub async fn endpoint_trigger_get(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
     claims: Option<axum::Extension<Claims>>,
+    api_key_ctx: Option<axum::Extension<ApiKeyContext>>,
 ) -> Result<Json<Value>> {
     let body = serde_json::to_value(&params).unwrap_or(json!({}));
     let caller = resolve_endpoint_caller(&pool, &headers, claims.as_ref()).await?;
+    let apikey_write_guard = resolve_apikey_write_guard(api_key_ctx.as_ref(), &caller);
     let (resolved_database_id, _tenant_id) =
         resolve_database_for_caller(&pool, &caller, &database_slug).await?;
 
@@ -2510,8 +3083,15 @@ pub async fn endpoint_trigger_get(
         EndpointCaller::User(c) => Some(c.sub),
         EndpointCaller::ApiKey { .. } | EndpointCaller::Anonymous => None,
     };
-    let result =
-        run_workflow_detached(pool.clone(), workflow.clone(), "endpoint", body, user_id).await;
+    let result = run_workflow_detached(
+        pool.clone(),
+        workflow.clone(),
+        "endpoint",
+        body,
+        user_id,
+        apikey_write_guard,
+    )
+    .await;
     finalize_endpoint_response(&workflow, result)
 }
 
@@ -2555,12 +3135,14 @@ pub async fn endpoint_trigger_public(
     trigger_map.insert("headers".to_string(), Value::Object(headers_json));
     let trigger_data = Value::Object(trigger_map);
 
+    // 公开端点无 auth_middleware / ApiKeyContext，不接网关 key 读写护栏（维持现状）。
     let result = run_workflow_detached(
         pool.clone(),
         workflow.clone(),
         "endpoint",
         trigger_data,
         None,
+        ApiKeyWriteGuard::Off,
     )
     .await;
     finalize_endpoint_response(&workflow, result)
@@ -2629,6 +3211,7 @@ pub async fn execute_workflow_internal(
     trigger_type: &str,
     trigger_data: &Value,
     user_id: Option<i32>,
+    apikey_write_guard: ApiKeyWriteGuard,
 ) -> Result<Vec<NodeExecutionResult>> {
     // 防御性兜底（集中不变量）：任何触发路径都不得执行已禁用的工作流。
     //
@@ -2706,6 +3289,7 @@ pub async fn execute_workflow_internal(
         workflow_dependencies: workflow.dependencies.clone(),
         dry_run: false,
         prod_readonly: false,
+        apikey_write_guard,
     };
 
     let engine = DagEngine::new(pool.clone());
@@ -3403,7 +3987,7 @@ pub async fn set_workflow_doc_share(
     axum::Extension(claims): axum::Extension<Claims>,
     Json(req): Json<DocShareRequest>,
 ) -> Result<Json<Value>> {
-    fetch_workflow_for_admin(&pool, &claims, id).await?;
+    let wf = fetch_workflow_for_admin(&pool, &claims, id).await?;
 
     let row = if req.enabled {
         let token = generate_doc_share_token();
@@ -3431,6 +4015,37 @@ pub async fn set_workflow_doc_share(
 
     let token: Option<String> = row.get("doc_share_token");
     let enabled: bool = row.get("doc_share_enabled");
+
+    // 操作日志打点：开启/关闭公开文档分享链接。开启=对外暴露，标记高危。
+    if let Some(tenant_id) = wf.tenant_id {
+        let mut input = OperationLogInput::new(
+            tenant_id,
+            Actor::User {
+                id: claims.sub,
+                name: claims.email.clone(),
+                role: None,
+            },
+            Source::Console,
+            operation_log::action::UPDATE,
+            format!(
+                "{}工作流「{}」的公开文档分享链接",
+                if req.enabled { "开启" } else { "关闭" },
+                wf.name
+            ),
+            Status::Success,
+        )
+        .resource(
+            operation_log::resource_type::WORKFLOW,
+            wf.name.clone(),
+            Some(wf.id.to_string()),
+        )
+        .detail(json!({ "doc_share_enabled": enabled, "slug": wf.slug }));
+        if req.enabled {
+            input.high_risk = Some(true);
+        }
+        operation_log::record(&pool, input);
+    }
+
     Ok(Json(doc_share_response(token, enabled)))
 }
 
@@ -3500,4 +4115,157 @@ pub async fn public_workflow_doc(
         );
     }
     Ok(Json(model))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apikey_write_guard_composition() {
+        let ro = json!({ "read": true, "write": false, "delete": false });
+        let rw = json!({ "read": true, "write": true, "delete": true });
+
+        // mode=off：无论 key 如何都不拦。
+        assert_eq!(
+            apikey_write_guard_for(ApiKeyWriteGuard::Off, &[&ro]),
+            ApiKeyWriteGuard::Off
+        );
+
+        // 无 key：不拦（维持现状）。
+        assert_eq!(
+            apikey_write_guard_for(ApiKeyWriteGuard::Enforce, &[]),
+            ApiKeyWriteGuard::Off
+        );
+
+        // 读写 key：不拦。
+        assert_eq!(
+            apikey_write_guard_for(ApiKeyWriteGuard::Enforce, &[&rw]),
+            ApiKeyWriteGuard::Off
+        );
+
+        // 只读 key + enforce：采用 enforce（真拦）。
+        assert_eq!(
+            apikey_write_guard_for(ApiKeyWriteGuard::Enforce, &[&ro]),
+            ApiKeyWriteGuard::Enforce
+        );
+
+        // 只读 key + log_only：采用 log_only（不拦但记日志）。
+        assert_eq!(
+            apikey_write_guard_for(ApiKeyWriteGuard::LogOnly, &[&ro]),
+            ApiKeyWriteGuard::LogOnly
+        );
+    }
+
+    #[test]
+    fn apikey_write_guard_takes_union_of_sources() {
+        let ro = json!({ "read": true, "write": false, "delete": false });
+        let rw = json!({ "read": true, "write": true, "delete": true });
+        let empty = json!({});
+
+        // 任一来源声明只读即生效——覆盖 `apikey: cr_只读key` + `Bearer <JWT>` 这条
+        // 绕过路径（ApiKeyContext 缺席，只有 caller 侧解析出只读 key）。
+        assert_eq!(
+            apikey_write_guard_for(ApiKeyWriteGuard::Enforce, &[&rw, &ro]),
+            ApiKeyWriteGuard::Enforce
+        );
+        assert_eq!(
+            apikey_write_guard_for(ApiKeyWriteGuard::Enforce, &[&ro, &rw]),
+            ApiKeyWriteGuard::Enforce
+        );
+
+        // 全是读写才放行。
+        assert_eq!(
+            apikey_write_guard_for(ApiKeyWriteGuard::Enforce, &[&rw, &rw]),
+            ApiKeyWriteGuard::Off
+        );
+
+        // 空 permissions 走 fail-open，不因「判不出来」就拦掉存量 key。
+        assert_eq!(
+            apikey_write_guard_for(ApiKeyWriteGuard::Enforce, &[&empty]),
+            ApiKeyWriteGuard::Off
+        );
+        // 但同一请求里另有来源显式声明只读时，仍然拦。
+        assert_eq!(
+            apikey_write_guard_for(ApiKeyWriteGuard::Enforce, &[&empty, &ro]),
+            ApiKeyWriteGuard::Enforce
+        );
+    }
+
+    #[test]
+    fn api_key_readonly_block_marker_is_recognized() {
+        let err = workflow_engine::api_key_readonly_block_error("save", "db_execute").to_string();
+        assert!(is_api_key_readonly_block(&err));
+        // 普通节点错误不得被误判成 403。
+        assert!(!is_api_key_readonly_block("db_execute 节点执行失败: 连接超时"));
+        assert!(!is_api_key_readonly_block(""));
+    }
+}
+
+#[cfg(test)]
+mod op_log_diff_tests {
+    use super::*;
+
+    #[test]
+    fn diff_detects_add_modify_remove_nodes_and_edges() {
+        let old_nodes = json!([
+            { "id": "n1", "type": "db_query", "config": { "timeout_ms": 5000 } },
+            { "id": "n2", "type": "http_call", "config": {} }
+        ]);
+        let old_edges = json!([{ "from": "n1", "to": "n2" }]);
+        let new_nodes = json!([
+            { "id": "n1", "type": "db_query", "config": { "timeout_ms": 8000 } },
+            { "id": "n3", "type": "condition", "config": {} }
+        ]);
+        let new_edges = json!([{ "from": "n1", "to": "n3" }]);
+
+        let change = diff_definition(&old_nodes, &old_edges, &new_nodes, &new_edges)
+            .expect("有变更应产出 change");
+        assert_eq!(change["kind"], "modified");
+        assert_eq!(change["v"], 1);
+
+        // 新增节点 n3 + 新增连线 n1->n3
+        let added = change["added"].as_array().unwrap();
+        assert!(added.iter().any(|x| x["node"] == "n3"));
+        assert!(added.iter().any(|x| x["edge"] == "n1 -> n3"));
+
+        // 删除节点 n2 + 删除连线 n1->n2
+        let removed = change["removed"].as_array().unwrap();
+        assert!(removed.iter().any(|x| x["node"] == "n2"));
+        assert!(removed.iter().any(|x| x["edge"] == "n1 -> n2"));
+
+        // 修改 n1 的 config.timeout_ms 5000 -> 8000
+        let modified = change["modified"].as_array().unwrap();
+        let m = modified
+            .iter()
+            .find(|x| x["node"] == "n1" && x["field"] == "timeout_ms")
+            .expect("应捕获 timeout_ms 变更");
+        assert_eq!(m["old"], "5000");
+        assert_eq!(m["new"], "8000");
+    }
+
+    #[test]
+    fn diff_no_change_returns_none() {
+        let nodes = json!([{ "id": "n1", "type": "code", "config": { "x": 1 } }]);
+        let edges = json!([]);
+        assert!(diff_definition(&nodes, &edges, &nodes, &edges).is_none());
+    }
+
+    #[test]
+    fn diff_ignores_pure_position_moves() {
+        // 仅画布坐标 _position 变化（挪动节点）→ 不应产生任何变更内容。
+        let old = json!([{ "id": "main", "type": "code", "config": {}, "_position": { "x": 300, "y": 60 } }]);
+        let new = json!([{ "id": "main", "type": "code", "config": {}, "_position": { "x": 320, "y": 60 } }]);
+        let edges = json!([]);
+        assert!(diff_definition(&old, &edges, &new, &edges).is_none());
+
+        // 但真实字段变化仍然要被捕获（坐标同时变了也不影响）。
+        let new2 = json!([{ "id": "main", "type": "code", "config": { "timeout_ms": 8000 }, "_position": { "x": 999, "y": 1 } }]);
+        let old2 = json!([{ "id": "main", "type": "code", "config": { "timeout_ms": 5000 }, "_position": { "x": 300, "y": 60 } }]);
+        let change = diff_definition(&old2, &edges, &new2, &edges).expect("timeout 改动应被捕获");
+        let modified = change["modified"].as_array().unwrap();
+        assert_eq!(modified.len(), 1);
+        assert_eq!(modified[0]["field"], "timeout_ms");
+        assert!(!modified.iter().any(|m| m["field"] == "_position"));
+    }
 }

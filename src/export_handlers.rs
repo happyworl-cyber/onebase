@@ -1,6 +1,7 @@
 use crate::auth::Claims;
 use crate::error::{AppError, Result};
 use crate::middleware::CurrentDatabaseId;
+use crate::operation_log::{self, Actor, Source, Status};
 use crate::permissions;
 use crate::query_builder::{QueryParams, SqlBuilder};
 use axum::{
@@ -47,6 +48,7 @@ pub async fn export_csv(
     Path((schema, table)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Response> {
+    let database_id = db_id.as_ref().map(|Extension(CurrentDatabaseId(id))| *id);
     require_export_access(&main_pool, &claims, db_id).await?;
     let pool = require_target_pool(&dynamic_pool)?;
     let params = QueryParams::from_query_map(query)?;
@@ -54,6 +56,24 @@ pub async fn export_csv(
     let (sql, args) = builder.build_select()?;
     tracing::debug!("导出 CSV - 执行 SQL: {}", sql);
     let rows = sqlx::query_with(&sql, args).fetch_all(pool).await?;
+
+    if let Some(did) = database_id {
+        operation_log::record_db_op(
+            &main_pool,
+            did,
+            Actor::from_claims(&claims),
+            Source::Console,
+            operation_log::action::EXPORT,
+            operation_log::resource_type::TABLE,
+            Some(format!("{}.{}", schema, table)),
+            None,
+            format!("导出数据表「{}.{}」为 CSV（{} 行）", schema, table, rows.len()),
+            Status::Success,
+            None,
+            None,
+            Some(serde_json::json!({ "format": "csv", "rows": rows.len() })),
+        );
+    }
 
     if rows.is_empty() {
         let mut headers = HeaderMap::new();
@@ -106,6 +126,7 @@ pub async fn export_json(
     Path((schema, table)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Response> {
+    let database_id = db_id.as_ref().map(|Extension(CurrentDatabaseId(id))| *id);
     require_export_access(&main_pool, &claims, db_id).await?;
     let pool = require_target_pool(&dynamic_pool)?;
     let params = QueryParams::from_query_map(query)?;
@@ -113,6 +134,24 @@ pub async fn export_json(
     let (sql, args) = builder.build_select()?;
     tracing::debug!("导出 JSON - 执行 SQL: {}", sql);
     let rows = sqlx::query_with(&sql, args).fetch_all(pool).await?;
+
+    if let Some(did) = database_id {
+        operation_log::record_db_op(
+            &main_pool,
+            did,
+            Actor::from_claims(&claims),
+            Source::Console,
+            operation_log::action::EXPORT,
+            operation_log::resource_type::TABLE,
+            Some(format!("{}.{}", schema, table)),
+            None,
+            format!("导出数据表「{}.{}」为 JSON（{} 行）", schema, table, rows.len()),
+            Status::Success,
+            None,
+            None,
+            Some(serde_json::json!({ "format": "json", "rows": rows.len() })),
+        );
+    }
 
     // 转换为 JSON
     let results: Vec<Value> = rows
@@ -177,7 +216,7 @@ pub async fn export_json(
 /// pg_catalog / 系统视图 / 跨 schema 关联都能命中，租户管理员开放 = 给一个
 /// 绕 RBAC 的后门。租户管理员自己的 ad-hoc 导出走 per-table 接口即可。
 pub async fn export_sql_csv(
-    State(_main_pool): State<PgPool>,
+    State(main_pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
     db_id: Option<Extension<CurrentDatabaseId>>,
     dynamic_pool: Option<Extension<PgPool>>,
@@ -185,9 +224,12 @@ pub async fn export_sql_csv(
 ) -> Result<Response> {
     permissions::require_platform_superadmin(&claims)?;
     // 必须带 X-Database-Id；否则会落到管理库导出 management.* 数据。
-    let _ = db_id.as_ref().ok_or_else(|| {
-        AppError::InvalidQuery("缺少 X-Database-Id 请求头，无法定位导出目标数据库".to_string())
-    })?;
+    let database_id = db_id
+        .as_ref()
+        .map(|Extension(CurrentDatabaseId(id))| *id)
+        .ok_or_else(|| {
+            AppError::InvalidQuery("缺少 X-Database-Id 请求头，无法定位导出目标数据库".to_string())
+        })?;
     let pool = require_target_pool(&dynamic_pool)?;
 
     let sql = req
@@ -204,6 +246,22 @@ pub async fn export_sql_csv(
 
     tracing::debug!("导出 SQL 查询结果 - 执行 SQL: {}", sql);
     let rows = sqlx::query(sql).fetch_all(pool).await?;
+
+    operation_log::record_db_op(
+        &main_pool,
+        database_id,
+        Actor::from_claims(&claims),
+        Source::Console,
+        operation_log::action::EXPORT,
+        operation_log::resource_type::DATABASE,
+        None,
+        None,
+        format!("按 SQL 导出为 CSV（{} 行）", rows.len()),
+        Status::Success,
+        None,
+        Some(serde_json::json!({ "v": 1, "kind": "sql", "sql": sql, "sql_type": "SELECT" })),
+        Some(serde_json::json!({ "format": "csv", "rows": rows.len() })),
+    );
 
     if rows.is_empty() {
         let mut headers = HeaderMap::new();

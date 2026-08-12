@@ -13,6 +13,7 @@
 use crate::auth::Claims;
 use crate::error::{AppError, Result};
 use crate::middleware::CurrentDatabaseId;
+use crate::operation_log::{self, Actor, Source, Status};
 use crate::rbac_handlers::{require_schema_permission, require_table_permission};
 use axum::{
     extract::{Path, Query, State},
@@ -389,6 +390,41 @@ pub async fn create_index(
     tracing::info!("创建索引: {}", sql);
     sqlx::query(&sql).execute(pool).await?;
 
+    let col_desc: Vec<String> = req
+        .columns
+        .iter()
+        .map(|c| {
+            c.name
+                .clone()
+                .filter(|s| !s.is_empty())
+                .or_else(|| c.expression.clone())
+                .unwrap_or_default()
+        })
+        .collect();
+    operation_log::record_db_op(
+        &main_pool,
+        database_id,
+        Actor::from_claims(&claims),
+        Source::Console,
+        operation_log::action::CREATE,
+        operation_log::resource_type::INDEX,
+        Some(req.name.clone()),
+        None,
+        format!("在「{}.{}」上创建索引「{}」", req.schema, req.table, req.name),
+        Status::Success,
+        None,
+        Some(json!({
+            "v": 1, "kind": "created",
+            "fields": {
+                "表": format!("{}.{}", req.schema, req.table),
+                "方法": method,
+                "唯一": if unique { "是" } else { "否" },
+                "列": col_desc.join(", "),
+            }
+        })),
+        None,
+    );
+
     Ok(Json(json!({
         "success": true,
         "name": req.name,
@@ -484,6 +520,22 @@ pub async fn drop_index(
 
     tracing::info!("删除索引: {}", sql);
     sqlx::query(&sql).execute(pool).await?;
+
+    operation_log::record_db_op(
+        &main_pool,
+        database_id,
+        Actor::from_claims(&claims),
+        Source::Console,
+        operation_log::action::DELETE,
+        operation_log::resource_type::INDEX,
+        Some(index_name.clone()),
+        None,
+        format!("删除索引「{}.{}」（表 {}）", schema, index_name, table_name),
+        Status::Success,
+        None,
+        None,
+        None,
+    );
 
     Ok(Json(json!({
         "success": true,

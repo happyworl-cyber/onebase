@@ -26,10 +26,17 @@ pub struct ApiKeyContext {
     pub bound_slug: String,
 }
 
-/// 校验 `cr_` API Key，并合成「该 Key 所属租户的 owner/admin」用户 Claims。
+/// 校验 `cr_` API Key，并合成用户 Claims：**优先 Key 创建者**（`created_by`），
+/// 让 MCP/AI 拿 Key 创建、修改工作流时作者归属到真人。
 ///
-/// `api_keys` 表不绑用户，只绑 `tenant_id`/`database_id`；因此用租户成员表挑一个
-/// active 的 owner（优先）或 admin，复用其权限面调用管理端接口。
+/// 创建者路径的两条安全约束：
+/// - 创建者必须仍是该租户的 **active 成员**，否则视同无创建者回退——停用成员身份
+///   即吊销其 Key 的代表权，不能只在硬删用户时才回退；
+/// - `is_superadmin` 强制钳为 false：归属（谁的名字）与权限（Key 能干什么）解耦，
+///   数据面 Key 不因创建者是平台超管而变成全平台管理凭证。
+///
+/// 存量 Key 的 `created_by` 为 NULL（历史上 `api_keys` 表不绑用户），此时回退旧逻辑：
+/// 用租户成员表挑一个 active 的 owner（优先）或 admin，复用其权限面调用管理端接口。
 async fn authenticate_cr_api_key(
     pool: &PgPool,
     raw_token: &str,
@@ -41,25 +48,36 @@ async fn authenticate_cr_api_key(
                k.database_id     AS database_id,
                k.permissions     AS permissions,
                td.slug           AS bound_slug,
-               u.id              AS user_id,
-               u.email           AS email,
-               COALESCE(u.role, 'user') AS role,
-               COALESCE(u.is_superadmin, false) AS is_superadmin,
-               ut.role           AS tenant_role
+               COALESCE(cu.id, fb.user_id)                     AS user_id,
+               COALESCE(cu.email, fb.email)                    AS email,
+               COALESCE(cu.role, fb.role, 'user')              AS role,
+               CASE WHEN cu.id IS NOT NULL THEN false
+                    ELSE COALESCE(fb.is_superadmin, false) END AS is_superadmin
         FROM management.api_keys k
         JOIN management.tenant_databases td
           ON td.id = k.database_id
          AND td.is_active = true
-        JOIN management.user_tenants ut
-          ON ut.tenant_id = k.tenant_id
-         AND ut.is_active = true
-         AND ut.role IN ('owner', 'admin')
-        JOIN users u ON u.id = ut.user_id
+        LEFT JOIN users cu
+          ON cu.id = k.created_by
+         AND EXISTS (SELECT 1 FROM management.user_tenants ut2
+                      WHERE ut2.tenant_id = k.tenant_id
+                        AND ut2.user_id = cu.id
+                        AND ut2.is_active = true)
+        LEFT JOIN LATERAL (
+            SELECT u.id AS user_id, u.email AS email,
+                   COALESCE(u.role, 'user') AS role,
+                   COALESCE(u.is_superadmin, false) AS is_superadmin
+            FROM management.user_tenants ut
+            JOIN users u ON u.id = ut.user_id
+            WHERE ut.tenant_id = k.tenant_id
+              AND ut.is_active = true
+              AND ut.role IN ('owner', 'admin')
+            ORDER BY CASE ut.role WHEN 'owner' THEN 0 ELSE 1 END, u.id ASC
+            LIMIT 1
+        ) fb ON cu.id IS NULL
         WHERE k.key_hash = encode(sha256($1::bytea), 'hex')
           AND k.is_active = true
           AND (k.expires_at IS NULL OR k.expires_at > NOW())
-        ORDER BY CASE ut.role WHEN 'owner' THEN 0 ELSE 1 END, u.id ASC
-        LIMIT 1
         "#,
     )
     .bind(raw_token)
@@ -70,7 +88,7 @@ async fn authenticate_cr_api_key(
     let row = match row {
         Some(r) => r,
         None => {
-            // 区分「Key 本身无效」与「租户没有 owner/admin」——先看 Key 是否存在。
+            // 区分「Key 本身无效」与「Key 有效但绑定的数据库已停用」——先看 Key 是否存在。
             let key_exists: bool = sqlx::query_scalar(
                 r#"
                 SELECT EXISTS(
@@ -88,8 +106,7 @@ async fn authenticate_cr_api_key(
 
             if key_exists {
                 return Err(AppError::Forbidden(
-                    "API Key 有效，但其所属租户没有 active 的 owner/admin，无法代表用户调用管理端接口"
-                        .to_string(),
+                    "API Key 有效，但其绑定的数据库已停用，无法调用管理端接口".to_string(),
                 ));
             }
             return Err(AppError::Unauthorized(
@@ -105,7 +122,15 @@ async fn authenticate_cr_api_key(
         .try_get("permissions")
         .unwrap_or_else(|_| serde_json::json!({}));
     let bound_slug: String = row.get("bound_slug");
-    let user_id: i32 = row.get("user_id");
+    // 创建者已不可用（删除或移出租户）且租户没有可回退的 owner/admin 时，Key 无法归属到任何用户
+    let user_id: i32 = row
+        .get::<Option<i32>, _>("user_id")
+        .ok_or_else(|| {
+            AppError::Forbidden(
+                "API Key 有效，但找不到可归属的用户（创建者已不在租户且租户无 active 的 owner/admin），无法代表用户调用管理端接口"
+                    .to_string(),
+            )
+        })?;
     let email: String = row.get("email");
     let role: String = row.get("role");
     let is_superadmin: bool = row.try_get("is_superadmin").unwrap_or(false);
@@ -772,7 +797,9 @@ pub async fn dynamic_db_middleware(
                         as u32,
                     connection_timeout: row
                         .get::<Option<i32>, _>("connection_timeout")
-                        .unwrap_or(30) as u64,
+                        .unwrap_or(
+                            crate::pool_manager::DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS as i32,
+                        ) as u64,
                 };
 
                 let pool = POOL_MANAGER.get_or_create_pool(config).await?;
@@ -801,7 +828,8 @@ pub async fn dynamic_db_middleware(
                             username: rr.get("db_user"),
                             password: rpw,
                             max_connections: crate::pool_manager::DEFAULT_TENANT_MAX_CONNECTIONS,
-                            connection_timeout: 30,
+                            connection_timeout:
+                                crate::pool_manager::DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS,
                         };
                         let _ = POOL_MANAGER
                             .upsert_replica(database_id, replica_id, weight, rc)

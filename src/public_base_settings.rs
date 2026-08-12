@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use crate::auth::Claims;
 use crate::error::{AppError, Result};
+use crate::operation_log::{self, Actor, OperationLogInput, Source, Status};
 use crate::permissions::{require_platform_superadmin, require_tenant_admin};
 
 const CACHE_TTL: Duration = Duration::from_secs(10);
@@ -258,7 +259,36 @@ pub async fn update_project_gateway_settings(
     Json(body): Json<UpdateBody>,
 ) -> Result<Json<Value>> {
     require_tenant_admin(&pool, &claims, project_id).await?;
+    let old_value = get_base_url(&pool, Some(project_id)).await;
     let normalized = normalize_and_validate(body.public_base_url)?;
     set_base_url(&pool, Some(project_id), normalized.clone()).await?;
+
+    let input = OperationLogInput::new(
+        project_id,
+        Actor::from_claims(&claims),
+        Source::Console,
+        operation_log::action::UPDATE,
+        "更新项目设置「对外调用基址」".to_string(),
+        Status::Success,
+    )
+    .resource(
+        operation_log::resource_type::PROJECT_SETTING,
+        "gateway-settings".to_string(),
+        Some(project_id.to_string()),
+    )
+    .change(json!({
+        "v": 1,
+        "kind": "modified",
+        "modified": [{
+            "node": "项目设置",
+            "fields": [{
+                "field": "对外调用基址",
+                "old": old_value.unwrap_or_else(|| "—".to_string()),
+                "new": normalized.clone().unwrap_or_else(|| "—".to_string()),
+            }]
+        }]
+    }));
+    operation_log::record(&pool, input);
+
     Ok(Json(json!({ "public_base_url": normalized })))
 }

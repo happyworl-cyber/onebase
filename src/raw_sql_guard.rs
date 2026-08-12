@@ -498,12 +498,15 @@ pub async fn execute_raw_on_conn(
 }
 
 /// 跑 DDL / 工具语句（autocommit，每条语句独立提交）。
+///
+/// `database_id` 用于饱和 fail-fast 与超时归因；未知时传 `None`。
 pub async fn run_raw_script_autocommit(
     pool: &PgPool,
     user_sql: &str,
     policy: RawSqlPolicy,
+    database_id: Option<i32>,
 ) -> std::result::Result<(), sqlx::Error> {
-    let mut conn = pool.acquire().await?;
+    let mut conn = crate::pool_metrics::acquire_traced(pool, database_id, "raw_sql").await?;
     let timeout = policy.statement_timeout_ms.to_string();
     sqlx::query(&format!("SET statement_timeout = {}", timeout))
         .execute(&mut *conn)
