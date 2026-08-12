@@ -1,7 +1,7 @@
 {
   "name": "onebase-mcp",
   "version": "1.0.0",
-  "description": "OneBase MCP server: create projects (from PG pool) and workflows over HTTP using a platform service token (crp_).",
+  "description": "OneBase MCP server: create projects (from PG pool) and workflows over HTTP using a platform service token (obp_).",
   "type": "module",
   "bin": {
     "onebase-mcp": "dist/index.js"

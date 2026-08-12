@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS management.api_keys (
     database_id INTEGER NOT NULL REFERENCES management.tenant_databases(id) ON DELETE CASCADE,
     name VARCHAR(100) NOT NULL,
     key_hash VARCHAR(128) NOT NULL,  -- SHA256 哈希
-    key_prefix VARCHAR(12) NOT NULL, -- 显示用前缀，如 "cr_abc123..."
+    key_prefix VARCHAR(12) NOT NULL, -- 显示用前缀，如 "ob_abc123..."
     permissions JSONB DEFAULT '{"read": true, "write": true, "delete": true}',
     is_active BOOLEAN DEFAULT true,
     last_used_at TIMESTAMP,

@@ -168,7 +168,7 @@ Auto API 根据数据库表结构自动生成 RESTful CRUD 接口。**无需写�
 ### 认证方式（二选一）
 
 1. **JWT Token**：`Authorization: Bearer <jwt_token>`
-2. **API Key**：`Authorization: Bearer cr_<api_key>`
+2. **API Key**：`Authorization: Bearer ob_<api_key>`
 
 ### 查询列表
 

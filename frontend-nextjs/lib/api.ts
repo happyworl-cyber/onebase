@@ -1722,7 +1722,7 @@ export const apiKeyAPI = {
     api.delete(`/api/admin/api-keys/${encodeURIComponent(String(databaseSlug))}/${keyId}`),
 }
 
-// 个人访问令牌（PAT，crm_ 前缀）—— MCP /mcp 工作流创作的鉴权凭证（绑定用户，非项目/数据库）
+// 个人访问令牌（PAT，obm_ 前缀）—— MCP /mcp 工作流创作的鉴权凭证（绑定用户，非项目/数据库）
 export const patAPI = {
   // 当前用户的 PAT 列表（不含明文）
   list: () => api.get('/api/admin/pats'),
@@ -1735,7 +1735,7 @@ export const patAPI = {
   revoke: (id: number) => api.delete(`/api/admin/pats/${id}`),
 }
 
-// 平台服务令牌（crp_）管理：仅平台超管，用 JWT 调用。
+// 平台服务令牌（obp_）管理：仅平台超管，用 JWT 调用。
 // 令牌用于机器 / AI 通过 HTTP 或 MCP 创建项目、管理工作流。
 export const platformTokenAPI = {
   // 列出自己的令牌（超管返回全部）
@@ -1780,7 +1780,7 @@ export const projectGatewayAPI = {
 
 // ─── Elasticsearch 反向代理 ───────────────────────────────────────────
 //
-// 业务端拿"平台代理 URL + cres_es_xxx token"访问 ES，永远见不到真实 ES 地址 /
+// 业务端拿"平台代理 URL + obes_es_xxx token"访问 ES，永远见不到真实 ES 地址 /
 // ApiKey。两套类型分别对应：
 //   - EsConnection：管理员视角的连接配置（含 verify_tls / timeout 等运维参数）
 //   - EsAccessToken：业务端视角的访问凭据（含 method/index/path 三层 ACL）
@@ -1898,7 +1898,7 @@ export const esAPI = {
   listTokens: (connectionId: number) =>
     api.get<EsAccessToken[]>(`/api/admin/es-connections/${connectionId}/tokens`),
   /**
-   * 创建 token；响应里的 `token` 字段是明文（cres_es_xxx），**仅此一次**
+   * 创建 token；响应里的 `token` 字段是明文（obes_es_xxx），**仅此一次**
    * 出现在 API 响应里。前端必须立刻显示并让用户复制保存。
    */
   createToken: (connectionId: number, input: CreateEsTokenInput) =>

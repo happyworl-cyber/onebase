@@ -1,7 +1,7 @@
 'use client'
 
 /**
- * `/workspace/platform-tokens` —— 平台服务令牌（crp_）管理 + 使用说明。
+ * `/workspace/platform-tokens` —— 平台服务令牌（obp_）管理 + 使用说明。
  *
  * 仅平台超管可访问。令牌用于机器 / AI 通过 HTTP 或 MCP 创建项目、管理工作流。
  * 入口在 ProjectTopbar 右上角用户菜单「平台服务令牌」（仅超管可见）。
@@ -167,7 +167,7 @@ export default function PlatformTokensPage() {
       "args": ["/绝对路径/onebase/mcp-server/dist/index.js"],
       "env": {
         "ONEBASE_BASE_URL": "${apiBase}",
-        "ONEBASE_TOKEN": "crp_你的令牌"
+        "ONEBASE_TOKEN": "obp_你的令牌"
       }
     }
   }
@@ -184,7 +184,7 @@ export default function PlatformTokensPage() {
             </Link>
             <h1 className="text-2xl font-bold text-gray-900 mt-2">平台服务令牌</h1>
             <p className="text-gray-600 mt-1 text-sm">
-              给机器 / AI 用的长期凭证（<span className="font-mono">crp_</span> 前缀）。可通过 HTTP 或
+              给机器 / AI 用的长期凭证（<span className="font-mono">obp_</span> 前缀）。可通过 HTTP 或
               MCP 直接创建项目、管理工作流，权限受令牌 scope 约束。
             </p>
           </div>
@@ -311,11 +311,11 @@ export default function PlatformTokensPage() {
           <div>
             <h3 className="text-sm font-semibold text-gray-700 mb-1">方式一：直接 HTTP 调用</h3>
             <p className="text-sm text-gray-600 mb-2">
-              所有请求带 <span className="font-mono">Authorization: Bearer crp_...</span>。典型流程：列池 → 列模板 → 建项目 → 建工作流 → 触发。
+              所有请求带 <span className="font-mono">Authorization: Bearer obp_...</span>。典型流程：列池 → 列模板 → 建项目 → 建工作流 → 触发。
             </p>
             <pre className="bg-gray-900 text-gray-100 text-xs rounded-lg p-4 overflow-x-auto">
 {`BASE=${apiBase}
-TOKEN=crp_你的令牌
+TOKEN=obp_你的令牌
 
 # 1) 可用 PG 池
 curl -s "$BASE/api/provision/pg-pools/available" -H "Authorization: Bearer $TOKEN"
@@ -355,7 +355,7 @@ curl -s -X POST "$BASE/workflow/my-proj/echo" \\
             </div>
             <p className="text-sm text-gray-600 mb-2">
               先在 <span className="font-mono">mcp-server/</span> 里 <span className="font-mono">npm install &amp;&amp; npm run build</span>，
-              再把下面配置加进 Cursor / Claude 的 <span className="font-mono">mcpServers</span>（令牌填本页创建的 <span className="font-mono">crp_</span>）：
+              再把下面配置加进 Cursor / Claude 的 <span className="font-mono">mcpServers</span>（令牌填本页创建的 <span className="font-mono">obp_</span>）：
             </p>
             <pre className="bg-gray-900 text-gray-100 text-xs rounded-lg p-4 overflow-x-auto">
 {mcpConfig}

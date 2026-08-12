@@ -7,7 +7,7 @@
 -- 整段 paste & run。需要超管权限。
 --
 -- 设计要点：
---   · ES 的真实地址/账密**不**进这张库；只配 onebase HTTP 入口 + 一个 cres_es_* token。
+--   · ES 的真实地址/账密**不**进这张库；只配 onebase HTTP 入口 + 一个 obes_es_* token。
 --   · 写入走 onebase 的应用 API (`/api/es-app/:index/bulk`)，onebase 帮忙转 ES `_bulk`、
 --     做审计、强制 token ACL（method 白名单、index 白名单）。
 --   · 这份脚本会在 gamesq 下创建：
@@ -58,11 +58,11 @@ CREATE TABLE IF NOT EXISTS gamesq._es_sync_config (
 -- 占位行：apply 后改成真实值。
 --   onebase_base_url：onebase HTTP 监听地址（必须从 PG 这台机器能访问到；
 --     如果 PG 在公网 RDS、onebase 在内网，请填 onebase 公网/反代地址）。
---   onebase_es_token：在 onebase【ES 反向代理】页面给目标连接申请的 `cres_es_*` token，
+--   onebase_es_token：在 onebase【ES 反向代理】页面给目标连接申请的 `obes_es_*` token，
 --     methods_allow 至少含 GET/POST/PUT/DELETE，indices_allow 至少覆盖三个目标索引。
 INSERT INTO gamesq._es_sync_config(key, value) VALUES
     ('onebase_base_url',  'http://127.0.0.1:3006'),
-    ('onebase_es_token',  'cres_es_REPLACE_ME'),
+    ('onebase_es_token',  'obes_es_REPLACE_ME'),
     ('article_index',       'way_article_search_main'),
     ('community_index',     'way_community_search'),
     ('user_index',          'way_user_search'),

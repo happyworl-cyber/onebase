@@ -237,7 +237,7 @@ async fn validate_database_belongs_to_tenant(
 
 // ─── Handlers ────────────────────────────────
 
-/// `cr_` API Key 调用时：body 未指定则回填密钥绑定的租户/数据库。
+/// `ob_` API Key 调用时：body 未指定则回填密钥绑定的租户/数据库。
 fn fill_from_api_key_context(
     tenant_id: &mut Option<i32>,
     database_id: &mut Option<i32>,

@@ -1,12 +1,12 @@
 //! 对象存储访问令牌工具 + ops / object key ACL。
 //!
-//! Token 格式：`cres_os_<43 字符 base64url>`。
+//! Token 格式：`obes_os_<43 字符 base64url>`。
 
 use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
 
-pub const TOKEN_PREFIX: &str = "cres_os_";
+pub const TOKEN_PREFIX: &str = "obes_os_";
 
 pub const DEFAULT_OPS: &[&str] = &["put", "get", "delete", "list", "presign", "health"];
 
@@ -208,18 +208,18 @@ mod tests {
         let t = generate_token();
         assert!(t.starts_with(TOKEN_PREFIX));
         assert_eq!(hash_token(&t).len(), 64);
-        assert!(token_prefix(&t).starts_with("cres_os_"));
+        assert!(token_prefix(&t).starts_with("obes_os_"));
     }
 
     #[test]
     fn extract_api_key_and_x_header() {
         let mut h = HeaderMap::new();
-        h.insert("authorization", "ApiKey cres_os_abc".parse().unwrap());
-        assert_eq!(extract_token(&h).as_deref(), Some("cres_os_abc"));
+        h.insert("authorization", "ApiKey obes_os_abc".parse().unwrap());
+        assert_eq!(extract_token(&h).as_deref(), Some("obes_os_abc"));
 
         let mut h2 = HeaderMap::new();
-        h2.insert("x-os-token", "cres_os_xyz".parse().unwrap());
-        assert_eq!(extract_token(&h2).as_deref(), Some("cres_os_xyz"));
+        h2.insert("x-os-token", "obes_os_xyz".parse().unwrap());
+        assert_eq!(extract_token(&h2).as_deref(), Some("obes_os_xyz"));
     }
 
     #[test]

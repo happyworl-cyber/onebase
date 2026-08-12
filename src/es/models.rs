@@ -36,7 +36,7 @@ pub struct EsAccessToken {
     #[allow(dead_code)]
     #[serde(skip_serializing)]
     pub token_hash: String,
-    /// 列表展示用：`cres_es_aB3c…`
+    /// 列表展示用：`obes_es_aB3c…`
     pub token_prefix: String,
     pub allowed_methods: Vec<String>,
     pub index_allowlist: Vec<String>,

@@ -155,7 +155,7 @@ export function buildRestApiDoc({ apiBaseUrl, databaseSlug, schema, gatewayMode 
     ? [`## 鉴权`, `请求经网关统一鉴权，无需在调用侧携带 API Key。`]
     : [
         `## 鉴权`,
-        `所有请求需带请求头 Authorization: Bearer <YOUR_API_KEY>（API Key 以 cr_ 开头；也支持 apikey: cr_... 头；登录用户可用 JWT）。`,
+        `所有请求需带请求头 Authorization: Bearer <YOUR_API_KEY>（API Key 以 ob_ 开头；也支持 apikey: ob_... 头；登录用户可用 JWT）。`,
         `RPC 调用需在 API Key 的 scope 中包含 EXECUTE 动作；DDL 需包含 DDL 或 ALL。`,
       ]
 

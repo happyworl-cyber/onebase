@@ -75,9 +75,9 @@ pub async fn sql_auth_middleware(
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string());
 
-    // PAT（crp_* 平台服务令牌）支持：解析成绑定用户的 Claims，复用 DDL 权限体系。
-    // auth_middleware 里已有相同模式；ddl/sql 中间件只检查了 JWT 和 cr_* 项目 key，
-    // 漏掉了 PAT，导致 crp_* 两个分支都走不进，直接落到 Unauthorized。
+    // PAT（obp_* 平台服务令牌）支持：解析成绑定用户的 Claims，复用 DDL 权限体系。
+    // auth_middleware 里已有相同模式；ddl/sql 中间件只检查了 JWT 和 ob_* 项目 key，
+    // 漏掉了 PAT，导致 obp_* 两个分支都走不进，直接落到 Unauthorized。
     if let Some(pat) = auth_header_str
         .as_deref()
         .and_then(|h| h.strip_prefix("Bearer "))
@@ -97,7 +97,7 @@ pub async fn sql_auth_middleware(
     if let Some(token) = auth_header_str
         .as_deref()
         .and_then(|h| h.strip_prefix("Bearer "))
-        .filter(|t| !t.starts_with("cr_"))
+        .filter(|t| !t.starts_with("ob_"))
     {
         if let Ok(claims) = crate::auth::verify_token(token) {
             if !claims.jti.is_empty() {
@@ -136,11 +136,11 @@ pub async fn sql_auth_middleware(
     let api_key = auth_header_str
         .as_deref()
         .and_then(|h| h.strip_prefix("Bearer "))
-        .filter(|s| s.starts_with("cr_"))
+        .filter(|s| s.starts_with("ob_"))
         .or_else(|| {
             apikey_header_str
                 .as_deref()
-                .filter(|s| s.starts_with("cr_"))
+                .filter(|s| s.starts_with("ob_"))
         });
 
     if let Some(key) = api_key {

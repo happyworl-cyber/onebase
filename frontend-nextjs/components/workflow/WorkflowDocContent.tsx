@@ -167,7 +167,7 @@ function sampleBody(fields: string[]): string {
 function curlExample(url: string, fields: string[], gatewayMode = false): string {
   const lines = [`curl -X POST '${url}' \\`]
   // 走网关时鉴权由网关统一处理，示例不再展示 API Key 头。
-  if (!gatewayMode) lines.push(`  -H 'Authorization: Bearer cr_<your_api_key>' \\`)
+  if (!gatewayMode) lines.push(`  -H 'Authorization: Bearer ob_<your_api_key>' \\`)
   lines.push(`  -H 'Content-Type: application/json' \\`)
   lines.push(`  -d '${sampleBody(fields).replace(/\n\s*/g, ' ')}'`)
   return lines.join('\n')
@@ -204,7 +204,7 @@ export function buildDocMarkdown(model: DocModel, apiBase: string, gatewayMode =
       L.push('请求经网关统一鉴权，无需在调用侧携带 API Key。')
     } else {
       L.push('请求头二选一：')
-      L.push('- API Key：`Authorization: Bearer cr_xxx` 或 `apikey: cr_xxx`（须绑定本数据库）')
+      L.push('- API Key：`Authorization: Bearer ob_xxx` 或 `apikey: ob_xxx`（须绑定本数据库）')
       L.push('- 用户 JWT：`Authorization: Bearer <登录 token>`（须有该数据库所属租户权限）')
     }
   }
@@ -369,7 +369,7 @@ export default function WorkflowDocContent({
             <>
               <p className="text-xs text-gray-600 leading-relaxed mb-1.5">二选一，请求头携带：</p>
               <ul className="space-y-1 text-xs text-gray-600 list-disc pl-5">
-                <li><strong>API Key</strong>：<code className="bg-gray-100 px-1 rounded">Authorization: Bearer cr_xxx</code> 或 <code className="bg-gray-100 px-1 rounded">apikey: cr_xxx</code>（该 Key 须绑定本数据库）。</li>
+                <li><strong>API Key</strong>：<code className="bg-gray-100 px-1 rounded">Authorization: Bearer ob_xxx</code> 或 <code className="bg-gray-100 px-1 rounded">apikey: ob_xxx</code>（该 Key 须绑定本数据库）。</li>
                 <li><strong>用户 JWT</strong>：<code className="bg-gray-100 px-1 rounded">Authorization: Bearer &lt;登录 token&gt;</code>（须有该数据库所属租户权限）。</li>
               </ul>
             </>

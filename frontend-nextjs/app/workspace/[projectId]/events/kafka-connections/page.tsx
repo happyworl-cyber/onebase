@@ -317,15 +317,15 @@ function UsageTab({ connection }: { connection: KafkaConnection }) {
   }
 
   const produceCurl = `curl -X POST '${base}/produce' \\
-  -H 'Authorization: ApiKey cres_kafka_<your_token>' \\
+  -H 'Authorization: ApiKey obes_kafka_<your_token>' \\
   -H 'Content-Type: application/json' \\
   -d '{"topic":"orders","key":"u1","value":{"id":1}}'`
 
   const topicsCurl = `curl '${base}/topics' \\
-  -H 'Authorization: ApiKey cres_kafka_<your_token>'`
+  -H 'Authorization: ApiKey obes_kafka_<your_token>'`
 
   const healthCurl = `curl '${base}/health' \\
-  -H 'Authorization: ApiKey cres_kafka_<your_token>'`
+  -H 'Authorization: ApiKey obes_kafka_<your_token>'`
 
   return (
     <div className="space-y-4 text-sm">
@@ -341,11 +341,11 @@ function UsageTab({ connection }: { connection: KafkaConnection }) {
         )}
         <ul className="list-disc list-inside space-y-0.5">
           <li>
-            先在「访问令牌」Tab 创建 <code className="bg-white px-1 rounded">cres_kafka_*</code>
+            先在「访问令牌」Tab 创建 <code className="bg-white px-1 rounded">obes_kafka_*</code>
             ，明文仅创建时显示一次。
           </li>
           <li>
-            请求头：<code className="bg-white px-1 rounded">Authorization: ApiKey cres_kafka_...</code>
+            请求头：<code className="bg-white px-1 rounded">Authorization: ApiKey obes_kafka_...</code>
             （也支持 Bearer / X-Kafka-Token）。
           </li>
           <li>令牌可限制 allowed_ops 与 topic_allowlist；无需平台登录即可调用。</li>

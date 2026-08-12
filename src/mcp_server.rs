@@ -4,12 +4,12 @@
 //! 手写 JSON-RPC 2.0 最小子集（initialize / ping / tools/list / tools/call），
 //! 零外部 MCP SDK 依赖。
 //!
-//! 鉴权：`Authorization: Bearer crm_*`（PAT）。本路由**不挂 auth_middleware**
-//! （那条链路只认 JWT / `cr_*` API Key / `crp_*` 平台令牌），在 handler 内自行调用
+//! 鉴权：`Authorization: Bearer obm_*`（PAT）。本路由**不挂 auth_middleware**
+//! （那条链路只认 JWT / `ob_*` API Key / `obp_*` 平台令牌），在 handler 内自行调用
 //! [`crate::pat_handlers::verify_pat`]。
 //!
 //! 客户端接入（Claude Code）：
-//! `claude mcp add --transport http onebase <BASE_URL>/mcp --header "Authorization: Bearer crm_xxx"`
+//! `claude mcp add --transport http onebase <BASE_URL>/mcp --header "Authorization: Bearer obm_xxx"`
 
 use axum::{
     extract::State,
@@ -51,7 +51,7 @@ pub async fn mcp_endpoint(
         None => {
             return (
                 StatusCode::UNAUTHORIZED,
-                Json(json!({ "error": "缺少 Authorization: Bearer crm_* 个人访问令牌" })),
+                Json(json!({ "error": "缺少 Authorization: Bearer obm_* 个人访问令牌" })),
             )
                 .into_response()
         }

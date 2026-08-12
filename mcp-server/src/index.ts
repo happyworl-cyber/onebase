@@ -6,12 +6,12 @@
  *   - 用 PG 池里的库开通新项目（create_project）
  *   - 创建 / 更新 / 调试 / 运行工作流（*_workflow）
  *
- * 鉴权：使用平台服务令牌（crp_ 前缀），通过环境变量注入。该令牌在 OneBase 后端
+ * 鉴权：使用平台服务令牌（obp_ 前缀），通过环境变量注入。该令牌在 OneBase 后端
  * 被解析成绑定用户的身份，并受令牌 scope（project:create / workflow:read|write|run）约束。
  *
  * 必需环境变量：
  *   - ONEBASE_BASE_URL   后端基址，如 http://10.0.5.11:31088
- *   - ONEBASE_TOKEN      平台令牌明文，crp_ 开头
+ *   - ONEBASE_TOKEN      平台令牌明文，obp_ 开头
  *
  * 运行（stdio）：node dist/index.js
  */
@@ -27,12 +27,12 @@ if (!BASE_URL) {
   process.exit(1);
 }
 if (!TOKEN) {
-  console.error("[onebase-mcp] 缺少环境变量 ONEBASE_TOKEN（crp_ 平台令牌）");
+  console.error("[onebase-mcp] 缺少环境变量 ONEBASE_TOKEN（obp_ 平台令牌）");
   process.exit(1);
 }
-if (!TOKEN.startsWith("crp_")) {
+if (!TOKEN.startsWith("obp_")) {
   console.error(
-    "[onebase-mcp] 警告：ONEBASE_TOKEN 不是 crp_ 开头，可能不是平台服务令牌"
+    "[onebase-mcp] 警告：ONEBASE_TOKEN 不是 obp_ 开头，可能不是平台服务令牌"
   );
 }
 

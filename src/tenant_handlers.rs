@@ -4038,7 +4038,7 @@ async fn lookup_pool_admin_password(pool: &PgPool, pool_id: i32) -> Result<Strin
 // 公开接口不连接租户库、不列出表名（文档正文是静态模板，schema 固定 public）。
 
 /// 公开文档链接 token：`dr_` 前缀 + 24 字节随机 hex（共 51 字符，< VARCHAR(64)）。
-/// 与 API Key（`cr_`）、工作流文档（`ds_`）命名空间独立。
+/// 与 API Key（`ob_`）、工作流文档（`ds_`）命名空间独立。
 fn generate_rest_doc_share_token() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();

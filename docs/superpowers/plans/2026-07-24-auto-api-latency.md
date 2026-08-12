@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Cut Auto API list latency by deduplicating `cr_` `api_keys` lookups and skipping unnecessary `COUNT(*)` on list reads.
+**Goal:** Cut Auto API list latency by deduplicating `ob_` `api_keys` lookups and skipping unnecessary `COUNT(*)` on list reads.
 
 **Architecture:** Enrich `ApiKeyContext` once in `auth_middleware`, then short-circuit slug resolve / RBAC / `validate_auth`. In `list_records`, parse `Prefer: count=...`, run `SELECT` first, and only `COUNT(*)` when exact total is required and the page is full.
 
@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Single `cr_` request may query `management.api_keys` at most once (in `auth_middleware`)
+- Single `ob_` request may query `management.api_keys` at most once (in `auth_middleware`)
 - Default Prefer count mode is `exact` (backward compatible)
 - `count=planned` / `count=estimated` behave as `exact` this iteration
 - No DB migration
@@ -27,7 +27,7 @@
 |------|----------------|
 | `src/auto_api_handlers.rs` | Prefer count parse/decide helpers; list SELECT-then-COUNT; `validate_auth` short-circuit; unit tests |
 | `src/middleware.rs` | Extend `ApiKeyContext`; load `permissions` + `bound_slug` in `authenticate_cr_api_key`; slug resolve short-circuit |
-| `src/rbac_middleware.rs` | `cr_` branch use `ApiKeyContext.permissions` when present |
+| `src/rbac_middleware.rs` | `ob_` branch use `ApiKeyContext.permissions` when present |
 | `docs/superpowers/specs/2026-07-24-auto-api-latency-design.md` | Mark status implemented when done |
 
 ---
@@ -397,7 +397,7 @@ EOF
 
 **Files:**
 - Modify: `src/middleware.rs` (`resolve_database_id_from_slug`, `auto_api_database_slug_middleware`)
-- Modify: `src/rbac_middleware.rs` (`rbac_middleware` `cr_` branch ~137–217)
+- Modify: `src/rbac_middleware.rs` (`rbac_middleware` `ob_` branch ~137–217)
 - Modify: `src/auto_api_handlers.rs` (`validate_auth` + all call sites)
 
 **Interfaces:**
@@ -458,7 +458,7 @@ async fn validate_auth(
         return auth_from_api_key_context(ctx, path_database_id);
     }
 
-    // existing Bearer cr_ DB lookup path, but DELETE the synchronous
+    // existing Bearer ob_ DB lookup path, but DELETE the synchronous
     // UPDATE management.api_keys SET last_used_at = NOW() block entirely.
     // ...
 }
@@ -525,7 +525,7 @@ let database_id = if let Ok(id) = db_seg.parse::<i32>() {
 };
 ```
 
-- [ ] **Step 5: Short-circuit `rbac_middleware` cr_ branch**
+- [ ] **Step 5: Short-circuit `rbac_middleware` ob_ branch**
 
 At the start of the `if let Some(api_key) = api_key` block, before the SQL:
 
@@ -603,7 +603,7 @@ Expected: all PASS / success
 
 Against a staging/prod-like env with the slow URL shape:
 
-1. `cr_` + slug URL, no Prefer → response still has exact total when rows < limit; `elapsed_ms` drops vs baseline
+1. `ob_` + slug URL, no Prefer → response still has exact total when rows < limit; `elapsed_ms` drops vs baseline
 2. `Prefer: count=none` → `Content-Range` ends with `/*`, body `count` absent/null
 3. Force full page (`limit` ≤ returned rows) → still returns exact total (COUNT path)
 4. Wrong slug vs key → same Forbidden message as before
@@ -629,7 +629,7 @@ EOF
 
 | Spec requirement | Task |
 |------------------|------|
-| `api_keys` queried once per `cr_` request | Task 3 + 4 |
+| `api_keys` queried once per `ob_` request | Task 3 + 4 |
 | Extend `ApiKeyContext` with permissions + bound_slug | Task 3 |
 | slug / rbac / validate_auth short-circuit | Task 4 |
 | Remove sync `last_used_at` UPDATE in validate_auth | Task 4 |

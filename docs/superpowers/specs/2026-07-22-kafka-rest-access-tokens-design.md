@@ -2,7 +2,7 @@
 
 > 状态：design approved（2026-07-22），待 spec review。
 >
-> 对齐参考：ES 代理（`cres_es_*` + `/api/es*` / `/api/es-app*` + Tokens/Usage UI）。
+> 对齐参考：ES 代理（`obes_es_*` + `/api/es*` / `/api/es-app*` + Tokens/Usage UI）。
 >
 > 上游：`docs/superpowers/specs/2026-07-21-kafka-workflow-integration-design.md`（连接注册表 + produce 节点 + kafka 触发器已落地）。
 
@@ -12,7 +12,7 @@
 
 让外部系统能像调用 ES 应用 API 一样，用访问令牌（无需平台登录）访问 Kafka：
 
-1. 管理端签发 `cres_kafka_*` 令牌（JWT 管理）
+1. 管理端签发 `obes_kafka_*` 令牌（JWT 管理）
 2. 对外路径式 REST：`produce` / `topics` / `health`
 3. 支持 `/api/v1/:database_slug/kafka/...` 租户作用域
 4. 令牌 ACL：`allowed_ops` + `topic_allowlist`
@@ -41,8 +41,8 @@
 JWT ──► /api/admin/kafka-connections[+ /tokens|/health|/topics]
 JWT ──► /api/kafka-connections/:id/exec          （保留）
 
-cres_kafka_* ──► /api/kafka/:id/{produce|topics|health}
-cres_kafka_* ──► /api/v1/:database_slug/kafka/:id/{...}
+obes_kafka_* ──► /api/kafka/:id/{produce|topics|health}
+obes_kafka_* ──► /api/v1/:database_slug/kafka/:id/{...}
                        │
                        ▼
               kafka_ds::commands（produce / list_topics / health_probe）
@@ -83,9 +83,9 @@ src/main.rs                   # 路由；slug 版复用 ES 同类 tenant-scope �
 
 ### 4.2 Token 格式与提取
 
-- 明文：`cres_kafka_` + 43 字符 base64url（与 `cres_es_` 同熵）
+- 明文：`obes_kafka_` + 43 字符 base64url（与 `obes_es_` 同熵）
 - 提取顺序：`Authorization: ApiKey|Bearer|裸 token`，fallback `X-Kafka-Token`
-- 前缀避免被 `rbac_middleware` 的 `cr_` API Key 分支误判
+- 前缀避免被 `rbac_middleware` 的 `ob_` API Key 分支误判
 
 ### 4.3 管理 API（JWT，租户 admin）
 
@@ -97,7 +97,7 @@ src/main.rs                   # 路由；slug 版复用 ES 同类 tenant-scope �
 创建响应一次性返回：
 
 ```json
-{ "token": "cres_kafka_...", "record": { "...无 hash..." } }
+{ "token": "obes_kafka_...", "record": { "...无 hash..." } }
 ```
 
 ## 5. 对外 REST
@@ -176,7 +176,7 @@ topics / health 同理，`result` 为现有 `list_topics` / `health_probe` 输�
 ## 9. 验收标准
 
 1. 管理员可签发令牌，明文仅创建时可见
-2. 外部用 `Authorization: ApiKey cres_kafka_*` 可 produce / topics / health
+2. 外部用 `Authorization: ApiKey obes_kafka_*` 可 produce / topics / health
 3. `/api/v1/:slug/kafka/:id/...` 租户隔离生效
 4. `allowed_ops` / `topic_allowlist` 拒绝越权
 5. JWT admin、JWT exec、工作流 kafka 节点与触发器不受影响

@@ -146,8 +146,8 @@ export default function RestApiDocContent({
           <p className="text-sm text-gray-600 mt-4 leading-relaxed">
             <i className="fas fa-key mr-1.5 text-amber-600"></i>
             所有请求需带 <span className="font-mono text-xs">Authorization: Bearer YOUR_API_KEY</span>
-            （API Key 以 <span className="font-mono text-xs">cr_</span> 开头；也支持{' '}
-            <span className="font-mono text-xs">apikey: cr_…</span> 头）。RPC 需 API Key scope 含{' '}
+            （API Key 以 <span className="font-mono text-xs">ob_</span> 开头；也支持{' '}
+            <span className="font-mono text-xs">apikey: ob_…</span> 头）。RPC 需 API Key scope 含{' '}
             <span className="font-mono text-xs">EXECUTE</span>；DDL 需 <span className="font-mono text-xs">DDL</span> 或{' '}
             <span className="font-mono text-xs">ALL</span>。
           </p>

@@ -896,8 +896,8 @@ export default function ApiPage() {
             ) : (
               <p className="text-xs text-gray-500 border-t border-gray-100 pt-4">
                 鉴权：与表 API 相同，使用 <span className="font-mono">Authorization: Bearer &lt;API Key&gt;</span>（
-                <span className="font-mono">cr_</span> 前缀）；亦支持{' '}
-                <span className="font-mono">apikey: cr_…</span> 头。登录用户可改用 JWT。
+                <span className="font-mono">ob_</span> 前缀）；亦支持{' '}
+                <span className="font-mono">apikey: ob_…</span> 头。登录用户可改用 JWT。
                 使用 API Key 时，URL 中的 <span className="font-mono">project</span> 路径段必须与该
                 Key 绑定的库一致，否则会被拒绝。
               </p>

@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS management.es_access_tokens (
     -- 与 management.api_keys 同款：sha256(plain_token) 的 hex，64 字符
     -- 唯一索引保证查找 O(1) 同时拦截撞库
     token_hash            CHAR(64) NOT NULL UNIQUE,
-    -- 列表展示用的"前缀截断"，例如 `cres_es_aB3c…` —— 不参与鉴权
+    -- 列表展示用的"前缀截断"，例如 `obes_es_aB3c…` —— 不参与鉴权
     token_prefix          VARCHAR(20) NOT NULL,
 
     -- ── 访问控制三层 ──

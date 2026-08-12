@@ -572,7 +572,7 @@ async fn main() -> anyhow::Result<()> {
             get(tenant_handlers::list_project_templates),
         )
         // M2 主端点：自助开通新项目；caller 自动成为 owner
-        // 路由级再叠一层平台令牌 scope 校验：crp_ 令牌须持有 project:create（JWT 用户不受限）。
+        // 路由级再叠一层平台令牌 scope 校验：obp_ 令牌须持有 project:create（JWT 用户不受限）。
         .route(
             "/api/projects/provision",
             post(tenant_handlers::provision_project).layer(axum_middleware::from_fn(
@@ -746,10 +746,10 @@ async fn main() -> anyhow::Result<()> {
             middleware::auth_middleware,
         ));
 
-    // 平台服务令牌管理（crp_）：仅 JWT 用户可管理自己的令牌（超管可管全部）。
+    // 平台服务令牌管理（obp_）：仅 JWT 用户可管理自己的令牌（超管可管全部）。
     // create 接口内部禁止用平台令牌调用（防提权链）。
     //
-    // 注意：平台令牌（表 platform_tokens，`crp_`）≠ 内置 /mcp 用的 PAT（表 personal_access_tokens，`crm_`），
+    // 注意：平台令牌（表 platform_tokens，`obp_`）≠ 内置 /mcp 用的 PAT（表 personal_access_tokens，`obm_`），
     // 前缀不同、互不通用。两套 MCP 实现的鉴权对照详见下方 pat_routes 处的注释。
     let platform_token_routes = Router::new()
         .route(
@@ -1052,7 +1052,7 @@ async fn main() -> anyhow::Result<()> {
     //         schema 由 Accept-Profile 头选
     //
     // 身份：rpc_auth_middleware 同时支持 JWT 与 API Key（`apikey` 或
-    //   `Authorization: Bearer cr_*`），与 supabase-js 兼容。
+    //   `Authorization: Bearer ob_*`），与 supabase-js 兼容。
     //
     // 细粒度授权（在 handler 内部）：
     //   - 用户主体 → management.permissions / role_permissions（同表权限模型）
@@ -1413,16 +1413,16 @@ async fn main() -> anyhow::Result<()> {
     // ⚠️ MCP 有两套并存实现，鉴权令牌前缀不同、查不同的表，务必分清：
     //
     //   ┌─ 内置 /mcp（本进程，mcp_server.rs + mcp_tools.rs）
-    //   │    令牌：PAT（`crm_` 前缀），表 management.personal_access_tokens
+    //   │    令牌：PAT（`obm_` 前缀），表 management.personal_access_tokens
     //   │    管理：/api/admin/pats（下面的 pat_routes），前端 patAPI
     //   │    用途：仅工作流创作（list/get/create/update/debug_workflow 等）
     //   │
     //   └─ 外部 mcp-server/（独立 Node 进程，转调本服务 HTTP API）
-    //        令牌：平台服务令牌（`crp_` 前缀），表 management.platform_tokens
+    //        令牌：平台服务令牌（`obp_` 前缀），表 management.platform_tokens
     //        管理：/api/platform-tokens（platform_token_routes），前端 platformTokenAPI
-    //        用途：建项目 + 工作流全套（走 auth_middleware 的 crp_ 分支 + scope 校验）
+    //        用途：建项目 + 工作流全套（走 auth_middleware 的 obp_ 分支 + scope 校验）
     //
-    // 令牌不可混用：拿 `crm_` PAT 打 HTTP API、或拿 `crp_` 平台令牌打 /mcp，
+    // 令牌不可混用：拿 `obm_` PAT 打 HTTP API、或拿 `obp_` 平台令牌打 /mcp，
     // 都会查不到记录而 401。这是设计如此（两套各自独立），不是 bug。
     //
     // PAT 管理 API（个人访问令牌）：普通登录态即可管理自己的令牌。
@@ -1437,7 +1437,7 @@ async fn main() -> anyhow::Result<()> {
             middleware::auth_middleware,
         ));
 
-    // 内置 MCP 工作流创作端点：不挂 auth_middleware（那条链路只认 JWT / cr_ API Key），
+    // 内置 MCP 工作流创作端点：不挂 auth_middleware（那条链路只认 JWT / ob_ API Key），
     // handler 内自行调 pat_handlers::verify_pat 做 PAT 鉴权，详见 mcp_server.rs 模块注释。
     // 模块闸门：MCP（智能体接入）属于「AI / MCP」加购模块。
     let mcp_routes = Router::new()
@@ -1620,7 +1620,7 @@ async fn main() -> anyhow::Result<()> {
     //  1) `/api/admin/es-connections/*`  — 连接 + token CRUD，走 auth_middleware
     //     （JWT only；token 在 handler 里按租户 owner/admin 校验）。
     //  2) `/api/es/*es_path`             — 业务端实际打的代理，**不走 auth_middleware**：
-    //     用业务专属 `cres_es_xxx` token 在 handler 内自鉴权，故意不耦合 JWT —— 业务
+    //     用业务专属 `obes_es_xxx` token 在 handler 内自鉴权，故意不耦合 JWT —— 业务
     //     端的 ES client（Python / Node / curl）不需要登录平台拿 JWT，开箱即用。
     //
     // proxy 路由用 axum 通配 `*es_path`，匹配 `/api/es/` 之后的所有 path（含多级）。
@@ -1745,7 +1745,7 @@ async fn main() -> anyhow::Result<()> {
     // JWT 面：
     //  1) `/api/admin/object-storage-connections/*` — 连接 CRUD + health + tokens
     //  2) `/api/object-storage-connections/:id/exec` — 租户成员数据读写
-    // 令牌面（见下方 object_storage_app_routes）：`cres_os_*` 自鉴权，不挂 JWT。
+    // 令牌面（见下方 object_storage_app_routes）：`obes_os_*` 自鉴权，不挂 JWT。
     let object_storage_admin_routes = Router::new()
         .route(
             "/api/admin/object-storage-connections",
@@ -1784,7 +1784,7 @@ async fn main() -> anyhow::Result<()> {
             middleware::auth_middleware,
         ));
 
-    // Kafka 令牌面 REST：cres_kafka_* 自鉴权，不挂 JWT。
+    // Kafka 令牌面 REST：obes_kafka_* 自鉴权，不挂 JWT。
     fn kafka_app_inner() -> Router<PgPool> {
         Router::new()
             .route("/:id/produce", post(kafka_app_handlers::produce))
@@ -1806,7 +1806,7 @@ async fn main() -> anyhow::Result<()> {
             onebase::license::require_module(req, next, "pipeline")
         }));
 
-    // 对象存储令牌面 REST：cres_os_* 自鉴权，不挂 JWT。
+    // 对象存储令牌面 REST：obes_os_* 自鉴权，不挂 JWT。
     fn object_storage_app_inner() -> Router<PgPool> {
         Router::new()
             .route("/:id/exec", post(object_storage_app_handlers::exec))
@@ -1859,7 +1859,7 @@ async fn main() -> anyhow::Result<()> {
         }));
 
     // ES 高层「应用」API：业务侧无需 ES DSL / SDK，直接发简化 JSON。
-    // 复用与 proxy 同一套 `cres_es_xxx` token；handler 自鉴权，同样不走 auth_middleware。
+    // 复用与 proxy 同一套 `obes_es_xxx` token；handler 自鉴权，同样不走 auth_middleware。
     // 旧路径 `/api/es-app/*` 保留兼容；推荐 `/api/v1/:database_slug/es-app/*`。
     fn es_app_inner() -> Router<PgPool> {
         Router::new()

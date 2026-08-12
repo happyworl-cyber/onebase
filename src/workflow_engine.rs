@@ -144,7 +144,7 @@ pub fn stale_grace_secs() -> i64 {
     })
 }
 
-/// 网关 cr_ API Key 只读护栏的档位。
+/// 网关 ob_ API Key 只读护栏的档位。
 ///
 /// 既是环境变量 `WORKFLOW_APIKEY_RW_GUARD` 的解析结果，也是运行时存入
 /// [`ExecutionContext::apikey_write_guard`] 的状态：
@@ -357,7 +357,7 @@ pub struct ExecutionContext {
     /// 生产实例（RUST_ENV 非 development/staging/test）置 true，其余路径恒为 false，
     /// 线上运行时行为不变。
     pub prod_readonly: bool,
-    /// 网关 cr_ API Key 只读护栏（DB 写维度）。仅 `endpoint` 触发时按请求所带 cr_ key 的
+    /// 网关 ob_ API Key 只读护栏（DB 写维度）。仅 `endpoint` 触发时按请求所带 ob_ key 的
     /// `permissions` 与 `WORKFLOW_APIKEY_RW_GUARD` 档位推导；其余触发路径恒 `Off`。
     ///
     /// 与 `prod_readonly` 的区别：本标志**只**约束 DB 写（db_execute / db_transaction /

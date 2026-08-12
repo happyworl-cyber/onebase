@@ -5,12 +5,12 @@
 
 ## 接入（Claude Code）
 
-1. 页面「安全 → API Key → 个人访问令牌」生成 PAT（`crm_` 前缀，MCP 专用；区别于平台服务令牌的 `crp_`；明文只显示一次）
+1. 页面「安全 → API Key → 个人访问令牌」生成 PAT（`obm_` 前缀，MCP 专用；区别于平台服务令牌的 `obp_`；明文只显示一次）
 2. 客户端添加：
 
 ```bash
 claude mcp add --transport http onebase https://你的OneBase地址/mcp \
-  --header "Authorization: Bearer crm_xxxxxxxx"
+  --header "Authorization: Bearer obm_xxxxxxxx"
 ```
 
 ## 工具集（11 个）

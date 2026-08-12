@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! GET /api/v1/{database_id}/{table}?col=eq.val&order=created_at.desc
-//! Authorization: Bearer cr_<api_key>
+//! Authorization: Bearer ob_<api_key>
 //! Accept-Profile: <schema>          # 读：GET / HEAD / DELETE
 //! Content-Profile: <schema>         # 写：POST / PATCH / PUT
 //! X-Project-IDs: 1,4,5,...          # 业务自定义：多项目过滤

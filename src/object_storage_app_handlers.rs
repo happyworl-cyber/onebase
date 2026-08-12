@@ -1,4 +1,4 @@
-//! 对象存储令牌面 REST：外部用 `cres_os_*` 调 exec / health。
+//! 对象存储令牌面 REST：外部用 `obes_os_*` 调 exec / health。
 //!
 //! 路径：
 //!   - `/api/object-storage/:id/{exec|health}`
@@ -49,7 +49,7 @@ async fn resolve_access(
 ) -> Result<ResolvedAccess, AppError> {
     let plain = os_auth::extract_token(headers).ok_or_else(|| {
         AppError::Unauthorized(
-            "缺少对象存储访问令牌；请用 `Authorization: ApiKey cres_os_xxx`".to_string(),
+            "缺少对象存储访问令牌；请用 `Authorization: ApiKey obes_os_xxx`".to_string(),
         )
     })?;
     let hash = os_auth::hash_token(&plain);

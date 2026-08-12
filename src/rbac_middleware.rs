@@ -117,20 +117,20 @@ pub async fn rbac_middleware(
     let action = method_to_action(&method);
     let resource = format!("{}.{}", schema, table);
 
-    // 数据面 API Key（cr_）：即使 auth_middleware 已注入了合成 Claims，仍走 Key scope
+    // 数据面 API Key（ob_）：即使 auth_middleware 已注入了合成 Claims，仍走 Key scope
     // 路径——Key 的 permissions JSON 才是数据面授权来源，不应改成用户 RBAC。
     let api_key = req
         .headers()
         .get("Authorization")
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
-        .filter(|s| s.starts_with("cr_"))
+        .filter(|s| s.starts_with("ob_"))
         .map(|s| s.to_string())
         .or_else(|| {
             req.headers()
                 .get("apikey")
                 .and_then(|h| h.to_str().ok())
-                .filter(|s| s.starts_with("cr_"))
+                .filter(|s| s.starts_with("ob_"))
                 .map(|s| s.to_string())
         });
 
@@ -247,7 +247,7 @@ pub async fn rbac_middleware(
         return Ok(next.run(req).await);
     }
 
-    // 尝试获取 JWT / 平台令牌 /（非 cr_ 场景）Claims
+    // 尝试获取 JWT / 平台令牌 /（非 ob_ 场景）Claims
     let claims_opt = req.extensions().get::<Claims>().cloned();
 
     match claims_opt {
@@ -332,7 +332,7 @@ pub async fn rbac_middleware(
             req.extensions_mut().insert(result);
         }
         None => {
-            // cr_ 已在上方优先处理；走到这里说明既无 Claims 也无 cr_ Key。
+            // ob_ 已在上方优先处理；走到这里说明既无 Claims 也无 ob_ Key。
             tracing::warn!(
                 target: "authz",
                 database_id = database_id,

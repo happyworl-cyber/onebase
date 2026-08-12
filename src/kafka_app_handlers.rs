@@ -1,4 +1,4 @@
-//! Kafka 令牌面 REST：外部用 `cres_kafka_*` 调 produce / topics / health。
+//! Kafka 令牌面 REST：外部用 `obes_kafka_*` 调 produce / topics / health。
 //!
 //! 路径：
 //!   - `/api/kafka/:id/{produce|topics|health}`
@@ -49,7 +49,7 @@ async fn resolve_access(
 ) -> Result<ResolvedAccess, AppError> {
     let plain = kafka_auth::extract_token(headers).ok_or_else(|| {
         AppError::Unauthorized(
-            "缺少 Kafka 访问令牌；请用 `Authorization: ApiKey cres_kafka_xxx`".to_string(),
+            "缺少 Kafka 访问令牌；请用 `Authorization: ApiKey obes_kafka_xxx`".to_string(),
         )
     })?;
     let hash = kafka_auth::hash_token(&plain);

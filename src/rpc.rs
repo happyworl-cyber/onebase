@@ -982,8 +982,8 @@ async fn resolve_rpc_database_id_for_user(
 /// 1. 从 URL 路径抠出 `database_slug`（`/api/v1/:database_slug/rpc/:fn_name`），
 ///    并把它作为权威值覆盖到 `X-Database-Id` 请求头——后续的
 ///    `dynamic_db_middleware` 据此切池，调用方自带的同名头会被忽略。
-/// 2. 优先尝试 JWT（`Authorization: Bearer <jwt>`，`<jwt>` 不以 `cr_` 开头）。
-/// 3. 兜底 API Key：`Authorization: Bearer cr_*` 或 Supabase 风格的 `apikey: cr_*`；
+/// 2. 优先尝试 JWT（`Authorization: Bearer <jwt>`，`<jwt>` 不以 `ob_` 开头）。
+/// 3. 兜底 API Key：`Authorization: Bearer ob_*` 或 Supabase 风格的 `apikey: ob_*`；
 ///    Key 绑定数据库必须与路径一致，否则 401（防止跨库调用）。
 /// 4. 把通过校验的主体注入 `RpcAuthSubject` request extension 供 handler 使用。
 ///
@@ -1014,7 +1014,7 @@ pub async fn rpc_auth_middleware(
     if let Some(token) = auth_header_str
         .as_deref()
         .and_then(|h| h.strip_prefix("Bearer "))
-        .filter(|t| !t.starts_with("cr_"))
+        .filter(|t| !t.starts_with("ob_"))
     {
         if let Ok(claims) = verify_token(token) {
             if !claims.jti.is_empty() {
@@ -1052,11 +1052,11 @@ pub async fn rpc_auth_middleware(
     let api_key = auth_header_str
         .as_deref()
         .and_then(|h| h.strip_prefix("Bearer "))
-        .filter(|s| s.starts_with("cr_"))
+        .filter(|s| s.starts_with("ob_"))
         .or_else(|| {
             apikey_header_str
                 .as_deref()
-                .filter(|s| s.starts_with("cr_"))
+                .filter(|s| s.starts_with("ob_"))
         });
 
     if let Some(key) = api_key {

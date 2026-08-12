@@ -642,7 +642,7 @@ function PatSection() {
           </h2>
           <p className="text-xs text-gray-500 mt-1">
             供 AI 客户端（Claude Code 等）连接 <code className="bg-gray-100 px-1 rounded">/mcp</code> 创作与调试工作流；
-            令牌以 <code className="bg-gray-100 px-1 rounded font-mono">crm_</code> 开头（MCP 专用，区别于平台令牌的 <code className="bg-gray-100 px-1 rounded font-mono">crp_</code>）；
+            令牌以 <code className="bg-gray-100 px-1 rounded font-mono">obm_</code> 开头（MCP 专用，区别于平台令牌的 <code className="bg-gray-100 px-1 rounded font-mono">obp_</code>）；
             生产环境实例仅允许干跑 + 只读查询，启用工作流仍需人工操作。
           </p>
         </div>

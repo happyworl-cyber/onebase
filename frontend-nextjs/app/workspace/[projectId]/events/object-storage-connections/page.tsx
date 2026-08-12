@@ -339,12 +339,12 @@ function UsageTab({ connection }: { connection: ObjectStorageConnection }) {
   }
 
   const execCurl = `curl -X POST '${base}/exec' \\
-  -H 'Authorization: ApiKey cres_os_<your_token>' \\
+  -H 'Authorization: ApiKey obes_os_<your_token>' \\
   -H 'Content-Type: application/json' \\
   -d '{"op":"put","args":{"key":"demo.txt","content":"hello"}}'`
 
   const healthCurl = `curl '${base}/health' \\
-  -H 'Authorization: ApiKey cres_os_<your_token>'`
+  -H 'Authorization: ApiKey obes_os_<your_token>'`
 
   return (
     <div className="space-y-4 text-sm">
@@ -361,12 +361,12 @@ function UsageTab({ connection }: { connection: ObjectStorageConnection }) {
         )}
         <ul className="list-disc list-inside space-y-0.5">
           <li>
-            先在「访问令牌」Tab 创建 <code className="bg-white px-1 rounded">cres_os_*</code>
+            先在「访问令牌」Tab 创建 <code className="bg-white px-1 rounded">obes_os_*</code>
             ，明文仅创建时显示一次。
           </li>
           <li>
             请求头：
-            <code className="bg-white px-1 rounded">Authorization: ApiKey cres_os_...</code>
+            <code className="bg-white px-1 rounded">Authorization: ApiKey obes_os_...</code>
             （也支持 Bearer / X-Os-Token）。
           </li>
           <li>令牌可限制 allowed_ops 与 key_prefix_allowlist；无需平台登录即可调用。</li>
