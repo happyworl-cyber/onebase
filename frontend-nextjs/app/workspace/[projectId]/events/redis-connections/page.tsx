@@ -65,10 +65,11 @@ function RedisConnectionsManager({ tenantId }: { tenantId: number }) {
     setLoading(true)
     try {
       const res = await redisAPI.listConnections(tenantId)
-      setConnections(res.data)
-      if (res.data.length > 0) {
+      const rows = res.data.filter((c) => c.tenant_id === tenantId)
+      setConnections(rows)
+      if (rows.length > 0) {
         setActiveId((prev) =>
-          prev !== null && res.data.some((c) => c.id === prev) ? prev : res.data[0].id,
+          prev !== null && rows.some((c) => c.id === prev) ? prev : rows[0].id,
         )
       } else {
         setActiveId(null)

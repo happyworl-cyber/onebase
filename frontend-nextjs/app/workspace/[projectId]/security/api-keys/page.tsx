@@ -46,8 +46,11 @@ export default function ApiKeysPage() {
   // workspace layout 已经从 /api/projects/:id 拉到 primary_connection.database_id
   // 并铺到 currentConnection，这里直接读就行。
   const currentConnection = useAppStore((s) => s.currentConnection)
-  const databaseId = currentConnection?.database_id ?? null
-  const databaseSlug = currentConnection?.database_slug || null
+  // 必须属于当前项目，防止残留的上一项目 currentConnection 把 key 列到错误项目下。
+  const connectionForProject =
+    currentConnection?.tenant_id === projectId ? currentConnection : null
+  const databaseId = connectionForProject?.database_id ?? null
+  const databaseSlug = connectionForProject?.database_slug || null
   const dbRouteSeg = databaseSlug || null
   const caps = useCurrentProjectCapabilities()
   const notify = useNotification()

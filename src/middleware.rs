@@ -52,7 +52,9 @@ async fn authenticate_cr_api_key(
                COALESCE(cu.email, fb.email)                    AS email,
                COALESCE(cu.role, fb.role, 'user')              AS role,
                CASE WHEN cu.id IS NOT NULL THEN false
-                    ELSE COALESCE(fb.is_superadmin, false) END AS is_superadmin
+                    ELSE COALESCE(fb.is_superadmin, false) END AS is_superadmin,
+               CASE WHEN cu.id IS NOT NULL THEN COALESCE(cu.is_active, false)
+                    ELSE COALESCE(fb.is_active, false) END     AS user_is_active
         FROM management.api_keys k
         JOIN management.tenant_databases td
           ON td.id = k.database_id
@@ -66,11 +68,13 @@ async fn authenticate_cr_api_key(
         LEFT JOIN LATERAL (
             SELECT u.id AS user_id, u.email AS email,
                    COALESCE(u.role, 'user') AS role,
-                   COALESCE(u.is_superadmin, false) AS is_superadmin
+                   COALESCE(u.is_superadmin, false) AS is_superadmin,
+                   u.is_active AS is_active
             FROM management.user_tenants ut
             JOIN users u ON u.id = ut.user_id
             WHERE ut.tenant_id = k.tenant_id
               AND ut.is_active = true
+              AND COALESCE(u.is_active, true) = true
               AND ut.role IN ('owner', 'admin')
             ORDER BY CASE ut.role WHEN 'owner' THEN 0 ELSE 1 END, u.id ASC
             LIMIT 1
@@ -134,6 +138,12 @@ async fn authenticate_cr_api_key(
     let email: String = row.get("email");
     let role: String = row.get("role");
     let is_superadmin: bool = row.try_get("is_superadmin").unwrap_or(false);
+    let user_is_active: bool = row.try_get("user_is_active").unwrap_or(false);
+    if !user_is_active {
+        return Err(AppError::Unauthorized(
+            "API Key 无效、已禁用或已过期".to_string(),
+        ));
+    }
 
     // last_used_at 节流更新，失败不影响鉴权。
     let pool2 = pool.clone();
@@ -495,7 +505,8 @@ pub async fn auth_middleware(
     let session_row = sqlx::query(
         r#"
         SELECT s.revoked, s.expires_at,
-               COALESCE(u.must_change_password, false) AS must_change_password
+               COALESCE(u.must_change_password, false) AS must_change_password,
+               COALESCE(u.is_active, true) AS is_active
         FROM user_sessions s
         JOIN users u ON u.id = s.user_id
         WHERE s.jti = $1::uuid
@@ -548,6 +559,13 @@ pub async fn auth_middleware(
             "认证失败：会话已过期"
         );
         return Err(AppError::Unauthorized("会话已过期，请重新登录".to_string()));
+    }
+
+    let is_active: bool = row.try_get("is_active").unwrap_or(true);
+    if !is_active {
+        return Err(AppError::Forbidden(
+            "账号已停用，请联系管理员".to_string(),
+        ));
     }
 
     // 强制改密网关：内置默认管理员首次登录后必须先改密，否则除“改密/登出/查询自身/刷新”
@@ -1132,6 +1150,26 @@ mod tests {
 
         assert!(has_role(&admin_claims, "user"));
         assert!(has_role(&admin_claims, "admin"));
+    }
+
+    #[test]
+    fn api_key_claims_require_active_user() {
+        let source = include_str!("middleware.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(
+            source.contains("COALESCE(cu.is_active, false)"),
+            "API key creator activity must be loaded"
+        );
+        assert!(
+            source.contains("AND COALESCE(u.is_active, true) = true"),
+            "API key fallback must only select active users"
+        );
+        assert!(
+            source.contains("if !user_is_active"),
+            "inactive API key claim subjects must be rejected"
+        );
     }
 
     /// 验证 `deprecated_legacy_crud_middleware` 给响应注入了正确的弃用头。

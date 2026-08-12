@@ -153,6 +153,46 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, AppError> {
     bcrypt::verify(password, hash).map_err(|e| AppError::Internal(format!("密码验证失败: {}", e)))
 }
 
+/// 简单的密码校验（与注册时一致：≥ 8 位、含大小写和数字）。
+pub fn validate_password(p: &str) -> Result<(), AppError> {
+    if p.len() < 8 {
+        return Err(AppError::InvalidQuery("密码至少需要 8 位".to_string()));
+    }
+    let has_upper = p.chars().any(|c| c.is_uppercase());
+    let has_lower = p.chars().any(|c| c.is_lowercase());
+    let has_digit = p.chars().any(|c| c.is_ascii_digit());
+    if !(has_upper && has_lower && has_digit) {
+        return Err(AppError::InvalidQuery(
+            "密码必须包含大写字母、小写字母和数字".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// 用户名校验（1-100 字符，不允许只是空白）。
+pub fn validate_username(name: &str) -> Result<(), AppError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.len() > 100 {
+        return Err(AppError::InvalidQuery(
+            "用户名长度需在 1-100 字符之间".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// 简易邮箱校验（够用即可，不做完整 RFC 校验）。
+pub fn validate_email(email: &str) -> Result<(), AppError> {
+    let email = email.trim();
+    if email.is_empty()
+        || !email.contains('@')
+        || !email.contains('.')
+        || email.len() > 255
+    {
+        return Err(AppError::InvalidQuery("无效的邮箱地址".to_string()));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,5 +260,12 @@ mod tests {
         init_test_env();
         let result = verify_token("invalid.token.here");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_email_rejects_more_than_255_bytes() {
+        let email = format!("{}@example.com", "a".repeat(245));
+        assert!(email.len() > 255);
+        assert!(validate_email(&email).is_err());
     }
 }

@@ -70,11 +70,12 @@ function EsConnectionsManager({ tenantId }: { tenantId: number }) {
     setLoading(true)
     try {
       const res = await esAPI.listConnections(tenantId)
-      setConnections(res.data)
+      const rows = res.data.filter((c) => c.tenant_id === tenantId)
+      setConnections(rows)
       // 首次进入或当前选中已被删 → 自动选第一个
-      if (res.data.length > 0) {
+      if (rows.length > 0) {
         setActiveId((prev) =>
-          prev !== null && res.data.some((c) => c.id === prev) ? prev : res.data[0].id,
+          prev !== null && rows.some((c) => c.id === prev) ? prev : rows[0].id,
         )
       } else {
         setActiveId(null)

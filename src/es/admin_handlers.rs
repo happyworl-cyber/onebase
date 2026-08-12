@@ -82,7 +82,7 @@ async fn fetch_connection_authorized(
 /// 列表查询参数。
 #[derive(Debug, Deserialize)]
 pub struct ListConnectionsQuery {
-    /// 仅超管可用：按 tenant_id 过滤。非超管自动按自己管辖的租户过滤。
+    /// 按项目过滤。工作空间页必须传；未传时超管看全平台，非超管看其全部管辖租户。
     pub tenant_id: Option<i32>,
 }
 
@@ -141,38 +141,47 @@ pub async fn list_connections(
     Extension(claims): Extension<Claims>,
     Query(q): Query<ListConnectionsQuery>,
 ) -> Result<Json<Vec<EsConnection>>, AppError> {
-    // 超管：可指定 tenant_id 过滤，未指定则全平台；
-    // 非超管：忽略 query 里的 tenant_id，强制只看自己管辖的租户。
-    let rows =
-        if claims.is_superadmin {
-            match q.tenant_id {
-                Some(t) => sqlx::query_as::<_, EsConnection>(
-                    "SELECT * FROM management.es_connections WHERE tenant_id = $1 ORDER BY id DESC",
-                )
-                .bind(t)
-                .fetch_all(&pool)
-                .await,
-                None => {
-                    sqlx::query_as::<_, EsConnection>(
-                        "SELECT * FROM management.es_connections ORDER BY id DESC",
-                    )
-                    .fetch_all(&pool)
-                    .await
-                }
-            }
-        } else {
-            let admins = audit_handlers::admin_tenant_ids(&pool, &claims).await?;
-            if admins.is_empty() {
+    // 与 webhook / sse-routes 一致：显式 tenant_id 必须生效，避免多项目 admin
+    // 在项目 A 看到项目 B 的连接与代理 token。
+    let admins = if claims.is_superadmin {
+        Vec::new()
+    } else {
+        audit_handlers::admin_tenant_ids(&pool, &claims).await?
+    };
+    let filter = crate::permissions::resolve_tenant_list_filter(
+        claims.is_superadmin,
+        q.tenant_id,
+        &admins,
+    )?;
+    let rows = match filter {
+        crate::permissions::TenantListFilter::One(t) => {
+            sqlx::query_as::<_, EsConnection>(
+                "SELECT * FROM management.es_connections WHERE tenant_id = $1 ORDER BY id DESC",
+            )
+            .bind(t)
+            .fetch_all(&pool)
+            .await
+        }
+        crate::permissions::TenantListFilter::All => {
+            sqlx::query_as::<_, EsConnection>(
+                "SELECT * FROM management.es_connections ORDER BY id DESC",
+            )
+            .fetch_all(&pool)
+            .await
+        }
+        crate::permissions::TenantListFilter::Many(ids) => {
+            if ids.is_empty() {
                 return Ok(Json(vec![]));
             }
             sqlx::query_as::<_, EsConnection>(
-            "SELECT * FROM management.es_connections WHERE tenant_id = ANY($1) ORDER BY id DESC",
-        )
-        .bind(&admins)
-        .fetch_all(&pool)
-        .await
+                "SELECT * FROM management.es_connections WHERE tenant_id = ANY($1) ORDER BY id DESC",
+            )
+            .bind(&ids)
+            .fetch_all(&pool)
+            .await
         }
-        .map_err(|e| AppError::Internal(format!("列出 ES 连接失败: {e}")))?;
+    }
+    .map_err(|e| AppError::Internal(format!("列出 ES 连接失败: {e}")))?;
     Ok(Json(rows))
 }
 

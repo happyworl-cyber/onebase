@@ -97,37 +97,46 @@ pub async fn list_connections(
     Extension(claims): Extension<Claims>,
     Query(q): Query<ListConnectionsQuery>,
 ) -> Result<Json<Vec<Value>>, AppError> {
-    let rows = if claims.is_superadmin {
-        match q.tenant_id {
-            Some(tenant_id) => {
-                sqlx::query_as::<_, KafkaConnection>(
-                    "SELECT * FROM management.kafka_connections \
-                 WHERE tenant_id = $1 ORDER BY id DESC",
-                )
-                .bind(tenant_id)
-                .fetch_all(&pool)
-                .await
-            }
-            None => {
-                sqlx::query_as::<_, KafkaConnection>(
-                    "SELECT * FROM management.kafka_connections ORDER BY id DESC",
-                )
-                .fetch_all(&pool)
-                .await
-            }
-        }
+    // 显式 tenant_id 必须生效（与 webhook / sse-routes / ES 一致）。
+    let admins = if claims.is_superadmin {
+        Vec::new()
     } else {
-        let admins = audit_handlers::admin_tenant_ids(&pool, &claims).await?;
-        if admins.is_empty() {
-            return Ok(Json(vec![]));
+        audit_handlers::admin_tenant_ids(&pool, &claims).await?
+    };
+    let filter = crate::permissions::resolve_tenant_list_filter(
+        claims.is_superadmin,
+        q.tenant_id,
+        &admins,
+    )?;
+    let rows = match filter {
+        crate::permissions::TenantListFilter::One(tenant_id) => {
+            sqlx::query_as::<_, KafkaConnection>(
+                "SELECT * FROM management.kafka_connections \
+                 WHERE tenant_id = $1 ORDER BY id DESC",
+            )
+            .bind(tenant_id)
+            .fetch_all(&pool)
+            .await
         }
-        sqlx::query_as::<_, KafkaConnection>(
-            "SELECT * FROM management.kafka_connections \
-             WHERE tenant_id = ANY($1) ORDER BY id DESC",
-        )
-        .bind(&admins)
-        .fetch_all(&pool)
-        .await
+        crate::permissions::TenantListFilter::All => {
+            sqlx::query_as::<_, KafkaConnection>(
+                "SELECT * FROM management.kafka_connections ORDER BY id DESC",
+            )
+            .fetch_all(&pool)
+            .await
+        }
+        crate::permissions::TenantListFilter::Many(ids) => {
+            if ids.is_empty() {
+                return Ok(Json(vec![]));
+            }
+            sqlx::query_as::<_, KafkaConnection>(
+                "SELECT * FROM management.kafka_connections \
+                 WHERE tenant_id = ANY($1) ORDER BY id DESC",
+            )
+            .bind(&ids)
+            .fetch_all(&pool)
+            .await
+        }
     }
     .map_err(|e| AppError::Internal(format!("列出 Kafka 连接失败: {e}")))?;
 

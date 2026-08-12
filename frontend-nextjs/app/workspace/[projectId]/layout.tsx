@@ -71,6 +71,8 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
     }
 
     setCurrentTenant(null)
+    // 切项目立刻清掉，避免异步拉取期间拦截器仍带上一项目的 X-Database-Id。
+    setCurrentConnection(null)
 
     setErrorState(null)
     setAuthorized(false)
@@ -82,11 +84,9 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
       .then((resp) => {
         setCurrentProject(resp.data)
 
-        // W2 关键步骤：把项目主连接立刻铺到 currentConnection 上，让
-        // 工作空间下所有页面里的 schemaAPI / queryAPI / rpcAPI 走对的
-        // X-Database-Id（这些 API 的拦截器从 localStorage.current_connection
-        // 读 database_id）。无连接的项目此处保持 currentConnection 不动——
-        // 子页面会自己判定并提示"暂无连接"。
+        // 把项目主连接铺到 currentConnection，让 schema/query/rpc 拦截器
+        // 读到正确的 X-Database-Id。无主连接时必须清空——否则切到无库项目
+        // 会残留上一项目的 database_id，API Key 页会列出别的项目的 key。
         const pc = resp.data.primary_connection
         if (pc) {
           setCurrentConnection({
@@ -105,6 +105,8 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
             is_primary: pc.is_primary,
             user_role: resp.data.user_role,
           })
+        } else {
+          setCurrentConnection(null)
         }
 
         setAuthorized(true)

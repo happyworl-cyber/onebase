@@ -61,6 +61,10 @@ redis = { version = "0.25", features = ["tokio-comp", "connection-manager", "tok
 # Kafka 数据源（工作流 produce + kafka 触发器）
 rdkafka = { version = "0.36", features = ["cmake-build", "ssl", "sasl"] }
 
+# 对象存储数据源（COS / OSS / MinIO，S3 兼容）
+# 用轻量 rusty-s3（Sans-IO + 复用 reqwest），避免 aws-sdk-s3 → aws-lc-sys 拖垮冷编译。
+rusty-s3 = { version = "0.10", default-features = false, features = ["rustcrypto", "full"] }
+
 # HTTP 客户端（用于 OAuth2 回调）
 reqwest = { version = "0.11", features = ["json", "native-tls", "stream", "blocking"], default-features = false }
 

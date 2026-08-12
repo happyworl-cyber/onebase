@@ -89,7 +89,7 @@ function isReachableByNormalEdges(
 const NODE_PALETTE_GROUPS: { label: string; types: string[] }[] = [
   { label: '数据操作', types: ['db_query', 'db_execute', 'db_transaction', 'foreach', 'transform', 'code'] },
   { label: '控制流', types: ['condition', 'loop'] },
-  { label: '集成', types: ['http_call', 'email_send', 'sse_publish', 'call_workflow', 'redis', 'kafka'] },
+  { label: '集成', types: ['http_call', 'email_send', 'sse_publish', 'call_workflow', 'redis', 'kafka', 'object_storage'] },
   { label: '输出', types: ['response'] },
 ]
 
@@ -693,6 +693,7 @@ function getDefaultConfig(type: string): Record<string, unknown> {
     case 'call_workflow': return { workflow: '', input: '{\n  "key": "{{trigger.value}}"\n}' }
     case 'redis': return { connection_id: 0, op: 'get', key: '' }
     case 'kafka': return { connection_id: 0, op: 'produce', topic: '', key: '', value: '' }
+    case 'object_storage': return { connection_id: 0, op: 'get', key: '' }
     case 'loop': return { loop_mode: 'while', expression: '', max_iterations: 100, delay_ms: 0, allow_failure: false }
     default: return {}
   }

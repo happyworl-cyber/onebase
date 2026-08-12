@@ -108,6 +108,7 @@ pub async fn authenticate(
         FROM management.platform_tokens pt
         JOIN users u ON u.id = pt.user_id
         WHERE pt.token_hash = $1 AND pt.is_active = true
+          AND COALESCE(u.is_active, true) = true
         "#,
     )
     .bind(&token_hash)
@@ -212,5 +213,17 @@ mod tests {
         assert!(validate_scopes(&["project:create".to_string()]).is_ok());
         assert!(validate_scopes(&["*".to_string()]).is_ok());
         assert!(validate_scopes(&["bogus".to_string()]).is_err());
+    }
+
+    #[test]
+    fn platform_token_authentication_requires_active_user() {
+        let production_source = include_str!("platform_token.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(
+            production_source.contains("AND COALESCE(u.is_active, true) = true"),
+            "platform token lookup must reject globally inactive users"
+        );
     }
 }

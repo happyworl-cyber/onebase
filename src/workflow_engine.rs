@@ -254,6 +254,10 @@ pub enum NodeType {
     /// Kafka produce。
     /// config: `{ "connection_id": <i64>, "op": "produce", "topic", "key"?, "value", "headers"? }`
     Kafka,
+    /// 对象存储（COS / OSS / MinIO）精选操作。
+    /// config: `{ "connection_id": <i64>, "op": "put|get|delete|list|presign", ...templated args... }`
+    /// 连接按 `ctx.tenant_id` 校验，杜绝跨租户取数。
+    ObjectStorage,
     /// 循环节点：反复执行「循环体子图」直到退出，再走 `done` 出口。
     /// config: `{ "loop_mode": "while|until|count|for_each", "expression": "...",
     ///            "max_iterations": <u64>, "delay_ms": <u64>, "count": <u64|template>,
@@ -2404,6 +2408,7 @@ impl DagEngine {
             NodeType::CallWorkflow => self.exec_call_workflow_node(config, ctx, call_stack).await,
             NodeType::Redis => self.exec_redis_node(config, ctx).await,
             NodeType::Kafka => self.exec_kafka_node(config, ctx).await,
+            NodeType::ObjectStorage => self.exec_object_storage_node(config, ctx).await,
             // loop 节点由 execute_dag 特殊分发（run_loop），需要访问整图以界定循环体，
             // 不经此逐节点 dispatch。走到这里说明循环体识别有误（如循环体内又嵌了未被
             // 拥有的 loop），属于内部不变量被破坏，直接报错而非静默。
@@ -3837,6 +3842,68 @@ end
         let conn = fetch_active_for_tenant(&self.pool, connection_id, tenant_id).await?;
         let producer = client_cache::get_or_create(&conn).await?;
         let result = commands::execute(&producer, &op, &args).await?;
+
+        Ok((json!({ "op": op, "result": result }), None))
+    }
+
+    // ─── 对象存储节点 ─────────────────────────────────────────
+    //
+    // config: `{ "connection_id": <i64>, "op": "put|get|delete|list|presign", ...args... }`
+    // 其余字段先经 resolve_template，再交给 commands::execute。
+    // dry_run / 生产只读：写操作（put/delete/presign PUT）返回 mock。
+    async fn exec_object_storage_node(
+        &self,
+        config: &JsonValue,
+        ctx: &ExecutionContext,
+    ) -> Result<(JsonValue, Option<String>)> {
+        use crate::object_storage_ds::{client_cache, commands, fetch_active_for_tenant};
+
+        let connection_id = config
+            .get("connection_id")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| {
+                AppError::InvalidQuery(
+                    "object_storage 节点缺少 connection_id（整数）".to_string(),
+                )
+            })?;
+        let op = config
+            .get("op")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| AppError::InvalidQuery("object_storage 节点缺少 op".to_string()))?
+            .to_lowercase();
+
+        let mut args = config.clone();
+        if let Some(obj) = args.as_object_mut() {
+            obj.remove("connection_id");
+            obj.remove("op");
+        }
+
+        if (ctx.dry_run || ctx.prod_readonly) && commands::is_write_op(&op, &args) {
+            let mut mock = json!({ "op": op, "result": null });
+            if let Some(obj) = mock.as_object_mut() {
+                if ctx.prod_readonly && !ctx.dry_run {
+                    obj.insert(
+                        "blocked_by".to_string(),
+                        JsonValue::from("production_readonly"),
+                    );
+                } else {
+                    obj.insert("dry_run".to_string(), JsonValue::Bool(true));
+                }
+            }
+            return Ok((mock, None));
+        }
+
+        let tenant_id = ctx.tenant_id.ok_or_else(|| {
+            AppError::InvalidQuery(
+                "object_storage 节点需要 workflow.tenant_id 才能解析连接".to_string(),
+            )
+        })?;
+
+        let conn = fetch_active_for_tenant(&self.pool, connection_id, tenant_id).await?;
+        let handle = client_cache::get_or_create(&conn).await?;
+        let result = commands::execute(&handle, &conn.bucket, &op, &args).await?;
 
         Ok((json!({ "op": op, "result": result }), None))
     }

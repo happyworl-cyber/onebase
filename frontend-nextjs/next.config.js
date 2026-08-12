@@ -62,15 +62,16 @@ const nextConfig = {
   compiler: {
     removeConsole: process.env.NODE_ENV === 'production' ? { exclude: ['error'] } : false,
   },
-  // dev 服务器允许的 origin 白名单（消除 "Cross origin request detected" 警告，
-  // 并向后兼容 Next.js 15+ 的强制要求）。只影响 dev，生产下未读取。
-  experimental: {
-    allowedDevOrigins: [
-      'localhost:3006',
-      '127.0.0.1:3006',
-      'localhost:3001',
-      '127.0.0.1:3001',
-    ],
+  // Next 14.2 不识别 experimental.allowedDevOrigins（会打 Invalid next.config 警告）。
+  // 顶层字段供 Next 15+ 使用；开发请统一用 http://localhost:3006，勿混用 127.0.0.1。
+  allowedDevOrigins: ['127.0.0.1', 'localhost'],
+  // 慢磁盘 / 冷编译时默认 chunk 超时过短，会报 ChunkLoadError: Loading chunk app/layout failed (timeout)
+  webpack: (config, { dev }) => {
+    if (dev) {
+      config.output = config.output || {}
+      config.output.chunkLoadTimeout = 120000
+    }
+    return config
   },
   async headers() {
     return [

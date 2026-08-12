@@ -3,18 +3,17 @@
 /**
  * `/workspace/platform-tokens` —— 平台服务令牌（crp_）管理 + 使用说明。
  *
- * 用户级页面（非项目级）：任何登录用户都能管理自己的令牌（超管可见全部）。
- * 令牌用于机器 / AI 通过 HTTP 或 MCP 直接创建项目、管理工作流，受 scope 约束。
- *
- * 刻意不放在 `/workspace/[projectId]/...` 下——令牌不绑定具体项目；入口在
- * ProjectTopbar 右上角用户菜单「平台服务令牌」。
+ * 仅平台超管可访问。令牌用于机器 / AI 通过 HTTP 或 MCP 创建项目、管理工作流。
+ * 入口在 ProjectTopbar 右上角用户菜单「平台服务令牌」（仅超管可见）。
  */
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { platformTokenAPI } from '@/lib/api'
 import { useNotification } from '@/hooks/useNotification'
 import Drawer from '@/components/Drawer'
+import { useAppStore } from '@/lib/store'
 
 interface PlatformToken {
   id: number
@@ -38,6 +37,9 @@ const ALL_SCOPES: { value: string; label: string; hint: string }[] = [
 
 export default function PlatformTokensPage() {
   const notify = useNotification()
+  const router = useRouter()
+  const currentUser = useAppStore((s) => s.currentUser)
+  const [authorized, setAuthorized] = useState(false)
 
   const [tokens, setTokens] = useState<PlatformToken[]>([])
   const [loading, setLoading] = useState(true)
@@ -72,9 +74,40 @@ export default function PlatformTokensPage() {
   }
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+    const token = localStorage.getItem('token')
+    if (!token) {
+      router.replace('/login')
+      return
+    }
+    let isSuperadmin = !!currentUser?.is_superadmin
+    if (!isSuperadmin) {
+      try {
+        const userStr = localStorage.getItem('current_user')
+        isSuperadmin = !!(userStr && JSON.parse(userStr)?.is_superadmin)
+      } catch {
+        isSuperadmin = false
+      }
+    }
+    if (!isSuperadmin) {
+      router.replace('/workspace')
+      return
+    }
+    setAuthorized(true)
     loadTokens()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [currentUser, router])
+
+  if (!authorized) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <i className="fas fa-spinner fa-spin text-2xl text-gray-400 mb-2"></i>
+          <p className="text-sm text-gray-500">加载中...</p>
+        </div>
+      </div>
+    )
+  }
 
   const toggleScope = (value: string) => {
     setForm((f) => {

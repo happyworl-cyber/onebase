@@ -193,21 +193,23 @@ export default function ProjectTopbar() {
                 <div className="text-[10px] text-amber-600 mt-0.5">平台超管</div>
               )}
             </div>
-            <Link
-              href="/workspace/platform-tokens"
-              onClick={() => setUserMenuOpen(false)}
-              className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
-            >
-              <i className="fas fa-robot mr-2"></i> 平台服务令牌
-            </Link>
             {currentUser?.is_superadmin && (
-              <Link
-                href="/platform"
-                onClick={() => setUserMenuOpen(false)}
-                className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
-              >
-                <i className="fas fa-shield-alt mr-2"></i> 前往平台控制台
-              </Link>
+              <>
+                <Link
+                  href="/workspace/platform-tokens"
+                  onClick={() => setUserMenuOpen(false)}
+                  className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  <i className="fas fa-robot mr-2"></i> 平台服务令牌
+                </Link>
+                <Link
+                  href="/platform"
+                  onClick={() => setUserMenuOpen(false)}
+                  className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  <i className="fas fa-shield-alt mr-2"></i> 前往平台控制台
+                </Link>
+              </>
             )}
             <button
               onClick={logout}

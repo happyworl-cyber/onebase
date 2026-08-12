@@ -211,7 +211,12 @@ function KafkaTriggerConfig({
     kafkaAPI
       .listConnections(Number.isNaN(tenantId) ? undefined : tenantId)
       .then((res) => {
-        if (alive) setConnections(res.data)
+        if (alive) {
+          const rows = Number.isNaN(tenantId)
+            ? res.data
+            : res.data.filter((c) => c.tenant_id === tenantId)
+          setConnections(rows)
+        }
       })
       .catch(() => {})
       .finally(() => {

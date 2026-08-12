@@ -1,4 +1,6 @@
-use crate::auth::{hash_password, Claims};
+use crate::auth::{
+    hash_password, validate_email, validate_password, validate_username, Claims,
+};
 use crate::error::{AppError, Result};
 use crate::permissions;
 use crate::redis_manager::RedisManager;
@@ -500,42 +502,6 @@ pub struct AdminUpdateUserRequest {
 #[derive(Debug, Deserialize)]
 pub struct AdminResetPasswordRequest {
     pub new_password: String,
-}
-
-/// 简单的密码校验（与注册时一致：≥ 8 位、含大小写和数字）。
-fn validate_password(p: &str) -> Result<()> {
-    if p.len() < 8 {
-        return Err(AppError::InvalidQuery("密码至少需要 8 位".to_string()));
-    }
-    let has_upper = p.chars().any(|c| c.is_uppercase());
-    let has_lower = p.chars().any(|c| c.is_lowercase());
-    let has_digit = p.chars().any(|c| c.is_ascii_digit());
-    if !(has_upper && has_lower && has_digit) {
-        return Err(AppError::InvalidQuery(
-            "密码必须包含大写字母、小写字母和数字".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-/// 用户名校验（1-100 字符，不允许只是空白）。
-fn validate_username(name: &str) -> Result<()> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() || trimmed.len() > 100 {
-        return Err(AppError::InvalidQuery(
-            "用户名长度需在 1-100 字符之间".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-/// 简易邮箱校验（够用即可，不做完整 RFC 校验）。
-fn validate_email(email: &str) -> Result<()> {
-    let e = email.trim();
-    if e.is_empty() || !e.contains('@') || !e.contains('.') || e.len() > 320 {
-        return Err(AppError::InvalidQuery("无效的邮箱地址".to_string()));
-    }
-    Ok(())
 }
 
 /// 数一下当前还有几个有效超管，用来防止"删掉最后一个超管把平台锁死"。

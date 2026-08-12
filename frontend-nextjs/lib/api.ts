@@ -560,6 +560,7 @@ export interface ProjectMember {
   username: string
   email: string
   is_superadmin: boolean
+  is_active: boolean
   role: 'owner' | 'admin' | 'member' | 'viewer'
   created_at: string
 }
@@ -763,6 +764,28 @@ export const projectMembersAPI = {
     api.get<MemberCandidate[]>(`/api/projects/${projectId}/members/search`, {
       params: { q },
     }),
+
+  updateProfile: (
+    projectId: number,
+    userId: number,
+    body: { username?: string; email?: string },
+  ) =>
+    api.patch<{ ok: boolean; user_id: number; username: string; email: string }>(
+      `/api/projects/${projectId}/members/${userId}/profile`,
+      body,
+    ),
+
+  resetPassword: (projectId: number, userId: number, newPassword: string) =>
+    api.post<{ ok: boolean; message: string }>(
+      `/api/projects/${projectId}/members/${userId}/reset-password`,
+      { new_password: newPassword },
+    ),
+
+  updateStatus: (projectId: number, userId: number, isActive: boolean) =>
+    api.patch<{ ok: boolean; user_id: number; is_active: boolean }>(
+      `/api/projects/${projectId}/members/${userId}/status`,
+      { is_active: isActive },
+    ),
 }
 
 // 超管 API（仅超级管理员可访问）
@@ -1712,7 +1735,7 @@ export const patAPI = {
   revoke: (id: number) => api.delete(`/api/admin/pats/${id}`),
 }
 
-// 平台服务令牌（crp_）管理：用户级（非项目级），用 JWT 调用。
+// 平台服务令牌（crp_）管理：仅平台超管，用 JWT 调用。
 // 令牌用于机器 / AI 通过 HTTP 或 MCP 创建项目、管理工作流。
 export const platformTokenAPI = {
   // 列出自己的令牌（超管返回全部）
@@ -2169,6 +2192,152 @@ export const kafkaAPI = {
   deleteToken: (connectionId: number, tokenId: number) =>
     api.delete<{ deleted: number }>(
       `/api/admin/kafka-connections/${connectionId}/tokens/${tokenId}`,
+    ),
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 对象存储数据源连接（COS / OSS / MinIO，S3 兼容）
+
+export type ObjectStorageProvider = 'minio' | 'cos' | 'oss'
+
+export interface ObjectStorageConnection {
+  id: number
+  tenant_id: number
+  connection_name: string
+  provider: ObjectStorageProvider | string
+  endpoint: string
+  region: string
+  bucket: string
+  access_key_id: string
+  force_path_style: boolean
+  connect_timeout_secs: number
+  is_active: boolean
+  created_by: number
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateObjectStorageConnectionInput {
+  tenant_id: number
+  connection_name: string
+  provider: ObjectStorageProvider
+  endpoint: string
+  region?: string
+  bucket: string
+  access_key_id: string
+  secret_key: string
+  force_path_style?: boolean
+  connect_timeout_secs?: number
+}
+
+export interface UpdateObjectStorageConnectionInput {
+  connection_name?: string
+  provider?: ObjectStorageProvider
+  endpoint?: string
+  region?: string
+  bucket?: string
+  access_key_id?: string
+  /** undefined = keep; non-empty = replace */
+  secret_key?: string
+  force_path_style?: boolean
+  connect_timeout_secs?: number
+  is_active?: boolean
+}
+
+export const OBJECT_STORAGE_OPS = ['put', 'get', 'delete', 'list', 'presign'] as const
+export type ObjectStorageOp = (typeof OBJECT_STORAGE_OPS)[number]
+
+export const OBJECT_STORAGE_TOKEN_OPS = [
+  'put',
+  'get',
+  'delete',
+  'list',
+  'presign',
+  'health',
+] as const
+export type ObjectStorageTokenOp = (typeof OBJECT_STORAGE_TOKEN_OPS)[number]
+
+export interface ObjectStorageExecInput {
+  op: ObjectStorageOp | string
+  args?: Record<string, unknown>
+}
+
+export interface ObjectStorageAccessToken {
+  id: number
+  connection_id: number
+  name: string
+  description: string | null
+  token_prefix: string
+  allowed_ops: string[]
+  key_prefix_allowlist: string[]
+  expires_at: string | null
+  last_used_at: string | null
+  use_count: number
+  is_active: boolean
+  revoked_at: string | null
+  created_by: number
+  created_at: string
+}
+
+export interface CreateObjectStorageTokenInput {
+  name: string
+  description?: string
+  allowed_ops?: ObjectStorageTokenOp[]
+  key_prefix_allowlist?: string[]
+  expires_at?: string | null
+}
+
+export interface UpdateObjectStorageTokenInput {
+  name?: string
+  description?: string
+  allowed_ops?: ObjectStorageTokenOp[]
+  key_prefix_allowlist?: string[]
+  expires_at?: string | null
+  is_active?: boolean
+}
+
+export const objectStorageAPI = {
+  listConnections: (tenantId?: number) =>
+    api.get<ObjectStorageConnection[]>('/api/admin/object-storage-connections', {
+      params: tenantId !== undefined ? { tenant_id: tenantId } : undefined,
+    }),
+  getConnection: (id: number) =>
+    api.get<ObjectStorageConnection>(`/api/admin/object-storage-connections/${id}`),
+  createConnection: (input: CreateObjectStorageConnectionInput) =>
+    api.post<ObjectStorageConnection>('/api/admin/object-storage-connections', input),
+  updateConnection: (id: number, input: UpdateObjectStorageConnectionInput) =>
+    api.put<ObjectStorageConnection>(`/api/admin/object-storage-connections/${id}`, input),
+  deleteConnection: (id: number) =>
+    api.delete<{ deleted: number }>(`/api/admin/object-storage-connections/${id}`),
+  healthCheck: (id: number) =>
+    api.post<{ ok: boolean; latency_ms?: number; bucket?: string; error?: string }>(
+      `/api/admin/object-storage-connections/${id}/health`,
+      {},
+      { suppressErrorToast: true } as ApiRequestConfig,
+    ),
+  exec: (id: number, input: ObjectStorageExecInput) =>
+    api.post<{ op: string; result: Record<string, unknown> }>(
+      `/api/object-storage-connections/${id}/exec`,
+      input,
+      { suppressErrorToast: true } as ApiRequestConfig,
+    ),
+  listTokens: (connectionId: number) =>
+    api.get<ObjectStorageAccessToken[]>(
+      `/api/admin/object-storage-connections/${connectionId}/tokens`,
+    ),
+  createToken: (connectionId: number, input: CreateObjectStorageTokenInput) =>
+    api.post<{ token: string; record: ObjectStorageAccessToken }>(
+      `/api/admin/object-storage-connections/${connectionId}/tokens`,
+      input,
+    ),
+  updateToken: (connectionId: number, tokenId: number, input: UpdateObjectStorageTokenInput) =>
+    api.patch<ObjectStorageAccessToken>(
+      `/api/admin/object-storage-connections/${connectionId}/tokens/${tokenId}`,
+      input,
+    ),
+  deleteToken: (connectionId: number, tokenId: number) =>
+    api.delete<{ deleted: number }>(
+      `/api/admin/object-storage-connections/${connectionId}/tokens/${tokenId}`,
     ),
 }
 
