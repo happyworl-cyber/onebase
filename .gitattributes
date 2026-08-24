@@ -1,0 +1,18 @@
+# Sync text sources from Crestrail through the repository-local OneBase driver.
+.env*       merge=onebase
+.gitignore  merge=onebase
+*.rs        merge=onebase
+*.toml      merge=onebase
+*.ts        merge=onebase
+*.tsx       merge=onebase
+*.js        merge=onebase
+*.jsx       merge=onebase
+*.json      merge=onebase
+*.md        merge=onebase
+*.sql       merge=onebase
+*.sh        merge=onebase
+*.yml       merge=onebase
+*.yaml      merge=onebase
+*.conf      merge=onebase
+*.html      merge=onebase
+Dockerfile* merge=onebase
