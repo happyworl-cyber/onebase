@@ -563,9 +563,7 @@ pub async fn auth_middleware(
 
     let is_active: bool = row.try_get("is_active").unwrap_or(true);
     if !is_active {
-        return Err(AppError::Forbidden(
-            "账号已停用，请联系管理员".to_string(),
-        ));
+        return Err(AppError::Forbidden("账号已停用，请联系管理员".to_string()));
     }
 
     // 强制改密网关：内置默认管理员首次登录后必须先改密，否则除“改密/登出/查询自身/刷新”
@@ -630,10 +628,7 @@ pub async fn enforce_platform_scope(
 /// - 路径以 `/trigger` 结尾（手动触发执行）→ `workflow:run`
 /// - GET / HEAD（列表、详情、版本、运行历史）→ `workflow:read`
 /// - 其余写操作（创建/更新/删除/复制/恢复/调试/清理）→ `workflow:write`
-pub async fn enforce_workflow_token_scope(
-    req: Request,
-    next: Next,
-) -> Result<Response, AppError> {
+pub async fn enforce_workflow_token_scope(req: Request, next: Next) -> Result<Response, AppError> {
     if let Some(ctx) = req
         .extensions()
         .get::<crate::platform_token::PlatformTokenContext>()
@@ -815,9 +810,8 @@ pub async fn dynamic_db_middleware(
                         as u32,
                     connection_timeout: row
                         .get::<Option<i32>, _>("connection_timeout")
-                        .unwrap_or(
-                            crate::pool_manager::DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS as i32,
-                        ) as u64,
+                        .unwrap_or(crate::pool_manager::DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS as i32)
+                        as u64,
                 };
 
                 let pool = POOL_MANAGER.get_or_create_pool(config).await?;

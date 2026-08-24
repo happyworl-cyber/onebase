@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { Suspense, useState, useEffect } from 'react'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { schemaAPI, ddlAPI, type AlterOp, type DdlColumnDef, type DdlIndexDef } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
@@ -66,6 +66,20 @@ interface TableInfo {
 type Mode = 'create' | 'edit'
 
 export default function TableDesignerPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="p-6 text-sm text-gray-500">
+          <i className="fas fa-spinner fa-spin mr-2"></i>加载中…
+        </div>
+      }
+    >
+      <TableDesignerInner />
+    </Suspense>
+  )
+}
+
+function TableDesignerInner() {
   const { currentSchema } = useAppStore()
   const notify = useNotification()
   const { canWriteDatabase } = useCurrentProjectCapabilities()

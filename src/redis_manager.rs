@@ -204,8 +204,7 @@ impl RedisManager {
     /// PING 健康检查
     pub async fn ping(&self) -> Result<bool> {
         let mut conn = self.conn();
-        let result: Result<String> =
-            timed("PING", redis::cmd("PING").query_async(&mut conn)).await;
+        let result: Result<String> = timed("PING", redis::cmd("PING").query_async(&mut conn)).await;
         Ok(result.map(|s| s == "PONG").unwrap_or(false))
     }
 }

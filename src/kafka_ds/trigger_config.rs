@@ -101,11 +101,8 @@ mod tests {
 
     #[test]
     fn default_group_id_uses_workflow_id() {
-        let cfg = parse_kafka_trigger_config(
-            42,
-            &json!({ "connection_id": 1, "topic": "orders" }),
-        )
-        .unwrap();
+        let cfg = parse_kafka_trigger_config(42, &json!({ "connection_id": 1, "topic": "orders" }))
+            .unwrap();
         assert_eq!(cfg.group_id, "onebase-wf-42");
         assert_eq!(cfg.auto_offset_reset, "latest");
         assert_eq!(cfg.value_format, "json");
@@ -119,11 +116,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cfg.connection_id, 3);
-        assert!(parse_kafka_trigger_config(
-            7,
-            &json!({ "connection_id": "0", "topic": "t" }),
-        )
-        .is_none());
+        assert!(
+            parse_kafka_trigger_config(7, &json!({ "connection_id": "0", "topic": "t" }),)
+                .is_none()
+        );
     }
 
     #[test]
@@ -144,9 +140,7 @@ mod tests {
 
     #[test]
     fn build_trigger_data_text_keeps_string_payload() {
-        let v = build_kafka_trigger_data(
-            1, "t", 0, 1, None, json!({}), "hello", "text",
-        );
+        let v = build_kafka_trigger_data(1, "t", 0, 1, None, json!({}), "hello", "text");
         assert_eq!(v["payload"], "hello");
     }
 }

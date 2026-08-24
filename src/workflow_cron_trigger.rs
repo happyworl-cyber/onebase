@@ -208,7 +208,8 @@ pub fn validate_cron(expr: &str) -> Result<(), String> {
         (parts[4], 0, 6, true, "周"),
     ];
     for (field, min, max, is_wd, name) in specs {
-        validate_field(field, min, max, is_wd).map_err(|e| format!("{}字段 `{}` {}", name, field, e))?;
+        validate_field(field, min, max, is_wd)
+            .map_err(|e| format!("{}字段 `{}` {}", name, field, e))?;
     }
     Ok(())
 }
@@ -227,9 +228,7 @@ fn validate_field(field: &str, min: u32, max: u32, is_wd: bool) -> Result<(), St
 fn validate_token(token: &str, min: u32, max: u32, is_wd: bool) -> Result<(), String> {
     let (range_part, has_step) = match token.split_once('/') {
         Some((r, s)) => {
-            let step = s
-                .parse::<u32>()
-                .map_err(|_| "步进不是数字".to_string())?;
+            let step = s.parse::<u32>().map_err(|_| "步进不是数字".to_string())?;
             if step == 0 {
                 return Err("步进不能为 0".to_string());
             }
@@ -289,7 +288,10 @@ fn token_matches(token: &str, value: u32, min: u32, max: u32, is_weekday: bool) 
     let (start, end) = if range_part == "*" {
         (min, max)
     } else if let Some((a, b)) = range_part.split_once('-') {
-        match (parse_field_num(a, is_weekday), parse_field_num(b, is_weekday)) {
+        match (
+            parse_field_num(a, is_weekday),
+            parse_field_num(b, is_weekday),
+        ) {
             (Some(a), Some(b)) => (a, b),
             _ => return false,
         }
@@ -434,7 +436,7 @@ mod tests {
         assert!(cron_matches("* * 9 * 5", dt(0, 0))); // 日9命中 → true
         assert!(cron_matches("* * 1 * 2", dt(0, 0))); // 周二命中 → true
         assert!(!cron_matches("* * 1 * 5", dt(0, 0))); // 都不命中 → false
-        // 有一个是 * → 取“与”
+                                                       // 有一个是 * → 取“与”
         assert!(cron_matches("* * 9 * *", dt(0, 0)));
         assert!(!cron_matches("* * 1 * *", dt(0, 0)));
     }

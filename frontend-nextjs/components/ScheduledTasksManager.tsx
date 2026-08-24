@@ -1720,6 +1720,10 @@ function TaskRow({
           )}
           <p className="text-xs text-gray-500 font-mono break-all">{target}</p>
           <div className="text-xs text-gray-400 mt-1 space-x-4">
+            <span title={task.created_by_email || undefined}>
+              <i className="fas fa-user text-gray-300 mr-1"></i>创建人：
+              {task.created_by_name || '未知'}
+            </span>
             <span>
               <i className="fas fa-arrow-right text-gray-300 mr-1"></i>下次：
               {formatDateTime(task.next_run_at)}

@@ -1,5 +1,6 @@
 'use client'
 
+import { isWorkflowVersionsPath, tabIdentity } from '@/components/workspace/workspaceNav'
 import { ReactNode, useRef } from 'react'
 
 /**
@@ -29,15 +30,16 @@ export default function KeepAliveOutlet({ currentPath, openPaths, children }: Pr
   const cacheRef = useRef<Map<string, ReactNode>>(new Map())
   const cache = cacheRef.current
 
-  // 首次进入：缓存当前页面元素。已缓存则保留原引用（避免 remount 丢状态）。
-  if (!cache.has(currentPath)) {
-    cache.set(currentPath, children)
+  const cacheKey = tabIdentity(currentPath)
+
+  if (isWorkflowVersionsPath(currentPath) || !cache.has(cacheKey)) {
+    cache.set(cacheKey, children)
   }
 
-  // 需要渲染的集合 = 已打开 ∪ 当前（覆盖 store 尚未同步到最新路由的那一帧）。
-  const renderPaths = Array.from(new Set<string>([...openPaths, currentPath]))
+  const renderPaths = Array.from(
+    new Set<string>([...openPaths.map(tabIdentity), cacheKey]),
+  )
 
-  // 回收：不在渲染集合里的缓存条目（= 对应 Tab 已关闭）真正销毁。
   for (const key of Array.from(cache.keys())) {
     if (!renderPaths.includes(key)) cache.delete(key)
   }
@@ -45,7 +47,7 @@ export default function KeepAliveOutlet({ currentPath, openPaths, children }: Pr
   return (
     <>
       {renderPaths.map((path) => {
-        const active = path === currentPath
+        const active = path === cacheKey
         const node = cache.get(path) ?? (active ? children : null)
         return (
           <div key={path} hidden={!active} className="h-full overflow-auto p-6">

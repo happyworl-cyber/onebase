@@ -26,7 +26,10 @@ use std::time::Duration;
 use axum::{
     extract::{Extension, Path, Query, State},
     http::{header, HeaderMap, HeaderValue},
-    response::{sse::{Event, KeepAlive, Sse}, IntoResponse, Response},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
     Json,
 };
 use chrono::{DateTime, Utc};
@@ -173,7 +176,10 @@ impl SseHub {
             .filter(|env| env.ts >= cutoff)
             .collect();
         matched.sort_by_key(|e| e.ts);
-        match matched.iter().position(|e| e.id.as_deref() == Some(last_id)) {
+        match matched
+            .iter()
+            .position(|e| e.id.as_deref() == Some(last_id))
+        {
             Some(pos) => matched.split_off(pos + 1),
             None => Vec::new(),
         }
@@ -460,10 +466,7 @@ where
         header::CACHE_CONTROL,
         HeaderValue::from_static("no-cache, no-transform"),
     );
-    headers.insert(
-        header::CONNECTION,
-        HeaderValue::from_static("keep-alive"),
-    );
+    headers.insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
     headers.insert(
         header::HeaderName::from_static("x-accel-buffering"),
         HeaderValue::from_static("no"),
@@ -530,8 +533,28 @@ fn live_stream(
     let close_deadline = close_after.map(|d| Instant::now() + d);
 
     futures::stream::unfold(
-        (rx, subs, guard, replayed_ids, fixed_event_name, heartbeat, close_deadline, close_after, false),
-        |(mut rx, subs, guard, mut replayed_ids, fixed_event_name, mut heartbeat, close_deadline, close_after, closing)| async move {
+        (
+            rx,
+            subs,
+            guard,
+            replayed_ids,
+            fixed_event_name,
+            heartbeat,
+            close_deadline,
+            close_after,
+            false,
+        ),
+        |(
+            mut rx,
+            subs,
+            guard,
+            mut replayed_ids,
+            fixed_event_name,
+            mut heartbeat,
+            close_deadline,
+            close_after,
+            closing,
+        )| async move {
             // 上一轮已发出 exit 事件，本轮结束流 → ConnGuard drop → 摘除连接。
             if closing {
                 return None;
@@ -751,7 +774,10 @@ const DEFAULT_GRACEFUL_CLOSE_SECS: u64 = 1500;
 impl GracefulCloseCfg {
     /// 从节点 `config` 解析 `graceful_close_enabled` / `graceful_close_seconds`。
     fn from_node_config(config: &Value) -> Self {
-        match config.get("graceful_close_enabled").and_then(|v| v.as_bool()) {
+        match config
+            .get("graceful_close_enabled")
+            .and_then(|v| v.as_bool())
+        {
             Some(true) => {
                 // 兼容数字与字符串（如 "1500"）；缺省 / 非法则用默认 1500s，
                 // 避免「开启了却因没填秒数而回退全局甚至永不断开」的反直觉行为。
@@ -1124,9 +1150,24 @@ mod tests {
     fn replay_since_returns_messages_after_last_id() {
         let hub = SseHub::new(16);
         let topic = "way:u1:growth:1".to_string();
-        hub.publish(topic.clone(), "msg".into(), serde_json::json!({"n":1}), Some("id1".into()));
-        hub.publish(topic.clone(), "msg".into(), serde_json::json!({"n":2}), Some("id2".into()));
-        hub.publish(topic.clone(), "msg".into(), serde_json::json!({"n":3}), Some("id3".into()));
+        hub.publish(
+            topic.clone(),
+            "msg".into(),
+            serde_json::json!({"n":1}),
+            Some("id1".into()),
+        );
+        hub.publish(
+            topic.clone(),
+            "msg".into(),
+            serde_json::json!({"n":2}),
+            Some("id2".into()),
+        );
+        hub.publish(
+            topic.clone(),
+            "msg".into(),
+            serde_json::json!({"n":3}),
+            Some("id3".into()),
+        );
 
         let subs = vec!["way:u1:growth:*".to_string()];
         let out = hub.replay_since(&subs, "id1");
@@ -1145,10 +1186,18 @@ mod tests {
     #[test]
     fn send_assigns_id_when_missing() {
         let hub = SseHub::new(16);
-        hub.publish("user:5:notify".into(), "msg".into(), serde_json::json!({}), None);
+        hub.publish(
+            "user:5:notify".into(),
+            "msg".into(),
+            serde_json::json!({}),
+            None,
+        );
         let q = hub.recent.get("user:5:notify").unwrap();
         assert_eq!(q.len(), 1);
-        assert!(q.front().unwrap().id.is_some(), "send 应为缺省 id 的消息补上 id");
+        assert!(
+            q.front().unwrap().id.is_some(),
+            "send 应为缺省 id 的消息补上 id"
+        );
     }
 
     #[test]

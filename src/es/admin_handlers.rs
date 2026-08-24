@@ -148,11 +148,8 @@ pub async fn list_connections(
     } else {
         audit_handlers::admin_tenant_ids(&pool, &claims).await?
     };
-    let filter = crate::permissions::resolve_tenant_list_filter(
-        claims.is_superadmin,
-        q.tenant_id,
-        &admins,
-    )?;
+    let filter =
+        crate::permissions::resolve_tenant_list_filter(claims.is_superadmin, q.tenant_id, &admins)?;
     let rows = match filter {
         crate::permissions::TenantListFilter::One(t) => {
             sqlx::query_as::<_, EsConnection>(

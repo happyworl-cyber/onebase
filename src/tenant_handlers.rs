@@ -431,14 +431,7 @@ pub async fn create_database_connection(
     let connection_timeout = req
         .connection_timeout
         .unwrap_or(crate::pool_manager::DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS as i32);
-    ensure_connection_budget(
-        &pool,
-        &req.db_host,
-        req.db_port,
-        None,
-        max_connections,
-    )
-    .await?;
+    ensure_connection_budget(&pool, &req.db_host, req.db_port, None, max_connections).await?;
 
     // 插入数据库连接配置
     let db_connection = sqlx::query_as::<_, TenantDatabase>(
@@ -570,12 +563,11 @@ pub async fn update_database_connection(
         }
     }
     if let Some(max_conn) = max_connections {
-        let existing_endpoint = sqlx::query(
-            "SELECT db_host, db_port FROM management.tenant_databases WHERE id = $1",
-        )
-        .bind(database_id)
-        .fetch_one(&pool)
-        .await?;
+        let existing_endpoint =
+            sqlx::query("SELECT db_host, db_port FROM management.tenant_databases WHERE id = $1")
+                .bind(database_id)
+                .fetch_one(&pool)
+                .await?;
         let host = new_host.unwrap_or_else(|| existing_endpoint.get::<&str, _>("db_host"));
         let port = req
             .db_port
@@ -871,7 +863,8 @@ pub async fn list_all_tenants(
     Ok(Json(result))
 }
 
-/// POST /api/admin/tenants - 创建新租户（超管专用）
+/// POST /api/admin/tenants/create - **Deprecated**
+/// 请改用 `POST /api/organizations` + 租户控制台开通项目。
 pub async fn create_tenant(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
@@ -879,9 +872,11 @@ pub async fn create_tenant(
     Json(req): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>> {
     let user_id = claims.sub;
-
-    // 平台超管限制已按需求移除：该接口对任何已认证用户开放（user_id 仅用于审计日志）。
-    let _ = user_id;
+    tracing::warn!(
+        target: "deprecated_api",
+        "POST /api/admin/tenants/create used by user {}; prefer organizations API",
+        user_id
+    );
 
     let name = req["name"]
         .as_str()
@@ -967,19 +962,42 @@ pub async fn create_tenant(
         tracing::info!("创建了新数据库: {}:{}/{}", db_host, db_port, db_name);
     }
 
-    // 创建租户记录
+    // 创建组织 + 项目（tenants 行）
+    let mut tx = pool.begin().await?;
+    let org_id: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO management.organizations (name, slug, status, contact_email)
+        VALUES ($1, $2, 'active', $3)
+        RETURNING id
+        "#,
+    )
+    .bind(name)
+    .bind(slug)
+    .bind(contact_email)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| match &e {
+        sqlx::Error::Database(db) if db.constraint() == Some("organizations_slug_key") => {
+            crate::error::AppError::InvalidQuery("组织标识 (slug) 已存在".to_string())
+        }
+        _ => crate::error::AppError::Database(e),
+    })?;
+
     let tenant = sqlx::query(
         r#"
-        INSERT INTO management.tenants (name, slug, contact_email, status)
-        VALUES ($1, $2, $3, 'active')
+        INSERT INTO management.tenants (name, slug, contact_email, status, kind, organization_id)
+        VALUES ($1, $2, $3, 'active', 'project', $4)
         RETURNING id, name, slug, status, contact_email, created_at::TEXT as created_at
         "#,
     )
     .bind(name)
     .bind(slug)
     .bind(contact_email)
-    .fetch_one(&pool)
+    .bind(org_id)
+    .fetch_one(&mut *tx)
     .await?;
+
+    tx.commit().await?;
 
     let tenant_id = tenant.get::<i32, _>("id");
 
@@ -1930,12 +1948,11 @@ pub async fn delete_tenant(
     }
 
     // 删除前先读 slug / workspace_config，供 Webhook deprovision 使用
-    let tenant_row = sqlx::query(
-        "SELECT name, slug, workspace_config FROM management.tenants WHERE id = $1",
-    )
-    .bind(tenant_id)
-    .fetch_optional(&pool)
-    .await?;
+    let tenant_row =
+        sqlx::query("SELECT name, slug, workspace_config FROM management.tenants WHERE id = $1")
+            .bind(tenant_id)
+            .fetch_optional(&pool)
+            .await?;
 
     match tenant_row {
         Some(row) => {
@@ -2119,40 +2136,86 @@ pub async fn assign_user_to_tenant(
 ///
 /// 返回当前登录用户可见的项目列表。
 /// - 超管：返回所有 status='active' 的 tenants
-/// - 普通用户：返回自己 user_tenants.is_active=true 的 tenants
+/// - 普通用户：返回自己加入的项目，以及自己管理的组织下全部 active 项目
 ///
-/// 返回字段：id, name, slug, status, kind, contact_email, user_role
+/// 返回字段：id, name, slug, status, kind, contact_email, user_role, via_organization
 /// user_role 取值：
 ///   - 超管：'superadmin'
-///   - 普通用户：user_tenants.role（'owner'/'admin'/'member'/'viewer' 等）
+///   - 项目成员：user_tenants.role（'owner'/'admin'/'member'/'viewer' 等）
+///   - 仅通过组织管理员身份访问：'admin'
+#[derive(Deserialize)]
+pub struct ListProjectsQuery {
+    pub organization_id: Option<i32>,
+}
+
+const LIST_PROJECTS_FOR_USER_SQL: &str = r#"
+    SELECT id, name, slug, status, kind, contact_email,
+           organization_id, organization_name, user_role, via_organization
+    FROM (
+        SELECT t.id, t.name, t.slug, t.status, t.kind, t.contact_email,
+               t.organization_id, o.name AS organization_name,
+               ut.role AS user_role, false AS via_organization
+        FROM management.tenants t
+        JOIN management.organizations o ON o.id = t.organization_id
+        JOIN management.user_tenants ut
+          ON ut.tenant_id = t.id AND ut.user_id = $1 AND ut.is_active = true
+        JOIN management.organization_members om
+          ON om.organization_id = t.organization_id
+         AND om.user_id = ut.user_id AND om.is_active = true
+        WHERE t.status = 'active'
+          AND ($2::int IS NULL OR t.organization_id = $2)
+
+        UNION ALL
+
+        SELECT t.id, t.name, t.slug, t.status, t.kind, t.contact_email,
+               t.organization_id, o.name AS organization_name,
+               'admin'::text AS user_role, true AS via_organization
+        FROM management.tenants t
+        JOIN management.organizations o ON o.id = t.organization_id
+        JOIN management.organization_members om
+          ON om.organization_id = t.organization_id
+         AND om.user_id = $1 AND om.is_active = true
+         AND om.role IN ('owner', 'admin')
+        WHERE t.status = 'active'
+          AND ($2::int IS NULL OR t.organization_id = $2)
+          AND NOT EXISTS (
+              SELECT 1
+              FROM management.user_tenants ut
+              WHERE ut.tenant_id = t.id
+                AND ut.user_id = $1
+                AND ut.is_active = true
+          )
+    ) visible_projects
+    ORDER BY id DESC
+"#;
+
 pub async fn list_projects(
     State(pool): State<sqlx::PgPool>,
     Extension(claims): Extension<Claims>,
+    Query(q): Query<ListProjectsQuery>,
 ) -> Result<Json<serde_json::Value>> {
     let rows = if claims.is_superadmin {
         sqlx::query(
             r#"
-            SELECT id, name, slug, status, kind, contact_email
-            FROM management.tenants
-            WHERE status = 'active'
-            ORDER BY id DESC
-            "#,
-        )
-        .fetch_all(&pool)
-        .await
-    } else {
-        sqlx::query(
-            r#"
-            SELECT t.id, t.name, t.slug, t.status, t.kind, t.contact_email, ut.role AS user_role
+            SELECT t.id, t.name, t.slug, t.status, t.kind, t.contact_email,
+                   t.organization_id, o.name AS organization_name,
+                   false AS via_organization
             FROM management.tenants t
-            JOIN management.user_tenants ut ON ut.tenant_id = t.id AND ut.is_active = true
-            WHERE ut.user_id = $1 AND t.status = 'active'
+            JOIN management.organizations o ON o.id = t.organization_id
+            WHERE t.status = 'active'
+              AND ($1::int IS NULL OR t.organization_id = $1)
             ORDER BY t.id DESC
             "#,
         )
-        .bind(claims.sub)
+        .bind(q.organization_id)
         .fetch_all(&pool)
         .await
+    } else {
+        sqlx::query(LIST_PROJECTS_FOR_USER_SQL)
+            .bind(claims.sub)
+            .bind(q.organization_id)
+            .fetch_all(&pool)
+            .await
     }?;
 
     let projects: Vec<serde_json::Value> = rows
@@ -2164,11 +2227,14 @@ pub async fn list_projects(
             let status: String = r.get("status");
             let kind: String = r.get("kind");
             let contact_email: Option<String> = r.try_get("contact_email")?;
+            let organization_id: i32 = r.get("organization_id");
+            let organization_name: String = r.get("organization_name");
             let user_role: String = if claims.is_superadmin {
                 "superadmin".to_string()
             } else {
                 r.get("user_role")
             };
+            let via_organization: bool = r.get("via_organization");
             Ok(serde_json::json!({
                 "id": id,
                 "name": name,
@@ -2176,7 +2242,10 @@ pub async fn list_projects(
                 "status": status,
                 "kind": kind,
                 "contact_email": contact_email,
+                "organization_id": organization_id,
+                "organization_name": organization_name,
                 "user_role": user_role,
+                "via_organization": via_organization,
             }))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -2196,9 +2265,11 @@ pub async fn get_project(
 ) -> Result<Json<serde_json::Value>> {
     let tenant_row = sqlx::query(
         r#"
-        SELECT id, name, slug, status, kind, contact_email, workspace_config
-        FROM management.tenants
-        WHERE id = $1 AND status = 'active'
+        SELECT t.id, t.name, t.slug, t.status, t.kind, t.contact_email, t.workspace_config,
+               t.organization_id, o.name AS organization_name
+        FROM management.tenants t
+        JOIN management.organizations o ON o.id = t.organization_id
+        WHERE t.id = $1 AND t.status = 'active'
         "#,
     )
     .bind(project_id)
@@ -2206,9 +2277,30 @@ pub async fn get_project(
     .await?
     .ok_or_else(|| AppError::NotFound(format!("项目 {} 不存在", project_id)))?;
 
-    let user_role: String = if claims.is_superadmin {
-        "superadmin".to_string()
+    let organization_id: i32 = tenant_row.get("organization_id");
+    let organization_name: String = tenant_row.get("organization_name");
+
+    let (user_role, via_organization): (String, bool) = if claims.is_superadmin {
+        ("superadmin".to_string(), false)
+    } else if permissions::is_org_admin_for_project(&pool, claims.sub, project_id).await? {
+        let role_opt: Option<String> = sqlx::query_scalar(
+            r#"
+            SELECT role FROM management.user_tenants
+            WHERE user_id = $1 AND tenant_id = $2 AND is_active = true
+            "#,
+        )
+        .bind(claims.sub)
+        .bind(project_id)
+        .fetch_optional(&pool)
+        .await?;
+        let via_organization = role_opt.is_none();
+        (
+            role_opt.unwrap_or_else(|| "admin".to_string()),
+            via_organization,
+        )
     } else {
+        // 两级成员：须同时是组织成员 + 项目成员
+        permissions::require_tenant_membership_any(&pool, &claims, project_id).await?;
         let role_opt: Option<String> = sqlx::query_scalar(
             r#"
             SELECT role FROM management.user_tenants
@@ -2221,7 +2313,7 @@ pub async fn get_project(
         .await?;
 
         match role_opt {
-            Some(r) => r,
+            Some(r) => (r, false),
             None => {
                 return Err(AppError::Forbidden(format!(
                     "你不是项目 {} 的成员",
@@ -2235,8 +2327,8 @@ pub async fn get_project(
     // 让所有现存 schemaAPI / queryAPI / rpcAPI 在不改一行业务代码的情况下
     // 走对的 X-Database-Id。详见 W2 plan Task 1/2。
     //
-    // 鉴权：上面已经检查过 user_tenants（非超管时），所以这里直接按 tenant_id
-    // 取所有 active 连接，不再二次 join 用户表。
+    // 鉴权：上面已经检查过项目成员或组织管理员身份（非超管时），所以这里直接按
+    // tenant_id 取所有 active 连接，不再二次 join 用户表。
     //
     // 选连：is_primary=true 优先；都不是 primary 则取 id 最小那条；项目未绑定
     // 连接时返回 null（前端兜底显示"暂无连接"）。多读副本时本接口只回主连接，
@@ -2279,8 +2371,11 @@ pub async fn get_project(
         "status": status,
         "kind": kind,
         "contact_email": contact_email,
+        "organization_id": organization_id,
+        "organization_name": organization_name,
         "workspace_config": workspace_config,
         "user_role": user_role,
+        "via_organization": via_organization,
         "primary_connection": primary_connection,
     })))
 }
@@ -2419,6 +2514,9 @@ pub async fn add_project_member(
 ) -> Result<Json<serde_json::Value>> {
     permissions::require_tenant_admin(&pool, &claims, project_id).await?;
     validate_tenant_role(&req.role)?;
+    if req.role == "owner" {
+        permissions::require_project_owner_grant(&pool, &claims, project_id).await?;
+    }
 
     // 校验项目存在
     let project_exists: bool = sqlx::query_scalar(
@@ -2442,6 +2540,9 @@ pub async fn add_project_member(
     if !user_exists {
         return Err(AppError::NotFound(format!("用户 {} 不存在", req.user_id)));
     }
+
+    // 两级成员：目标用户必须先是该项目所属组织的成员
+    permissions::require_user_is_org_member_of_project(&pool, req.user_id, project_id).await?;
 
     sqlx::query(
         r#"
@@ -2567,6 +2668,7 @@ pub async fn create_project_member(
     }
 
     let password_hash = crate::auth::hash_password(&req.password)?;
+    let organization_id = permissions::lookup_organization_for_project(&pool, project_id).await?;
 
     // 建号
     let new_user_id: i32 = sqlx::query_scalar(
@@ -2580,6 +2682,20 @@ pub async fn create_project_member(
     .bind(&email)
     .bind(&password_hash)
     .fetch_one(&pool)
+    .await?;
+
+    // 先入组织（member），再入项目——满足两级成员不变量
+    sqlx::query(
+        r#"
+        INSERT INTO management.organization_members (user_id, organization_id, role, is_active)
+        VALUES ($1, $2, 'member', true)
+        ON CONFLICT (user_id, organization_id)
+        DO UPDATE SET is_active = true
+        "#,
+    )
+    .bind(new_user_id)
+    .bind(organization_id)
+    .execute(&pool)
     .await?;
 
     // 加入项目（与 add_project_member 同口径：upsert + 默认 RBAC 角色）
@@ -2674,6 +2790,7 @@ pub async fn search_project_member_candidates(
         .replace('_', "\\_");
     let like = format!("%{}%", escaped);
 
+    // 两级成员：候选人必须已是该项目所属租户的 active 成员
     let rows = sqlx::query(
         r#"
         SELECT
@@ -2686,12 +2803,15 @@ pub async fn search_project_member_candidates(
                 WHERE ut.user_id = u.id AND ut.tenant_id = $2 AND ut.is_active = true
             ) AS already_member
         FROM users u
+        JOIN management.tenants t ON t.id = $2 AND t.status = 'active'
+        JOIN management.organization_members om
+          ON om.organization_id = t.organization_id
+         AND om.user_id = u.id
+         AND om.is_active = true
         WHERE u.username ILIKE $1 ESCAPE '\'
            OR u.email    ILIKE $1 ESCAPE '\'
         ORDER BY
-            -- 已经是成员的排后面（避免占据搜索框靠上的视野）
             already_member ASC,
-            -- 完全相等的优先（搜 "alice" 命中 alice 比 alice123 更精确）
             CASE
                 WHEN lower(u.username) = lower($3) OR lower(u.email) = lower($3) THEN 0
                 WHEN lower(u.username) LIKE lower($3) || '%' OR lower(u.email) LIKE lower($3) || '%' THEN 1
@@ -2958,6 +3078,9 @@ pub async fn update_project_member(
 ) -> Result<Json<serde_json::Value>> {
     permissions::require_tenant_admin(&pool, &claims, project_id).await?;
     validate_tenant_role(&req.role)?;
+    if req.role == "owner" {
+        permissions::require_project_owner_grant(&pool, &claims, project_id).await?;
+    }
 
     // 自我保护——避免一个 admin 不小心把自己降成 viewer 然后再也进不来。
     // 平台超管也走这条限制；他们要改自己的项目角色可以走 /api/admin/* 路径。
@@ -3333,6 +3456,8 @@ pub struct ProvisionRequest {
     pub pg_connection: Option<ManualPgConnection>,
     pub template_slug: String,
     pub scenario: Option<String>,
+    /// 所属组织。有则挂到该组织；无则兼容期隐式创建个人组织（P2 将删除）。
+    pub organization_id: Option<i32>,
 }
 
 struct ResolvedProvisionPg {
@@ -3384,9 +3509,7 @@ async fn resolve_provision_source(
 
     if req.use_provision_webhook {
         let cfg = crate::provision_webhook::load_config().ok_or_else(|| {
-            AppError::InvalidQuery(
-                "未配置 PROVISION_WEBHOOK_URL，无法使用运维自动开通".to_string(),
-            )
+            AppError::InvalidQuery("未配置 PROVISION_WEBHOOK_URL，无法使用运维自动开通".to_string())
         })?;
         let resources = crate::provision_webhook::normalize_requested_resources(
             req.requested_resources.clone(),
@@ -3759,22 +3882,58 @@ pub async fn provision_project(
         workspace_config["provision_id"] = json!(pid);
     }
 
+    // 组织归属：必须挂在已有租户下（租户仅平台创建，禁止隐式建组织）
+    let explicit_org_id = req.organization_id.ok_or_else(|| {
+        AppError::InvalidQuery(
+            "必须指定 organization_id：请从租户控制台创建项目（租户仅平台超管可创建）".to_string(),
+        )
+    })?;
+    permissions::require_organization_admin(&pool, &claims, explicit_org_id).await?;
+    let org_ok: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM management.organizations WHERE id = $1 AND status = 'active')",
+    )
+    .bind(explicit_org_id)
+    .fetch_one(&pool)
+    .await?;
+    if !org_ok {
+        return Err(AppError::NotFound(format!(
+            "组织 {} 不存在或已停用",
+            explicit_org_id
+        )));
+    }
+
     // 把所有 management.* 写入放进一个 async 块统一拿 Result：任何一步失败（slug 抢注、
     // 密码加密、INSERT 报错等）都会让上一步 CREATE DATABASE / Webhook 建出来的库变成孤儿，
     // 因此失败时统一做补偿回滚。
     let provision_writes = async {
         let mut tx = pool.begin().await?;
 
+        let organization_id = explicit_org_id;
+
+        // 确保 caller 仍是组织成员（admin 校验已过）
+        sqlx::query(
+            r#"
+            INSERT INTO management.organization_members (user_id, organization_id, role, is_active)
+            VALUES ($1, $2, 'member', true)
+            ON CONFLICT (user_id, organization_id) DO UPDATE SET is_active = true
+            "#,
+        )
+        .bind(claims.sub)
+        .bind(organization_id)
+        .execute(&mut *tx)
+        .await?;
+
         let tenant_row = sqlx::query(
             r#"
-            INSERT INTO management.tenants (name, slug, status, kind, workspace_config)
-            VALUES ($1, $2, 'active', 'project', $3)
+            INSERT INTO management.tenants (name, slug, status, kind, workspace_config, organization_id)
+            VALUES ($1, $2, 'active', 'project', $3, $4)
             RETURNING id
             "#,
         )
         .bind(name)
         .bind(slug)
         .bind(&workspace_config)
+        .bind(organization_id)
         .fetch_one(&mut *tx)
         .await
         .map_err(|e| match &e {
@@ -3810,7 +3969,7 @@ pub async fn provision_project(
         .await?;
         let database_id: i32 = database_row.get("id");
 
-        // caller 自动成为 owner
+        // caller 自动成为项目 owner
         sqlx::query(
             r#"
             INSERT INTO management.user_tenants (user_id, tenant_id, role, is_active)
@@ -3866,12 +4025,8 @@ pub async fn provision_project(
                     }
                 }
                 ProvisionRollbackPlan::DeprovisionWebhook { provision_id } => {
-                    crate::provision_webhook::try_deprovision_webhook(
-                        slug,
-                        provision_id,
-                        None,
-                    )
-                    .await;
+                    crate::provision_webhook::try_deprovision_webhook(slug, provision_id, None)
+                        .await;
                     tracing::warn!(
                         "M2 provisioning: 管理库写入失败，已请求 deprovision（slug={}, provision_id={}）: {}",
                         slug,
@@ -3885,9 +4040,10 @@ pub async fn provision_project(
     };
 
     if let Some(env_vars) = webhook_env_vars {
-        if let Err(e) =
-            crate::env_var_handlers::seed_provision_env_vars(&pool, tenant_id, &env_vars, claims.sub)
-                .await
+        if let Err(e) = crate::env_var_handlers::seed_provision_env_vars(
+            &pool, tenant_id, &env_vars, claims.sub,
+        )
+        .await
         {
             tracing::warn!(
                 "M2 provisioning: seed_provision_env_vars({}) 失败: {}",
@@ -3901,9 +4057,7 @@ pub async fn provision_project(
     // 用 ddl_creds（本地 PG 为 admin，可建扩展等），对象随后授权给项目角色。
     if !ddl_sql.trim().is_empty() {
         if let Err(e) = crate::pg_pool_helpers::apply_template_ddl_with_credentials(
-            &ddl_creds,
-            &db_name,
-            &ddl_sql,
+            &ddl_creds, &db_name, &ddl_sql,
         )
         .await
         {
@@ -3927,12 +4081,9 @@ pub async fn provision_project(
 
     // ─── 5.1 P1.1：把 DDL 建出的对象权限补授给项目角色（兜底，幂等）─
     if let Some((admin_creds, role)) = grant_after_ddl.as_ref() {
-        if let Err(e) = crate::pg_pool_helpers::grant_existing_objects_to_role(
-            admin_creds,
-            &db_name,
-            role,
-        )
-        .await
+        if let Err(e) =
+            crate::pg_pool_helpers::grant_existing_objects_to_role(admin_creds, &db_name, role)
+                .await
         {
             // 不阻断：default privileges 已覆盖多数情况，这里仅兜底补授。
             tracing::warn!(
@@ -4222,10 +4373,7 @@ mod connection_budget_tests {
 
     #[test]
     fn tenant_pool_global_budget_defaults_and_env() {
-        assert_eq!(
-            tenant_pool_global_budget_from_env_map(|_| None),
-            60
-        );
+        assert_eq!(tenant_pool_global_budget_from_env_map(|_| None), 60);
         assert_eq!(
             tenant_pool_global_budget_from_env_map(|k| {
                 if k == "TENANT_POOL_GLOBAL_MAX_CONNECTIONS" {

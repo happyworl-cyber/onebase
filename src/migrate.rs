@@ -310,6 +310,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "059 users is_active",
         include_str!("../migrations/059_users_is_active.sql"),
     ),
+    (
+        "060 organizations hierarchy",
+        include_str!("../migrations/060_organizations.sql"),
+    ),
 ];
 
 /// API Keys 表（内联 SQL，历史上由独立的 migrate_api_keys 维护，这里随主序列一起跑）。
@@ -335,6 +339,8 @@ const API_KEYS_SQL: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_api_keys_database_id ON management.api_keys(database_id);
     CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash   ON management.api_keys(key_hash);
     CREATE INDEX IF NOT EXISTS idx_api_keys_active     ON management.api_keys(is_active) WHERE is_active = true;
+    CREATE INDEX IF NOT EXISTS idx_api_keys_tenant_active
+        ON management.api_keys(tenant_id) WHERE is_active = true;
 "#;
 
 /// 跨实例互斥用的 advisory lock key（任意固定常量，只要全集群一致即可）。

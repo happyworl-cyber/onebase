@@ -154,8 +154,12 @@ pub async fn sso_authorize(
     .execute(&pool)
     .await?;
 
-    let auth_url =
-        sso::build_authorization_url(&provider, &redirect_uri, &state_token, code_challenge.as_deref());
+    let auth_url = sso::build_authorization_url(
+        &provider,
+        &redirect_uri,
+        &state_token,
+        code_challenge.as_deref(),
+    );
 
     tracing::info!(
         target: "sso",
@@ -236,10 +240,14 @@ pub async fn sso_exchange(
         "SSO exchange 用 code 换 token"
     );
 
-    let token_response =
-        sso::exchange_code_for_token(&provider, &body.code, &redirect_uri, code_verifier.as_deref())
-            .await
-            .map_err(AppError::Internal)?;
+    let token_response = sso::exchange_code_for_token(
+        &provider,
+        &body.code,
+        &redirect_uri,
+        code_verifier.as_deref(),
+    )
+    .await
+    .map_err(AppError::Internal)?;
 
     let (jwt, is_new_user, user) =
         finish_sso_login(&pool, &provider, tenant_id, &token_response).await?;
@@ -347,7 +355,8 @@ async fn finish_sso_login(
     let (jwt, jti) = auth::generate_token(user_id, &user_email, &user_role, user_is_superadmin)?;
 
     // 登记会话（SSO 没有显式 IP/UA，写空即可）
-    let session_expires = chrono::Utc::now() + chrono::Duration::seconds(auth::jwt_expiration_secs());
+    let session_expires =
+        chrono::Utc::now() + chrono::Duration::seconds(auth::jwt_expiration_secs());
     sqlx::query(
         "INSERT INTO user_sessions (jti, user_id, expires_at, user_agent, ip) VALUES ($1::uuid, $2, $3, $4, NULL)",
     )
@@ -733,10 +742,12 @@ async fn find_or_create_user(
             (row.get::<i32, _>("user_id"), false, true)
         } else if let Some(row) = match email {
             // 如果有 email，尝试通过 email 找到已有用户
-            Some(email) => sqlx::query("SELECT id FROM users WHERE email = $1")
-                .bind(email)
-                .fetch_optional(pool)
-                .await?,
+            Some(email) => {
+                sqlx::query("SELECT id FROM users WHERE email = $1")
+                    .bind(email)
+                    .fetch_optional(pool)
+                    .await?
+            }
             None => None,
         } {
             (row.get::<i32, _>("id"), false, false)
@@ -784,11 +795,19 @@ async fn find_or_create_user(
                         .execute(pool)
                         .await
                     {
-                        tracing::warn!("SSO 刷新用户名失败 (user_id={}): {} —— 不阻断登录", user_id, e);
+                        tracing::warn!(
+                            "SSO 刷新用户名失败 (user_id={}): {} —— 不阻断登录",
+                            user_id,
+                            e
+                        );
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("SSO 计算唯一用户名失败 (user_id={}): {} —— 不阻断登录", user_id, e);
+                    tracing::warn!(
+                        "SSO 计算唯一用户名失败 (user_id={}): {} —— 不阻断登录",
+                        user_id,
+                        e
+                    );
                 }
             }
         }

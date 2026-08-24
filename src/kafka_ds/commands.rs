@@ -147,9 +147,7 @@ pub fn validate_new_topic(
         ));
     }
     if !(1..=100).contains(&num_partitions) {
-        return Err(AppError::InvalidQuery(
-            "num_partitions 须在 1..=100".into(),
-        ));
+        return Err(AppError::InvalidQuery("num_partitions 须在 1..=100".into()));
     }
     if !(1..=10).contains(&replication_factor) {
         return Err(AppError::InvalidQuery(
@@ -178,16 +176,18 @@ pub async fn create_topic(
     );
     let timeout = connection_timeout(conn);
     let opts = AdminOptions::new().operation_timeout(Some(timeout));
-    let results = tokio::time::timeout(timeout + Duration::from_secs(5), admin.create_topics(&[topic], &opts))
-        .await
-        .map_err(|_| AppError::ServiceUnavailable("Kafka 创建 topic 超时".into()))?
-        .map_err(|error| {
-            AppError::ServiceUnavailable(format!("Kafka 创建 topic 失败: {error}"))
-        })?;
+    let results = tokio::time::timeout(
+        timeout + Duration::from_secs(5),
+        admin.create_topics(&[topic], &opts),
+    )
+    .await
+    .map_err(|_| AppError::ServiceUnavailable("Kafka 创建 topic 超时".into()))?
+    .map_err(|error| AppError::ServiceUnavailable(format!("Kafka 创建 topic 失败: {error}")))?;
 
-    let result = results.into_iter().next().ok_or_else(|| {
-        AppError::Internal("Kafka 创建 topic 未返回结果".into())
-    })?;
+    let result = results
+        .into_iter()
+        .next()
+        .ok_or_else(|| AppError::Internal("Kafka 创建 topic 未返回结果".into()))?;
 
     match result {
         Ok(_) => Ok(json!({
@@ -196,9 +196,9 @@ pub async fn create_topic(
             "num_partitions": num_partitions,
             "replication_factor": replication_factor,
         })),
-        Err((_, RDKafkaErrorCode::TopicAlreadyExists)) => Err(AppError::InvalidQuery(format!(
-            "topic 已存在: {name}"
-        ))),
+        Err((_, RDKafkaErrorCode::TopicAlreadyExists)) => {
+            Err(AppError::InvalidQuery(format!("topic 已存在: {name}")))
+        }
         Err((_, code)) => Err(AppError::ServiceUnavailable(format!(
             "Kafka 创建 topic 失败: {code}"
         ))),
@@ -229,9 +229,7 @@ pub async fn list_consumer_groups(conn: &KafkaConnection) -> Result<Value> {
     let group_list = admin
         .inner()
         .fetch_group_list(None, Timeout::After(connection_timeout(conn)))
-        .map_err(|error| {
-            AppError::ServiceUnavailable(format!("Kafka 列出消费组失败: {error}"))
-        })?;
+        .map_err(|error| AppError::ServiceUnavailable(format!("Kafka 列出消费组失败: {error}")))?;
 
     let mut groups: Vec<Value> = group_list
         .groups()
@@ -334,7 +332,10 @@ mod tests {
             validate_new_topic("onebase.ai-close-ticket", 3, 1).unwrap(),
             "onebase.ai-close-ticket"
         );
-        assert_eq!(validate_new_topic("  orders_v1  ", 1, 1).unwrap(), "orders_v1");
+        assert_eq!(
+            validate_new_topic("  orders_v1  ", 1, 1).unwrap(),
+            "orders_v1"
+        );
     }
 
     #[test]
@@ -356,7 +357,10 @@ mod tests {
     #[test]
     fn optional_kafka_key_coerces_number() {
         let args = json!({ "key": 639582 });
-        assert_eq!(optional_kafka_key(&args).unwrap().as_deref(), Some("639582"));
+        assert_eq!(
+            optional_kafka_key(&args).unwrap().as_deref(),
+            Some("639582")
+        );
         let args = json!({ "key": "aid-1" });
         assert_eq!(optional_kafka_key(&args).unwrap().as_deref(), Some("aid-1"));
         let args = json!({ "key": "" });

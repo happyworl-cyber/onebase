@@ -59,15 +59,13 @@ static INSTALL_MUTEXES: OnceLock<Mutex<HashMap<i32, Arc<Mutex<()>>>>> = OnceLock
 pub fn parse_javascript_deps(dependencies: &Value) -> Option<JsDependencies> {
     let js = dependencies.get("javascript")?;
     let package_json = js.get("packageJson")?.clone();
-    let package_lock = js
-        .get("packageLock")
-        .and_then(|v| {
-            if v.is_null() {
-                None
-            } else {
-                v.as_str().map(str::to_string)
-            }
-        });
+    let package_lock = js.get("packageLock").and_then(|v| {
+        if v.is_null() {
+            None
+        } else {
+            v.as_str().map(str::to_string)
+        }
+    });
     Some(JsDependencies {
         package_json,
         package_lock,
@@ -101,9 +99,7 @@ pub fn deps_root() -> PathBuf {
 
 /// `{deps_root}/{workflow_id}/javascript/`
 pub fn javascript_dir(workflow_id: i32) -> PathBuf {
-    deps_root()
-        .join(workflow_id.to_string())
-        .join("javascript")
+    deps_root().join(workflow_id.to_string()).join("javascript")
 }
 
 /// Read `.deps-status.json` for a workflow, or `Idle` when missing/unreadable.
@@ -187,10 +183,7 @@ pub async fn ensure_javascript_deps(
 
 fn has_installable_deps(package_json: &Value) -> bool {
     fn object_len(value: Option<&Value>) -> usize {
-        value
-            .and_then(Value::as_object)
-            .map(Map::len)
-            .unwrap_or(0)
+        value.and_then(Value::as_object).map(Map::len).unwrap_or(0)
     }
     object_len(package_json.get("dependencies")) > 0
         || object_len(package_json.get("devDependencies")) > 0
@@ -230,8 +223,7 @@ fn write_manifest(dir: &Path, js: &JsDependencies) -> Result<(), String> {
 fn write_status(workflow_id: i32, status: &DepsStatus) -> Result<(), String> {
     let dir = javascript_dir(workflow_id);
     std::fs::create_dir_all(&dir).map_err(|e| format!("create deps dir: {e}"))?;
-    let raw =
-        serde_json::to_string_pretty(status).map_err(|e| format!("serialize status: {e}"))?;
+    let raw = serde_json::to_string_pretty(status).map_err(|e| format!("serialize status: {e}"))?;
     std::fs::write(dir.join(STATUS_FILE), raw).map_err(|e| format!("write status: {e}"))
 }
 
@@ -299,16 +291,9 @@ async fn run_npm_install(dir: &Path, has_lock: bool) -> Result<(), String> {
         }
     }
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("spawn npm ({npm}): {e}"))?;
+    let mut child = cmd.spawn().map_err(|e| format!("spawn npm ({npm}): {e}"))?;
 
-    match tokio::time::timeout(
-        std::time::Duration::from_millis(timeout_ms),
-        child.wait(),
-    )
-    .await
-    {
+    match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), child.wait()).await {
         Ok(Ok(status)) if status.success() => Ok(()),
         Ok(Ok(status)) => {
             let stderr = child.stderr.take();

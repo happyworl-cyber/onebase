@@ -7,7 +7,8 @@
  * 数据：/api/admin/platform-monitor/* + 既有 slow-queries / circuit-breakers
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { Suspense, useState, useEffect, useCallback } from 'react'
+import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import api from '@/lib/api'
 
 type Tab = 'overview' | 'traffic' | 'async' | 'diagnose' | 'alerts'
@@ -77,6 +78,36 @@ interface Overview {
   }
   anomalies?: { level: string; code: string; message: string }[]
   warnings?: string[]
+  signal_samples?: {
+    stuck_running: {
+      total: number
+      items: {
+        trace_id: string
+        source: string
+        name: string | null
+        tenant_id: number | null
+        project_name: string | null
+        organization_id: number | null
+        organization_name: string | null
+        started_at: string
+        running_for_seconds: number | null
+      }[]
+    }
+    expiring_api_keys: {
+      total: number
+      items: {
+        id: number
+        name: string
+        key_prefix: string
+        tenant_id: number
+        project_name: string | null
+        organization_id: number | null
+        organization_name: string | null
+        expires_at: string
+        days_left: number | null
+      }[]
+    }
+  }
 }
 
 const EMPTY_SIGNALS = {
@@ -87,6 +118,11 @@ const EMPTY_SIGNALS = {
   expiring_api_keys_7d: 0,
   expiring_tokens_7d: 0,
   webhook_failures_24h: 0,
+}
+
+const EMPTY_SIGNAL_SAMPLES: NonNullable<Overview['signal_samples']> = {
+  stuck_running: { total: 0, items: [] },
+  expiring_api_keys: { total: 0, items: [] },
 }
 
 interface TopEndpoint {
@@ -211,13 +247,39 @@ function Kpi({
   label,
   value,
   warn,
+  onClick,
+  active,
 }: {
   label: string
   value: string
   warn?: boolean
+  onClick?: () => void
+  active?: boolean
 }) {
+  const clickable = Boolean(onClick)
   return (
-    <div className={`rounded-lg border p-3 ${warn ? 'border-orange-300 bg-orange-50' : 'border-gray-200 bg-white'}`}>
+    <div
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={
+        clickable
+          ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                onClick?.()
+              }
+            }
+          : undefined
+      }
+      className={`rounded-lg border p-3 ${
+        active
+          ? 'border-blue-400 bg-blue-50'
+          : warn
+            ? 'border-orange-300 bg-orange-50'
+            : 'border-gray-200 bg-white'
+      } ${clickable ? 'cursor-pointer hover:border-blue-300' : ''}`}
+    >
       <p className="text-xs text-gray-500">{label}</p>
       <p className={`mt-1 text-lg font-semibold tabular-nums ${warn ? 'text-orange-800' : 'text-gray-900'}`}>
         {value}
@@ -226,8 +288,42 @@ function Kpi({
   )
 }
 
+function initialTab(sp: URLSearchParams | null): Tab {
+  const t = sp?.get('tab')
+  if (t === 'traffic' || t === 'async' || t === 'diagnose' || t === 'alerts' || t === 'overview') {
+    return t
+  }
+  return 'overview'
+}
+
 export default function PlatformMonitorPage() {
-  const [tab, setTab] = useState<Tab>('overview')
+  return (
+    <Suspense fallback={<div className="p-8 text-sm text-gray-400">加载中…</div>}>
+      <PlatformMonitorPageInner />
+    </Suspense>
+  )
+}
+
+function PlatformMonitorPageInner() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const pathname = usePathname()
+  const [tab, setTab] = useState<Tab>(() => initialTab(searchParams))
+  type ExpandKey = 'stuck_running' | 'expiring_api_keys' | null
+  const [expanded, setExpanded] = useState<ExpandKey>(null)
+
+  function selectTab(next: Tab) {
+    setTab(next)
+    const params = new URLSearchParams(searchParams.toString())
+    if (next === 'overview') params.delete('tab')
+    else params.set('tab', next)
+    const q = params.toString()
+    router.replace(q ? `${pathname}?${q}` : pathname, { scroll: false })
+  }
+
+  function toggleExpand(key: ExpandKey) {
+    setExpanded((cur) => (cur === key ? null : key))
+  }
   const [overview, setOverview] = useState<Overview | null>(null)
   const [appSlowQueries, setAppSlowQueries] = useState<AppSlowQuery[]>([])
   const [circuitBreakers, setCircuitBreakers] = useState<CircuitBreakerInfo[]>([])
@@ -416,7 +512,7 @@ export default function PlatformMonitorPage() {
           <button
             key={t.id}
             type="button"
-            onClick={() => setTab(t.id)}
+            onClick={() => selectTab(t.id)}
             className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
               tab === t.id
                 ? 'border-blue-500 text-blue-600'
@@ -437,6 +533,14 @@ export default function PlatformMonitorPage() {
       {tab === 'overview' && overview && (() => {
         const anomalies = overview.anomalies ?? []
         const signals = overview.signals ?? EMPTY_SIGNALS
+        const samples = overview.signal_samples ?? EMPTY_SIGNAL_SAMPLES
+
+        function onAnomalyClick(code: string) {
+          if (code === 'stuck_running') toggleExpand('stuck_running')
+          else if (code === 'api_key_expiring') toggleExpand('expiring_api_keys')
+          else if (code === 'exec_failed') selectTab('diagnose')
+        }
+
         return (
         <div className="space-y-4">
           {anomalies.length > 0 ? (
@@ -445,30 +549,41 @@ export default function PlatformMonitorPage() {
                 当前信号 {anomalies.length} 条
               </p>
               <ul className="text-sm space-y-1">
-                {anomalies.map((a) => (
-                  <li key={a.code} className="flex items-center gap-2">
-                    <span
-                      className={`inline-block w-1.5 h-1.5 rounded-full ${
-                        a.level === 'critical'
-                          ? 'bg-red-500'
-                          : a.level === 'warning'
-                            ? 'bg-orange-500'
-                            : 'bg-blue-400'
-                      }`}
-                    />
-                    <span
-                      className={
-                        a.level === 'critical'
-                          ? 'text-red-700'
-                          : a.level === 'warning'
-                            ? 'text-orange-700'
-                            : 'text-gray-600'
-                      }
-                    >
-                      {a.message}
-                    </span>
-                  </li>
-                ))}
+                {anomalies.map((a) => {
+                  const clickable =
+                    a.code === 'stuck_running' ||
+                    a.code === 'api_key_expiring' ||
+                    a.code === 'exec_failed'
+                  return (
+                    <li key={a.code} className="flex items-center gap-2">
+                      <span
+                        className={`inline-block w-1.5 h-1.5 rounded-full ${
+                          a.level === 'critical'
+                            ? 'bg-red-500'
+                            : a.level === 'warning'
+                              ? 'bg-orange-500'
+                              : 'bg-blue-400'
+                        }`}
+                      />
+                      <button
+                        type="button"
+                        className={`text-left ${
+                          clickable ? 'underline-offset-2 hover:underline cursor-pointer' : ''
+                        } ${
+                          a.level === 'critical'
+                            ? 'text-red-700'
+                            : a.level === 'warning'
+                              ? 'text-orange-700'
+                              : 'text-gray-600'
+                        }`}
+                        onClick={() => onAnomalyClick(a.code)}
+                        disabled={!clickable}
+                      >
+                        {a.message}
+                      </button>
+                    </li>
+                  )
+                })}
               </ul>
             </div>
           ) : (
@@ -513,13 +628,138 @@ export default function PlatformMonitorPage() {
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2">
               <Kpi label="限流命中 (1h)" value={String(signals.rate_limited_429_1h)} warn={signals.rate_limited_429_1h >= 20} />
               <Kpi label="认证失败 (1h)" value={String(signals.auth_failures_1h)} warn={signals.auth_failures_1h >= 20} />
-              <Kpi label="卡死执行" value={String(signals.stuck_running)} warn={signals.stuck_running > 0} />
+              <Kpi
+                label="卡死执行"
+                value={String(signals.stuck_running)}
+                warn={signals.stuck_running > 0}
+                active={expanded === 'stuck_running'}
+                onClick={signals.stuck_running > 0 ? () => toggleExpand('stuck_running') : undefined}
+              />
               <Kpi label="卡死工作流" value={String(signals.stuck_workflow)} warn={signals.stuck_workflow > 0} />
-              <Kpi label="Key 将过期" value={String(signals.expiring_api_keys_7d)} warn={signals.expiring_api_keys_7d > 0} />
+              <Kpi
+                label="Key 将过期"
+                value={String(signals.expiring_api_keys_7d)}
+                warn={signals.expiring_api_keys_7d > 0}
+                active={expanded === 'expiring_api_keys'}
+                onClick={
+                  signals.expiring_api_keys_7d > 0 ? () => toggleExpand('expiring_api_keys') : undefined
+                }
+              />
               <Kpi label="令牌将过期" value={String(signals.expiring_tokens_7d)} warn={signals.expiring_tokens_7d > 0} />
               <Kpi label="Webhook 失败 (24h)" value={String(signals.webhook_failures_24h)} warn={signals.webhook_failures_24h > 0} />
             </div>
           </div>
+
+          {expanded === 'stuck_running' && (
+            <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-100 flex justify-between items-center">
+                <h3 className="text-sm font-semibold text-gray-700">卡死执行明细</h3>
+                <button type="button" className="text-xs text-gray-500" onClick={() => setExpanded(null)}>
+                  收起
+                </button>
+              </div>
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">组织</th>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">项目</th>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">来源</th>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">名称</th>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">开始</th>
+                    <th className="px-4 py-2 text-right text-xs text-gray-500">已跑</th>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">trace</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {samples.stuck_running.items.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-6 text-center text-xs text-gray-400">
+                        无样例（可能刚恢复或查询失败，见 warnings）
+                      </td>
+                    </tr>
+                  ) : (
+                    samples.stuck_running.items.map((row) => (
+                      <tr key={row.trace_id + row.started_at} className="hover:bg-gray-50">
+                        <td className="px-4 py-2 text-xs">{row.organization_name || '—'}</td>
+                        <td className="px-4 py-2 text-xs">{row.project_name || row.tenant_id || '—'}</td>
+                        <td className="px-4 py-2 text-xs">{row.source}</td>
+                        <td className="px-4 py-2 text-xs max-w-[12rem] truncate" title={row.name || ''}>
+                          {row.name || '—'}
+                        </td>
+                        <td className="px-4 py-2 text-xs text-gray-500 whitespace-nowrap">
+                          {new Date(row.started_at).toLocaleString('zh-CN')}
+                        </td>
+                        <td className="px-4 py-2 text-xs text-right tabular-nums">
+                          {row.running_for_seconds != null
+                            ? `${Math.floor(row.running_for_seconds / 60)}m`
+                            : '—'}
+                        </td>
+                        <td className="px-4 py-2 text-xs font-mono">
+                          <button
+                            type="button"
+                            className="text-blue-600 hover:underline"
+                            title="复制 trace_id"
+                            onClick={() => navigator.clipboard.writeText(row.trace_id)}
+                          >
+                            {row.trace_id.slice(0, 8)}…
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+              {samples.stuck_running.total > samples.stuck_running.items.length && (
+                <p className="px-4 py-2 text-xs text-gray-500 border-t border-gray-100">
+                  共 {samples.stuck_running.total} 条，展示前 {samples.stuck_running.items.length}
+                </p>
+              )}
+            </div>
+          )}
+
+          {expanded === 'expiring_api_keys' && (
+            <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-100 flex justify-between items-center">
+                <h3 className="text-sm font-semibold text-gray-700">即将过期 API Key</h3>
+                <button type="button" className="text-xs text-gray-500" onClick={() => setExpanded(null)}>
+                  收起
+                </button>
+              </div>
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">组织</th>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">项目</th>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">名称</th>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">前缀</th>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">过期</th>
+                    <th className="px-4 py-2 text-right text-xs text-gray-500">剩余天</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {samples.expiring_api_keys.items.map((row) => (
+                    <tr key={row.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-2 text-xs">{row.organization_name || '—'}</td>
+                      <td className="px-4 py-2 text-xs">{row.project_name || row.tenant_id}</td>
+                      <td className="px-4 py-2 text-xs">{row.name}</td>
+                      <td className="px-4 py-2 text-xs font-mono">{row.key_prefix}</td>
+                      <td className="px-4 py-2 text-xs text-gray-500 whitespace-nowrap">
+                        {new Date(row.expires_at).toLocaleString('zh-CN')}
+                      </td>
+                      <td className="px-4 py-2 text-xs text-right tabular-nums">
+                        {row.days_left ?? '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {samples.expiring_api_keys.total > samples.expiring_api_keys.items.length && (
+                <p className="px-4 py-2 text-xs text-gray-500 border-t border-gray-100">
+                  共 {samples.expiring_api_keys.total} 条，展示前 {samples.expiring_api_keys.items.length}
+                </p>
+              )}
+            </div>
+          )}
 
           <div className="card p-4">
             <h3 className="text-sm font-semibold text-gray-700 mb-2">近 24h 调用量</h3>
@@ -896,7 +1136,7 @@ export default function PlatformMonitorPage() {
                   <th className="px-4 py-2 text-left text-xs text-gray-500">路径</th>
                   <th className="px-4 py-2 text-right text-xs text-gray-500">状态</th>
                   <th className="px-4 py-2 text-right text-xs text-gray-500">耗时</th>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">租户</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">项目</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -932,12 +1172,12 @@ export default function PlatformMonitorPage() {
 
           <div className="card overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-100">
-              <h3 className="text-sm font-semibold text-gray-700">按租户分解（近 24h）</h3>
+              <h3 className="text-sm font-semibold text-gray-700">按项目分解（近 24h）</h3>
             </div>
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">租户</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">项目</th>
                   <th className="px-4 py-2 text-right text-xs text-gray-500">调用</th>
                   <th className="px-4 py-2 text-right text-xs text-gray-500">5xx</th>
                   <th className="px-4 py-2 text-right text-xs text-gray-500">错误率</th>
@@ -958,7 +1198,7 @@ export default function PlatformMonitorPage() {
                     return (
                       <tr key={String(r.tenant_id)} className="hover:bg-gray-50">
                         <td className="px-4 py-2 text-xs">
-                          {r.tenant_name || (r.tenant_id != null ? `#${r.tenant_id}` : '(无租户)')}
+                          {r.tenant_name || (r.tenant_id != null ? `#${r.tenant_id}` : '(无项目)')}
                         </td>
                         <td className="px-4 py-2 text-xs text-right tabular-nums">{r.calls}</td>
                         <td className={`px-4 py-2 text-xs text-right tabular-nums ${r.err_5xx > 0 ? 'text-red-600 font-semibold' : ''}`}>

@@ -31,9 +31,7 @@ pub fn js_enabled() -> bool {
         .map(str::trim)
         .map(|value| value.to_ascii_lowercase())
     {
-        Some(value) if !value.is_empty() => {
-            !matches!(value.as_str(), "false" | "0" | "no" | "off")
-        }
+        Some(value) if !value.is_empty() => !matches!(value.as_str(), "false" | "0" | "no" | "off"),
         _ => true,
     }
 }
@@ -276,9 +274,10 @@ fn runtime_path() -> Result<PathBuf, String> {
         let configured = configured.trim();
         if !configured.is_empty() {
             let path = PathBuf::from(configured);
-            return path.is_file().then_some(path).ok_or_else(|| {
-                format!("WORKFLOW_JS_RUNTIME 指向的文件不存在: {configured}")
-            });
+            return path
+                .is_file()
+                .then_some(path)
+                .ok_or_else(|| format!("WORKFLOW_JS_RUNTIME 指向的文件不存在: {configured}"));
         }
     }
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

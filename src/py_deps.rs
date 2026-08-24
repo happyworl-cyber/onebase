@@ -186,8 +186,7 @@ fn write_manifest(dir: &Path, py: &PyDependencies) -> Result<(), String> {
 fn write_status(workflow_id: i32, status: &DepsStatus) -> Result<(), String> {
     let dir = python_dir(workflow_id);
     std::fs::create_dir_all(&dir).map_err(|e| format!("create deps dir: {e}"))?;
-    let raw =
-        serde_json::to_string_pretty(status).map_err(|e| format!("serialize status: {e}"))?;
+    let raw = serde_json::to_string_pretty(status).map_err(|e| format!("serialize status: {e}"))?;
     std::fs::write(dir.join(STATUS_FILE), raw).map_err(|e| format!("write status: {e}"))
 }
 
@@ -263,8 +262,7 @@ async fn run_pip_install(dir: &Path) -> Result<(), String> {
 
     // Reinstall into a clean target so removed requirements do not linger.
     if target.exists() {
-        std::fs::remove_dir_all(&target)
-            .map_err(|e| format!("clean site-packages: {e}"))?;
+        std::fs::remove_dir_all(&target).map_err(|e| format!("clean site-packages: {e}"))?;
     }
     std::fs::create_dir_all(&target).map_err(|e| format!("create site-packages: {e}"))?;
 
@@ -306,12 +304,7 @@ async fn run_pip_install(dir: &Path) -> Result<(), String> {
         buf
     });
 
-    match tokio::time::timeout(
-        std::time::Duration::from_millis(timeout_ms),
-        child.wait(),
-    )
-    .await
-    {
+    match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), child.wait()).await {
         Ok(Ok(status)) if status.success() => Ok(()),
         Ok(Ok(status)) => {
             let detail = stderr_task.await.unwrap_or_default();

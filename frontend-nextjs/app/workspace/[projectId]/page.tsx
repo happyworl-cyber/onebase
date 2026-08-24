@@ -8,14 +8,16 @@ import {
   dashboardAPI,
   type DashboardOverview,
   type DashboardActivityRow,
+  type DashboardResources,
 } from '@/lib/api'
+import { useCurrentProjectCapabilities } from '@/lib/permissions'
 
 /**
  * 项目首页 / M6 简化大盘。
  *
  * 历史：W1/W2 时这里是 4 张 placeholder 卡（'数据表 / API 端点 / RPC 函数 / 本月调用量'），
- * 后三张写死 '—'。M6 落地后改成 spec §2.3 要求的 6 张应用层指标卡 + 24h sparkline +
- * sanitized 最近活动 feed，复用同一页面避免新建路由。
+ * 后三张写死 '—'。M6 落地后改成 spec §2.3 要求的 6 张应用层指标卡 + 资源统计 +
+ * 功能快捷入口 + 24h sparkline + sanitized 最近活动 feed。
  *
  * 数据源（所有都按 tenant_id 过滤、含 viewer 可读）：
  *   - GET /api/dashboard/overview        → 6 指标 + 24 hourly buckets
@@ -30,6 +32,7 @@ export default function WorkspaceHome() {
 
   const base = `/workspace/${params.projectId}`
   const tenantId = currentProject?.id
+  const caps = useCurrentProjectCapabilities()
 
   const [overview, setOverview] = useState<DashboardOverview | null>(null)
   const [activity, setActivity] = useState<DashboardActivityRow[]>([])
@@ -165,6 +168,16 @@ export default function WorkspaceHome() {
         />
       </section>
 
+      <ResourceStats
+        base={base}
+        resources={overview?.resources}
+        caps={{
+          canManageEvents: caps.canManageEvents,
+          canManageMembers: caps.canManageMembers,
+          canManageSecurity: caps.canManageSecurity,
+        }}
+      />
+
       {/* 24h sparkline */}
       <section className="bg-white border border-gray-200 rounded-lg p-4">
         <div className="flex items-center justify-between mb-2">
@@ -213,41 +226,32 @@ export default function WorkspaceHome() {
         )}
       </section>
 
-      {/* 快捷入口（保留） */}
-      <section className="bg-white border border-gray-200 rounded-lg p-4">
-        <h2 className="text-sm font-medium text-gray-900 mb-3">快捷入口</h2>
-        <div className="flex flex-wrap gap-2">
-          <Link
-            href={`${base}/database/table-designer?mode=create`}
-            className="px-3 py-1.5 text-xs bg-blue-50 text-blue-700 rounded hover:bg-blue-100"
-          >
-            <i className="fas fa-plus mr-1"></i> 建表
-          </Link>
-          <Link
-            href={`${base}/rpc`}
-            className="px-3 py-1.5 text-xs bg-blue-50 text-blue-700 rounded hover:bg-blue-100"
-          >
-            <i className="fas fa-terminal mr-1"></i> 调用 RPC
-          </Link>
-          <Link
-            href={`${base}/events/webhooks`}
-            className="px-3 py-1.5 text-xs bg-blue-50 text-blue-700 rounded hover:bg-blue-100"
-          >
-            <i className="fas fa-broadcast-tower mr-1"></i> 配 Webhook
-          </Link>
-          <Link
-            href={`${base}/api`}
-            className="px-3 py-1.5 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
-          >
-            <i className="fas fa-cloud mr-1"></i> 查看 API 文档
-          </Link>
-        </div>
-      </section>
+      <ShortcutGrid
+        base={base}
+        caps={{
+          canManageEvents: caps.canManageEvents,
+          canWriteDatabase: caps.canWriteDatabase,
+          canManageSecurity: caps.canManageSecurity,
+        }}
+      />
     </div>
   )
 }
 
 // ─── 子组件 ────────────────────────────────────────────────────
+
+type MetricColor =
+  | 'blue'
+  | 'indigo'
+  | 'green'
+  | 'red'
+  | 'yellow'
+  | 'emerald'
+  | 'purple'
+  | 'gray'
+  | 'sky'
+  | 'orange'
+  | 'rose'
 
 function MetricCard({
   icon,
@@ -255,14 +259,16 @@ function MetricCard({
   value,
   color,
   href,
+  hint,
 }: {
   icon: string
   label: string
   value: string
-  color: 'blue' | 'indigo' | 'green' | 'red' | 'yellow' | 'emerald' | 'purple' | 'gray'
+  color: MetricColor
   href: string
+  hint?: string
 }) {
-  const colors: Record<typeof color, string> = {
+  const colors: Record<MetricColor, string> = {
     blue: 'text-blue-600 bg-blue-50',
     indigo: 'text-indigo-600 bg-indigo-50',
     green: 'text-green-600 bg-green-50',
@@ -271,6 +277,9 @@ function MetricCard({
     emerald: 'text-emerald-600 bg-emerald-50',
     purple: 'text-purple-600 bg-purple-50',
     gray: 'text-gray-600 bg-gray-50',
+    sky: 'text-sky-600 bg-sky-50',
+    orange: 'text-orange-600 bg-orange-50',
+    rose: 'text-rose-600 bg-rose-50',
   }
   return (
     <Link
@@ -282,7 +291,241 @@ function MetricCard({
       </div>
       <p className="text-xs text-gray-500 truncate">{label}</p>
       <p className="text-lg font-semibold text-gray-900 mt-0.5 tabular-nums">{value}</p>
+      {hint && <p className="text-[11px] text-gray-400 mt-0.5 truncate">{hint}</p>}
     </Link>
+  )
+}
+
+function ResourceStats({
+  base,
+  resources,
+  caps,
+}: {
+  base: string
+  resources?: DashboardResources
+  caps: {
+    canManageEvents: boolean
+    canManageMembers: boolean
+    canManageSecurity: boolean
+  }
+}) {
+  const r = resources
+  const cards = [
+    caps.canManageEvents && {
+      icon: 'fa-diagram-project',
+      label: '工作流',
+      value: r ? String(r.workflows) : '—',
+      hint: r ? `启用 ${r.workflows_enabled}` : undefined,
+      color: 'sky' as const,
+      href: `${base}/automation/workflows`,
+    },
+    caps.canManageEvents && {
+      icon: 'fa-clock',
+      label: '定时任务',
+      value: r ? String(r.scheduled_tasks) : '—',
+      hint: r ? `启用 ${r.scheduled_tasks_active}` : undefined,
+      color: 'orange' as const,
+      href: `${base}/events/scheduled-tasks`,
+    },
+    caps.canManageEvents && {
+      icon: 'fa-broadcast-tower',
+      label: 'Webhook',
+      value: r ? String(r.webhooks) : '—',
+      hint: r ? `启用 ${r.webhooks_active}` : undefined,
+      color: 'indigo' as const,
+      href: `${base}/events/webhooks`,
+    },
+    caps.canManageMembers && {
+      icon: 'fa-users',
+      label: '项目成员',
+      value: r ? String(r.members) : '—',
+      color: 'blue' as const,
+      href: `${base}/settings/members`,
+    },
+    caps.canManageEvents && {
+      icon: 'fa-play-circle',
+      label: '工作流执行（24h）',
+      value: r ? String(r.workflow_runs_24h) : '—',
+      hint: r ? `失败 ${r.workflow_failed_24h}` : undefined,
+      color: r && r.workflow_failed_24h > 0 ? ('red' as const) : ('green' as const),
+      href: `${base}/automation/workflows`,
+    },
+    caps.canManageEvents && {
+      icon: 'fa-history',
+      label: '定时任务执行（24h）',
+      value: r ? String(r.scheduled_runs_24h) : '—',
+      hint: r ? `失败 ${r.scheduled_failed_24h}` : undefined,
+      color: r && r.scheduled_failed_24h > 0 ? ('red' as const) : ('green' as const),
+      href: `${base}/events/scheduled-tasks`,
+    },
+    caps.canManageSecurity && {
+      icon: 'fa-stream',
+      label: '执行日志',
+      value: '查看',
+      hint: '工作流 / 任务 / API',
+      color: 'gray' as const,
+      href: `${base}/logs`,
+    },
+  ].filter(Boolean) as {
+    icon: string
+    label: string
+    value: string
+    hint?: string
+    color: MetricColor
+    href: string
+  }[]
+
+  if (cards.length === 0) return null
+
+  return (
+    <section>
+      <div className="flex items-baseline justify-between mb-3">
+        <h2 className="text-sm font-medium text-gray-900">资源与自动化</h2>
+        <span className="text-xs text-gray-400">点击卡片进入对应功能</span>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+        {cards.map((card) => (
+          <MetricCard key={card.label} {...card} />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function ShortcutGrid({
+  base,
+  caps,
+}: {
+  base: string
+  caps: {
+    canManageEvents: boolean
+    canWriteDatabase: boolean
+    canManageSecurity: boolean
+  }
+}) {
+  const items = [
+    caps.canManageEvents && {
+      href: `${base}/automation/workflows`,
+      icon: 'fa-diagram-project',
+      title: '工作流',
+      desc: '编排自动化流程，发布为 API',
+      tone: 'sky',
+    },
+    caps.canManageEvents && {
+      href: `${base}/events/scheduled-tasks`,
+      icon: 'fa-clock',
+      title: '定时任务',
+      desc: 'Cron 调度 RPC / HTTP / Shell',
+      tone: 'orange',
+    },
+    {
+      href: `${base}/database/tables`,
+      icon: 'fa-table',
+      title: '数据表',
+      desc: '浏览与管理本项目表',
+      tone: 'blue',
+    },
+    {
+      href: `${base}/database/table-designer?mode=create`,
+      icon: 'fa-pen-ruler',
+      title: '建表',
+      desc: '可视化设计表结构',
+      tone: 'blue',
+    },
+    {
+      href: `${base}/database/query`,
+      icon: 'fa-terminal',
+      title: 'SQL 编辑器',
+      desc: '直接查询与调试 SQL',
+      tone: 'gray',
+    },
+    {
+      href: `${base}/rpc`,
+      icon: 'fa-code',
+      title: 'RPC',
+      desc: '调用数据库函数',
+      tone: 'purple',
+    },
+    {
+      href: `${base}/api`,
+      icon: 'fa-cloud',
+      title: 'REST API',
+      desc: '接口文档与试调',
+      tone: 'indigo',
+    },
+    {
+      href: `${base}/database/functions`,
+      icon: 'fa-code',
+      title: '函数',
+      desc: '管理数据库函数与触发器',
+      tone: 'emerald',
+    },
+    caps.canManageEvents && {
+      href: `${base}/events/webhooks`,
+      icon: 'fa-broadcast-tower',
+      title: 'Webhook',
+      desc: '数据变更推送到外部系统',
+      tone: 'rose',
+    },
+    caps.canWriteDatabase && {
+      href: `${base}/database/import`,
+      icon: 'fa-file-import',
+      title: '数据导入',
+      desc: 'CSV / SQL 导入到表',
+      tone: 'gray',
+    },
+    caps.canManageSecurity && {
+      href: `${base}/logs`,
+      icon: 'fa-stream',
+      title: '执行日志',
+      desc: '按 trace 定位失败',
+      tone: 'gray',
+    },
+  ].filter(Boolean) as {
+    href: string
+    icon: string
+    title: string
+    desc: string
+    tone: MetricColor
+  }[]
+
+  const tones: Record<MetricColor, string> = {
+    blue: 'text-blue-600 bg-blue-50',
+    indigo: 'text-indigo-600 bg-indigo-50',
+    green: 'text-green-600 bg-green-50',
+    red: 'text-red-600 bg-red-50',
+    yellow: 'text-yellow-700 bg-yellow-50',
+    emerald: 'text-emerald-600 bg-emerald-50',
+    purple: 'text-purple-600 bg-purple-50',
+    gray: 'text-gray-600 bg-gray-50',
+    sky: 'text-sky-600 bg-sky-50',
+    orange: 'text-orange-600 bg-orange-50',
+    rose: 'text-rose-600 bg-rose-50',
+  }
+
+  return (
+    <section className="bg-white border border-gray-200 rounded-lg p-4">
+      <h2 className="text-sm font-medium text-gray-900 mb-3">快捷入口</h2>
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+        {items.map((item) => (
+          <Link
+            key={item.href}
+            href={item.href}
+            className="flex items-start gap-3 rounded-lg border border-gray-100 p-3 hover:border-blue-300 hover:bg-gray-50 transition"
+          >
+            <span
+              className={`inline-flex items-center justify-center w-8 h-8 rounded-md flex-shrink-0 ${tones[item.tone]}`}
+            >
+              <i className={`fas ${item.icon} text-xs`}></i>
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm font-medium text-gray-900">{item.title}</span>
+              <span className="block text-xs text-gray-500 mt-0.5">{item.desc}</span>
+            </span>
+          </Link>
+        ))}
+      </div>
+    </section>
   )
 }
 

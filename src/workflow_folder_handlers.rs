@@ -201,9 +201,7 @@ pub async fn update_workflow_folder(
                     ));
                 }
                 if parent.id == id {
-                    return Err(AppError::InvalidQuery(
-                        "不能将文件夹移动到自身".to_string(),
-                    ));
+                    return Err(AppError::InvalidQuery("不能将文件夹移动到自身".to_string()));
                 }
                 (true, Some(parent_id))
             }
@@ -252,12 +250,11 @@ pub async fn delete_workflow_folder(
         return Err(AppError::InvalidQuery("共享服务不可删除".to_string()));
     }
 
-    let child_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM management.workflow_folders WHERE parent_id = $1",
-    )
-    .bind(id)
-    .fetch_one(&pool)
-    .await?;
+    let child_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM management.workflow_folders WHERE parent_id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await?;
 
     if child_count > 0 {
         return Err(AppError::InvalidQuery(

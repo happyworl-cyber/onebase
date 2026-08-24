@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { clearAuthToken } from '@/lib/auth'
 
@@ -11,7 +12,8 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { name: '项目管理', path: '/platform', icon: 'fa-folder-tree' },
+  { name: '租户管理', path: '/platform/organizations', icon: 'fa-building' },
+  { name: '全部项目', path: '/platform', icon: 'fa-folder-tree' },
   { name: '用户管理', path: '/platform/users', icon: 'fa-users' },
   { name: '审计日志', path: '/platform/audit', icon: 'fa-clipboard-list' },
   { name: '执行日志', path: '/platform/logs', icon: 'fa-stream' },
@@ -151,6 +153,14 @@ export default function PlatformSidebar() {
         {showUserMenu && (
           <div className="absolute bottom-full left-3 right-3 mb-2 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden z-20">
             <div className="py-1">
+              <Link
+                href="/account"
+                onClick={() => setShowUserMenu(false)}
+                className="flex items-center space-x-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                <i className="fas fa-user-cog text-xs w-4 text-gray-400"></i>
+                <span>账号设置</span>
+              </Link>
               <button
                 onClick={handleLogout}
                 className="w-full flex items-center space-x-2.5 px-3 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"

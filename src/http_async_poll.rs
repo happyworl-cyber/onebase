@@ -76,9 +76,7 @@ pub(crate) fn is_private_url(url: &str) -> bool {
 
 fn assert_public_http_url(url: &str) -> Result<(), String> {
     if is_private_url(url) {
-        return Err(format!(
-            "http_call 异步轮询不允许访问内网地址: {url}"
-        ));
+        return Err(format!("http_call 异步轮询不允许访问内网地址: {url}"));
     }
     Ok(())
 }

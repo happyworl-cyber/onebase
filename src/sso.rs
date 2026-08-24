@@ -368,7 +368,10 @@ pub async fn exchange_code_for_token(
             .get("refresh_token")
             .and_then(|v| v.as_str())
             .map(String::from),
-        scope: payload.get("scope").and_then(|v| v.as_str()).map(String::from),
+        scope: payload
+            .get("scope")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         id_token: payload
             .get("id_token")
             .and_then(|v| v.as_str())
@@ -513,19 +516,16 @@ async fn http_fetch_userinfo(
             .bearer_auth(access_token)
             .header("User-Agent", "OneBase/1.0")
     };
-    let response = request
-        .send()
-        .await
-        .map_err(|e| {
-            tracing::error!(
-                target: "sso",
-                provider_id = provider.id,
-                provider_type = %provider.provider_type,
-                err = %e,
-                "OAuth2 获取用户信息失败（网络层）"
-            );
-            format!("UserInfo 请求失败: {}", e)
-        })?;
+    let response = request.send().await.map_err(|e| {
+        tracing::error!(
+            target: "sso",
+            provider_id = provider.id,
+            provider_type = %provider.provider_type,
+            err = %e,
+            "OAuth2 获取用户信息失败（网络层）"
+        );
+        format!("UserInfo 请求失败: {}", e)
+    })?;
 
     if !response.status().is_success() {
         let status = response.status().as_u16();

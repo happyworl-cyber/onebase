@@ -25,14 +25,7 @@ use crate::error::{AppError, Result};
 use crate::operation_log::{self, Actor, OperationLogInput, Source, Status};
 use crate::permissions;
 
-const VALID_PROVIDER_TYPES: &[&str] = &[
-    "google",
-    "apple",
-    "facebook",
-    "github",
-    "oidc",
-    "mind",
-];
+const VALID_PROVIDER_TYPES: &[&str] = &["google", "apple", "facebook", "github", "oidc", "mind"];
 const DEFAULT_ALLOWED_SCOPES: &[&str] = &["openid", "email", "profile"];
 const CLIENT_ID_PREFIX: &str = "ob_live_";
 const CLIENT_SECRET_PREFIX: &str = "obs_live_";
@@ -304,7 +297,11 @@ fn value_keys(value: Option<&Value>) -> String {
 }
 
 fn bool_text(value: bool) -> &'static str {
-    if value { "是" } else { "否" }
+    if value {
+        "是"
+    } else {
+        "否"
+    }
 }
 
 fn record_idp_op(
@@ -577,7 +574,12 @@ pub async fn update_project_idp_provider(
     .bind(&provider_type)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("项目 {} 未配置 provider {}", project_id, provider_type)))?;
+    .ok_or_else(|| {
+        AppError::NotFound(format!(
+            "项目 {} 未配置 provider {}",
+            project_id, provider_type
+        ))
+    })?;
     let provider_id: i32 = existing.get("id");
     let old_display_name: Option<String> = existing.get("display_name");
     let old_client_id: String = existing.get("client_id");
@@ -734,9 +736,7 @@ pub async fn create_oauth2_client(
 
     let display_name = req.display_name.trim();
     if display_name.is_empty() {
-        return Err(AppError::InvalidQuery(
-            "display_name 不能为空".to_string(),
-        ));
+        return Err(AppError::InvalidQuery("display_name 不能为空".to_string()));
     }
     validate_redirect_uris(&req.redirect_uris)?;
     let allowed_scopes = normalize_allowed_scopes(req.allowed_scopes)?;
@@ -762,7 +762,12 @@ pub async fn create_oauth2_client(
     .bind(&client_id)
     .bind(&client_secret_hash)
     .bind(display_name)
-    .bind(req.redirect_uris.iter().map(|s| s.trim().to_string()).collect::<Vec<_>>())
+    .bind(
+        req.redirect_uris
+            .iter()
+            .map(|s| s.trim().to_string())
+            .collect::<Vec<_>>(),
+    )
     .bind(&allowed_scopes)
     .bind(access_token_ttl)
     .bind(refresh_token_ttl)
@@ -840,9 +845,7 @@ pub async fn update_oauth2_client(
 
     if let Some(display_name) = &req.display_name {
         if display_name.trim().is_empty() {
-            return Err(AppError::InvalidQuery(
-                "display_name 不能为空".to_string(),
-            ));
+            return Err(AppError::InvalidQuery("display_name 不能为空".to_string()));
         }
     }
     if let Some(redirect_uris) = &req.redirect_uris {
@@ -891,11 +894,11 @@ pub async fn update_oauth2_client(
         "#,
     )
     .bind(req.display_name.as_deref().map(str::trim))
-    .bind(
-        req.redirect_uris
-            .as_ref()
-            .map(|uris| uris.iter().map(|s| s.trim().to_string()).collect::<Vec<_>>()),
-    )
+    .bind(req.redirect_uris.as_ref().map(|uris| {
+        uris.iter()
+            .map(|s| s.trim().to_string())
+            .collect::<Vec<_>>()
+    }))
     .bind(allowed_scopes.as_ref())
     .bind(current_ttls.map(|(access, _)| access))
     .bind(current_ttls.map(|(_, refresh)| refresh))

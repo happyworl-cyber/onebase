@@ -32,6 +32,9 @@ interface ApiKey {
   last_used_at: string | null
   created_at: string
   expires_at: string | null
+  created_by: number | null
+  created_by_name: string | null
+  created_by_email: string | null
 }
 
 export default function ApiKeysPage() {
@@ -46,6 +49,7 @@ export default function ApiKeysPage() {
   // workspace layout 已经从 /api/projects/:id 拉到 primary_connection.database_id
   // 并铺到 currentConnection，这里直接读就行。
   const currentConnection = useAppStore((s) => s.currentConnection)
+  const currentProject = useAppStore((s) => s.currentProject)
   // 必须属于当前项目，防止残留的上一项目 currentConnection 把 key 列到错误项目下。
   const connectionForProject =
     currentConnection?.tenant_id === projectId ? currentConnection : null
@@ -194,6 +198,11 @@ export default function ApiKeysPage() {
 
   return (
     <div className="p-6 space-y-6">
+      {currentProject?.via_organization && (
+        <p className="text-sm text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mb-4">
+          你以租户管理员身份管理本项目（尚未加入为项目成员）。数据面写操作仍需项目 member 角色。
+        </p>
+      )}
       <div className="flex items-end justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">API Key</h1>
@@ -266,6 +275,12 @@ export default function ApiKeysPage() {
                   </div>
                 </div>
                 <div className="flex items-center space-x-6">
+                  <div
+                    className="text-sm text-gray-500 truncate max-w-[10rem]"
+                    title={key.created_by_email || undefined}
+                  >
+                    创建人: {key.created_by_name || '未知'}
+                  </div>
                   <div className="text-sm text-gray-500">
                     {key.last_used_at ? (
                       <span>最后使用: {new Date(key.last_used_at).toLocaleString()}</span>

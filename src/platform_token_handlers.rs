@@ -50,7 +50,9 @@ pub async fn create_platform_token(
 
     let name = req.name.trim();
     if name.is_empty() || name.len() > 100 {
-        return Err(AppError::InvalidQuery("令牌名称需为 1-100 个字符".to_string()));
+        return Err(AppError::InvalidQuery(
+            "令牌名称需为 1-100 个字符".to_string(),
+        ));
     }
 
     // 默认授予全部已知 scope（绑定用户自身权限仍会兜底限制实际能做什么）。
@@ -158,12 +160,13 @@ pub async fn delete_platform_token(
     Path(id): Path<i32>,
 ) -> Result<Json<Value>> {
     require_platform_token_admin(&claims)?;
-    let affected = sqlx::query("UPDATE management.platform_tokens SET is_active = false WHERE id = $1")
-        .bind(id)
-        .execute(&pool)
-        .await
-        .map_err(|e| AppError::Internal(format!("停用平台令牌失败: {}", e)))?
-        .rows_affected();
+    let affected =
+        sqlx::query("UPDATE management.platform_tokens SET is_active = false WHERE id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .map_err(|e| AppError::Internal(format!("停用平台令牌失败: {}", e)))?
+            .rows_affected();
 
     if affected == 0 {
         return Err(AppError::NotFound("令牌不存在或无权操作".to_string()));

@@ -50,7 +50,9 @@ pub(crate) fn build_handle(conn: &ObjectStorageConnection, secret_key: &str) -> 
     let timeout_secs = conn.connect_timeout_secs.clamp(1, 60) as u64;
     let http = HttpClient::builder()
         .connect_timeout(Duration::from_secs(timeout_secs))
-        .timeout(Duration::from_secs(timeout_secs.saturating_mul(2).clamp(10, 120)))
+        .timeout(Duration::from_secs(
+            timeout_secs.saturating_mul(2).clamp(10, 120),
+        ))
         .build()
         .map_err(|e| AppError::Internal(format!("创建 HTTP 客户端失败: {e}")))?;
 

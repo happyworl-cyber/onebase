@@ -1,3 +1,4 @@
+import { tabIdentity } from '@/components/workspace/workspaceNav'
 import { create } from 'zustand'
 
 /**
@@ -100,10 +101,14 @@ export const useWorkspaceTabs = create<WorkspaceTabsState>((set, get) => ({
 
   openTab: (tab) => {
     set((s) => {
-      const exists = s.tabs.some((t) => t.path === tab.path)
-      const tabs = exists
-        ? s.tabs.map((t) => (t.path === tab.path ? { ...t, title: tab.title, icon: tab.icon } : t))
-        : [...s.tabs, tab]
+      const id = tabIdentity(tab.path)
+      const idx = s.tabs.findIndex((t) => tabIdentity(t.path) === id)
+      const tabs =
+        idx >= 0
+          ? s.tabs.map((t, i) =>
+              i === idx ? { ...t, path: tab.path, title: tab.title, icon: tab.icon } : t,
+            )
+          : [...s.tabs, tab]
       return commit(get, { tabs, activePath: tab.path })
     })
   },

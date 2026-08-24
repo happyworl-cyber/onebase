@@ -220,9 +220,7 @@ pub fn derive_high_risk(action: &str, resource_type: Option<&str>) -> bool {
 
 fn actor_columns(actor: &Actor) -> (&'static str, Option<i32>, Option<String>, Option<String>) {
     match actor {
-        Actor::User { id, name, role } => {
-            ("user", Some(*id), Some(name.clone()), role.clone())
-        }
+        Actor::User { id, name, role } => ("user", Some(*id), Some(name.clone()), role.clone()),
         Actor::System { name } => ("system", None, Some(name.clone()), Some("系统".to_string())),
     }
 }
@@ -538,21 +536,42 @@ mod tests {
     #[test]
     fn high_risk_covers_destructive_deletes() {
         // 高危：删工作流 / 删表 / 删 Schema。
-        assert!(derive_high_risk(action::DELETE, Some(resource_type::WORKFLOW)));
+        assert!(derive_high_risk(
+            action::DELETE,
+            Some(resource_type::WORKFLOW)
+        ));
         assert!(derive_high_risk(action::DELETE, Some(resource_type::TABLE)));
-        assert!(derive_high_risk(action::DELETE, Some(resource_type::SCHEMA)));
+        assert!(derive_high_risk(
+            action::DELETE,
+            Some(resource_type::SCHEMA)
+        ));
         // 非删除 / 非结构对象一律 false。
-        assert!(!derive_high_risk(action::UPDATE, Some(resource_type::WORKFLOW)));
-        assert!(!derive_high_risk(action::CREATE, Some(resource_type::TABLE)));
-        assert!(!derive_high_risk(action::DELETE, Some(resource_type::INDEX)));
-        assert!(!derive_high_risk(action::PERMISSION, Some(resource_type::ROLE)));
+        assert!(!derive_high_risk(
+            action::UPDATE,
+            Some(resource_type::WORKFLOW)
+        ));
+        assert!(!derive_high_risk(
+            action::CREATE,
+            Some(resource_type::TABLE)
+        ));
+        assert!(!derive_high_risk(
+            action::DELETE,
+            Some(resource_type::INDEX)
+        ));
+        assert!(!derive_high_risk(
+            action::PERMISSION,
+            Some(resource_type::ROLE)
+        ));
         assert!(!derive_high_risk(action::DELETE, None));
     }
 
     #[test]
     fn high_risk_override_respected_via_input() {
         // 覆盖语义在 record() 内：Some(_) 优先于规则。这里直接验证规则本身。
-        assert!(!derive_high_risk(action::CREATE, Some(resource_type::WORKFLOW)));
+        assert!(!derive_high_risk(
+            action::CREATE,
+            Some(resource_type::WORKFLOW)
+        ));
     }
 
     #[test]
@@ -608,7 +627,9 @@ mod tests {
         let summary = view["summary"].as_array().unwrap();
         assert_eq!(summary.len(), 3);
         // value 被字符串化
-        assert!(summary.iter().any(|s| s["label"] == "slug" && s["value"] == "daily-digest"));
+        assert!(summary
+            .iter()
+            .any(|s| s["label"] == "slug" && s["value"] == "daily-digest"));
     }
 
     #[test]
@@ -653,8 +674,12 @@ mod tests {
         assert_eq!(item["name"], "每日摘要");
         let fields = item["fields"].as_array().unwrap();
         assert_eq!(fields.len(), 2);
-        assert!(fields.iter().any(|f| f["key"] == "启用状态" && f["old"] == "停用" && f["new"] == "启用"));
-        assert!(fields.iter().any(|f| f["key"] == "超时(ms)" && f["new"] == "8000"));
+        assert!(fields
+            .iter()
+            .any(|f| f["key"] == "启用状态" && f["old"] == "停用" && f["new"] == "启用"));
+        assert!(fields
+            .iter()
+            .any(|f| f["key"] == "超时(ms)" && f["new"] == "8000"));
     }
 
     #[test]
@@ -685,7 +710,12 @@ mod tests {
         assert_eq!(tview["statements"].as_array().unwrap().len(), 1);
 
         // 无 sql 也无 statements → 无内容。
-        assert!(format_change(action::EXECUTE, None, &json!({ "kind": "sql", "sql_type": "SELECT" })).is_none());
+        assert!(format_change(
+            action::EXECUTE,
+            None,
+            &json!({ "kind": "sql", "sql_type": "SELECT" })
+        )
+        .is_none());
     }
 
     #[test]
@@ -702,6 +732,11 @@ mod tests {
         assert_eq!(view["items"].as_array().unwrap().len(), 2);
         assert_eq!(view["items"][0]["slug"], "daily-digest");
         // 空 items → 无内容
-        assert!(format_change(action::IMPORT, None, &json!({ "kind": "imported", "items": [] })).is_none());
+        assert!(format_change(
+            action::IMPORT,
+            None,
+            &json!({ "kind": "imported", "items": [] })
+        )
+        .is_none());
     }
 }

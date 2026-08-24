@@ -48,9 +48,5 @@ pub async fn fetch_active_for_tenant(
     .fetch_optional(pool)
     .await
     .map_err(|e| AppError::Internal(format!("查询 Redis 连接失败: {e}")))?
-    .ok_or_else(|| {
-        AppError::NotFound(format!(
-            "Redis 连接 {id} 不存在 / 已禁用 / 不属于当前租户"
-        ))
-    })
+    .ok_or_else(|| AppError::NotFound(format!("Redis 连接 {id} 不存在 / 已禁用 / 不属于当前租户")))
 }

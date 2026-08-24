@@ -163,7 +163,11 @@ async fn collect_runtime(
     limiter: Option<&RateLimiter>,
 ) -> RuntimeSnapshot {
     let mgmt_db_ok = matches!(
-        tokio::time::timeout(Duration::from_secs(2), sqlx::query("SELECT 1").execute(pool)).await,
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            sqlx::query("SELECT 1").execute(pool)
+        )
+        .await,
         Ok(Ok(_))
     );
 
@@ -193,7 +197,8 @@ async fn collect_runtime(
     let (rate_limit, rate_limit_degraded, rate_limit_fallback_rejected) =
         if let Some(limiter) = limiter {
             let stats = limiter.stats_snapshot().await;
-            let degraded = stats.redis_configured && stats.redis_failures_streak >= REDIS_DEGRADED_STREAK;
+            let degraded =
+                stats.redis_configured && stats.redis_failures_streak >= REDIS_DEGRADED_STREAK;
             (
                 Some(json!(stats)),
                 degraded,
@@ -251,12 +256,11 @@ async fn collect_async(
         })
         .collect();
 
-    let total_tasks: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)::bigint FROM management.scheduled_tasks",
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    let total_tasks: i64 =
+        sqlx::query_scalar("SELECT COUNT(*)::bigint FROM management.scheduled_tasks")
+            .fetch_one(pool)
+            .await
+            .map_err(|e| e.to_string())?;
     let active_tasks: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)::bigint FROM management.scheduled_tasks WHERE is_active = true",
     )
@@ -346,7 +350,8 @@ async fn collect_signals(pool: &PgPool) -> std::result::Result<Signals, String> 
           (SELECT COUNT(*)::bigint FROM management.api_keys
              WHERE COALESCE(is_active, false) = true
                AND expires_at IS NOT NULL
-               AND expires_at BETWEEN now() AND now() + INTERVAL '7 days') AS exp_api_keys_7d,
+               AND expires_at > now()
+               AND expires_at <= now() + INTERVAL '7 days') AS exp_api_keys_7d,
           (SELECT COUNT(*)::bigint FROM management.platform_tokens
              WHERE expires_at IS NOT NULL
                AND expires_at BETWEEN now() AND now() + INTERVAL '7 days') AS exp_tokens_7d,
@@ -369,7 +374,144 @@ async fn collect_signals(pool: &PgPool) -> std::result::Result<Signals, String> 
     })
 }
 
-fn build_anomalies(traffic: &TrafficSnapshot, runtime: &RuntimeSnapshot, asyncs: &AsyncSnapshot) -> Vec<Value> {
+fn signal_sample_bucket(total: i64, items: Vec<Value>) -> Value {
+    json!({ "total": total, "items": items })
+}
+
+#[derive(Debug, Clone, Default)]
+struct SignalSamples {
+    stuck_running: Value,
+    expiring_api_keys: Value,
+}
+
+impl SignalSamples {
+    fn empty() -> Self {
+        Self {
+            stuck_running: signal_sample_bucket(0, vec![]),
+            expiring_api_keys: signal_sample_bucket(0, vec![]),
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "stuck_running": self.stuck_running,
+            "expiring_api_keys": self.expiring_api_keys,
+        })
+    }
+}
+
+async fn collect_signal_samples(pool: &PgPool) -> std::result::Result<SignalSamples, String> {
+    let stuck_total: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint FROM management.execution_index
+        WHERE status = 'running' AND started_at < now() - INTERVAL '10 minutes'
+        "#,
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let stuck_rows = sqlx::query(
+        r#"
+        SELECT e.trace_id, e.source, e.name, e.tenant_id,
+               e.started_at::TEXT AS started_at,
+               EXTRACT(EPOCH FROM (now() - e.started_at))::bigint AS running_for_seconds,
+               t.name AS project_name,
+               t.organization_id,
+               o.name AS organization_name
+        FROM management.execution_index e
+        LEFT JOIN management.tenants t ON t.id = e.tenant_id
+        LEFT JOIN management.organizations o ON o.id = t.organization_id
+        WHERE e.status = 'running' AND e.started_at < now() - INTERVAL '10 minutes'
+        ORDER BY e.started_at ASC
+        LIMIT 20
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let stuck_items: Vec<Value> = stuck_rows
+        .iter()
+        .map(|r| {
+            json!({
+                "trace_id": r.get::<String, _>("trace_id"),
+                "source": r.get::<String, _>("source"),
+                "name": r.try_get::<Option<String>, _>("name").ok().flatten(),
+                "tenant_id": r.try_get::<Option<i32>, _>("tenant_id").ok().flatten(),
+                "project_name": r.try_get::<Option<String>, _>("project_name").ok().flatten(),
+                "organization_id": r.try_get::<Option<i32>, _>("organization_id").ok().flatten(),
+                "organization_name": r.try_get::<Option<String>, _>("organization_name").ok().flatten(),
+                "started_at": r.get::<String, _>("started_at"),
+                "running_for_seconds": r.try_get::<Option<i64>, _>("running_for_seconds").ok().flatten(),
+            })
+        })
+        .collect();
+
+    let key_total: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint FROM management.api_keys
+        WHERE COALESCE(is_active, false) = true
+          AND expires_at IS NOT NULL
+          AND expires_at > now()
+          AND expires_at <= now() + INTERVAL '7 days'
+        "#,
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let key_rows = sqlx::query(
+        r#"
+        SELECT k.id, k.name, k.key_prefix, k.tenant_id,
+               k.expires_at::TEXT AS expires_at,
+               CEIL(EXTRACT(EPOCH FROM (k.expires_at - now())) / 86400.0)::int AS days_left,
+               t.name AS project_name,
+               t.organization_id,
+               o.name AS organization_name
+        FROM management.api_keys k
+        LEFT JOIN management.tenants t ON t.id = k.tenant_id
+        LEFT JOIN management.organizations o ON o.id = t.organization_id
+        WHERE COALESCE(k.is_active, false) = true
+          AND k.expires_at IS NOT NULL
+          AND k.expires_at > now()
+          AND k.expires_at <= now() + INTERVAL '7 days'
+        ORDER BY k.expires_at ASC
+        LIMIT 20
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let key_items: Vec<Value> = key_rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<i32, _>("id"),
+                "name": r.get::<String, _>("name"),
+                "key_prefix": r.get::<String, _>("key_prefix"),
+                "tenant_id": r.get::<i32, _>("tenant_id"),
+                "project_name": r.try_get::<Option<String>, _>("project_name").ok().flatten(),
+                "organization_id": r.try_get::<Option<i32>, _>("organization_id").ok().flatten(),
+                "organization_name": r.try_get::<Option<String>, _>("organization_name").ok().flatten(),
+                "expires_at": r.get::<String, _>("expires_at"),
+                "days_left": r.try_get::<Option<i32>, _>("days_left").ok().flatten(),
+            })
+        })
+        .collect();
+
+    Ok(SignalSamples {
+        stuck_running: signal_sample_bucket(stuck_total, stuck_items),
+        expiring_api_keys: signal_sample_bucket(key_total, key_items),
+    })
+}
+
+fn build_anomalies(
+    traffic: &TrafficSnapshot,
+    runtime: &RuntimeSnapshot,
+    asyncs: &AsyncSnapshot,
+) -> Vec<Value> {
     let mut out = Vec::new();
     if !runtime.mgmt_db_ok {
         out.push(json!({"level":"critical","code":"mgmt_db","message":"管理库健康检查失败"}));
@@ -451,7 +593,11 @@ fn metric_value(
     match metric {
         "error_rate_24h" => traffic.error_rate_24h,
         "circuit_open_count" => Some(runtime.circuit_open_count as f64),
-        "rate_limit_degraded" => Some(if runtime.rate_limit_degraded { 1.0 } else { 0.0 }),
+        "rate_limit_degraded" => Some(if runtime.rate_limit_degraded {
+            1.0
+        } else {
+            0.0
+        }),
         "slow_queries_5min" => traffic.slow_queries_5min.map(|v| v as f64),
         "exec_failed_24h" => Some(asyncs.exec_failed_24h as f64),
         "scheduler_failed_24h" => Some(asyncs.scheduler_failed_24h as f64),
@@ -528,6 +674,14 @@ pub async fn overview(
         }
     };
 
+    let signal_samples = match collect_signal_samples(&pool).await {
+        Ok(s) => s,
+        Err(e) => {
+            warnings.push(format!("signal_samples: {e}"));
+            SignalSamples::empty()
+        }
+    };
+
     let mut anomalies = build_anomalies(&traffic, &runtime, &asyncs);
     anomalies.extend(signals_to_anomalies(&signals));
     let hourly: Vec<Value> = traffic
@@ -578,6 +732,7 @@ pub async fn overview(
             "expiring_tokens_7d": signals.expiring_tokens_7d,
             "webhook_failures_24h": signals.webhook_failures_24h,
         },
+        "signal_samples": signal_samples.to_json(),
         "anomalies": anomalies,
         "warnings": warnings,
     })))
@@ -648,7 +803,9 @@ pub async fn top_endpoints(
             })
         })
         .collect();
-    Ok(Json(json!({ "window": q.window, "order": q.order, "data": data })))
+    Ok(Json(
+        json!({ "window": q.window, "order": q.order, "data": data }),
+    ))
 }
 
 /// GET /api/admin/platform-monitor/recent-errors
@@ -799,17 +956,15 @@ pub async fn timeseries(
         _ => "24 hours",
     };
 
-    let rows = sqlx::query(
-        &format!(
-            "SELECT sampled_at::TEXT AS sampled_at, qps_5min, p95_ms_5min, error_rate_24h, \
+    let rows = sqlx::query(&format!(
+        "SELECT sampled_at::TEXT AS sampled_at, qps_5min, p95_ms_5min, error_rate_24h, \
                     calls_5min, slow_queries_5min, circuit_open_count, rate_limit_degraded, \
                     exec_failed_24h, scheduler_failed_24h, sse_connections, \
                     mgmt_db_ok, redis_ok \
              FROM management.platform_metric_samples \
              WHERE sampled_at >= NOW() - INTERVAL '{interval}' \
              ORDER BY sampled_at ASC"
-        ),
-    )
+    ))
     .fetch_all(&pool)
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -1410,7 +1565,6 @@ async fn evaluate_alerts(
             }
         }
     }
-
 }
 
 /// 后台采样 + 告警评估。多实例用 advisory lock 互斥。
@@ -1435,12 +1589,10 @@ pub fn spawn_platform_monitor_task(
         tokio::time::sleep(Duration::from_secs(15)).await;
         loop {
             ticker.tick().await;
-            let locked: bool = match sqlx::query_scalar(
-                "SELECT pg_try_advisory_lock($1)",
-            )
-            .bind(SAMPLE_LOCK_KEY)
-            .fetch_one(&pool)
-            .await
+            let locked: bool = match sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+                .bind(SAMPLE_LOCK_KEY)
+                .fetch_one(&pool)
+                .await
             {
                 Ok(v) => v,
                 Err(e) => {
@@ -1454,13 +1606,8 @@ pub fn spawn_platform_monitor_task(
 
             let result = async {
                 let traffic = collect_traffic(&pool).await.unwrap_or_default();
-                let runtime = collect_runtime(
-                    &pool,
-                    redis.as_ref(),
-                    Some(&cb),
-                    limiter.as_ref(),
-                )
-                .await;
+                let runtime =
+                    collect_runtime(&pool, redis.as_ref(), Some(&cb), limiter.as_ref()).await;
                 let asyncs = collect_async(&pool, Some(&hub), Some(&bridge))
                     .await
                     .unwrap_or_default();
@@ -1482,15 +1629,27 @@ pub fn spawn_platform_monitor_task(
             }
         }
     });
-    tracing::info!(
-        interval_secs,
-        "平台监控采样/告警任务已启动"
-    );
+    tracing::info!(interval_secs, "平台监控采样/告警任务已启动");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_signal_sample_bucket_shape() {
+        let v = signal_sample_bucket(0, vec![]);
+        assert_eq!(v["total"], 0);
+        assert!(v["items"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn signal_sample_bucket_preserves_total_gt_items() {
+        let items = vec![json!({"id": 1})];
+        let v = signal_sample_bucket(5, items);
+        assert_eq!(v["total"], 5);
+        assert_eq!(v["items"].as_array().unwrap().len(), 1);
+    }
 
     #[test]
     fn eval_rule_operators() {

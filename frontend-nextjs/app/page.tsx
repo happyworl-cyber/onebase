@@ -24,7 +24,8 @@ export default function Home() {
     } catch {
       /* current_user 损坏时按普通用户处理 */
     }
-    router.push(isSuperadmin ? '/platform' : '/workspace')
+    // 超管 → 平台租户管理；普通用户 → 租户选择 / 租户控制台
+    router.push(isSuperadmin ? '/platform/organizations' : '/orgs')
   }, [router])
 
   return (

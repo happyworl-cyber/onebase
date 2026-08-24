@@ -204,6 +204,18 @@ export interface NavMeta {
   icon: string
 }
 
+const WORKFLOW_VERSIONS_RE = /^(\/automation\/workflows\/\d+\/versions)(?:\/[^/]+)?$/
+
+export function isWorkflowVersionsPath(relPath: string): boolean {
+  return WORKFLOW_VERSIONS_RE.test(relPath)
+}
+
+/** Same-workflow version list and detail share one Tab identity. Other paths are unchanged. */
+export function tabIdentity(relPath: string): string {
+  const m = relPath.match(WORKFLOW_VERSIONS_RE)
+  return m ? m[1] : relPath
+}
+
 /**
  * 相对路径 → { label, icon }。给 Tab 栏渲染标题 / 图标用。
  *
@@ -213,6 +225,10 @@ export interface NavMeta {
  *   3) 兜底：用末段路径生成一个可读标题，图标给默认。
  */
 export function resolveNavMeta(relPath: string): NavMeta {
+  if (isWorkflowVersionsPath(relPath)) {
+    return { label: '工作流版本', icon: 'fas fa-clock-rotate-left' }
+  }
+
   const exact = ALL_NAV_ITEMS.find((it) => it.href === relPath)
   if (exact) return { label: exact.label, icon: exact.icon }
 

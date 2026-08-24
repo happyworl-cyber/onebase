@@ -3,9 +3,7 @@
 //! 实现：rusty-s3 签名 URL + reqwest 发送（无 aws-sdk）。
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use rusty_s3::actions::{
-    DeleteObject, GetObject, HeadBucket, ListObjectsV2, PutObject, S3Action,
-};
+use rusty_s3::actions::{DeleteObject, GetObject, HeadBucket, ListObjectsV2, PutObject, S3Action};
 use serde_json::{json, Value as JsonValue};
 use std::time::Duration;
 

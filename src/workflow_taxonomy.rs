@@ -96,10 +96,7 @@ pub fn normalize_for_storage(tax: WorkflowTaxonomy) -> WorkflowTaxonomy {
 }
 
 /// 列表筛选「某部门 / 未分类」时兼容尚未清洗的空 category 数据。
-pub fn push_dept_uncategorized_filter(
-    qb: &mut sqlx::QueryBuilder<'_, sqlx::Postgres>,
-    dept: &str,
-) {
+pub fn push_dept_uncategorized_filter(qb: &mut sqlx::QueryBuilder<'_, sqlx::Postgres>, dept: &str) {
     if dept == SHARED_DEPARTMENT {
         qb.push(" AND ((w.department IS NULL AND w.category IS NULL) OR (w.department = ")
             .push_bind(dept.to_string())
@@ -116,7 +113,10 @@ pub fn push_dept_uncategorized_filter(
 }
 
 /// 创建时解析：显式 department/category 优先；仅 category 时按兼容规则解析。
-pub fn resolve_taxonomy_input(department: Option<&str>, category: Option<&str>) -> WorkflowTaxonomy {
+pub fn resolve_taxonomy_input(
+    department: Option<&str>,
+    category: Option<&str>,
+) -> WorkflowTaxonomy {
     let dept_provided = department.map(str::trim).is_some_and(|s| !s.is_empty());
     let cat_raw = category.map(str::trim).filter(|s| !s.is_empty());
 

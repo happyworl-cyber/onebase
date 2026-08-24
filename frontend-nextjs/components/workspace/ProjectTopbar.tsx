@@ -20,6 +20,7 @@ import { clearAuthToken } from '@/lib/auth'
 export default function ProjectTopbar() {
   const router = useRouter()
   const currentProject = useAppStore((s) => s.currentProject)
+  const currentOrganization = useAppStore((s) => s.currentOrganization)
   const currentUser = useAppStore((s) => s.currentUser)
   // SSO 用户（如 Mind）可能没有邮箱，优先用用户名兜底，避免头像/菜单显示成 "?"。
   const displayName = currentUser?.username || currentUser?.email || '用户'
@@ -29,8 +30,18 @@ export default function ProjectTopbar() {
   const [projects, setProjects] = useState<Project[] | null>(null)
   const [loading, setLoading] = useState(false)
 
+  const orgId =
+    currentOrganization?.id ?? currentProject?.organization_id ?? null
+  const orgLabel =
+    currentOrganization?.name ?? currentProject?.organization_name ?? null
+
   const projectMenuRef = useRef<HTMLDivElement>(null)
   const userMenuRef = useRef<HTMLDivElement>(null)
+
+  // 切换组织后清空缓存，避免下拉仍显示上一租户的项目
+  useEffect(() => {
+    setProjects(null)
+  }, [orgId])
 
   // 点击外部 / 按 Esc 关闭下拉
   useEffect(() => {
@@ -63,7 +74,10 @@ export default function ProjectTopbar() {
       try {
         const res = await api.get<{ projects: Project[] }>(
           '/api/projects',
-          { suppressErrorToast: true } as ApiRequestConfig,
+          {
+            params: orgId ? { organization_id: orgId } : undefined,
+            suppressErrorToast: true,
+          } as ApiRequestConfig,
         )
         setProjects(res.data.projects || [])
       } catch {
@@ -80,6 +94,7 @@ export default function ProjectTopbar() {
       localStorage.removeItem('current_user')
       localStorage.removeItem('current_tenant')
       localStorage.removeItem('current_project')
+      localStorage.removeItem('current_organization')
     } catch {}
     router.push('/login')
   }
@@ -98,6 +113,11 @@ export default function ProjectTopbar() {
             <i className="fas fa-cube text-xs text-blue-600"></i>
           </div>
           <div className="text-left leading-tight">
+            {orgLabel && (
+              <div className="text-[10px] text-gray-400 truncate max-w-[200px]">
+                {orgLabel}
+              </div>
+            )}
             <div className="text-sm font-medium text-gray-900">{projectLabel}</div>
             {currentProject?.slug && (
               <div className="text-[10px] text-gray-400 font-mono">
@@ -112,7 +132,9 @@ export default function ProjectTopbar() {
         {projectMenuOpen && (
           <div className="absolute top-full left-0 mt-1 w-72 bg-white border border-gray-200 rounded-lg shadow-lg z-50">
             <div className="px-3 py-2 border-b border-gray-100">
-              <div className="text-xs text-gray-500">切换项目</div>
+              <div className="text-xs text-gray-500">
+                {orgLabel ? `切换项目 · ${orgLabel}` : '切换项目'}
+              </div>
             </div>
             {loading && (
               <div className="px-3 py-4 text-center text-xs text-gray-400">
@@ -157,11 +179,23 @@ export default function ProjectTopbar() {
             )}
             <div className="border-t border-gray-100">
               <Link
-                href="/workspace"
+                href={orgId ? `/org/${orgId}` : '/orgs'}
                 onClick={() => setProjectMenuOpen(false)}
                 className="block px-3 py-2 text-xs text-blue-600 hover:bg-gray-50"
               >
-                <i className="fas fa-list mr-1.5"></i> 查看所有项目
+                <i className="fas fa-building mr-1.5"></i> 返回租户控制台
+              </Link>
+              <Link
+                href="/orgs"
+                onClick={() => {
+                  setProjectMenuOpen(false)
+                  try {
+                    localStorage.removeItem('current_organization')
+                  } catch {}
+                }}
+                className="block px-3 py-2 text-xs text-gray-600 hover:bg-gray-50"
+              >
+                <i className="fas fa-exchange-alt mr-1.5"></i> 切换租户
               </Link>
             </div>
           </div>
@@ -211,6 +245,13 @@ export default function ProjectTopbar() {
                 </Link>
               </>
             )}
+            <Link
+              href="/account"
+              onClick={() => setUserMenuOpen(false)}
+              className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+            >
+              <i className="fas fa-user-cog mr-2"></i> 账号设置
+            </Link>
             <button
               onClick={logout}
               className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"

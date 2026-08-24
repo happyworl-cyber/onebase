@@ -302,10 +302,7 @@ pub async fn call_provision_webhook(
     );
 
     let resp = req.send().await.map_err(|e| {
-        AppError::InvalidQuery(format!(
-            "Provisioner 请求失败（{}）：{}",
-            cfg.url, e
-        ))
+        AppError::InvalidQuery(format!("Provisioner 请求失败（{}）：{}", cfg.url, e))
     })?;
 
     let status = resp.status();
@@ -376,7 +373,9 @@ async fn poll_provision_until_ready(
 ) -> Result<WebhookProvisionOutcome> {
     let deadline = Instant::now() + cfg.poll_max;
     let client = build_http_client(cfg.timeout)?;
-    let mut next_sleep = initial_poll_after_secs.max(1).min(cfg.poll_interval.as_secs().max(1));
+    let mut next_sleep = initial_poll_after_secs
+        .max(1)
+        .min(cfg.poll_interval.as_secs().max(1));
 
     if let Some(msg) = initial_message.as_ref().filter(|s| !s.is_empty()) {
         tracing::info!(
@@ -414,9 +413,10 @@ async fn poll_provision_until_ready(
             req = req.header(AUTHORIZATION, format!("Bearer {}", token));
         }
 
-        let resp = req.send().await.map_err(|e| {
-            AppError::InvalidQuery(format!("Provisioner poll 请求失败: {}", e))
-        })?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| AppError::InvalidQuery(format!("Provisioner poll 请求失败: {}", e)))?;
 
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
@@ -484,9 +484,7 @@ fn parse_provision_response(
                 message: Some("Provisioner 已接受请求".to_string()),
             });
         }
-        return Err(AppError::Internal(
-            "Provisioner 响应体为空".to_string(),
-        ));
+        return Err(AppError::Internal("Provisioner 响应体为空".to_string()));
     }
 
     let parsed: WebhookProvisionResponse = serde_json::from_str(text).map_err(|e| {
@@ -723,8 +721,11 @@ mod tests {
     #[test]
     fn normalize_resources_postgresql_and_redis() {
         assert_eq!(
-            normalize_requested_resources(Some(vec!["redis".to_string(), "postgresql".to_string()]))
-                .unwrap(),
+            normalize_requested_resources(Some(vec![
+                "redis".to_string(),
+                "postgresql".to_string()
+            ]))
+            .unwrap(),
             vec!["postgresql".to_string(), "redis".to_string()]
         );
     }

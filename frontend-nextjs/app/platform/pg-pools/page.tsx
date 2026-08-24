@@ -169,7 +169,7 @@ export default function PlatformPgPoolsPage() {
   }
 
   return (
-    <div className="p-6 max-w-7xl space-y-6">
+    <div className="w-full space-y-6">
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">PG 服务器池</h1>

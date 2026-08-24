@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import FolderTree from './FolderTree'
 import WorkflowBreadcrumb from './WorkflowBreadcrumb'
 import WorkflowListToolbar from './WorkflowListToolbar'
@@ -62,9 +63,21 @@ import {
 } from './folderApi'
 import { fetchWorkflowList, fetchWorkflowSummary } from './listApi'
 
+/** 依赖图入口按钮的隐藏门 localStorage 键，值为 'on' / 'off'。 */
+const DEP_GRAPH_ENTRY_STORAGE_KEY = 'onebase:dep-graph-entry'
+
+declare global {
+  interface Window {
+    /** 控制台暗号：不传或传 true 显示"依赖图"入口按钮，传 false 隐藏。 */
+    __depGraph?: (unlock?: boolean) => void
+  }
+}
+
 export interface WorkflowListViewProps {
   cleaning: boolean
   defaultDatabaseId?: number | null
+  /** workspace 的 projectId（tenants.id），用于拼"依赖图"按钮的跳转链接。 */
+  projectId?: number | null
   refreshToken?: number
   onSummaryChange?: (groups: WorkflowGroupCount[], total: number) => void
   onNewWorkflow: (folderPlacement?: { department: string; category?: string | null }) => void
@@ -74,6 +87,7 @@ export interface WorkflowListViewProps {
   onShowRuns: (wf: WorkflowListItem) => void
   onDuplicate: (wf: WorkflowListItem) => void
   onShare: (wf: WorkflowListItem) => void
+  onOpenVersionHistory?: (wf: WorkflowListItem) => void
   onExport: (wf: WorkflowListItem) => void
   onDelete: (wf: WorkflowListItem) => void
   onCleanupRuns: () => void
@@ -92,6 +106,7 @@ function initialExpanded(folders: WorkflowFolder[]): Set<string> {
 export default function WorkflowListView({
   cleaning,
   defaultDatabaseId,
+  projectId,
   refreshToken = 0,
   onSummaryChange,
   onNewWorkflow,
@@ -101,6 +116,7 @@ export default function WorkflowListView({
   onShowRuns,
   onDuplicate,
   onShare,
+  onOpenVersionHistory,
   onExport,
   onDelete,
   onCleanupRuns,
@@ -134,6 +150,7 @@ export default function WorkflowListView({
   const [selectedMap, setSelectedMap] = useState<Map<number, WorkflowListItem>>(new Map())
   const [batchModal, setBatchModal] = useState<BatchModalType>(null)
   const [showBatchImport, setShowBatchImport] = useState(false)
+  const [depGraphEntryUnlocked, setDepGraphEntryUnlocked] = useState(false)
   const bannerCheckboxRef = useRef<HTMLInputElement>(null)
 
   const useServerFolders = defaultDatabaseId != null
@@ -182,6 +199,17 @@ export default function WorkflowListView({
       perPage: normalizeListPerPage(prefs.perPage) ?? DEFAULT_LIST_PER_PAGE,
     }
   })
+
+  // 依赖图入口隐藏门：默认不展示，读 localStorage 标记决定是否显示；
+  // 并把控制台暗号 window.__depGraph 挂到 window 上，供作者本人切换。
+  useEffect(() => {
+    setDepGraphEntryUnlocked(window.localStorage.getItem(DEP_GRAPH_ENTRY_STORAGE_KEY) === 'on')
+    window.__depGraph = (unlock = true) => {
+      window.localStorage.setItem(DEP_GRAPH_ENTRY_STORAGE_KEY, unlock ? 'on' : 'off')
+      window.location.reload()
+    }
+    // 不做卸载清理：暗号全局常驻，避免列表页卸载后在编辑器/执行记录页控制台敲不到。
+  }, [])
 
   useEffect(() => {
     if (useServerFolders) {
@@ -361,6 +389,28 @@ export default function WorkflowListView({
   }, [folderNavKey, folders, clearSelection])
 
   const folderPlacementForNew = folderTaxonomyFromFolderId(state.folderId) ?? undefined
+
+  // 依赖图入口带 scope：只有选中到具体「分类」节点（department+category 都确定）才带 query，
+  // 纯部门节点/根节点/搜索态一律进全量视图——后端 department+category 必须同时给才生效。
+  const router = useRouter()
+  const graphScope = useMemo(() => catNamesFromId(state.folderId), [state.folderId])
+  const graphHref = useMemo(() => {
+    const base = `/workspace/${projectId}/automation/workflow-graph`
+    if (!graphScope) return base
+    const qs = new URLSearchParams({ department: graphScope.dept, category: graphScope.cat })
+    return `${base}?${qs.toString()}`
+  }, [projectId, graphScope])
+
+  // 多入口 focus（P1.3⑤）行级入口："在依赖图中查看此工作流"——进全量图（不带 scope，
+  // 保留该工作流的完整上下游上下文）+ focus=id 自动定位，而不是复用带 scope 的 graphHref
+  // （分类主集可能不含它调用/被调用的外部工作流，focus 场景要看的是这条工作流本身的全貌）。
+  const openWorkflowInGraph = useCallback(
+    (wf: WorkflowListItem) => {
+      if (projectId == null) return
+      router.push(`/workspace/${projectId}/automation/workflow-graph?focus=${wf.id}`)
+    },
+    [projectId, router],
+  )
 
   const createFolderAction = useMemo(
     () => resolveCreateFolderAction(state.folderId),
@@ -649,6 +699,18 @@ export default function WorkflowListView({
                 <i className="fas fa-layer-group text-[10px]" />
                 批量导入
               </button>
+              {projectId != null && depGraphEntryUnlocked && (
+                <button
+                  type="button"
+                  data-alt="open-dependency-graph-button"
+                  onClick={() => router.push(graphHref)}
+                  className="px-2.5 py-2 text-sm bg-white text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-50 flex items-center gap-1.5"
+                  title={graphScope ? `查看「${graphScope.dept} / ${graphScope.cat}」的依赖图` : '查看全部工作流的依赖图'}
+                >
+                  <i className="fas fa-share-nodes text-[10px] text-slate-400" />
+                  依赖图
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => onNewWorkflow(folderPlacementForNew)}
@@ -745,8 +807,10 @@ export default function WorkflowListView({
                     onShowRuns={() => onShowRuns(wf)}
                     onDuplicate={() => onDuplicate(wf)}
                     onShare={() => onShare(wf)}
+                    onOpenVersionHistory={onOpenVersionHistory ? () => onOpenVersionHistory(wf) : undefined}
                     onExport={() => onExport(wf)}
                     onDelete={() => onDelete(wf)}
+                    onOpenGraph={projectId != null && depGraphEntryUnlocked ? () => openWorkflowInGraph(wf) : undefined}
                     selected={selectedMap.has(wf.id)}
                     onSelectToggle={() => toggleSelect(wf)}
                   />
@@ -768,8 +832,10 @@ export default function WorkflowListView({
                     onShowRuns={() => onShowRuns(wf)}
                     onDuplicate={() => onDuplicate(wf)}
                     onShare={() => onShare(wf)}
+                    onOpenVersionHistory={onOpenVersionHistory ? () => onOpenVersionHistory(wf) : undefined}
                     onExport={() => onExport(wf)}
                     onDelete={() => onDelete(wf)}
+                    onOpenGraph={projectId != null && depGraphEntryUnlocked ? () => openWorkflowInGraph(wf) : undefined}
                     selected={selectedMap.has(wf.id)}
                     onSelectToggle={() => toggleSelect(wf)}
                   />

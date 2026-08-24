@@ -35,7 +35,10 @@ fn json_array_count(value: &serde_json::Value) -> usize {
 }
 
 fn opt_json_array_count(value: Option<&serde_json::Value>) -> usize {
-    value.and_then(|v| v.as_array()).map(|arr| arr.len()).unwrap_or(0)
+    value
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.len())
+        .unwrap_or(0)
 }
 
 fn permission_label(resource: &str, action: &str) -> String {
@@ -861,11 +864,12 @@ pub async fn assign_user_role(
     require_tenant_admin(&pool, &claims, req.tenant_id).await?;
 
     // role_id 必须属于同一个 tenant_id（防止跨租户拉取角色）
-    let role_row = sqlx::query("SELECT name FROM management.roles WHERE id = $1 AND tenant_id = $2")
-    .bind(req.role_id)
-    .bind(req.tenant_id)
-        .fetch_optional(&pool)
-        .await?;
+    let role_row =
+        sqlx::query("SELECT name FROM management.roles WHERE id = $1 AND tenant_id = $2")
+            .bind(req.role_id)
+            .bind(req.tenant_id)
+            .fetch_optional(&pool)
+            .await?;
     let role_name: String = match role_row {
         Some(row) => row.get("name"),
         None => {
@@ -938,12 +942,13 @@ pub async fn remove_user_role(
 ) -> Result<Json<Value>> {
     require_tenant_admin(&pool, &claims, tenant_id).await?;
 
-    let role_row = sqlx::query("SELECT name FROM management.roles WHERE id = $1 AND tenant_id = $2")
-        .bind(role_id)
-        .bind(tenant_id)
-        .fetch_optional(&pool)
-        .await?
-        .ok_or_else(|| AppError::NotFound("角色不存在".to_string()))?;
+    let role_row =
+        sqlx::query("SELECT name FROM management.roles WHERE id = $1 AND tenant_id = $2")
+            .bind(role_id)
+            .bind(tenant_id)
+            .fetch_optional(&pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound("角色不存在".to_string()))?;
     let role_name: String = role_row.get("name");
 
     sqlx::query(

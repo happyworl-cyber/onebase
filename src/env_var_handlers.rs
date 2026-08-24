@@ -144,11 +144,12 @@ pub async fn seed_provision_env_vars(
             continue;
         }
 
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM management.project_env_vars WHERE tenant_id = $1")
-                .bind(tenant_id)
-                .fetch_one(pool)
-                .await?;
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM management.project_env_vars WHERE tenant_id = $1",
+        )
+        .bind(tenant_id)
+        .fetch_one(pool)
+        .await?;
         if count >= MAX_VARS_PER_TENANT {
             tracing::warn!(
                 tenant_id,
@@ -246,10 +247,7 @@ pub async fn list_env_vars(
 
     // 明文密钥严禁缓存
     let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok((StatusCode::OK, headers, Json(body)).into_response())
 }
 
@@ -423,14 +421,13 @@ pub async fn delete_env_var(
     let env_var_name: String = existing.get("name");
     let description: Option<String> = existing.get("description");
 
-    let affected = sqlx::query(
-        "DELETE FROM management.project_env_vars WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(var_id)
-    .bind(project_id)
-    .execute(&pool)
-    .await?
-    .rows_affected();
+    let affected =
+        sqlx::query("DELETE FROM management.project_env_vars WHERE id = $1 AND tenant_id = $2")
+            .bind(var_id)
+            .bind(project_id)
+            .execute(&pool)
+            .await?
+            .rows_affected();
 
     if affected == 0 {
         return Err(AppError::NotFound(format!("环境变量 {} 不存在", var_id)));

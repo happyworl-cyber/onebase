@@ -16,9 +16,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 
-use crate::auth::Claims;
 use crate::audit_handlers::admin_tenant_ids;
+use crate::auth::Claims;
 use crate::error::{AppError, Result};
+use crate::permissions;
 
 #[derive(Debug, Deserialize)]
 pub struct ExecutionQuery {
@@ -32,6 +33,8 @@ pub struct ExecutionQuery {
     /// 显式限定租户（工作空间内查看时传当前项目 = 租户 id）。
     /// 对非超管会与其可管理租户集合求交，越权传入只会查到空结果。
     pub tenant_id: Option<i32>,
+    /// 组织级聚合：限定为该组织下属全部项目（与身份可管理集合求交）。
+    pub organization_id: Option<i32>,
     /// 名称模糊匹配（工作流名 / 任务名 / 路径）
     pub name: Option<String>,
     pub trace_id: Option<String>,
@@ -56,6 +59,33 @@ async fn tenant_scope(pool: &PgPool, claims: &Claims) -> Result<Option<Vec<i32>>
     }
 }
 
+/// 解析执行日志可见项目集合。
+///
+/// - 带 `organization_id`：要求 org admin+，范围为该组织下属全部项目
+///   （不要求调用方同时是每个项目的 owner/admin）
+/// - 不带：沿用平台语义（超管全部 / 项目 owner·admin 自己的项目）
+async fn resolve_execution_tenant_filter(
+    pool: &PgPool,
+    claims: &Claims,
+    params: &ExecutionQuery,
+) -> Result<Option<Vec<i32>>> {
+    let Some(org_id) = params.organization_id else {
+        return tenant_scope(pool, claims).await;
+    };
+
+    permissions::require_organization_admin(pool, claims, org_id).await?;
+    let org_projects: Vec<i32> = sqlx::query_scalar(
+        r#"
+        SELECT id FROM management.tenants
+        WHERE organization_id = $1 AND status IN ('active', 'suspended')
+        "#,
+    )
+    .bind(org_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(Some(org_projects))
+}
+
 /// Exact COUNT 在百万行租户下会扫完整 btree；分页只需要「够不够翻页」的量级。
 /// 超过该上限时返回 capped=true，UI 显示「N+」。
 const EXECUTION_COUNT_CAP: i64 = 50_000;
@@ -67,7 +97,10 @@ const EXECUTION_COUNT_CAP: i64 = 50_000;
 ///
 /// 租户条件：显式 `tenant_id` 时只用等值（可走 idx_ei_tenant）；否则非超管用 `ANY($租户列表)`。
 /// 避免历史上 `ANY([1]) AND tenant_id = 1` 的重复谓词。
-fn build_exec_conditions(params: &ExecutionQuery, tenant_filter: &Option<Vec<i32>>) -> (String, u32) {
+fn build_exec_conditions(
+    params: &ExecutionQuery,
+    tenant_filter: &Option<Vec<i32>>,
+) -> (String, u32) {
     let mut conditions = vec!["1=1".to_string()];
     let mut idx = 1u32;
 
@@ -162,7 +195,14 @@ pub async fn list_executions(
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
     let offset = params.offset.unwrap_or(0).max(0);
 
-    let tenant_filter = tenant_scope(&pool, &claims).await?;
+    let tenant_filter = resolve_execution_tenant_filter(&pool, &claims, &params).await?;
+    if matches!(tenant_filter.as_deref(), Some([])) {
+        return Ok(Json(json!({
+            "data": [],
+            "limit": limit,
+            "offset": offset,
+        })));
+    }
     if let (Some(tid), Some(ids)) = (params.tenant_id, tenant_filter.as_ref()) {
         if !ids.contains(&tid) {
             return Ok(Json(json!({
@@ -211,11 +251,18 @@ pub async fn count_executions(
     Extension(claims): Extension<Claims>,
     Query(params): Query<ExecutionQuery>,
 ) -> Result<Json<Value>> {
-    let tenant_filter = tenant_scope(&pool, &claims).await?;
-    // 显式 tenant_id：非超管必须落在可管理集合内，越权直接空结果。
+    let tenant_filter = resolve_execution_tenant_filter(&pool, &claims, &params).await?;
+    if matches!(tenant_filter.as_deref(), Some([])) {
+        return Ok(Json(
+            json!({ "total": 0, "capped": false, "cap": EXECUTION_COUNT_CAP }),
+        ));
+    }
+    // 显式 tenant_id：必须落在可管理 / 组织集合内，越权直接空结果。
     if let (Some(tid), Some(ids)) = (params.tenant_id, tenant_filter.as_ref()) {
         if !ids.contains(&tid) {
-            return Ok(Json(json!({ "total": 0, "capped": false, "cap": EXECUTION_COUNT_CAP })));
+            return Ok(Json(
+                json!({ "total": 0, "capped": false, "cap": EXECUTION_COUNT_CAP }),
+            ));
         }
     }
 
@@ -231,11 +278,7 @@ pub async fn count_executions(
     let cq = bind_exec_filters(sqlx::query(&count_sql), &params, &tenant_filter);
     let scanned: i64 = cq.fetch_one(&pool).await?.get("total");
     let capped = scanned > EXECUTION_COUNT_CAP;
-    let total = if capped {
-        EXECUTION_COUNT_CAP
-    } else {
-        scanned
-    };
+    let total = if capped { EXECUTION_COUNT_CAP } else { scanned };
 
     Ok(Json(json!({
         "total": total,
@@ -269,13 +312,39 @@ pub async fn get_execution_detail(
         return Err(AppError::NotFound("未找到该执行记录".to_string()));
     }
 
-    // 租户隔离：非超管必须该 trace 至少有一行属于自己可管理的 tenant。
+    // 租户隔离：项目 owner/admin，或该项目所属组织的 org admin+。
     if let Some(ref ids) = tenant_filter {
-        let allowed = index_rows.iter().any(|r| {
+        let mut allowed = index_rows.iter().any(|r| {
             r.get::<Option<i32>, _>("tenant_id")
                 .map(|t| ids.contains(&t))
                 .unwrap_or(false)
         });
+        if !allowed {
+            let trace_tenants: Vec<i32> = index_rows
+                .iter()
+                .filter_map(|r| r.get::<Option<i32>, _>("tenant_id"))
+                .collect();
+            if !trace_tenants.is_empty() {
+                allowed = sqlx::query_scalar(
+                    r#"
+                    SELECT EXISTS(
+                        SELECT 1
+                        FROM management.tenants t
+                        JOIN management.organization_members om
+                          ON om.organization_id = t.organization_id
+                         AND om.user_id = $2
+                         AND om.is_active = true
+                         AND om.role IN ('owner', 'admin')
+                        WHERE t.id = ANY($1)
+                    )
+                    "#,
+                )
+                .bind(&trace_tenants)
+                .bind(claims.sub)
+                .fetch_one(&pool)
+                .await?;
+            }
+        }
         if !allowed {
             return Err(AppError::Forbidden("无权查看该执行记录".to_string()));
         }
@@ -336,7 +405,10 @@ pub async fn execution_stats(
     Extension(claims): Extension<Claims>,
     Query(params): Query<ExecutionQuery>,
 ) -> Result<Json<Value>> {
-    let tenant_filter = tenant_scope(&pool, &claims).await?;
+    let tenant_filter = resolve_execution_tenant_filter(&pool, &claims, &params).await?;
+    if matches!(tenant_filter.as_deref(), Some([])) {
+        return Ok(Json(json!({ "by_source": [], "by_status": [] })));
+    }
 
     let mut conditions = vec!["started_at >= NOW() - INTERVAL '24 hours'".to_string()];
     // 与列表/count 一致：显式 tenant_id 用等值，否则非超管用 ANY。

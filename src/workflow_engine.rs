@@ -3,6 +3,8 @@ use serde_json::{json, Value as JsonValue};
 use sqlx::PgPool;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::error::{AppError, Result};
@@ -82,7 +84,9 @@ pub fn lua_node_timeout_ms() -> u64 {
 pub fn workflow_db_statement_timeout_ms() -> u64 {
     static V: OnceLock<u64> = OnceLock::new();
     *V.get_or_init(|| {
-        workflow_db_statement_timeout_ms_from(std::env::var("WORKFLOW_DB_STATEMENT_TIMEOUT_MS").ok())
+        workflow_db_statement_timeout_ms_from(
+            std::env::var("WORKFLOW_DB_STATEMENT_TIMEOUT_MS").ok(),
+        )
     })
 }
 
@@ -186,7 +190,9 @@ impl ApiKeyWriteGuard {
 /// 脏值告警并回退默认。仅在进程首次读取时求值一次（OnceLock 缓存）。
 pub fn apikey_rw_guard_mode() -> ApiKeyWriteGuard {
     static V: OnceLock<ApiKeyWriteGuard> = OnceLock::new();
-    *V.get_or_init(|| parse_apikey_rw_guard(std::env::var("WORKFLOW_APIKEY_RW_GUARD").ok().as_deref()))
+    *V.get_or_init(|| {
+        parse_apikey_rw_guard(std::env::var("WORKFLOW_APIKEY_RW_GUARD").ok().as_deref())
+    })
 }
 
 /// 纯解析（可注入，便于单测）：缺失 → 默认 `log_only`；脏值告警后回退 `log_only`。
@@ -2051,6 +2057,198 @@ pub async fn probe_datasource_connection(
     Ok(())
 }
 
+fn should_record_subworkflow_run(ctx: &ExecutionContext) -> bool {
+    !ctx.dry_run && ctx.run_id > 0 && ctx.workflow_id > 0
+}
+
+struct SubworkflowRunSummary {
+    status: &'static str,
+    index_status: &'static str,
+    error_message: Option<String>,
+    final_output: JsonValue,
+}
+
+fn summarize_subworkflow_run(
+    results: &[NodeExecutionResult],
+    returned_output: JsonValue,
+) -> SubworkflowRunSummary {
+    let failed = results.iter().find(|r| r.status == NodeStatus::Failed);
+    if failed.is_some() {
+        SubworkflowRunSummary {
+            status: "failed",
+            index_status: "failed",
+            error_message: failed.and_then(|r| r.error.clone()),
+            final_output: returned_output,
+        }
+    } else {
+        SubworkflowRunSummary {
+            status: "completed",
+            index_status: "success",
+            error_message: None,
+            final_output: returned_output,
+        }
+    }
+}
+
+async fn begin_subworkflow_run(
+    pool: &PgPool,
+    workflow_id: i32,
+    tenant_id: Option<i32>,
+    trigger_data: &JsonValue,
+    user_id: Option<i32>,
+    name: Option<&str>,
+) -> Option<(i64, Option<i64>)> {
+    use sqlx::Row;
+    let trace_id = crate::execution_log::new_trace_id();
+    let row = sqlx::query(
+        r#"INSERT INTO management.workflow_runs
+           (workflow_id, tenant_id, trigger_type, trigger_data, status, trace_id)
+           VALUES ($1, $2, 'subworkflow', $3, 'running', $4)
+           RETURNING id"#,
+    )
+    .bind(workflow_id)
+    .bind(tenant_id)
+    .bind(trigger_data)
+    .bind(&trace_id)
+    .fetch_one(pool)
+    .await;
+    let run_id = match row {
+        Ok(r) => r.get::<i64, _>("id"),
+        Err(e) => {
+            tracing::warn!(workflow_id, "子工作流 run 写入失败: {}", e);
+            return None;
+        }
+    };
+    let index_id = crate::execution_log::begin_index(
+        pool,
+        &trace_id,
+        "workflow",
+        Some("workflow_runs"),
+        Some(run_id),
+        tenant_id,
+        user_id,
+        name,
+    )
+    .await;
+    Some((run_id, index_id))
+}
+
+async fn finish_subworkflow_run(
+    pool: &PgPool,
+    run_id: i64,
+    index_id: Option<i64>,
+    env_vars: &HashMap<String, String>,
+    results: &[NodeExecutionResult],
+    returned_output: &JsonValue,
+    engine_error: Option<&str>,
+    elapsed_ms: i64,
+) {
+    let mut summary = summarize_subworkflow_run(results, returned_output.clone());
+    if let Some(msg) = engine_error {
+        summary.status = "failed";
+        summary.index_status = "failed";
+        if summary.error_message.is_none() {
+            summary.error_message = Some(msg.to_string());
+        }
+    }
+    let masked_node_results = mask_env_values(&json!(results), env_vars);
+    let masked_final_output = mask_env_values(&summary.final_output, env_vars);
+    let masked_error = summary.error_message.as_ref().map(|m| {
+        mask_env_values(&json!(m), env_vars)
+            .as_str()
+            .unwrap_or(m)
+            .to_string()
+    });
+    if let Err(e) = sqlx::query(
+        r#"UPDATE management.workflow_runs
+           SET status = $2, node_results = $3, final_output = $4,
+               error_message = $5, elapsed_ms = $6, completed_at = NOW()
+           WHERE id = $1"#,
+    )
+    .bind(run_id)
+    .bind(summary.status)
+    .bind(masked_node_results)
+    .bind(masked_final_output)
+    .bind(&masked_error)
+    .bind(elapsed_ms)
+    .execute(pool)
+    .await
+    {
+        tracing::warn!(run_id, "子工作流 run 收口失败: {}", e);
+    }
+    crate::execution_log::finish_index(
+        pool,
+        index_id,
+        summary.index_status,
+        Some(elapsed_ms),
+        masked_error.as_deref(),
+    )
+    .await;
+}
+
+struct SubworkflowRunGuard {
+    pool: PgPool,
+    run_id: i64,
+    index_id: Option<i64>,
+    started: Instant,
+    finalized: Arc<AtomicBool>,
+}
+
+impl SubworkflowRunGuard {
+    fn new(pool: PgPool, run_id: i64, index_id: Option<i64>) -> Self {
+        Self {
+            pool,
+            run_id,
+            index_id,
+            started: Instant::now(),
+            finalized: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn mark_finalized(&self) {
+        self.finalized.store(true, Ordering::SeqCst);
+    }
+}
+
+impl Drop for SubworkflowRunGuard {
+    fn drop(&mut self) {
+        if self.finalized.load(Ordering::SeqCst) {
+            return;
+        }
+        let pool = self.pool.clone();
+        let run_id = self.run_id;
+        let index_id = self.index_id;
+        let elapsed_ms = self.started.elapsed().as_millis() as i64;
+        let msg = "子工作流执行被中断（父工作流超时或任务取消，未正常收口）".to_string();
+        tracing::warn!(
+            target: "workflow",
+            run_id,
+            elapsed_ms,
+            "SubworkflowRunGuard：子工作流 run 在收口前被 drop"
+        );
+        tokio::spawn(async move {
+            let _ = sqlx::query(
+                r#"UPDATE management.workflow_runs
+                   SET status = 'failed', error_message = $2, elapsed_ms = $3, completed_at = NOW()
+                   WHERE id = $1 AND status = 'running'"#,
+            )
+            .bind(run_id)
+            .bind(&msg)
+            .bind(elapsed_ms)
+            .execute(&pool)
+            .await;
+            crate::execution_log::finish_index(
+                &pool,
+                index_id,
+                "failed",
+                Some(elapsed_ms),
+                Some(&msg),
+            )
+            .await;
+        });
+    }
+}
+
 /// 工作流 DAG 引擎：按拓扑顺序调度各节点
 pub struct DagEngine {
     pool: PgPool,
@@ -2846,9 +3044,10 @@ impl DagEngine {
 
     // ─── CallWorkflow 节点（同步调用子工作流） ─────────────────────────────
     //
-    // 设计（轻量观测）：子工作流在同进程内内联执行，不单独写 workflow_runs；其逐节点
-    // 结果汇总进本节点输出（output._sub）便于排障。返回值优先取子工作流 response 节点
-    // 输出，缺省则给出全部节点输出。dry_run / 生产只读标志透传，子流程副作用照样被拦截。
+    // 子工作流在同进程内内联执行（保持 call_stack 环检测）。真实父 run 下会为子工作流
+    // 另写 workflow_runs + execution_index，打开被调用工作流也能看到执行记录。
+    // debug / dry_run 不落库。返回值优先取子工作流 response 节点输出，缺省则给出全部
+    // 节点输出。dry_run / 生产只读标志透传，子流程副作用照样被拦截。
     //
     // 安全：只在**同租户**内按 slug 解析目标（优先同库），杜绝跨租户取数；通过 call_stack
     // 检测环（A→B→A）与限制层级（≤5），防止递归爆栈 / 死循环。
@@ -2899,6 +3098,7 @@ impl DagEngine {
         })?;
 
         let target_id: i32 = row.get("id");
+        let target_name: String = row.get("name");
 
         // 环检测：目标是当前工作流自身、或已在调用链上 ⇒ 拒绝。
         if target_id == ctx.workflow_id || call_stack.contains(&target_id) {
@@ -2932,9 +3132,28 @@ impl DagEngine {
         };
         let input = resolve_template(&input_obj, ctx);
 
+        let started = Instant::now();
+        let recorded = if should_record_subworkflow_run(ctx) {
+            begin_subworkflow_run(
+                &self.pool,
+                target_id,
+                target_tenant,
+                &input,
+                ctx.user_id,
+                Some(target_name.as_str()),
+            )
+            .await
+        } else {
+            None
+        };
+        let child_run_id = recorded.as_ref().map(|(id, _)| *id).unwrap_or(ctx.run_id);
+        let _guard = recorded.as_ref().map(|(run_id, index_id)| {
+            SubworkflowRunGuard::new(self.pool.clone(), *run_id, *index_id)
+        });
+
         let mut sub_ctx = ExecutionContext {
             workflow_id: target_id,
-            run_id: ctx.run_id, // 轻量：复用父 run，不另起 run 行
+            run_id: child_run_id,
             trigger_type: "subworkflow".to_string(),
             trigger_data: input,
             user_id: ctx.user_id,
@@ -2954,17 +3173,32 @@ impl DagEngine {
         let mut new_stack = call_stack.to_vec();
         new_stack.push(ctx.workflow_id);
 
-        let sub_results = self.execute_dag(&sub_def, &mut sub_ctx, new_stack).await?;
+        let sub_results = self.execute_dag(&sub_def, &mut sub_ctx, new_stack).await;
 
-        // 子流程任一节点硬失败 ⇒ 让父节点也失败（父节点可用 allow_failure 容错）。
-        if let Some(failed) = sub_results.iter().find(|r| r.status == NodeStatus::Failed) {
-            return Err(AppError::InvalidQuery(format!(
-                "子工作流 '{}' 节点 '{}' 失败: {}",
-                target_slug,
-                failed.node_id,
-                failed.error.clone().unwrap_or_default()
-            )));
-        }
+        let elapsed_ms = started.elapsed().as_millis() as i64;
+        let sub_results = match sub_results {
+            Ok(results) => results,
+            Err(e) => {
+                let msg = e.to_string();
+                if let Some((run_id, index_id)) = recorded {
+                    finish_subworkflow_run(
+                        &self.pool,
+                        run_id,
+                        index_id,
+                        &sub_ctx.env_vars,
+                        &[],
+                        &JsonValue::Null,
+                        Some(&msg),
+                        elapsed_ms,
+                    )
+                    .await;
+                    if let Some(g) = &_guard {
+                        g.mark_finalized();
+                    }
+                }
+                return Err(e);
+            }
+        };
 
         // 返回值：取「实际执行过的」response 节点输出。node_outputs 仅含已执行节点
         // （被跳过分支上的 response 不会写入输出），因此 find_map 会按数组顺序取到
@@ -2982,6 +3216,34 @@ impl DagEngine {
             Some(v) => v,
             None => json!({ "nodes": sub_ctx.node_outputs }),
         };
+
+        if let Some((run_id, index_id)) = recorded {
+            finish_subworkflow_run(
+                &self.pool,
+                run_id,
+                index_id,
+                &sub_ctx.env_vars,
+                &sub_results,
+                &output,
+                None,
+                elapsed_ms,
+            )
+            .await;
+            if let Some(g) = &_guard {
+                g.mark_finalized();
+            }
+        }
+
+        // 子流程任一节点硬失败 ⇒ 让父节点也失败（父节点可用 allow_failure 容错）。
+        if let Some(failed) = sub_results.iter().find(|r| r.status == NodeStatus::Failed) {
+            return Err(AppError::InvalidQuery(format!(
+                "子工作流 '{}' 节点 '{}' 失败: {}",
+                target_slug,
+                failed.node_id,
+                failed.error.clone().unwrap_or_default()
+            )));
+        }
+
         Ok((output, None))
     }
 
@@ -3862,9 +4124,7 @@ end
             .get("connection_id")
             .and_then(|v| v.as_i64())
             .ok_or_else(|| {
-                AppError::InvalidQuery(
-                    "object_storage 节点缺少 connection_id（整数）".to_string(),
-                )
+                AppError::InvalidQuery("object_storage 节点缺少 connection_id（整数）".to_string())
             })?;
         let op = config
             .get("op")
@@ -4174,12 +4434,9 @@ end
                     .get("branch")
                     .and_then(|v| v.as_str())
                     .unwrap_or("default");
-                let expr = cond
-                    .get("expression")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let expr = cond.get("expression").unwrap_or(&JsonValue::Null);
 
-                if evaluate_expression(expr, ctx) {
+                if condition_expression_matches(expr, ctx) {
                     return Ok((
                         json!({ "matched_branch": branch }),
                         Some(branch.to_string()),
@@ -4201,8 +4458,8 @@ end
         // 形态 B（单表达式）：config.expression = "..."，命中走 "true" 边、否则走 "false" 边。
         // 这是前端画布（NodeConfigPanel / WorkflowCanvas 用 true/false sourceHandle）保存的结构，
         // 引擎需要兼容，否则 UI 里画出来的条件节点跑不起来。
-        if let Some(expr) = config.get("expression").and_then(|v| v.as_str()) {
-            let branch = if evaluate_expression(expr, ctx) {
+        if let Some(expr) = config.get("expression") {
+            let branch = if condition_expression_matches(expr, ctx) {
                 "true"
             } else {
                 "false"
@@ -4315,13 +4572,14 @@ fn is_db_write_node(node_type: &NodeType) -> bool {
 /// - `SELECT ... FOR UPDATE`（只读行锁）不会被误判——它不以 `AS (` 引出；
 /// - `WITH x AS (SELECT ...) SELECT`（只读 CTE）不匹配；
 /// - 关键字藏在注释或字符串字面量里的先被 [`strip_sql_literals_and_comments`] 剥掉，不误判。
-static DATA_MODIFYING_CTE_RE: once_cell::sync::Lazy<regex::Regex> =
-    once_cell::sync::Lazy::new(|| {
+static DATA_MODIFYING_CTE_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(
+    || {
         regex::Regex::new(
             r"(?i)\bas\s*(?:not\s+materialized\s+|materialized\s+)?\(\s*(?:insert|update|delete|merge)\b",
         )
         .expect("数据修改型 CTE 正则应当合法")
-    });
+    },
+);
 
 /// 剥掉 SQL 里的块注释 / 行注释 / 单引号字符串字面量（含 `''` 转义），
 /// 避免写关键字藏在注释或字面量里造成误判。替换成空格以保持词边界。
@@ -4671,6 +4929,16 @@ fn config_allow_failure(config: &JsonValue) -> bool {
         }
         Some(JsonValue::Number(n)) => n.as_f64().map(|f| f != 0.0).unwrap_or(false),
         _ => false,
+    }
+}
+
+/// Condition 的 `expression` 在 execute_dag 里会先被 `resolve_template` 整份渲染：
+/// 比较式（`{{x}} > 0`）仍是字符串；单个 `{{x}}` 则会被替换成原始 JSON 类型。
+/// 字符串继续走表达式求值；数组/对象/数字/布尔直接按 truthy 判断，避免 `as_str()` 丢成空串后恒为 false。
+fn condition_expression_matches(expr: &JsonValue, ctx: &ExecutionContext) -> bool {
+    match expr {
+        JsonValue::String(s) => evaluate_expression(s, ctx),
+        other => json_is_truthy(other),
     }
 }
 
@@ -5258,7 +5526,11 @@ mod tests {
     /// 若护栏未生效，同一用例会因连不上库而报连接错误，从而暴露漏拦。
     #[tokio::test]
     async fn enforce_blocks_db_write_nodes_before_touching_database() {
-        for node_type in [NodeType::DbExecute, NodeType::DbTransaction, NodeType::ForEach] {
+        for node_type in [
+            NodeType::DbExecute,
+            NodeType::DbTransaction,
+            NodeType::ForEach,
+        ] {
             let label = node_type_label(&node_type);
             let node = WorkflowNode {
                 id: "write_step".to_string(),
@@ -5461,7 +5733,8 @@ mod tests {
     #[test]
     fn side_effect_mock_now_covers_db_transaction_and_foreach() {
         // 回归：db_transaction / foreach 此前遗漏，现在 dry_run / prod_readonly 下也被拦。
-        let m = side_effect_mock(&NodeType::DbTransaction, false).expect("db_transaction 应被 mock");
+        let m =
+            side_effect_mock(&NodeType::DbTransaction, false).expect("db_transaction 应被 mock");
         assert_eq!(m["dry_run"], json!(true));
         let m = side_effect_mock(&NodeType::ForEach, true).expect("foreach 应被 mock");
         assert_eq!(m["blocked_by"], json!("production_readonly"));
@@ -6215,6 +6488,75 @@ mod tests {
             Some("{\"id\": \"{{trigger.uid}}\"}"),
             "input 应保持原文不被字符串替换"
         );
+    }
+
+    #[test]
+    fn subworkflow_run_is_recorded_only_for_real_parent_runs() {
+        let mut ctx = exec_ctx();
+        assert!(should_record_subworkflow_run(&ctx));
+
+        ctx.dry_run = true;
+        assert!(!should_record_subworkflow_run(&ctx));
+
+        ctx.dry_run = false;
+        ctx.run_id = 0;
+        assert!(
+            !should_record_subworkflow_run(&ctx),
+            "debug 路径 run_id=0 不应落子工作流 run"
+        );
+
+        ctx.run_id = 10;
+        ctx.workflow_id = 0;
+        assert!(!should_record_subworkflow_run(&ctx));
+    }
+
+    #[test]
+    fn summarize_subworkflow_run_uses_failed_node_and_response_output() {
+        let results = vec![
+            NodeExecutionResult {
+                node_id: "a".into(),
+                node_type: Some("code".into()),
+                status: NodeStatus::Success,
+                input: JsonValue::Null,
+                output: json!({"ok": true}),
+                elapsed_ms: 1,
+                error: None,
+                branch: None,
+            },
+            NodeExecutionResult {
+                node_id: "b".into(),
+                node_type: Some("code".into()),
+                status: NodeStatus::Failed,
+                input: JsonValue::Null,
+                output: JsonValue::Null,
+                elapsed_ms: 2,
+                error: Some("boom".into()),
+                branch: None,
+            },
+        ];
+        let summary = summarize_subworkflow_run(&results, json!({"from": "response"}));
+        assert_eq!(summary.status, "failed");
+        assert_eq!(summary.index_status, "failed");
+        assert_eq!(summary.error_message.as_deref(), Some("boom"));
+        assert_eq!(summary.final_output, json!({"from": "response"}));
+    }
+
+    #[test]
+    fn summarize_subworkflow_run_completed_when_no_hard_failure() {
+        let results = vec![NodeExecutionResult {
+            node_id: "a".into(),
+            node_type: Some("response".into()),
+            status: NodeStatus::Success,
+            input: JsonValue::Null,
+            output: json!(1),
+            elapsed_ms: 1,
+            error: None,
+            branch: None,
+        }];
+        let summary = summarize_subworkflow_run(&results, json!(1));
+        assert_eq!(summary.status, "completed");
+        assert_eq!(summary.index_status, "success");
+        assert!(summary.error_message.is_none());
     }
 
     #[test]
@@ -7264,6 +7606,200 @@ mod tests {
         }))
         .unwrap();
         assert!(camel_case.is_loop_back());
+    }
+
+    fn condition_node(id: &str, config: JsonValue) -> WorkflowNode {
+        WorkflowNode {
+            id: id.into(),
+            node_type: NodeType::Condition,
+            label: None,
+            config,
+        }
+    }
+
+    fn node_result<'a>(results: &'a [NodeExecutionResult], id: &str) -> &'a NodeExecutionResult {
+        results
+            .iter()
+            .find(|r| r.node_id == id)
+            .unwrap_or_else(|| panic!("missing node result {id}"))
+    }
+
+    /// 形态 A：`expression` 为单个 `{{node.path}}`，解析结果是非空数组时应命中分支。
+    /// 复现 wf40 `check_notify_open_id_found`：Mind records 非空却 matched_branch=false。
+    #[tokio::test]
+    async fn condition_form_a_nonempty_array_template_matches() {
+        let def = WorkflowDefinition {
+            nodes: vec![
+                transform_node(
+                    "src",
+                    json!({ "body": { "data": { "records": [{ "open_id": "ou_1" }] } } }),
+                ),
+                condition_node(
+                    "check",
+                    json!({
+                        "conditions": [{
+                            "branch": "found",
+                            "expression": "{{src.body.data.records}}"
+                        }],
+                        "default_branch": "false"
+                    }),
+                ),
+                transform_node("notify", json!("sent")),
+                transform_node("skip", json!("skipped")),
+            ],
+            edges: vec![
+                WorkflowEdge::new("src", "check", None),
+                WorkflowEdge::new("check", "notify", Some("found".into())),
+                WorkflowEdge::new("check", "skip", Some("false".into())),
+            ],
+        };
+        let mut ctx = exec_ctx();
+        let results = lazy_engine().execute(&def, &mut ctx).await.unwrap();
+        assert_eq!(
+            node_result(&results, "check").output["matched_branch"],
+            json!("found")
+        );
+        assert_eq!(node_result(&results, "notify").status, NodeStatus::Success);
+        assert_eq!(node_result(&results, "skip").status, NodeStatus::Skipped);
+    }
+
+    #[tokio::test]
+    async fn condition_form_a_empty_array_template_is_falsy() {
+        let def = WorkflowDefinition {
+            nodes: vec![
+                transform_node("src", json!({ "records": [] })),
+                condition_node(
+                    "check",
+                    json!({
+                        "conditions": [{
+                            "branch": "found",
+                            "expression": "{{src.records}}"
+                        }],
+                        "default_branch": "false"
+                    }),
+                ),
+                transform_node("notify", json!("sent")),
+                transform_node("skip", json!("skipped")),
+            ],
+            edges: vec![
+                WorkflowEdge::new("src", "check", None),
+                WorkflowEdge::new("check", "notify", Some("found".into())),
+                WorkflowEdge::new("check", "skip", Some("false".into())),
+            ],
+        };
+        let mut ctx = exec_ctx();
+        let results = lazy_engine().execute(&def, &mut ctx).await.unwrap();
+        assert_eq!(
+            node_result(&results, "check").output["matched_branch"],
+            json!("false")
+        );
+        assert_eq!(node_result(&results, "notify").status, NodeStatus::Skipped);
+        assert_eq!(node_result(&results, "skip").status, NodeStatus::Success);
+    }
+
+    /// 形态 B：单模板解析成数组后仍应走 true/false 边，不能因 as_str 失败而报错。
+    #[tokio::test]
+    async fn condition_form_b_nonempty_array_template_matches() {
+        let def = WorkflowDefinition {
+            nodes: vec![
+                transform_node("src", json!({ "records": [{ "open_id": "ou_1" }] })),
+                condition_node("check", json!({ "expression": "{{src.records}}" })),
+                transform_node("notify", json!("sent")),
+                transform_node("skip", json!("skipped")),
+            ],
+            edges: vec![
+                WorkflowEdge::new("src", "check", None),
+                WorkflowEdge::new("check", "notify", Some("true".into())),
+                WorkflowEdge::new("check", "skip", Some("false".into())),
+            ],
+        };
+        let mut ctx = exec_ctx();
+        let results = lazy_engine().execute(&def, &mut ctx).await.unwrap();
+        assert_eq!(node_result(&results, "check").status, NodeStatus::Success);
+        assert_eq!(
+            node_result(&results, "check").output["matched_branch"],
+            json!("true")
+        );
+        assert_eq!(node_result(&results, "notify").status, NodeStatus::Success);
+        assert_eq!(node_result(&results, "skip").status, NodeStatus::Skipped);
+    }
+
+    #[tokio::test]
+    async fn condition_form_a_number_and_bool_templates_are_truthy() {
+        let def = WorkflowDefinition {
+            nodes: vec![
+                transform_node("src", json!({ "count": 5, "ok": true })),
+                condition_node(
+                    "check_count",
+                    json!({
+                        "conditions": [{ "branch": "yes", "expression": "{{src.count}}" }],
+                        "default_branch": "no"
+                    }),
+                ),
+                condition_node(
+                    "check_ok",
+                    json!({
+                        "conditions": [{ "branch": "yes", "expression": "{{src.ok}}" }],
+                        "default_branch": "no"
+                    }),
+                ),
+                transform_node("after_count", json!("ok")),
+                transform_node("after_ok", json!("ok")),
+            ],
+            edges: vec![
+                WorkflowEdge::new("src", "check_count", None),
+                WorkflowEdge::new("check_count", "after_count", Some("yes".into())),
+                WorkflowEdge::new("after_count", "check_ok", None),
+                WorkflowEdge::new("check_ok", "after_ok", Some("yes".into())),
+            ],
+        };
+        let mut ctx = exec_ctx();
+        let results = lazy_engine().execute(&def, &mut ctx).await.unwrap();
+        assert_eq!(
+            node_result(&results, "check_count").output["matched_branch"],
+            json!("yes")
+        );
+        assert_eq!(
+            node_result(&results, "check_ok").output["matched_branch"],
+            json!("yes")
+        );
+        assert_eq!(
+            node_result(&results, "after_ok").status,
+            NodeStatus::Success
+        );
+    }
+
+    #[tokio::test]
+    async fn condition_form_a_comparison_expression_still_works() {
+        let def = WorkflowDefinition {
+            nodes: vec![
+                transform_node("src", json!({ "count": 5 })),
+                condition_node(
+                    "check",
+                    json!({
+                        "conditions": [{
+                            "branch": "found",
+                            "expression": "{{src.count}} > 0"
+                        }],
+                        "default_branch": "false"
+                    }),
+                ),
+                transform_node("notify", json!("sent")),
+                transform_node("skip", json!("skipped")),
+            ],
+            edges: vec![
+                WorkflowEdge::new("src", "check", None),
+                WorkflowEdge::new("check", "notify", Some("found".into())),
+                WorkflowEdge::new("check", "skip", Some("false".into())),
+            ],
+        };
+        let mut ctx = exec_ctx();
+        let results = lazy_engine().execute(&def, &mut ctx).await.unwrap();
+        assert_eq!(
+            node_result(&results, "check").output["matched_branch"],
+            json!("found")
+        );
+        assert_eq!(node_result(&results, "notify").status, NodeStatus::Success);
     }
 
     #[tokio::test]

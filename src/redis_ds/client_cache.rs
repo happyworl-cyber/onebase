@@ -65,8 +65,8 @@ pub async fn get_or_create(conn: &RedisConnection) -> Result<ConnectionManager> 
     };
     let info = build_connection_info(conn, password);
 
-    let client = Client::open(info)
-        .map_err(|e| AppError::Internal(format!("Redis 客户端创建失败: {e}")))?;
+    let client =
+        Client::open(info).map_err(|e| AppError::Internal(format!("Redis 客户端创建失败: {e}")))?;
 
     let connect_timeout = Duration::from_secs(conn.connect_timeout_secs.clamp(1, 60) as u64);
     let manager = tokio::time::timeout(connect_timeout, ConnectionManager::new(client))

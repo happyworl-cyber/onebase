@@ -67,7 +67,12 @@ pub async fn export_csv(
             operation_log::resource_type::TABLE,
             Some(format!("{}.{}", schema, table)),
             None,
-            format!("导出数据表「{}.{}」为 CSV（{} 行）", schema, table, rows.len()),
+            format!(
+                "导出数据表「{}.{}」为 CSV（{} 行）",
+                schema,
+                table,
+                rows.len()
+            ),
             Status::Success,
             None,
             None,
@@ -145,7 +150,12 @@ pub async fn export_json(
             operation_log::resource_type::TABLE,
             Some(format!("{}.{}", schema, table)),
             None,
-            format!("导出数据表「{}.{}」为 JSON（{} 行）", schema, table, rows.len()),
+            format!(
+                "导出数据表「{}.{}」为 JSON（{} 行）",
+                schema,
+                table,
+                rows.len()
+            ),
             Status::Success,
             None,
             None,

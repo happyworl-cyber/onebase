@@ -159,14 +159,17 @@ function workspaceRank(role: WorkspaceRole): number {
   return WORKSPACE_ROLE_ORDER[role] ?? 0
 }
 
-export function deriveWorkspaceCapabilities(role: WorkspaceRole): WorkspaceCapabilities {
+export function deriveWorkspaceCapabilities(
+  role: WorkspaceRole,
+  viaOrganization = false,
+): WorkspaceCapabilities {
   const r = workspaceRank(role)
   return {
     canManageProjectSettings: r >= WORKSPACE_ROLE_ORDER.owner,
     canManageMembers: r >= WORKSPACE_ROLE_ORDER.admin,
     canManageSecurity: r >= WORKSPACE_ROLE_ORDER.admin,
     canManageEvents: r >= WORKSPACE_ROLE_ORDER.admin,
-    canWriteDatabase: r >= WORKSPACE_ROLE_ORDER.member,
+    canWriteDatabase: !viaOrganization && r >= WORKSPACE_ROLE_ORDER.member,
     canCallApi: r >= WORKSPACE_ROLE_ORDER.viewer,
   }
 }
@@ -180,6 +183,56 @@ export function deriveWorkspaceCapabilities(role: WorkspaceRole): WorkspaceCapab
  * 元数据后会自动重派生，触发 React 重渲染显示更多入口。
  */
 export function useCurrentProjectCapabilities(): WorkspaceCapabilities {
-  const role = useAppStore((s) => s.currentProject?.user_role ?? 'viewer')
-  return deriveWorkspaceCapabilities(role)
+  const currentProject = useAppStore((s) => s.currentProject)
+  return deriveWorkspaceCapabilities(
+    currentProject?.user_role ?? 'viewer',
+    !!currentProject?.via_organization,
+  )
+}
+
+// ============================================================
+// 组织（租户）层 UI 能力
+// ============================================================
+
+export type OrganizationRole = 'superadmin' | 'owner' | 'admin' | 'member' | string
+
+export interface OrganizationCapabilities {
+  canManageOrgSettings: boolean
+  canManageOrgMembers: boolean
+  canCreateProject: boolean
+  canViewAllProjects: boolean
+  /** 转让 owner / 授予 owner / 归档项目 */
+  canTransferOwner: boolean
+  canArchiveProject: boolean
+  /** 租户级操作日志 / 执行日志 */
+  canViewOrgLogs: boolean
+}
+
+const ORG_ROLE_ORDER: Record<string, number> = {
+  superadmin: 100,
+  owner: 80,
+  admin: 60,
+  member: 40,
+}
+
+export function deriveOrganizationCapabilities(
+  role: OrganizationRole,
+): OrganizationCapabilities {
+  const r = ORG_ROLE_ORDER[role] ?? 0
+  const isOwnerPlus = r >= ORG_ROLE_ORDER.owner
+  const isAdminPlus = r >= ORG_ROLE_ORDER.admin
+  return {
+    canManageOrgSettings: isOwnerPlus,
+    canManageOrgMembers: isAdminPlus,
+    canCreateProject: isAdminPlus,
+    canViewAllProjects: isAdminPlus,
+    canTransferOwner: isOwnerPlus,
+    canArchiveProject: isOwnerPlus,
+    canViewOrgLogs: isAdminPlus,
+  }
+}
+
+export function useCurrentOrganizationCapabilities(): OrganizationCapabilities {
+  const role = useAppStore((s) => s.currentOrganization?.user_role ?? 'member')
+  return deriveOrganizationCapabilities(role)
 }

@@ -117,15 +117,16 @@ pub async fn sql_auth_middleware(
                         !revoked && expires_at.map(|t| t > chrono::Utc::now()).unwrap_or(false);
                     if active {
                         let path_db_id = ddl_handlers::resolve_ddl_database_id_for_user(
-                            &pool, &claims, &path_db_seg,
+                            &pool,
+                            &claims,
+                            &path_db_seg,
                         )
                         .await?;
                         if let Ok(v) = HeaderValue::from_str(&path_db_id.to_string()) {
                             req.headers_mut().insert("X-Database-Id", v);
                         }
                         req.extensions_mut().insert(claims.clone());
-                        req.extensions_mut()
-                            .insert(DdlAuthSubject::User(claims));
+                        req.extensions_mut().insert(DdlAuthSubject::User(claims));
                         return Ok(next.run(req).await);
                     }
                 }
@@ -205,9 +206,10 @@ pub async fn sql_auth_middleware(
 }
 
 fn require_database_id(opt: Option<Extension<CurrentDatabaseId>>) -> Result<i32> {
-    opt.map(|Extension(CurrentDatabaseId(id))| id).ok_or_else(|| {
-        AppError::InvalidQuery("缺少 X-Database-Id 请求头，无法在租户库上执行 DDL".to_string())
-    })
+    opt.map(|Extension(CurrentDatabaseId(id))| id)
+        .ok_or_else(|| {
+            AppError::InvalidQuery("缺少 X-Database-Id 请求头，无法在租户库上执行 DDL".to_string())
+        })
 }
 
 fn actor_label(subject: &DdlAuthSubject) -> String {
@@ -284,7 +286,10 @@ pub async fn v1_execute_raw_ddl(
         return Err(e);
     }
     if let Err(e) = raw_sql_guard::check_forbidden_session_commands(sql) {
-        push_audit("v1_raw_ddl_blocked", Some("forbidden_listen_unlisten_command"));
+        push_audit(
+            "v1_raw_ddl_blocked",
+            Some("forbidden_listen_unlisten_command"),
+        );
         return Err(e);
     }
     if let Err(e) = raw_sql_guard::require_ddl_only_sql_type(sql_type) {

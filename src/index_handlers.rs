@@ -410,7 +410,10 @@ pub async fn create_index(
         operation_log::resource_type::INDEX,
         Some(req.name.clone()),
         None,
-        format!("在「{}.{}」上创建索引「{}」", req.schema, req.table, req.name),
+        format!(
+            "在「{}.{}」上创建索引「{}」",
+            req.schema, req.table, req.name
+        ),
         Status::Success,
         None,
         Some(json!({

@@ -72,6 +72,17 @@ interface Tenant {
  *
  * 这里 export 是因为 ProjectTopbar / WorkspacePicker 等组件需要直接用类型。
  */
+/** 产品「租户/组织」——一个组织下可有多个项目 */
+export interface Organization {
+  id: number
+  name: string
+  slug: string
+  status: string
+  contact_email?: string | null
+  /** 当前用户在组织中的角色：owner | admin | member | superadmin */
+  user_role: string
+}
+
 export interface Project {
   id: number
   name: string
@@ -79,6 +90,8 @@ export interface Project {
   status: string
   kind: string
   contact_email?: string | null
+  organization_id?: number | null
+  organization_name?: string | null
   workspace_config?: Record<string, unknown> | null
   /**
    * 当前登录用户在该项目里的角色：
@@ -86,6 +99,8 @@ export interface Project {
    * 仅作为前端 UI 能力门槛的 hint；真值在后端 RBAC 表里。
    */
   user_role: string
+  /** 通过组织 admin/owner 身份进入、尚未加入为项目成员时为 true（GET /api/projects/:id） */
+  via_organization?: boolean
   /**
    * 项目主连接（W2）。工作空间 layout 拿到后立刻 setCurrentConnection，
    * 让所有现有 schemaAPI / queryAPI / rpcAPI 在不改业务代码的情况下直接
@@ -114,6 +129,10 @@ interface AppState {
   // W1 工作空间：当前进入的项目
   currentProject: Project | null
   setCurrentProject: (project: Project | null) => void
+
+  // 组织（租户）上下文：选项目前先选组织
+  currentOrganization: Organization | null
+  setCurrentOrganization: (org: Organization | null) => void
 
   // 新的多租户连接管理
   currentConnection: UserConnection | null
@@ -188,6 +207,28 @@ export const useAppStore = create<AppState>()((set, get) => ({
         localStorage.setItem('current_project', JSON.stringify(project))
       } else {
         localStorage.removeItem('current_project')
+      }
+    }
+  },
+
+  currentOrganization:
+    typeof window !== 'undefined'
+      ? (() => {
+          try {
+            const raw = localStorage.getItem('current_organization')
+            return raw ? (JSON.parse(raw) as Organization) : null
+          } catch {
+            return null
+          }
+        })()
+      : null,
+  setCurrentOrganization: (org) => {
+    set({ currentOrganization: org })
+    if (typeof window !== 'undefined') {
+      if (org) {
+        localStorage.setItem('current_organization', JSON.stringify(org))
+      } else {
+        localStorage.removeItem('current_organization')
       }
     }
   },

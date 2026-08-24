@@ -153,6 +153,11 @@ pub struct ScheduledTask {
     pub claimed_at: Option<DateTime<Utc>>,
     pub claimed_by: Option<String>,
     pub created_by: i32,
+    /// 列表 JOIN users 后填充；`SELECT *` / `RETURNING *` 无此列时为 None
+    #[sqlx(default)]
+    pub created_by_name: Option<String>,
+    #[sqlx(default)]
+    pub created_by_email: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

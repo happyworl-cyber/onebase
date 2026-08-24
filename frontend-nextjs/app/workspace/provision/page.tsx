@@ -9,9 +9,10 @@
  *   3. 确认 → POST /api/projects/provision（固定使用 blank 模板）
  */
 
-import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { Suspense, useEffect, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import {
+  organizationAPI,
   pgPoolAPI,
   projectProvisionAPI,
   type ManualPgConnection,
@@ -19,6 +20,7 @@ import {
   type PlatformPgInstance,
   type ProvisionWebhookConfig,
 } from '@/lib/api'
+import { useAppStore } from '@/lib/store'
 import { useNotification } from '@/hooks/useNotification'
 
 type StepId = 'name' | 'pool' | 'review'
@@ -54,8 +56,31 @@ function isManualPgValid(pg: ManualPgConnection): boolean {
 }
 
 export default function ProvisionWizardPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-gray-50">
+          <div className="text-sm text-gray-500">
+            <i className="fas fa-spinner fa-spin mr-2"></i>加载中…
+          </div>
+        </div>
+      }
+    >
+      <ProvisionWizardInner />
+    </Suspense>
+  )
+}
+
+function ProvisionWizardInner() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const notify = useNotification()
+  const currentOrganization = useAppStore((s) => s.currentOrganization)
+
+  const orgIdFromQuery = searchParams.get('org')
+  const organizationId = orgIdFromQuery
+    ? parseInt(orgIdFromQuery, 10)
+    : currentOrganization?.id ?? null
 
   const [authChecked, setAuthChecked] = useState(false)
   useEffect(() => {
@@ -64,8 +89,14 @@ export default function ProvisionWizardPage() {
       router.replace('/login')
       return
     }
+    // 必须挂在租户下开通项目，禁止无 organization_id 的隐式建租户
+    if (!organizationId || !Number.isFinite(organizationId)) {
+      notify.error('请从租户控制台进入「新建项目」')
+      router.replace('/orgs')
+      return
+    }
     setAuthChecked(true)
-  }, [router])
+  }, [router, organizationId, notify])
 
   const [stepIdx, setStepIdx] = useState(0)
   const [name, setName] = useState('')
@@ -145,14 +176,14 @@ export default function ProvisionWizardPage() {
     if (!pgStepValid) return
     setSubmitting(true)
     try {
-      const res = await projectProvisionAPI.provision({
+      const body = {
         name: name.trim(),
         slug,
         ...(pgMode === 'platform'
-          ? { use_platform_pg: true }
+          ? { use_platform_pg: true as const }
           : pgMode === 'webhook'
             ? {
-                use_provision_webhook: true,
+                use_provision_webhook: true as const,
                 requested_resources: webhookWantRedis
                   ? ['postgresql', 'redis']
                   : ['postgresql'],
@@ -161,7 +192,14 @@ export default function ProvisionWizardPage() {
               ? { pg_pool_id: poolId }
               : { pg_connection: manualPg }),
         template_slug: DEFAULT_TEMPLATE_SLUG,
-      })
+        ...(organizationId && Number.isFinite(organizationId)
+          ? { organization_id: organizationId }
+          : {}),
+      }
+      const res =
+        organizationId && Number.isFinite(organizationId)
+          ? await organizationAPI.createProject(organizationId, body)
+          : await projectProvisionAPI.provision(body)
       if (res.data.provisioned) {
         notify.success(`已创建项目 ${res.data.name}`)
       } else {

@@ -360,12 +360,7 @@ pub fn tool_definitions() -> Value {
 }
 
 /// tools/call 分发：返回 Ok(工具结果 JSON)；业务失败以 AppError 上抛，由 server 层转 isError 内容
-pub async fn call_tool(
-    pool: &PgPool,
-    claims: &Claims,
-    name: &str,
-    args: &Value,
-) -> Result<Value> {
+pub async fn call_tool(pool: &PgPool, claims: &Claims, name: &str, args: &Value) -> Result<Value> {
     match name {
         "node_spec" => Ok(json!({ "spec": NODE_SPEC })),
         "list_workflows" => tool_list_workflows(pool, claims, args).await,
@@ -448,7 +443,13 @@ fn require_id(args: &Value) -> Result<i32> {
 
 async fn tool_list_workflows(pool: &PgPool, claims: &Claims, args: &Value) -> Result<Value> {
     let mut params: HashMap<String, String> = HashMap::new();
-    for key in ["database_id", "tenant_id", "department", "category", "search"] {
+    for key in [
+        "database_id",
+        "tenant_id",
+        "department",
+        "category",
+        "search",
+    ] {
         if let Some(v) = args.get(key) {
             let s = match v {
                 Value::String(s) => s.clone(),
