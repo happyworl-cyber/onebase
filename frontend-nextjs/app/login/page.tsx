@@ -57,7 +57,7 @@ function LoginPageInner() {
   //      handleLogin 里如果拿到了 token 会主动做一次 /api/projects 直跳，省一次
   //      渲染 flash；这里只作为最后兜底（auto-redirect 路径不便发请求）。
   const targetAfterLogin = (isSuperadmin: boolean) =>
-    safeNext ?? (isSuperadmin ? '/platform' : '/workspace')
+    safeNext ?? (isSuperadmin ? '/platform/organizations' : '/orgs')
 
   /**
    * 登录成功后统一走"浏览器级导航"而不是 App Router SPA push。
@@ -113,15 +113,12 @@ function LoginPageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isExpiredSession])
 
-  // SSO 回调处理：如果 URL 带 token 参数则自动登录
-  // SSO 回来时还不知道 is_superadmin（没经过 /auth/login 拿 user 字段），
-  // 简单兜底走 /workspace；超管会被 /workspace picker 直接发回 /platform
-  // （picker 拿到空列表后会在 superadmin 分支显示"前往 /platform"的引导）。
+  // SSO 回调：落地租户选择（/orgs 会再按组织数派发）
   useEffect(() => {
     const token = searchParams.get('token')
     if (token) {
       setAuthToken(token)
-      navigateAfterLogin(safeNext ?? '/workspace')
+      navigateAfterLogin(safeNext ?? '/orgs')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, router])
@@ -157,23 +154,21 @@ function LoginPageInner() {
         return
       }
 
-      // 非超管：用新 token 立刻查一下项目数，直接派最终页面，避免先去 /workspace
-      // 再 replace 一跳的视觉 flash（spec §3.2.1）。失败兜底回 /workspace 让
-      // picker 自己再试一遍。
+      // 非超管：按租户数派发（0 → 引导页；1 → 租户控制台；多 → 选择页）
       try {
-        const projectsResp = await axios.get('/api/projects', {
+        const orgsResp = await axios.get('/api/organizations', {
           headers: { Authorization: `Bearer ${token}` },
         })
-        const list: Array<{ id: number }> = projectsResp.data?.projects ?? []
+        const list: Array<{ id: number }> = orgsResp.data?.organizations ?? []
         if (list.length === 0) {
           navigateAfterLogin('/workspace/no-projects')
         } else if (list.length === 1) {
-          navigateAfterLogin(`/workspace/${list[0].id}`)
+          navigateAfterLogin(`/org/${list[0].id}`)
         } else {
-          navigateAfterLogin('/workspace')
+          navigateAfterLogin('/orgs')
         }
       } catch {
-        navigateAfterLogin('/workspace')
+        navigateAfterLogin('/orgs')
       }
     } catch (err: any) {
       setError(err.response?.data?.error || '登录失败')

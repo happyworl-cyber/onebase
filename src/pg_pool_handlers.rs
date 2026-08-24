@@ -262,12 +262,7 @@ pub async fn list_available_pg_pools(
             .iter()
             .map(|e| {
                 let is_platform = platform.as_ref().is_some_and(|p| {
-                    pg_pool_helpers::same_pg_endpoint(
-                        &e.db_host,
-                        e.db_port,
-                        &p.db_host,
-                        p.db_port,
-                    )
+                    pg_pool_helpers::same_pg_endpoint(&e.db_host, e.db_port, &p.db_host, p.db_port)
                 });
                 entry_to_user_json(e, is_platform)
             })

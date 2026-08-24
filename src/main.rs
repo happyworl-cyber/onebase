@@ -22,10 +22,15 @@ mod execution_log_handlers;
 mod export_handlers;
 mod gateway_handlers;
 mod handlers;
+mod http_async_poll;
 mod idp_handlers;
 mod idp_oidc;
 mod index_handlers;
+mod js_deps;
+mod js_host_bridge;
+mod js_runner;
 mod kafka_app_handlers;
+mod kafka_ds;
 mod kafka_handlers;
 mod logging;
 mod lua_builtins;
@@ -40,6 +45,7 @@ mod object_storage_ds;
 mod object_storage_handlers;
 mod operation_log;
 mod operation_log_handlers;
+mod organization_handlers;
 mod pat_handlers;
 mod permission_cache;
 mod permissions;
@@ -55,6 +61,8 @@ mod postgrest_compat;
 mod provision_webhook;
 mod public_base;
 mod public_base_settings;
+mod py_deps;
+mod py_runner;
 mod query_builder;
 mod query_cache;
 mod query_perf_handlers;
@@ -64,7 +72,6 @@ mod rbac_handlers;
 mod rbac_middleware;
 mod rbac_models;
 mod realtime;
-mod kafka_ds;
 mod redis_ds;
 mod redis_handlers;
 mod redis_manager;
@@ -93,19 +100,13 @@ mod transaction;
 mod watchdog;
 mod webhook_handlers;
 mod webhook_manager;
-mod http_async_poll;
-mod js_deps;
-mod js_host_bridge;
-mod js_runner;
-mod py_deps;
-mod py_runner;
-mod workflow_engine;
-mod workflow_handlers;
-mod workflow_folder_handlers;
-mod workflow_taxonomy;
 mod workflow_cron_trigger;
+mod workflow_engine;
+mod workflow_folder_handlers;
+mod workflow_handlers;
 mod workflow_kafka_trigger;
 mod workflow_notify_trigger;
+mod workflow_taxonomy;
 mod workflow_trigger;
 
 // binary 侧 `mod workflow_engine` 与 lib 共用源文件，需在此 re-export 批量配置模块。
@@ -192,7 +193,10 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
             if let Err(e) = pg_pool_helpers::ensure_platform_pg_pool_entry(&pool).await {
-                tracing::warn!("自动注册 platform-default PG 池失败（可手工在 /platform/pg-pools 添加）: {}", e);
+                tracing::warn!(
+                    "自动注册 platform-default PG 池失败（可手工在 /platform/pg-pools 添加）: {}",
+                    e
+                );
             }
         }
         Err(e) => {
@@ -273,7 +277,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/health/live", get(health_live))
         .route("/health/ready", get(health_ready))
         .route("/api/license", get(license_status_handler))
-        .route("/api/providers", get(idp_handlers::list_available_providers))
+        .route(
+            "/api/providers",
+            get(idp_handlers::list_available_providers),
+        )
         .route(
             "/.well-known/openid-configuration",
             get(idp_oidc::oidc_discovery),
@@ -288,13 +295,11 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/oauth2/callback/:provider",
-            get(idp_oidc::oauth2_upstream_callback)
-                .post(idp_oidc::oauth2_upstream_callback_post),
+            get(idp_oidc::oauth2_upstream_callback).post(idp_oidc::oauth2_upstream_callback_post),
         )
         .route(
             "/auth/sso/:provider/callback",
-            get(idp_oidc::oauth2_upstream_callback)
-                .post(idp_oidc::oauth2_upstream_callback_post),
+            get(idp_oidc::oauth2_upstream_callback).post(idp_oidc::oauth2_upstream_callback_post),
         )
         .route("/auth/register", post(auth_handlers::register))
         .route("/auth/login", post(auth_handlers::login));
@@ -501,10 +506,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/monitor/connections",
             get(monitor_handlers::get_active_connections),
         )
-        .route(
-            "/api/monitor/locks",
-            get(monitor_handlers::get_lock_waits),
-        )
+        .route("/api/monitor/locks", get(monitor_handlers::get_lock_waits))
         .layer(axum_middleware::from_fn_with_state(
             pool.clone(),
             middleware::dynamic_db_middleware,
@@ -553,6 +555,84 @@ async fn main() -> anyhow::Result<()> {
             "/api/projects/:id",
             get(tenant_handlers::get_project).patch(tenant_handlers::patch_project),
         )
+        // Organization（产品「租户」）→ Project 层级
+        .route(
+            "/api/organizations",
+            get(organization_handlers::list_organizations)
+                .post(organization_handlers::create_organization),
+        )
+        .route(
+            "/api/organizations/:id",
+            get(organization_handlers::get_organization)
+                .patch(organization_handlers::patch_organization),
+        )
+        .route(
+            "/api/organizations/:id/members",
+            get(organization_handlers::list_organization_members)
+                .post(organization_handlers::add_organization_member),
+        )
+        .route(
+            "/api/organizations/:id/member-candidates",
+            get(organization_handlers::search_organization_member_candidates),
+        )
+        .route(
+            "/api/organizations/:id/members/:user_id",
+            patch(organization_handlers::update_organization_member)
+                .delete(organization_handlers::remove_organization_member),
+        )
+        .route(
+            "/api/organizations/:id/projects",
+            get(organization_handlers::list_organization_projects)
+                .post(organization_handlers::create_organization_project),
+        )
+        .route(
+            "/api/organizations/:id/stats",
+            get(organization_handlers::organization_stats),
+        )
+        .route(
+            "/api/organizations/:id/member-project-matrix",
+            get(organization_handlers::organization_member_project_matrix),
+        )
+        .route(
+            "/api/organizations/:id/security-overview",
+            get(organization_handlers::organization_security_overview),
+        )
+        .route(
+            "/api/organizations/:id/transfer-owner",
+            post(organization_handlers::transfer_organization_owner),
+        )
+        .route(
+            "/api/organizations/:id/projects/:project_id",
+            patch(organization_handlers::patch_organization_project),
+        )
+        .route(
+            "/api/organizations/:id/projects/:project_id/members",
+            post(organization_handlers::add_organization_project_member),
+        )
+        .route(
+            "/api/organizations/:id/operation-logs",
+            get(operation_log_handlers::list_organization_operation_logs),
+        )
+        .route(
+            "/api/organizations/:id/operation-logs/stats",
+            get(operation_log_handlers::organization_operation_log_stats),
+        )
+        .route(
+            "/api/organizations/:id/operation-logs/actors",
+            get(operation_log_handlers::list_organization_operation_log_actors),
+        )
+        .route(
+            "/api/organizations/:id/operation-logs/facets",
+            get(operation_log_handlers::organization_operation_log_facets),
+        )
+        .route(
+            "/api/organizations/:id/operation-logs/export",
+            get(operation_log_handlers::export_organization_operation_logs),
+        )
+        .route(
+            "/api/organizations/:id/operation-logs/:log_id",
+            get(operation_log_handlers::get_organization_operation_log),
+        )
         // M2 wizard 只读支撑数据（用户视角）：池清单 + 平台 PG 实例。
         // 路径挂在 /api/provision/... 下，避免被旧版 `/api/:schema/:table` 误匹配。
         .route(
@@ -571,7 +651,9 @@ async fn main() -> anyhow::Result<()> {
             "/api/project-templates",
             get(tenant_handlers::list_project_templates),
         )
-        // M2 主端点：自助开通新项目；caller 自动成为 owner
+        // M2 主端点：自助开通新项目；caller 自动成为 owner。
+        // Deprecated：无 organization_id 时会隐式建个人组织——新客户端请用
+        // POST /api/organizations/:id/projects，或在 body 中传 organization_id。
         // 路由级再叠一层平台令牌 scope 校验：obp_ 令牌须持有 project:create（JWT 用户不受限）。
         .route(
             "/api/projects/provision",
@@ -641,8 +723,7 @@ async fn main() -> anyhow::Result<()> {
         // 路由级 auth_middleware，handler 内 require_tenant_admin。凭证密钥永不回显。
         .route(
             "/api/projects/:id/wf-credentials",
-            get(datasource_handlers::list_credentials)
-                .post(datasource_handlers::create_credential),
+            get(datasource_handlers::list_credentials).post(datasource_handlers::create_credential),
         )
         .route(
             "/api/projects/:id/wf-credentials/:cred_id",
@@ -651,8 +732,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/api/projects/:id/wf-datasources",
-            get(datasource_handlers::list_datasources)
-                .post(datasource_handlers::create_datasource),
+            get(datasource_handlers::list_datasources).post(datasource_handlers::create_datasource),
         )
         // 测试连接需注册在 `/:ds_id` 之前，避免 axum 把 "test" 当作 ds_id 之外的静态段冲突。
         .route(
@@ -960,10 +1040,7 @@ async fn main() -> anyhow::Result<()> {
             "/auth/sso/:provider/authorize",
             get(sso_handlers::sso_authorize),
         )
-        .route(
-            "/auth/sso/exchange",
-            post(sso_handlers::sso_exchange),
-        );
+        .route("/auth/sso/exchange", post(sso_handlers::sso_exchange));
 
     // SSO Provider 管理（超管 + 租户 owner/admin）
     //
@@ -1332,6 +1409,11 @@ async fn main() -> anyhow::Result<()> {
             "/api/admin/workflows/export-audit",
             post(workflow_handlers::export_workflows_audit),
         )
+        // 依赖图浏览器：全量工作流 + call_workflow 依赖边，只读聚合；静态段，须在 `/:id` 之前。
+        .route(
+            "/api/admin/workflows/dependency-graph",
+            get(workflow_handlers::workflow_dependency_graph),
+        )
         .route(
             "/api/admin/workflows/:id",
             get(workflow_handlers::get_workflow)
@@ -1349,6 +1431,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/admin/workflows/:id/runs",
             get(workflow_handlers::get_workflow_runs),
+        )
+        .route(
+            "/api/admin/workflows/:id/runs/:run_id",
+            get(workflow_handlers::get_workflow_run_detail),
         )
         // 接口文档公开分享：读状态 / 开关分享。
         .route(
@@ -1724,8 +1810,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/api/admin/kafka-connections/:id/tokens/:token_id",
-            axum::routing::patch(kafka_handlers::update_token)
-                .delete(kafka_handlers::delete_token),
+            axum::routing::patch(kafka_handlers::update_token).delete(kafka_handlers::delete_token),
         )
         .route(
             "/api/kafka-connections/:id/exec",
@@ -1868,14 +1953,8 @@ async fn main() -> anyhow::Result<()> {
                 "/:index",
                 get(es::app_handlers::get_index_info).delete(es::app_handlers::delete_index),
             )
-            .route(
-                "/:index/_init",
-                post(es::app_handlers::init_index),
-            )
-            .route(
-                "/:index/docs",
-                post(es::app_handlers::create_doc),
-            )
+            .route("/:index/_init", post(es::app_handlers::init_index))
+            .route("/:index/docs", post(es::app_handlers::create_doc))
             .route(
                 "/:index/docs/:id",
                 get(es::app_handlers::get_doc)
@@ -2353,8 +2432,14 @@ mod sql_type_tests {
             raw_sql_guard::get_sql_type("REFRESH MATERIALIZED VIEW gamesq.member_list_stats_mv"),
             "UTILITY"
         );
-        assert_eq!(raw_sql_guard::get_sql_type("VACUUM public.orders"), "UTILITY");
-        assert_eq!(raw_sql_guard::get_sql_type("ANALYZE public.orders"), "UTILITY");
+        assert_eq!(
+            raw_sql_guard::get_sql_type("VACUUM public.orders"),
+            "UTILITY"
+        );
+        assert_eq!(
+            raw_sql_guard::get_sql_type("ANALYZE public.orders"),
+            "UTILITY"
+        );
     }
 }
 
@@ -2684,7 +2769,11 @@ async fn health_ready(
     // （默认 30s），远超探针自身超时，反而放大探测抖动。这里包一层 2s 超时——2s 内拿不到
     // 连接即视为"未就绪"，让上游负载均衡快速摘流，而不是把探针也拖死。
     let db_ok = matches!(
-        tokio::time::timeout(Duration::from_secs(2), sqlx::query("SELECT 1").execute(&pool)).await,
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            sqlx::query("SELECT 1").execute(&pool)
+        )
+        .await,
         Ok(Ok(_))
     );
 

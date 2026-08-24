@@ -57,7 +57,10 @@ fn parse_opts(args: &[String]) -> HashMap<String, String> {
     while i < args.len() {
         let a = &args[i];
         if let Some(key) = a.strip_prefix("--") {
-            let next_is_value = args.get(i + 1).map(|v| !v.starts_with("--")).unwrap_or(false);
+            let next_is_value = args
+                .get(i + 1)
+                .map(|v| !v.starts_with("--"))
+                .unwrap_or(false);
             if next_is_value {
                 map.insert(key.to_string(), args[i + 1].clone());
                 i += 2;
@@ -96,9 +99,7 @@ fn cmd_fingerprint() -> Result<(), String> {
 }
 
 fn cmd_issue(opts: &HashMap<String, String>) -> Result<(), String> {
-    let priv_path = opts
-        .get("priv")
-        .ok_or("缺少 --priv <私钥 PEM 路径>")?;
+    let priv_path = opts.get("priv").ok_or("缺少 --priv <私钥 PEM 路径>")?;
     let customer = opts
         .get("customer")
         .ok_or("缺少 --customer <客户名称>")?

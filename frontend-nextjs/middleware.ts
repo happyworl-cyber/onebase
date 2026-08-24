@@ -15,7 +15,7 @@ import type { NextRequest } from 'next/server'
  * middleware 的职责仅限"边缘剪枝"，不替代后端鉴权 —— 真正的 token 验签 +
  * 会话有效性（jti 是否被吊销、是否过期）仍由后端 `auth_middleware` 完成。
  */
-const PROTECTED_PREFIXES = ['/dashboard', '/platform', '/workspace'] as const
+const PROTECTED_PREFIXES = ['/dashboard', '/platform', '/workspace', '/account'] as const
 
 const TOKEN_COOKIE = 'onebase_token'
 
@@ -91,10 +91,18 @@ export function middleware(req: NextRequest) {
 }
 
 /**
- * matcher 只匹配受保护的三棵子树（dashboard / platform / workspace），避免
- * middleware 在静态资源 / API rewrite 路径（/api/*、/auth/*、/rest/* 等）上
- * 无谓地多跑一次。/workspace 是 W2 引入的新业务前缀。
+ * matcher 匹配受保护业务前缀，避免在静态资源 / API rewrite 上白跑。
+ * /orgs、/org 为租户层；/workspace 为项目工作区。
  */
 export const config = {
-  matcher: ['/dashboard/:path*', '/platform/:path*', '/workspace/:path*'],
+  matcher: [
+    '/dashboard/:path*',
+    '/platform/:path*',
+    '/workspace/:path*',
+    '/account',
+    '/account/:path*',
+    '/orgs',
+    '/orgs/:path*',
+    '/org/:path*',
+  ],
 }

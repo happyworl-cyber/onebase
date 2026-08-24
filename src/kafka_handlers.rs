@@ -103,11 +103,8 @@ pub async fn list_connections(
     } else {
         audit_handlers::admin_tenant_ids(&pool, &claims).await?
     };
-    let filter = crate::permissions::resolve_tenant_list_filter(
-        claims.is_superadmin,
-        q.tenant_id,
-        &admins,
-    )?;
+    let filter =
+        crate::permissions::resolve_tenant_list_filter(claims.is_superadmin, q.tenant_id, &admins)?;
     let rows = match filter {
         crate::permissions::TenantListFilter::One(tenant_id) => {
             sqlx::query_as::<_, KafkaConnection>(
@@ -337,13 +334,8 @@ pub async fn create_topic(
         )));
     }
     Ok(Json(
-        commands::create_topic(
-            &conn,
-            &req.name,
-            req.num_partitions,
-            req.replication_factor,
-        )
-        .await?,
+        commands::create_topic(&conn, &req.name, req.num_partitions, req.replication_factor)
+            .await?,
     ))
 }
 
@@ -512,9 +504,12 @@ pub async fn create_token(
     if req.name.trim().is_empty() {
         return Err(AppError::InvalidQuery("token name 不能为空".to_string()));
     }
-    let ops = req
-        .allowed_ops
-        .unwrap_or_else(|| kafka_auth::DEFAULT_OPS.iter().map(|s| s.to_string()).collect());
+    let ops = req.allowed_ops.unwrap_or_else(|| {
+        kafka_auth::DEFAULT_OPS
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    });
     kafka_auth::validate_ops(&ops)?;
     let topics = req.topic_allowlist.unwrap_or_else(|| vec!["*".to_string()]);
     if topics.is_empty() {

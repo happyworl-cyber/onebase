@@ -163,7 +163,8 @@ pub async fn is_gateway_mode(pool: &PgPool, tenant_id: Option<i32>) -> bool {
             return true;
         }
     }
-    get_base_url(pool, None).await.is_some() || crate::public_base::configured_public_base().is_some()
+    get_base_url(pool, None).await.is_some()
+        || crate::public_base::configured_public_base().is_some()
 }
 
 #[derive(Deserialize)]

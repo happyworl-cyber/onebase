@@ -33,7 +33,9 @@ pub fn decode_input(input: &str, encoding: &str) -> CryptoResult<Vec<u8>> {
         "base64url" => general_purpose::URL_SAFE_NO_PAD
             .decode(input.trim_end_matches('='))
             .map_err(|e| format!("base64url 解码失败: {e}")),
-        other => Err(format!("不支持的输入编码: {other}（可选 utf8/hex/base64/base64url）")),
+        other => Err(format!(
+            "不支持的输入编码: {other}（可选 utf8/hex/base64/base64url）"
+        )),
     }
 }
 
@@ -45,7 +47,9 @@ pub fn encode_output(data: &[u8], encoding: &str) -> CryptoResult<String> {
         "base64url" => Ok(general_purpose::URL_SAFE_NO_PAD.encode(data)),
         "utf8" | "utf-8" | "raw" | "" => String::from_utf8(data.to_vec())
             .map_err(|e| format!("UTF-8 输出失败（密文/二进制请用 base64 或 hex 输出）: {e}")),
-        other => Err(format!("不支持的输出编码: {other}（可选 utf8/hex/base64/base64url）")),
+        other => Err(format!(
+            "不支持的输出编码: {other}（可选 utf8/hex/base64/base64url）"
+        )),
     }
 }
 
@@ -86,7 +90,10 @@ fn unpad(data: Vec<u8>, block: usize, mode: &str) -> CryptoResult<Vec<u8>> {
             if pad_len == 0 || pad_len > block || pad_len > data.len() {
                 return Err("pkcs7 unpad: 非法填充长度（key/iv 或算法可能不匹配）".into());
             }
-            if data[data.len() - pad_len..].iter().any(|&b| b as usize != pad_len) {
+            if data[data.len() - pad_len..]
+                .iter()
+                .any(|&b| b as usize != pad_len)
+            {
                 return Err("pkcs7 unpad: 填充字节不一致（key/iv 或算法可能不匹配）".into());
             }
             let mut d = data;
@@ -233,7 +240,10 @@ pub fn aes_gcm_encrypt(
     use aes_gcm::{Aes128Gcm, Aes256Gcm, Nonce};
 
     if nonce.len() != 12 {
-        return Err(format!("AES-GCM nonce/iv 必须 12 字节，实际 {}", nonce.len()));
+        return Err(format!(
+            "AES-GCM nonce/iv 必须 12 字节，实际 {}",
+            nonce.len()
+        ));
     }
     let payload = Payload {
         msg: plaintext,
@@ -263,7 +273,10 @@ pub fn aes_gcm_decrypt(
     use aes_gcm::{Aes128Gcm, Aes256Gcm, Nonce};
 
     if nonce.len() != 12 {
-        return Err(format!("AES-GCM nonce/iv 必须 12 字节，实际 {}", nonce.len()));
+        return Err(format!(
+            "AES-GCM nonce/iv 必须 12 字节，实际 {}",
+            nonce.len()
+        ));
     }
     if ciphertext_and_tag.len() < 16 {
         return Err("AES-GCM 密文过短（至少要含 16 字节 tag）".into());
@@ -308,7 +321,8 @@ pub fn hmac_sha1(key: &[u8], data: &[u8]) -> CryptoResult<Vec<u8>> {
     use hmac::{Hmac, Mac};
     use sha1::Sha1;
     type H = Hmac<Sha1>;
-    let mut mac = <H as Mac>::new_from_slice(key).map_err(|e| format!("HMAC-SHA1 key 无效: {e}"))?;
+    let mut mac =
+        <H as Mac>::new_from_slice(key).map_err(|e| format!("HMAC-SHA1 key 无效: {e}"))?;
     mac.update(data);
     Ok(mac.finalize().into_bytes().to_vec())
 }
@@ -392,10 +406,7 @@ mod tests {
     #[test]
     fn md5_known_vector() {
         assert_eq!(hex::encode(md5(b"abc")), "900150983cd24fb0d6963f7d28e17f72");
-        assert_eq!(
-            hex::encode(md5(b"")),
-            "d41d8cd98f00b204e9800998ecf8427e"
-        );
+        assert_eq!(hex::encode(md5(b"")), "d41d8cd98f00b204e9800998ecf8427e");
     }
 
     #[test]
@@ -411,10 +422,7 @@ mod tests {
         // RFC 2202 test case: key=0x0b*20, data="Hi There"
         let key = [0x0bu8; 20];
         let mac = hmac_sha1(&key, b"Hi There").unwrap();
-        assert_eq!(
-            hex::encode(mac),
-            "b617318655057264e28bc0b6fb378c8ef146be00"
-        );
+        assert_eq!(hex::encode(mac), "b617318655057264e28bc0b6fb378c8ef146be00");
     }
 
     #[test]

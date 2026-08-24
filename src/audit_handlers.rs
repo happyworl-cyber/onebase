@@ -29,12 +29,15 @@ pub struct AuditLogQuery {
     pub resource: Option<String>,
     pub start_date: Option<String>,
     pub end_date: Option<String>,
+    /// 组织级聚合：限定下属全部项目（需 org admin+）
+    pub organization_id: Option<i32>,
 }
 
 /// GET /api/admin/audit-logs
 ///
 /// 超管：返回全部审计日志；
 /// 租户 owner/admin：只返回自己 tenant_id 的日志（NULL tenant_id 视为平台级，不返回）。
+/// 带 `organization_id`：org admin+ 看该组织下属项目。
 pub async fn list_audit_logs(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
@@ -46,7 +49,10 @@ pub async fn list_audit_logs(
     let mut conditions = vec!["1=1".to_string()];
     let mut bind_idx = 1u32;
 
-    let tenant_filter: Option<Vec<i32>> = if claims.is_superadmin {
+    let tenant_filter: Option<Vec<i32>> = if let Some(org_id) = params.organization_id {
+        permissions::require_organization_admin(&pool, &claims, org_id).await?;
+        Some(permissions::organization_project_ids(&pool, org_id).await?)
+    } else if claims.is_superadmin {
         None
     } else {
         let ids = admin_tenant_ids(&pool, &claims).await?;
@@ -57,6 +63,15 @@ pub async fn list_audit_logs(
         }
         Some(ids)
     };
+
+    if matches!(tenant_filter.as_deref(), Some([])) {
+        return Ok(Json(json!({
+            "data": [],
+            "total": 0,
+            "limit": limit,
+            "offset": offset,
+        })));
+    }
 
     if tenant_filter.is_some() {
         conditions.push(format!("tenant_id = ANY(${})", bind_idx));
@@ -207,7 +222,11 @@ fn operation_path_sql_filter() -> String {
     )
 }
 
-fn classify_operation_category(path: &str, action: &str, body: Option<&serde_json::Value>) -> &'static str {
+fn classify_operation_category(
+    path: &str,
+    action: &str,
+    body: Option<&serde_json::Value>,
+) -> &'static str {
     if path == "/query"
         || path == "/transaction"
         || (path.starts_with("/api/v1/") && path.ends_with("/sql"))
@@ -235,7 +254,10 @@ fn classify_operation_category(path: &str, action: &str, body: Option<&serde_jso
 
 /// 把 HTTP 方法 + 路径映射成可读的中文操作描述（无 handler 侧 kind 时的兜底）。
 fn describe_operation(method: &str, path: &str, action: &str) -> String {
-    if action != method && !action.chars().all(|c| c.is_ascii_uppercase() || c == '_' || c == '.')
+    if action != method
+        && !action
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c == '_' || c == '.')
     {
         return action.replace('_', " ").to_string();
     }
@@ -288,7 +310,9 @@ fn describe_operation(method: &str, path: &str, action: &str) -> String {
             _ => format!("{} {}", method, path),
         };
     }
-    if path.starts_with("/api/admin/tenants/create") || (path == "/api/admin/tenants" && method == "POST") {
+    if path.starts_with("/api/admin/tenants/create")
+        || (path == "/api/admin/tenants" && method == "POST")
+    {
         return "创建项目".to_string();
     }
     if path.starts_with("/api/admin/tenants/") && method == "PATCH" {
@@ -432,9 +456,7 @@ fn build_operation_summary(
         let op_count = body
             .and_then(|b| b.get("op_count"))
             .and_then(|v| v.as_i64());
-        let db_part = db_id
-            .map(|id| format!(" · 库 #{id}"))
-            .unwrap_or_default();
+        let db_part = db_id.map(|id| format!(" · 库 #{id}")).unwrap_or_default();
         if let Some(n) = op_count {
             return format!("{base} · {sql_type} · {n} 条语句 · {sql_len} 字符{db_part}");
         }
@@ -605,12 +627,7 @@ pub async fn list_platform_admin_audit(
                 .ok()
                 .flatten();
             let category = classify_operation_category(&path, &action, request_body.as_ref());
-            let summary = build_operation_summary(
-                &method,
-                &path,
-                &action,
-                request_body.as_ref(),
-            );
+            let summary = build_operation_summary(&method, &path, &action, request_body.as_ref());
             json!({
                 "id": r.get::<i64, _>("id"),
                 "user_id": r.get::<Option<i32>, _>("user_id"),
@@ -670,7 +687,12 @@ mod platform_audit_tests {
             "detail": { "name": "订单同步", "slug": "order-sync", "workflow_id": 7 }
         });
         assert_eq!(
-            build_operation_summary("POST", "/api/admin/workflows", "WORKFLOW.CREATE", Some(&body)),
+            build_operation_summary(
+                "POST",
+                "/api/admin/workflows",
+                "WORKFLOW.CREATE",
+                Some(&body)
+            ),
             "创建工作流「订单同步」(order-sync)"
         );
     }
@@ -712,6 +734,25 @@ pub async fn list_slow_queries(
         )
         .bind(min_duration)
         .bind(database_id)
+        .bind(limit)
+        .fetch_all(&pool)
+        .await?
+    } else if let Some(org_id) = params.organization_id {
+        permissions::require_organization_admin(&pool, &claims, org_id).await?;
+        let project_ids = permissions::organization_project_ids(&pool, org_id).await?;
+        if project_ids.is_empty() {
+            return Ok(Json(json!({ "data": [] })));
+        }
+        sqlx::query(
+            "SELECT s.id, s.database_id, s.schema_name, s.table_name, s.sql_preview, s.duration_ms, s.created_at \
+             FROM management.slow_query_logs s \
+             JOIN management.tenant_databases td ON td.id = s.database_id \
+             WHERE s.duration_ms >= $1 AND td.tenant_id = ANY($2) \
+             ORDER BY s.created_at DESC \
+             LIMIT $3",
+        )
+        .bind(min_duration)
+        .bind(&project_ids)
         .bind(limit)
         .fetch_all(&pool)
         .await?
@@ -788,6 +829,7 @@ pub struct SlowQueryParams {
     pub min_duration_ms: Option<i32>,
     pub tenant_id: Option<i32>,
     pub database_id: Option<i32>,
+    pub organization_id: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -802,30 +844,47 @@ pub struct RawSqlAuditQuery {
     pub end_date: Option<String>,
     /// 仅返回被拦截的记录（action 以 BLOCKED 结尾）
     pub blocked_only: Option<bool>,
+    /// 组织级：org admin+ 可看下属项目；不带则仍仅平台超管
+    pub organization_id: Option<i32>,
 }
 
 /// GET /api/platform/raw-sql-audit
 ///
-/// 平台超管专属的"原始 SQL 调用链"面板：
-/// - 从 `management.audit_logs` 里挑出所有 `action LIKE 'RAW_SQL%'` 的行；
-/// - 把 `request_body` JSONB 里的 `sql_type` / `sql_len` / `blocked_reason` /
-///   `database_id` / `read_only` / `acknowledge_destructive` 顶层暴露出来，
-///   便于前端做"被拦截统计 / 谁在哪个库上跑了多少条 DDL"之类的快速分析。
-///
-/// 与 `list_audit_logs` 区分：那个接口面向"租户日常审计"（含租户 admin），
-/// 这个接口只面向**平台超管**，因为原始 SQL 通道本身就是平台级特权。
+/// - 无 `organization_id`：仅平台超管（全站原始 SQL 审计）
+/// - 带 `organization_id`：org admin+ 看该组织下属项目的 RAW_SQL*
 pub async fn list_raw_sql_audit(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
     Query(params): Query<RawSqlAuditQuery>,
 ) -> Result<Json<serde_json::Value>> {
-    permissions::require_platform_superadmin(&claims)?;
+    let org_projects: Option<Vec<i32>> = if let Some(org_id) = params.organization_id {
+        permissions::require_organization_admin(&pool, &claims, org_id).await?;
+        Some(permissions::organization_project_ids(&pool, org_id).await?)
+    } else {
+        permissions::require_platform_superadmin(&claims)?;
+        None
+    };
 
     let limit = params.limit.unwrap_or(50).min(200);
     let offset = params.offset.unwrap_or(0);
 
+    if matches!(org_projects.as_deref(), Some([])) {
+        return Ok(Json(json!({
+            "data": [],
+            "total": 0,
+            "stats_by_reason": [],
+            "limit": limit,
+            "offset": offset,
+        })));
+    }
+
     let mut conditions = vec!["action LIKE 'RAW_SQL%'".to_string()];
     let mut bind_idx = 1u32;
+
+    if org_projects.is_some() {
+        conditions.push(format!("tenant_id = ANY(${})", bind_idx));
+        bind_idx += 1;
+    }
 
     if params.user_id.is_some() {
         conditions.push(format!("user_id = ${}", bind_idx));
@@ -876,6 +935,9 @@ pub async fn list_raw_sql_audit(
     );
 
     let mut query = sqlx::query(&sql);
+    if let Some(ref ids) = org_projects {
+        query = query.bind(ids);
+    }
     if let Some(uid) = params.user_id {
         query = query.bind(uid);
     }
@@ -900,6 +962,9 @@ pub async fn list_raw_sql_audit(
         where_clause
     );
     let mut count_query = sqlx::query(&count_sql);
+    if let Some(ref ids) = org_projects {
+        count_query = count_query.bind(ids);
+    }
     if let Some(uid) = params.user_id {
         count_query = count_query.bind(uid);
     }
@@ -949,6 +1014,9 @@ pub async fn list_raw_sql_audit(
         where_clause
     );
     let mut stats_query = sqlx::query(&stats_sql);
+    if let Some(ref ids) = org_projects {
+        stats_query = stats_query.bind(ids);
+    }
     if let Some(uid) = params.user_id {
         stats_query = stats_query.bind(uid);
     }

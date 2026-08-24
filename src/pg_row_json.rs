@@ -56,7 +56,9 @@ fn decode_pg_value(row: &sqlx::postgres::PgRow, idx: usize) -> Value {
         return Value::String(v.to_string());
     }
     if let Ok(v) = row.try_get::<Option<Uuid>, _>(idx) {
-        return v.map(|u| Value::String(u.to_string())).unwrap_or(Value::Null);
+        return v
+            .map(|u| Value::String(u.to_string()))
+            .unwrap_or(Value::Null);
     }
     if let Ok(v) = row.try_get::<Option<String>, _>(idx) {
         return v.map(Value::String).unwrap_or(Value::Null);

@@ -32,16 +32,43 @@ const SCAN_MAX_COUNT: usize = 10000;
 
 /// 支持的操作清单（用于校验与前端下拉）。
 pub const SUPPORTED_OPS: &[&str] = &[
-    "get", "set", "del", "exists", "expire", "ttl", "incr", "decr", "keys", "hget", "hset",
-    "hgetall", "lpush", "rpush", "lrange", "sadd", "smembers", "zadd", "zcard", "zremrangebyrank",
+    "get",
+    "set",
+    "del",
+    "exists",
+    "expire",
+    "ttl",
+    "incr",
+    "decr",
+    "keys",
+    "hget",
+    "hset",
+    "hgetall",
+    "lpush",
+    "rpush",
+    "lrange",
+    "sadd",
+    "smembers",
+    "zadd",
+    "zcard",
+    "zremrangebyrank",
 ];
 
 /// 判断某 op 是否为写操作（用于工作流 dry_run / 生产只读拦截）。
 pub fn is_write_op(op: &str) -> bool {
     matches!(
         op,
-        "set" | "del" | "expire" | "incr" | "decr" | "hset" | "lpush" | "rpush" | "sadd"
-            | "zadd" | "zremrangebyrank"
+        "set"
+            | "del"
+            | "expire"
+            | "incr"
+            | "decr"
+            | "hset"
+            | "lpush"
+            | "rpush"
+            | "sadd"
+            | "zadd"
+            | "zremrangebyrank"
     )
 }
 
@@ -96,7 +123,9 @@ fn arg_value_list(args: &JsonValue, name: &str) -> Result<Vec<String>> {
     match args.get(name) {
         Some(JsonValue::Array(arr)) => {
             if arr.is_empty() {
-                return Err(AppError::InvalidQuery(format!("参数 `{name}` 不能为空数组")));
+                return Err(AppError::InvalidQuery(format!(
+                    "参数 `{name}` 不能为空数组"
+                )));
             }
             Ok(arr.iter().map(value_to_redis_arg).collect())
         }
@@ -126,7 +155,8 @@ pub async fn execute(conn: &ConnectionManager, op: &str, args: &JsonValue) -> Re
     match op_lc.as_str() {
         "get" => {
             let key = arg_str(args, "key")?;
-            let v: Option<String> = timed("GET", redis::cmd("GET").arg(key).query_async(&mut c)).await?;
+            let v: Option<String> =
+                timed("GET", redis::cmd("GET").arg(key).query_async(&mut c)).await?;
             Ok(json!({ "value": v }))
         }
         "set" => {
@@ -152,15 +182,19 @@ pub async fn execute(conn: &ConnectionManager, op: &str, args: &JsonValue) -> Re
         }
         "del" => {
             // 支持单 key（key）或多 key（keys[]）。
-            let keys: Vec<String> = if let Some(list) = args.get("keys").and_then(|v| v.as_array()) {
-                list.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
+            let keys: Vec<String> = if let Some(list) = args.get("keys").and_then(|v| v.as_array())
+            {
+                list.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
             } else {
                 vec![arg_str(args, "key")?.to_string()]
             };
             if keys.is_empty() {
                 return Err(AppError::InvalidQuery("del 需要 key 或非空 keys[]".into()));
             }
-            let deleted: i64 = timed("DEL", redis::cmd("DEL").arg(&keys).query_async(&mut c)).await?;
+            let deleted: i64 =
+                timed("DEL", redis::cmd("DEL").arg(&keys).query_async(&mut c)).await?;
             Ok(json!({ "deleted": deleted }))
         }
         "exists" => {
@@ -171,7 +205,11 @@ pub async fn execute(conn: &ConnectionManager, op: &str, args: &JsonValue) -> Re
         "expire" => {
             let key = arg_str(args, "key")?;
             let ttl = arg_i64(args, "ttl")?;
-            let n: i64 = timed("EXPIRE", redis::cmd("EXPIRE").arg(key).arg(ttl).query_async(&mut c)).await?;
+            let n: i64 = timed(
+                "EXPIRE",
+                redis::cmd("EXPIRE").arg(key).arg(ttl).query_async(&mut c),
+            )
+            .await?;
             Ok(json!({ "ok": n == 1 }))
         }
         "ttl" => {
@@ -203,8 +241,11 @@ pub async fn execute(conn: &ConnectionManager, op: &str, args: &JsonValue) -> Re
         "hget" => {
             let key = arg_str(args, "key")?;
             let field = arg_str(args, "field")?;
-            let v: Option<String> =
-                timed("HGET", redis::cmd("HGET").arg(key).arg(field).query_async(&mut c)).await?;
+            let v: Option<String> = timed(
+                "HGET",
+                redis::cmd("HGET").arg(key).arg(field).query_async(&mut c),
+            )
+            .await?;
             Ok(json!({ "value": v }))
         }
         "hset" => {
@@ -214,54 +255,102 @@ pub async fn execute(conn: &ConnectionManager, op: &str, args: &JsonValue) -> Re
                 args.get("value")
                     .ok_or_else(|| AppError::InvalidQuery("缺少参数 `value`".into()))?,
             );
-            let added: i64 =
-                timed("HSET", redis::cmd("HSET").arg(key).arg(field).arg(value).query_async(&mut c)).await?;
+            let added: i64 = timed(
+                "HSET",
+                redis::cmd("HSET")
+                    .arg(key)
+                    .arg(field)
+                    .arg(value)
+                    .query_async(&mut c),
+            )
+            .await?;
             Ok(json!({ "added": added }))
         }
         "hgetall" => {
             let key = arg_str(args, "key")?;
-            let map: std::collections::HashMap<String, String> =
-                timed("HGETALL", redis::cmd("HGETALL").arg(key).query_async(&mut c)).await?;
+            let map: std::collections::HashMap<String, String> = timed(
+                "HGETALL",
+                redis::cmd("HGETALL").arg(key).query_async(&mut c),
+            )
+            .await?;
             Ok(json!({ "value": map }))
         }
         "lpush" => {
             let key = arg_str(args, "key")?;
             let values = list_values(args)?;
-            let len: i64 = timed("LPUSH", redis::cmd("LPUSH").arg(key).arg(&values).query_async(&mut c)).await?;
+            let len: i64 = timed(
+                "LPUSH",
+                redis::cmd("LPUSH")
+                    .arg(key)
+                    .arg(&values)
+                    .query_async(&mut c),
+            )
+            .await?;
             Ok(json!({ "length": len }))
         }
         "rpush" => {
             let key = arg_str(args, "key")?;
             let values = list_values(args)?;
-            let len: i64 = timed("RPUSH", redis::cmd("RPUSH").arg(key).arg(&values).query_async(&mut c)).await?;
+            let len: i64 = timed(
+                "RPUSH",
+                redis::cmd("RPUSH")
+                    .arg(key)
+                    .arg(&values)
+                    .query_async(&mut c),
+            )
+            .await?;
             Ok(json!({ "length": len }))
         }
         "lrange" => {
             let key = arg_str(args, "key")?;
             let start = args.get("start").and_then(|v| v.as_i64()).unwrap_or(0);
             let stop = args.get("stop").and_then(|v| v.as_i64()).unwrap_or(-1);
-            let items: Vec<String> =
-                timed("LRANGE", redis::cmd("LRANGE").arg(key).arg(start).arg(stop).query_async(&mut c)).await?;
+            let items: Vec<String> = timed(
+                "LRANGE",
+                redis::cmd("LRANGE")
+                    .arg(key)
+                    .arg(start)
+                    .arg(stop)
+                    .query_async(&mut c),
+            )
+            .await?;
             Ok(json!({ "items": items }))
         }
         "sadd" => {
             let key = arg_str(args, "key")?;
             let members = arg_value_list(args, "members")?;
-            let added: i64 = timed("SADD", redis::cmd("SADD").arg(key).arg(&members).query_async(&mut c)).await?;
+            let added: i64 = timed(
+                "SADD",
+                redis::cmd("SADD")
+                    .arg(key)
+                    .arg(&members)
+                    .query_async(&mut c),
+            )
+            .await?;
             Ok(json!({ "added": added }))
         }
         "smembers" => {
             let key = arg_str(args, "key")?;
-            let members: Vec<String> =
-                timed("SMEMBERS", redis::cmd("SMEMBERS").arg(key).query_async(&mut c)).await?;
+            let members: Vec<String> = timed(
+                "SMEMBERS",
+                redis::cmd("SMEMBERS").arg(key).query_async(&mut c),
+            )
+            .await?;
             Ok(json!({ "members": members }))
         }
         "zadd" => {
             let key = arg_str(args, "key")?;
             let member = arg_str(args, "member")?;
             let score = arg_f64(args, "score")?;
-            let added: i64 =
-                timed("ZADD", redis::cmd("ZADD").arg(key).arg(score).arg(member).query_async(&mut c)).await?;
+            let added: i64 = timed(
+                "ZADD",
+                redis::cmd("ZADD")
+                    .arg(key)
+                    .arg(score)
+                    .arg(member)
+                    .query_async(&mut c),
+            )
+            .await?;
             Ok(json!({ "added": added }))
         }
         "zcard" => {
@@ -275,7 +364,11 @@ pub async fn execute(conn: &ConnectionManager, op: &str, args: &JsonValue) -> Re
             let stop = arg_i64(args, "stop")?;
             let removed: i64 = timed(
                 "ZREMRANGEBYRANK",
-                redis::cmd("ZREMRANGEBYRANK").arg(key).arg(start).arg(stop).query_async(&mut c),
+                redis::cmd("ZREMRANGEBYRANK")
+                    .arg(key)
+                    .arg(start)
+                    .arg(stop)
+                    .query_async(&mut c),
             )
             .await?;
             Ok(json!({ "removed": removed }))

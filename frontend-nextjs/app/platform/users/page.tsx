@@ -305,14 +305,14 @@ export default function UsersPage() {
   }
 
   const handleAssignTenant = async () => {
-    if (!selected || !assignTenantId) return notify.warning('请选择要加入的租户')
+    if (!selected || !assignTenantId) return notify.warning('请选择要加入的项目')
     setAssigning(true)
     try {
       await adminAPI.assignUserToTenant(selected.id, {
         tenant_id: Number(assignTenantId),
         role: assignRole,
       })
-      notify.success('已加入租户')
+      notify.success('已加入项目')
       setAssignTenantId('')
       setAssignRole('member')
       await loadUsers()
@@ -325,10 +325,10 @@ export default function UsersPage() {
 
   const handleRemoveTenant = async (tenantId: number, tenantName: string) => {
     if (!selected) return
-    if (!window.confirm(`确定要把用户 "${selected.email}" 从租户 "${tenantName}" 中移除吗？`)) return
+    if (!window.confirm(`确定要把用户 "${selected.email}" 从项目 "${tenantName}" 中移除吗？`)) return
     try {
       await adminAPI.removeUserFromTenant(selected.id, tenantId)
-      notify.success('已从租户中移除')
+      notify.success('已从项目中移除')
       await loadUsers()
     } catch (err: any) {
       notify.error(err)
@@ -362,7 +362,9 @@ export default function UsersPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-gray-800">用户管理</h1>
-          <p className="text-sm text-gray-500 mt-1">管理平台账号、查看租户成员关系并分配新租户</p>
+          <p className="text-sm text-gray-500 mt-1">
+            管理平台账号、查看项目成员关系并分配项目（项目隶属于组织/租户）
+          </p>
         </div>
         <button onClick={() => setShowCreate(true)} className="btn-primary">
           <i className="fas fa-user-plus mr-2"></i>创建用户
@@ -632,14 +634,14 @@ export default function UsersPage() {
               )}
             </section>
 
-            {/* 租户成员关系 */}
+            {/* 项目成员关系（DB: user_tenants；产品层「项目」隶属于组织） */}
             <section>
               <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">
-                租户成员关系（{selected.tenants?.length || 0}）
+                项目成员关系（{selected.tenants?.length || 0}）
               </h4>
               {(selected.tenants?.length || 0) === 0 ? (
                 <div className="text-sm text-gray-400 bg-gray-50 rounded-lg p-4 text-center">
-                  该用户还没有加入任何租户
+                  该用户还没有加入任何项目
                 </div>
               ) : (
                 <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
@@ -667,14 +669,14 @@ export default function UsersPage() {
               )}
             </section>
 
-            {/* 加入新租户 */}
+            {/* 加入新项目 */}
             <section>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">加入新租户</h4>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">加入新项目</h4>
               {availableTenantsForAssign.length === 0 ? (
                 <div className="text-sm text-gray-400 bg-gray-50 rounded-lg p-4 text-center">
                   {tenants.length === 0
-                    ? '系统暂无任何租户，请先到"项目管理"创建租户'
-                    : '该用户已加入全部现有租户'}
+                    ? '系统暂无任何项目，请先在「租户管理」创建租户，再在租户控制台开通项目'
+                    : '该用户已加入全部现有项目'}
                 </div>
               ) : (
                 <div className="space-y-3">

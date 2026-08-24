@@ -414,14 +414,10 @@ pub async fn resolve_ddl_database_id_for_user(
     }
 }
 
-async fn enforce_ddl_api_key(
-    key: &DdlApiKeyAuth,
-    schema: &str,
-    resource: &str,
-) -> Result<()> {
+async fn enforce_ddl_api_key(key: &DdlApiKeyAuth, schema: &str, resource: &str) -> Result<()> {
     let perms = &key.permissions;
-    let new_format = perms.get("allowed_actions").is_some()
-        || perms.get("allowed_resources").is_some();
+    let new_format =
+        perms.get("allowed_actions").is_some() || perms.get("allowed_resources").is_some();
     if !new_format {
         return Err(AppError::Forbidden(
             "该 API Key 使用旧版 scope 格式，不支持 DDL；请重建 key 并启用 allowed_resources/allowed_actions".to_string(),
@@ -437,11 +433,7 @@ async fn enforce_ddl_api_key(
                 .collect()
         })
         .unwrap_or_default();
-    if !actions.is_empty()
-        && !actions
-            .iter()
-            .any(|a| a == "*" || a == "ALL" || a == "DDL")
-    {
+    if !actions.is_empty() && !actions.iter().any(|a| a == "*" || a == "ALL" || a == "DDL") {
         return Err(AppError::Forbidden(
             "API Key 不允许执行 DDL 操作".to_string(),
         ));
@@ -458,12 +450,9 @@ async fn enforce_ddl_api_key(
         .unwrap_or_default();
     if !resources.is_empty() {
         let schema_wildcard = format!("{}.*", schema);
-        let allowed = resources.iter().any(|r| {
-            r == "*"
-                || r == "*.*"
-                || r == resource
-                || r == &schema_wildcard
-        });
+        let allowed = resources
+            .iter()
+            .any(|r| r == "*" || r == "*.*" || r == resource || r == &schema_wildcard);
         if !allowed {
             return Err(AppError::Forbidden(format!(
                 "API Key 不允许访问资源: {}",
@@ -556,8 +545,7 @@ pub async fn ddl_auth_middleware(
         .filter(|t| t.starts_with(crate::platform_token::TOKEN_PREFIX))
     {
         let (claims, _ctx) = crate::platform_token::authenticate(&pool, pat).await?;
-        let path_db_id =
-            resolve_ddl_database_id_for_user(&pool, &claims, &path_db_seg).await?;
+        let path_db_id = resolve_ddl_database_id_for_user(&pool, &claims, &path_db_seg).await?;
         if let Ok(v) = HeaderValue::from_str(&path_db_id.to_string()) {
             req.headers_mut().insert("X-Database-Id", v);
         }
@@ -594,8 +582,7 @@ pub async fn ddl_auth_middleware(
                             req.headers_mut().insert("X-Database-Id", v);
                         }
                         req.extensions_mut().insert(claims.clone());
-                        req.extensions_mut()
-                            .insert(DdlAuthSubject::User(claims));
+                        req.extensions_mut().insert(DdlAuthSubject::User(claims));
                         return Ok(next.run(req).await);
                     }
                 }
@@ -658,10 +645,11 @@ pub async fn ddl_auth_middleware(
         .execute(&pool)
         .await;
 
-        req.extensions_mut().insert(DdlAuthSubject::ApiKey(DdlApiKeyAuth {
-            database_id: key_database_id,
-            permissions,
-        }));
+        req.extensions_mut()
+            .insert(DdlAuthSubject::ApiKey(DdlApiKeyAuth {
+                database_id: key_database_id,
+                permissions,
+            }));
         if let Ok(v) = HeaderValue::from_str(&key_database_id.to_string()) {
             req.headers_mut().insert("X-Database-Id", v);
         }
@@ -772,13 +760,18 @@ fn alter_ops_to_change(table: &str, ops: &[AlterOp]) -> Option<Value> {
                 removed.push(json!({ "node": name, "node_type": "列" }));
             }
             AlterOp::RenameTable { new_name } => {
-                modified.push(json!({ "node": table, "field": "表名", "old": table, "new": new_name }));
+                modified
+                    .push(json!({ "node": table, "field": "表名", "old": table, "new": new_name }));
             }
             AlterOp::RenameColumn { old_name, new_name } => {
-                modified.push(json!({ "node": old_name, "field": "列名", "old": old_name, "new": new_name }));
+                modified.push(
+                    json!({ "node": old_name, "field": "列名", "old": old_name, "new": new_name }),
+                );
             }
             AlterOp::AlterColumnType { name, column } => {
-                modified.push(json!({ "node": name, "field": "类型", "old": "—", "new": column.data_type }));
+                modified.push(
+                    json!({ "node": name, "field": "类型", "old": "—", "new": column.data_type }),
+                );
             }
             AlterOp::SetNotNull { name, value } => {
                 modified.push(json!({ "node": name, "field": "NOT NULL", "old": "—", "new": if *value { "是" } else { "否" } }));
@@ -788,20 +781,25 @@ fn alter_ops_to_change(table: &str, ops: &[AlterOp]) -> Option<Value> {
                 modified.push(json!({ "node": name, "field": "默认值", "old": "—", "new": nv }));
             }
             AlterOp::AddUnique { name } => {
-                modified.push(json!({ "node": name, "field": "唯一约束", "old": "—", "new": "UNIQUE" }));
+                modified.push(
+                    json!({ "node": name, "field": "唯一约束", "old": "—", "new": "UNIQUE" }),
+                );
             }
         }
     }
     if added.is_empty() && removed.is_empty() && modified.is_empty() {
         return None;
     }
-    Some(json!({ "v": 1, "kind": "modified", "added": added, "modified": modified, "removed": removed }))
+    Some(
+        json!({ "v": 1, "kind": "modified", "added": added, "modified": modified, "removed": removed }),
+    )
 }
 
 /// 破坏性 ALTER 判定：**删列 = 列及其数据不可逆丢失 → 高危**。
 /// 加列 / 改名 / 改类型 / 加约束等非破坏性，不算高危。
 fn alter_ops_high_risk(ops: &[AlterOp]) -> bool {
-    ops.iter().any(|op| matches!(op, AlterOp::DropColumn { .. }))
+    ops.iter()
+        .any(|op| matches!(op, AlterOp::DropColumn { .. }))
 }
 
 async fn create_table_inner(pool: &PgPool, req: &CreateTableRequest) -> Result<Value> {
@@ -1322,8 +1320,12 @@ mod tests {
         assert_eq!(change["removed"][0]["node"], "legacy");
         // 改列名 + 改表名都归到 modified
         let modified = change["modified"].as_array().unwrap();
-        assert!(modified.iter().any(|m| m["field"] == "列名" && m["new"] == "headline"));
-        assert!(modified.iter().any(|m| m["field"] == "表名" && m["old"] == "posts" && m["new"] == "articles"));
+        assert!(modified
+            .iter()
+            .any(|m| m["field"] == "列名" && m["new"] == "headline"));
+        assert!(modified
+            .iter()
+            .any(|m| m["field"] == "表名" && m["old"] == "posts" && m["new"] == "articles"));
 
         // 空操作 → None
         assert!(alter_ops_to_change("posts", &[]).is_none());
@@ -1338,19 +1340,34 @@ mod tests {
         }]));
         // 混入删列也算高危
         assert!(alter_ops_high_risk(&[
-            AlterOp::RenameTable { new_name: "t2".into() },
-            AlterOp::DropColumn { name: "old".into(), cascade: true },
+            AlterOp::RenameTable {
+                new_name: "t2".into()
+            },
+            AlterOp::DropColumn {
+                name: "old".into(),
+                cascade: true
+            },
         ]));
         // 纯非破坏性 → 非高危
         assert!(!alter_ops_high_risk(&[
             AlterOp::AddColumn {
                 column: ColumnDef {
-                    name: "c".into(), data_type: "text".into(), length: None, precision: None,
-                    scale: None, nullable: true, default_value: None, is_primary_key: false,
-                    is_unique: false, references: None,
+                    name: "c".into(),
+                    data_type: "text".into(),
+                    length: None,
+                    precision: None,
+                    scale: None,
+                    nullable: true,
+                    default_value: None,
+                    is_primary_key: false,
+                    is_unique: false,
+                    references: None,
                 },
             },
-            AlterOp::RenameColumn { old_name: "a".into(), new_name: "b".into() },
+            AlterOp::RenameColumn {
+                old_name: "a".into(),
+                new_name: "b".into()
+            },
         ]));
         assert!(!alter_ops_high_risk(&[]));
     }

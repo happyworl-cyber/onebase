@@ -35,6 +35,8 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
   const params = useParams<{ projectId: string }>()
   const pathname = usePathname()
   const setCurrentProject = useAppStore((s) => s.setCurrentProject)
+  const setCurrentOrganization = useAppStore((s) => s.setCurrentOrganization)
+  const currentOrganization = useAppStore((s) => s.currentOrganization)
   const setCurrentTenant = useAppStore((s) => s.setCurrentTenant)
   const setCurrentConnection = useAppStore((s) => s.setCurrentConnection)
 
@@ -83,6 +85,21 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
       } as ApiRequestConfig)
       .then((resp) => {
         setCurrentProject(resp.data)
+
+        // 从项目响应回填组织上下文（直链进 workspace 时 store 可能为空）
+        if (
+          resp.data.organization_id != null &&
+          (!currentOrganization ||
+            currentOrganization.id !== resp.data.organization_id)
+        ) {
+          setCurrentOrganization({
+            id: resp.data.organization_id,
+            name: resp.data.organization_name || `组织 #${resp.data.organization_id}`,
+            slug: '',
+            status: 'active',
+            user_role: currentOrganization?.user_role || 'member',
+          })
+        }
 
         // 把项目主连接铺到 currentConnection，让 schema/query/rpc 拦截器
         // 读到正确的 X-Database-Id。无主连接时必须清空——否则切到无库项目

@@ -16,12 +16,12 @@ use crate::auth::Claims;
 use crate::error::{AppError, Result};
 use crate::middleware::ApiKeyContext;
 use crate::operation_log::{self, Actor, OpSourceHint, OperationLogInput, Source, Status};
-use std::collections::BTreeMap;
 use crate::workflow_engine::{
     self, ApiKeyWriteGuard, DagEngine, ExecutionContext, NodeExecutionResult, NodeStatus,
     WorkflowDefinition,
 };
 use crate::workflow_taxonomy::{self, WorkflowTaxonomy};
+use std::collections::BTreeMap;
 
 // ─── 数据模型 ─────────────────────────────────────────
 
@@ -56,7 +56,9 @@ fn audit_workflow(
 
 /// 来源解析：HTTP 路由无此提示 → Console；MCP 直接调用会传 Some(Mcp)。
 fn op_source_of(hint: &Option<axum::Extension<OpSourceHint>>) -> Source {
-    hint.as_ref().map(|axum::Extension(h)| h.0).unwrap_or(Source::Console)
+    hint.as_ref()
+        .map(|axum::Extension(h)| h.0)
+        .unwrap_or(Source::Console)
 }
 
 fn nodes_count(nodes: &Value) -> usize {
@@ -79,7 +81,15 @@ fn is_ignorable_node_key(k: &str) -> bool {
     }
     matches!(
         k.to_ascii_lowercase().as_str(),
-        "position" | "positionabsolute" | "x" | "y" | "width" | "height" | "selected" | "dragging" | "zindex"
+        "position"
+            | "positionabsolute"
+            | "x"
+            | "y"
+            | "width"
+            | "height"
+            | "selected"
+            | "dragging"
+            | "zindex"
     )
 }
 
@@ -142,7 +152,9 @@ fn workflow_config_diff(old: &Workflow, new: &Workflow) -> Option<Value> {
     let en = |b: bool| if b { "启用" } else { "停用" };
     let mut fields: Vec<Value> = Vec::new();
     if old.is_enabled != new.is_enabled {
-        fields.push(json!({ "field": "启用状态", "old": en(old.is_enabled), "new": en(new.is_enabled) }));
+        fields.push(
+            json!({ "field": "启用状态", "old": en(old.is_enabled), "new": en(new.is_enabled) }),
+        );
     }
     if old.name != new.name {
         fields.push(json!({ "field": "名称", "old": old.name, "new": new.name }));
@@ -163,7 +175,9 @@ fn workflow_config_diff(old: &Workflow, new: &Workflow) -> Option<Value> {
     if fields.is_empty() {
         return None;
     }
-    Some(json!({ "v": 1, "kind": "modified", "modified": [ { "node": new.name, "fields": fields } ] }))
+    Some(
+        json!({ "v": 1, "kind": "modified", "modified": [ { "node": new.name, "fields": fields } ] }),
+    )
 }
 
 /// 纯函数版：对新旧 nodes/edges（JSON 数组）做 diff。抽出便于单测。
@@ -179,10 +193,14 @@ fn diff_definition(
     let old_edges = old_edges_v.as_array().unwrap_or(&empty);
     let new_edges = new_edges_v.as_array().unwrap_or(&empty);
 
-    let old_node_map: BTreeMap<String, &Value> =
-        old_nodes.iter().filter_map(|n| node_id(n).map(|id| (id, n))).collect();
-    let new_node_map: BTreeMap<String, &Value> =
-        new_nodes.iter().filter_map(|n| node_id(n).map(|id| (id, n))).collect();
+    let old_node_map: BTreeMap<String, &Value> = old_nodes
+        .iter()
+        .filter_map(|n| node_id(n).map(|id| (id, n)))
+        .collect();
+    let new_node_map: BTreeMap<String, &Value> = new_nodes
+        .iter()
+        .filter_map(|n| node_id(n).map(|id| (id, n)))
+        .collect();
 
     let mut added: Vec<Value> = Vec::new();
     let mut removed: Vec<Value> = Vec::new();
@@ -363,6 +381,21 @@ pub struct WorkflowRun {
     pub node_results: Value,
     pub final_output: Option<Value>,
     pub error_message: Option<String>,
+    pub elapsed_ms: Option<i64>,
+    #[serde(serialize_with = "serialize_naive_as_utc")]
+    pub started_at: chrono::NaiveDateTime,
+    #[serde(serialize_with = "serialize_naive_as_utc_opt")]
+    pub completed_at: Option<chrono::NaiveDateTime>,
+}
+
+/// 运行列表一行的摘要视图——不含 trigger_data（可能携带用户敏感入参，列表页不需要展示）。
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct WorkflowRunSummary {
+    pub id: i64,
+    pub workflow_id: i32,
+    pub trigger_type: String,
+    pub status: String,
+    pub node_results: Value,
     pub elapsed_ms: Option<i64>,
     #[serde(serialize_with = "serialize_naive_as_utc")]
     pub started_at: chrono::NaiveDateTime,
@@ -978,6 +1011,403 @@ pub async fn list_workflows(
     Ok(Json(out))
 }
 
+// ─── 依赖图浏览器（只读聚合） ─────────────────────────────
+
+/// 依赖图关注的特殊节点类型：出现即给该工作流打角标（图例可筛）。
+const DEPENDENCY_GRAPH_SPECIAL_TYPES: &[&str] = &["sse_publish", "kafka", "redis", "http_call"];
+
+#[derive(Debug, sqlx::FromRow)]
+struct WorkflowDepRow {
+    id: i32,
+    slug: Option<String>,
+    name: Option<String>,
+    department: Option<String>,
+    category: Option<String>,
+    nodes: Value,
+    tenant_id: Option<i32>,
+    database_id: Option<i32>,
+    is_enabled: bool,
+}
+
+/// 边解析用的候选行：**不受视图 scope / 分类主集限制**，覆盖来源工作流所在整个 tenant
+/// （跨 database_id）。同时承担"外部依赖节点"的字段来源——主集之外被 1 跳依赖命中的
+/// 工作流，也从这份候选行里取字段materialize 成 external 节点，字段形状与主集节点一致。
+#[derive(Debug, sqlx::FromRow)]
+struct WorkflowDepTargetRow {
+    id: i32,
+    slug: Option<String>,
+    name: Option<String>,
+    department: Option<String>,
+    category: Option<String>,
+    nodes: Value,
+    tenant_id: Option<i32>,
+    database_id: Option<i32>,
+    is_enabled: bool,
+}
+
+/// 单条工作流的运行状态聚合结果（来自 `management.workflow_runs`，见
+/// [`fetch_dependency_graph_run_stats`]）。窗口口径：`errorRate` 统计**最近 7 天**内
+/// 的运行；`lastRunStatus`/`activity` 看**全部历史里最近一条**运行（不受 7 天窗口限制，
+/// 避免"7天前跑过一次成功"的工作流被误判成 none）。
+struct DependencyGraphRunStats {
+    /// 最近一条运行的原始 status（'running'/'pending'/'completed'/'failed'/'timeout'）。
+    last_status: Option<String>,
+    last_started_at: Option<chrono::NaiveDateTime>,
+    /// 近 7 天窗口内的运行总数 / 失败数（failed + timeout 都算失败）。
+    window_total: i64,
+    window_failed: i64,
+}
+
+/// 配色切换器用的三个派生状态字段：最近成败 / 错误率 / 活跃度。
+/// 口径：
+/// - `lastRunStatus`：仅当最近一条运行已终结（completed/failed/timeout）才判成败；
+///   'running'/'pending'（进行中）与从无运行记录一样记 "none"（尚无可展示的成败结果）。
+/// - `errorRate`：近 7 天窗口 failed+timeout / total；窗口内无运行记为 0.0（而非 null，
+///   便于前端直接映射颜色梯度，不必额外判空）。
+/// - `activity`：按最近一条运行（不分终结与否）距今时长分档——24h 内 active，
+///   7 天内 idle，7 天外或从无运行 dormant。
+fn dependency_graph_status_fields(
+    stats: Option<&DependencyGraphRunStats>,
+) -> (String, f64, String) {
+    let Some(stats) = stats else {
+        return ("none".to_string(), 0.0, "dormant".to_string());
+    };
+
+    let last_run_status = match stats.last_status.as_deref() {
+        Some("completed") => "success",
+        Some("failed") | Some("timeout") => "failed",
+        _ => "none", // running/pending（进行中）或无记录
+    }
+    .to_string();
+
+    let error_rate = if stats.window_total > 0 {
+        stats.window_failed as f64 / stats.window_total as f64
+    } else {
+        0.0
+    };
+
+    let activity = match stats.last_started_at {
+        Some(ts) => {
+            let age = chrono::Utc::now().naive_utc() - ts;
+            if age <= chrono::Duration::hours(24) {
+                "active"
+            } else if age <= chrono::Duration::days(7) {
+                "idle"
+            } else {
+                "dormant"
+            }
+        }
+        None => "dormant",
+    }
+    .to_string();
+
+    (last_run_status, error_rate, activity)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dependency_graph_node_json(
+    id: i32,
+    slug: &Option<String>,
+    name: &Option<String>,
+    department: &Option<String>,
+    category: &Option<String>,
+    nodes: &Value,
+    external: bool,
+    enabled: bool,
+    run_stats: Option<&DependencyGraphRunStats>,
+) -> Value {
+    let node_count = nodes_count(nodes);
+    let special_flags: Vec<&str> = nodes
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|n| n.get("type").and_then(|t| t.as_str()))
+        .filter(|t| DEPENDENCY_GRAPH_SPECIAL_TYPES.contains(t))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let (last_run_status, error_rate, activity) = dependency_graph_status_fields(run_stats);
+    json!({
+        "id": id,
+        "slug": slug.clone().unwrap_or_default(),
+        "name": name.clone().unwrap_or_default(),
+        "department": department,
+        "category": category,
+        "nodeCount": node_count,
+        "specialFlags": special_flags,
+        "external": external,
+        "enabled": enabled,
+        "lastRunStatus": last_run_status,
+        "errorRate": error_rate,
+        "activity": activity,
+    })
+}
+
+/// 批量拉取依赖图节点集合（含外部依赖节点）的运行状态聚合。单趟 SQL：对每个
+/// workflow_id 用 `LEFT JOIN LATERAL ... ORDER BY started_at DESC LIMIT 1` 取最近一条运行
+/// （命中 `idx_workflow_runs_wid (workflow_id, started_at DESC)` 索引），配合另一个
+/// LATERAL 做近 7 天窗口的 COUNT/FILTER 聚合；不逐条工作流单查。
+///
+/// 正确关联键：`workflow_runs.workflow_id` 直接是 `workflows.id`（外键，全局唯一主键），
+/// 天然按工作流精确关联，无需再叠 tenant_id 过滤（不存在串表风险）。
+async fn fetch_dependency_graph_run_stats(
+    pool: &PgPool,
+    workflow_ids: &[i32],
+) -> Result<HashMap<i32, DependencyGraphRunStats>> {
+    if workflow_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        workflow_id: i32,
+        last_status: Option<String>,
+        last_started_at: Option<chrono::NaiveDateTime>,
+        window_total: i64,
+        window_failed: i64,
+    }
+
+    let rows = sqlx::query_as::<_, Row>(
+        r#"SELECT t.workflow_id,
+                  last.status AS last_status,
+                  last.started_at AS last_started_at,
+                  COALESCE(win.total, 0) AS window_total,
+                  COALESCE(win.failed, 0) AS window_failed
+           FROM unnest($1::int[]) AS t(workflow_id)
+           LEFT JOIN LATERAL (
+               SELECT r.status, r.started_at
+               FROM management.workflow_runs r
+               WHERE r.workflow_id = t.workflow_id
+               ORDER BY r.started_at DESC
+               LIMIT 1
+           ) last ON true
+           LEFT JOIN LATERAL (
+               SELECT COUNT(*) AS total,
+                      COUNT(*) FILTER (WHERE r.status IN ('failed', 'timeout')) AS failed
+               FROM management.workflow_runs r
+               WHERE r.workflow_id = t.workflow_id
+                 AND r.started_at >= NOW() - INTERVAL '7 days'
+           ) win ON true"#,
+    )
+    .bind(workflow_ids)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            (
+                r.workflow_id,
+                DependencyGraphRunStats {
+                    last_status: r.last_status,
+                    last_started_at: r.last_started_at,
+                    window_total: r.window_total,
+                    window_failed: r.window_failed,
+                },
+            )
+        })
+        .collect())
+}
+
+/// GET /api/admin/workflows/dependency-graph — 工作流依赖图（只读，现算不缓存）。
+///
+/// **主集 scope**：不传 `department`/`category` → 主集 = 当前视图 scope 内全部工作流（原全量行为）；
+/// 两者都传 → 主集收窄为该 department+category 下的工作流（精确匹配，与 push_list_filters 同风格）。
+///
+/// **外部依赖节点**：主集里的 call_workflow 若 1 跳指到主集之外的工作流，该外部工作流也作为节点
+/// 返回并标 `external: true`（主集节点 `external: false`）；只展开 1 跳，外部节点自身的依赖不再继续拉。
+/// 全量模式下主集本身即视图 scope 内全部，通常不会命中集外目标，`external` 恒为 false。
+///
+/// 边 = 扫每条**主集**工作流 nodes[] 里的 call_workflow 节点，config.workflow 是目标 slug；
+/// 正确性红线：目标解析覆盖整个 tenant（不受主集/scope 限制），复刻引擎语义
+/// （见 workflow_engine.rs exec_call_workflow_node）：按 `tenant_id IS NOT DISTINCT FROM` 同租户
+/// 解析，database_id 只是同租户内多候选时的排序偏好（优先同库、回退他库），且只取
+/// is_enabled=true 的目标。解析不到（跨租户/不存在/未启用/空 slug）一律计入 `unresolved`，不静默吞。
+pub async fn workflow_dependency_graph(
+    State(pool): State<PgPool>,
+    Query(params): Query<HashMap<String, String>>,
+    axum::Extension(claims): axum::Extension<Claims>,
+) -> Result<Json<Value>> {
+    let p = parse_list_params(&params);
+    let scope = resolve_list_scope(&pool, &claims, p.tenant_id, p.database_id).await?;
+    if matches!(scope, ListScope::Empty) {
+        return Ok(Json(json!({ "nodes": [], "edges": [], "unresolved": 0 })));
+    }
+
+    // 窄列查询：建图不需要 edges/dependencies/trigger_config 等大字段。主集 = 视图 scope
+    // （+ 可选 department/category 精确匹配收窄）。
+    let mut qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
+        "SELECT w.id, w.slug, w.name, w.department, w.category, w.nodes, \
+                w.tenant_id, w.database_id, w.is_enabled \
+         FROM management.workflows w ",
+    );
+    push_list_scope(&mut qb, &scope);
+    if let (Some(dept), Some(cat)) = (&p.department, &p.category) {
+        qb.push(" AND w.department = ")
+            .push_bind(dept.clone())
+            .push(" AND w.category = ")
+            .push_bind(cat.clone());
+    }
+
+    let primary_rows = qb
+        .build_query_as::<WorkflowDepRow>()
+        .fetch_all(&pool)
+        .await?;
+    let primary_ids: std::collections::HashSet<i32> = primary_rows.iter().map(|r| r.id).collect();
+
+    // 边解析候选池：按整租户拉（不套 scope / 分类主集），覆盖主集涉及的所有 tenant_id（含 NULL=共享）。
+    let tenant_ids: std::collections::BTreeSet<Option<i32>> =
+        primary_rows.iter().map(|r| r.tenant_id).collect();
+    let mut target_qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
+        "SELECT id, slug, name, department, category, nodes, tenant_id, database_id, is_enabled \
+         FROM management.workflows WHERE ",
+    );
+    {
+        let mut first = true;
+        for tid in &tenant_ids {
+            if !first {
+                target_qb.push(" OR ");
+            }
+            first = false;
+            match tid {
+                Some(t) => {
+                    target_qb.push("tenant_id = ").push_bind(*t);
+                }
+                None => {
+                    target_qb.push("tenant_id IS NULL");
+                }
+            }
+        }
+    }
+    let target_rows = target_qb
+        .build_query_as::<WorkflowDepTargetRow>()
+        .fetch_all(&pool)
+        .await?;
+    let target_by_id: HashMap<i32, &WorkflowDepTargetRow> =
+        target_rows.iter().map(|r| (r.id, r)).collect();
+
+    // slug 解析索引：(tenant_id, trim(slug)) → 候选行（IS NOT DISTINCT FROM 语义，
+    // Option<i32> 的 None==None 天然对齐 NULL IS NOT DISTINCT FROM NULL）。
+    let mut by_tenant_slug: HashMap<(Option<i32>, &str), Vec<&WorkflowDepTargetRow>> =
+        HashMap::new();
+    for row in &target_rows {
+        if let Some(slug) = row.slug.as_deref() {
+            let slug = slug.trim();
+            if slug.is_empty() {
+                continue;
+            }
+            by_tenant_slug
+                .entry((row.tenant_id, slug))
+                .or_default()
+                .push(row);
+        }
+    }
+
+    let mut edges: Vec<Value> = Vec::new();
+    let mut seen_edges: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
+    let mut unresolved: u32 = 0;
+    let mut external_ids: std::collections::BTreeSet<i32> = std::collections::BTreeSet::new();
+    for row in &primary_rows {
+        let Some(arr) = row.nodes.as_array() else {
+            continue;
+        };
+        for node in arr {
+            if node.get("type").and_then(|t| t.as_str()) != Some("call_workflow") {
+                continue;
+            }
+            let target_slug = node
+                .get("config")
+                .and_then(|c| c.get("workflow"))
+                .and_then(|w| w.as_str())
+                .map(str::trim)
+                .unwrap_or("");
+            if target_slug.is_empty() {
+                unresolved += 1;
+                continue;
+            }
+
+            // 复刻引擎解析：同 tenant_id 内（整租户，不受主集/视图 scope 限制）+ is_enabled=true，
+            // 多候选时优先 database_id 与来源一致，其次取 id 最小。
+            let candidates = by_tenant_slug.get(&(row.tenant_id, target_slug));
+            let target = candidates.and_then(|cands| {
+                cands
+                    .iter()
+                    .filter(|c| c.is_enabled)
+                    .min_by_key(|c| ((c.database_id != row.database_id) as u8, c.id))
+            });
+            match target {
+                Some(target) => {
+                    // 同一 (from,to) 可能来自同一工作流里多个 call_workflow 节点各自指向
+                    // 同一目标（合法用法：同一目标在不同分支/位置各调一次），按 (from,to)
+                    // 去重后只保留一条边，避免前端 G6 报 "Edge already exists"。
+                    // 不影响 unresolved 计数——这几条节点各自都已成功解析目标。
+                    if seen_edges.insert((row.id, target.id)) {
+                        edges.push(json!({ "from": row.id, "to": target.id }));
+                    }
+                    // 主集之外的目标 = 1 跳外部依赖节点，纳入返回；只展开这一跳，
+                    // 不递归扫外部节点自己的 nodes。
+                    if !primary_ids.contains(&target.id) {
+                        external_ids.insert(target.id);
+                    }
+                }
+                None => {
+                    unresolved += 1;
+                    tracing::debug!(
+                        target: "workflow",
+                        workflow_id = row.id,
+                        target_slug = target_slug,
+                        "依赖图：call_workflow 目标未解析（跨租户/不存在/未启用）"
+                    );
+                }
+            }
+        }
+    }
+
+    // 运行状态字段（配色切换器用）：一趟聚合覆盖主集 + 外部依赖节点全部 workflow_id。
+    let all_ids: Vec<i32> = primary_rows
+        .iter()
+        .map(|r| r.id)
+        .chain(external_ids.iter().copied())
+        .collect();
+    let run_stats = fetch_dependency_graph_run_stats(&pool, &all_ids).await?;
+
+    let mut nodes: Vec<Value> = primary_rows
+        .iter()
+        .map(|row| {
+            dependency_graph_node_json(
+                row.id,
+                &row.slug,
+                &row.name,
+                &row.department,
+                &row.category,
+                &row.nodes,
+                false,
+                row.is_enabled,
+                run_stats.get(&row.id),
+            )
+        })
+        .collect();
+    for id in &external_ids {
+        if let Some(t) = target_by_id.get(id) {
+            nodes.push(dependency_graph_node_json(
+                t.id,
+                &t.slug,
+                &t.name,
+                &t.department,
+                &t.category,
+                &t.nodes,
+                true,
+                t.is_enabled,
+                run_stats.get(&t.id),
+            ));
+        }
+    }
+
+    Ok(Json(
+        json!({ "nodes": nodes, "edges": edges, "unresolved": unresolved }),
+    ))
+}
+
 /// GET /api/admin/workflows/:id
 pub async fn get_workflow(
     State(pool): State<PgPool>,
@@ -1375,7 +1805,11 @@ pub async fn update_workflow(
     } else if existing.is_enabled != workflow.is_enabled {
         format!(
             "{}工作流「{}」",
-            if workflow.is_enabled { "启用" } else { "停用" },
+            if workflow.is_enabled {
+                "启用"
+            } else {
+                "停用"
+            },
             workflow.name
         )
     } else {
@@ -2428,8 +2862,9 @@ pub async fn get_workflow_runs(
         .unwrap_or(20)
         .min(100);
 
-    let runs = sqlx::query_as::<_, WorkflowRun>(
-        r#"SELECT * FROM management.workflow_runs
+    let runs = sqlx::query_as::<_, WorkflowRunSummary>(
+        r#"SELECT id, workflow_id, trigger_type, status, node_results, elapsed_ms, started_at, completed_at
+           FROM management.workflow_runs
            WHERE workflow_id = $1
            ORDER BY started_at DESC
            LIMIT $2"#,
@@ -2440,6 +2875,30 @@ pub async fn get_workflow_runs(
     .await?;
 
     Ok(Json(json!({ "runs": runs, "total": runs.len() })))
+}
+
+/// GET /api/admin/workflows/:id/runs/:run_id — 单次运行明细（执行回放图用）。
+///
+/// node_results / error_message 在落库前已脱敏（见 execute_workflow 内脱敏边界①），
+/// 这里直接透出即可，不需要再次掩码。
+pub async fn get_workflow_run_detail(
+    State(pool): State<PgPool>,
+    Path((id, run_id)): Path<(i32, i64)>,
+    axum::Extension(claims): axum::Extension<Claims>,
+) -> Result<Json<Value>> {
+    let _workflow = fetch_workflow_for_admin(&pool, &claims, id).await?;
+
+    let run = sqlx::query_as::<_, WorkflowRun>(
+        r#"SELECT * FROM management.workflow_runs
+           WHERE id = $1 AND workflow_id = $2"#,
+    )
+    .bind(run_id)
+    .bind(id)
+    .fetch_optional(&pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("运行记录 {} 不存在", run_id)))?;
+
+    Ok(Json(json!(run)))
 }
 
 // ─── 版本控制 ─────────────────────────────────────────
@@ -3218,8 +3677,8 @@ pub async fn execute_workflow_internal(
     // 各触发入口（endpoint 三态 / hook / notify / cron / manual）都已在查询时过滤
     // `is_enabled = true`，正常不会走到这里。但把「禁用即不执行」这条不变量集中在唯一的
     // 执行入口再确认一次：即便将来新增触发方式漏了过滤，禁用的工作流也绝不会真正运行
-    // —— 不落 run、不产生任何副作用。（调试 debug_workflow / 子工作流 call_workflow 不经此函数，
-    // 不受影响。）
+    // —— 不落 run、不产生任何副作用。（调试 debug_workflow 不经此函数，不受影响。
+    //     子工作流 call_workflow 仍走引擎内联执行，但会自行写入子工作流的 workflow_runs。）
     if !workflow.is_enabled {
         tracing::warn!(
             workflow_id = workflow.id,
@@ -4197,7 +4656,9 @@ mod tests {
         let err = workflow_engine::api_key_readonly_block_error("save", "db_execute").to_string();
         assert!(is_api_key_readonly_block(&err));
         // 普通节点错误不得被误判成 403。
-        assert!(!is_api_key_readonly_block("db_execute 节点执行失败: 连接超时"));
+        assert!(!is_api_key_readonly_block(
+            "db_execute 节点执行失败: 连接超时"
+        ));
         assert!(!is_api_key_readonly_block(""));
     }
 }

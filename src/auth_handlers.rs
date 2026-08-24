@@ -8,7 +8,9 @@ use sqlx::{FromRow, PgPool};
 use std::net::SocketAddr;
 use validator::Validate;
 
-use crate::auth::{generate_token, hash_password, jwt_expiration_secs, verify_password, Claims};
+use crate::auth::{
+    generate_token, hash_password, jwt_expiration_secs, validate_password, verify_password, Claims,
+};
 use crate::error::AppError;
 use crate::models::{AuthResponse, LoginRequest, RegisterRequest, UserInfo};
 use crate::redis_manager::RedisManager;
@@ -65,9 +67,7 @@ struct UserRow {
 
 pub(crate) fn require_active_user(is_active: bool) -> Result<(), AppError> {
     if !is_active {
-        return Err(AppError::Forbidden(
-            "账号已停用，请联系管理员".to_string(),
-        ));
+        return Err(AppError::Forbidden("账号已停用，请联系管理员".to_string()));
     }
     Ok(())
 }
@@ -432,15 +432,15 @@ pub async fn change_password(
             user_id,
             "修改密码失败：旧密码错误"
         );
-        return Err(AppError::Unauthorized("旧密码错误".to_string()));
+        return Err(AppError::InvalidQuery("旧密码错误".to_string()));
     }
 
     // 新密码不能与旧密码相同——否则内置默认密码“只能用一次”的约束形同虚设。
     if req.new_password == req.old_password {
-        return Err(AppError::InvalidQuery(
-            "新密码不能与旧密码相同".to_string(),
-        ));
+        return Err(AppError::InvalidQuery("新密码不能与旧密码相同".to_string()));
     }
+
+    validate_password(&req.new_password)?;
 
     // 哈希新密码
     let new_password_hash = hash_password(&req.new_password)?;

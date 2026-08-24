@@ -185,7 +185,10 @@ pub async fn create_connection(
     validate_provider(&req.provider)?;
     validate_endpoint(&req.endpoint)?;
     validate_bucket(&req.bucket)?;
-    let region = req.region.clone().unwrap_or_else(|| "us-east-1".to_string());
+    let region = req
+        .region
+        .clone()
+        .unwrap_or_else(|| "us-east-1".to_string());
     validate_region(&region)?;
     validate_access_key_id(&req.access_key_id)?;
 
@@ -348,7 +351,9 @@ pub async fn health_check(
             "ok": false,
             "error": format!("HeadBucket/ListObjects 失败: {e}")
         }))),
-        Err(_) => Ok(Json(json!({ "ok": false, "error": "探活超时，请检查网络/endpoint 是否可达" }))),
+        Err(_) => Ok(Json(
+            json!({ "ok": false, "error": "探活超时，请检查网络/endpoint 是否可达" }),
+        )),
     }
 }
 

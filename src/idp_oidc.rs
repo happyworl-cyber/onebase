@@ -16,7 +16,9 @@ use axum::{
 };
 use base64::Engine;
 use chrono::Utc;
-use jsonwebtoken::{decode, decode_header, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{
+    decode, decode_header, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation,
+};
 use rsa::{
     pkcs8::{DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding},
     traits::PublicKeyParts,
@@ -207,7 +209,11 @@ fn random_code() -> String {
 }
 
 fn callback_uri(base: &str, provider_type: &str) -> String {
-    format!("{}/oauth2/callback/{}", base.trim_end_matches('/'), provider_type)
+    format!(
+        "{}/oauth2/callback/{}",
+        base.trim_end_matches('/'),
+        provider_type
+    )
 }
 
 fn build_redirect_with_params(base: &str, params: &[(&str, &str)]) -> Result<String> {
@@ -330,11 +336,12 @@ fn build_runtime_sso_provider(provider: &IdpProjectProvider) -> Result<sso::SsoP
         let secret_plain = crypto::decrypt_secret(&provider.client_secret_enc)?;
         base64::engine::general_purpose::STANDARD.encode(secret_plain)
     };
-    let (user_id_field, email_field, name_field, avatar_field) = match provider.provider_type.as_str() {
-        "github" => ("id", "email", "name", "avatar_url"),
-        "mind" => ("UserID", "email", "name", "picture"),
-        _ => ("sub", "email", "name", "picture"),
-    };
+    let (user_id_field, email_field, name_field, avatar_field) =
+        match provider.provider_type.as_str() {
+            "github" => ("id", "email", "name", "avatar_url"),
+            "mind" => ("UserID", "email", "name", "picture"),
+            _ => ("sub", "email", "name", "picture"),
+        };
 
     let configured_auth_url = provider
         .provider_config
@@ -420,7 +427,9 @@ async fn authenticate_client(
 ) -> Result<OauthClient> {
     let client = load_oauth_client(pool, client_id).await?;
     if !client.is_active {
-        return Err(AppError::Unauthorized("该 OAuth2 Client 已停用".to_string()));
+        return Err(AppError::Unauthorized(
+            "该 OAuth2 Client 已停用".to_string(),
+        ));
     }
     if let Some(secret) = client_secret {
         if hash_secret(secret) != client.client_secret_hash {
@@ -745,8 +754,8 @@ async fn ensure_active_signing_key(pool: &PgPool) -> Result<SigningKeyMaterial> 
     }
 
     let mut rng = rsa::rand_core::OsRng;
-    let private_key =
-        RsaPrivateKey::new(&mut rng, 2048).map_err(|e| AppError::Internal(format!("生成 RSA 密钥失败: {}", e)))?;
+    let private_key = RsaPrivateKey::new(&mut rng, 2048)
+        .map_err(|e| AppError::Internal(format!("生成 RSA 密钥失败: {}", e)))?;
     let public_key = RsaPublicKey::from(&private_key);
 
     let private_key_pem = private_key
@@ -1022,9 +1031,15 @@ pub async fn oauth2_authorize(
 
     let client = load_oauth_client(&pool, &q.client_id).await?;
     if !client.is_active {
-        return Err(AppError::Unauthorized("该 OAuth2 Client 已停用".to_string()));
+        return Err(AppError::Unauthorized(
+            "该 OAuth2 Client 已停用".to_string(),
+        ));
     }
-    if !client.redirect_uris.iter().any(|uri| uri == &q.redirect_uri) {
+    if !client
+        .redirect_uris
+        .iter()
+        .any(|uri| uri == &q.redirect_uri)
+    {
         return Err(AppError::InvalidQuery(
             "redirect_uri 未在 client 白名单中".to_string(),
         ));
@@ -1032,7 +1047,8 @@ pub async fn oauth2_authorize(
     let provider_type = if let Some(connection) = q.connection.as_deref() {
         connection
     } else {
-        let providers = list_enabled_provider_types(&pool, client.tenant_id, &client.client_id).await?;
+        let providers =
+            list_enabled_provider_types(&pool, client.tenant_id, &client.client_id).await?;
         if providers.is_empty() {
             return Err(AppError::NotFound(
                 "该 client 当前没有可用的登录 Provider".to_string(),
@@ -1072,7 +1088,10 @@ pub async fn oauth2_authorize(
                 if let Some(method) = q.code_challenge_method.as_deref() {
                     pairs.append_pair("code_challenge_method", method);
                 }
-                pairs.append_pair("response_type", q.response_type.as_deref().unwrap_or("code"));
+                pairs.append_pair(
+                    "response_type",
+                    q.response_type.as_deref().unwrap_or("code"),
+                );
             }
             html.push_str(&format!(
                 "<a href=\"{}\">Continue with {}</a>",
@@ -1083,7 +1102,8 @@ pub async fn oauth2_authorize(
         html.push_str("</body></html>");
         return Ok(Html(html).into_response());
     };
-    let provider = load_available_provider(&pool, client.tenant_id, &client.client_id, provider_type).await?;
+    let provider =
+        load_available_provider(&pool, client.tenant_id, &client.client_id, provider_type).await?;
     let requested_scopes = parse_scopes(q.scope.as_deref(), &client.allowed_scopes)?;
 
     if client.require_pkce {
@@ -1192,9 +1212,14 @@ async fn process_upstream_callback(
                 ("error", error),
                 (
                     "error_description",
-                    q.error_description.as_deref().unwrap_or("upstream authorization failed"),
+                    q.error_description
+                        .as_deref()
+                        .unwrap_or("upstream authorization failed"),
                 ),
-                ("state", auth_state.downstream_state.as_deref().unwrap_or("")),
+                (
+                    "state",
+                    auth_state.downstream_state.as_deref().unwrap_or(""),
+                ),
             ],
         )?;
         delete_auth_state(&pool, &q.state).await?;
@@ -1205,8 +1230,13 @@ async fn process_upstream_callback(
         .code
         .as_deref()
         .ok_or_else(|| AppError::Unauthorized("上游回调缺少 code".to_string()))?;
-    let provider =
-        load_available_provider(&pool, auth_state.tenant_id, &auth_state.client_id, &provider_type).await?;
+    let provider = load_available_provider(
+        &pool,
+        auth_state.tenant_id,
+        &auth_state.client_id,
+        &provider_type,
+    )
+    .await?;
     let runtime_provider = build_runtime_sso_provider(&provider)?;
     let token_response = sso::exchange_code_for_token(
         &runtime_provider,
@@ -1229,7 +1259,8 @@ async fn process_upstream_callback(
             .await
             .map_err(AppError::Internal)?
     };
-    let (provider_sub, email, name, _avatar) = sso::extract_profile_fields(&runtime_provider, &profile);
+    let (provider_sub, email, name, _avatar) =
+        sso::extract_profile_fields(&runtime_provider, &profile);
     let email_verified = profile_email_verified(&profile);
     let (identity_id, sub, is_new) = resolve_or_create_identity(
         &pool,
@@ -1309,7 +1340,8 @@ pub async fn oauth2_token(
     }
 
     if req.grant_type == "refresh_token" {
-        let client = authenticate_client(&pool, client_id, req.client_secret.as_deref(), false).await?;
+        let client =
+            authenticate_client(&pool, client_id, req.client_secret.as_deref(), false).await?;
         let refresh_token = req
             .refresh_token
             .as_deref()
@@ -1384,13 +1416,7 @@ pub async fn oauth2_token(
         .as_deref()
         .ok_or_else(|| AppError::InvalidQuery("缺少 redirect_uri".to_string()))?;
 
-    let client = authenticate_client(
-        &pool,
-        client_id,
-        req.client_secret.as_deref(),
-        true,
-    )
-    .await?;
+    let client = authenticate_client(&pool, client_id, req.client_secret.as_deref(), true).await?;
 
     let row = sqlx::query(
         r#"
@@ -1432,9 +1458,7 @@ pub async fn oauth2_token(
             .as_deref()
             .ok_or_else(|| AppError::Unauthorized("缺少 code_verifier".to_string()))?;
         if stored_challenge_method.as_deref() != Some("S256") {
-            return Err(AppError::Unauthorized(
-                "当前仅支持 S256 PKCE".to_string(),
-            ));
+            return Err(AppError::Unauthorized("当前仅支持 S256 PKCE".to_string()));
         }
         let derived = sso::pkce_challenge_s256(verifier);
         if Some(derived) != stored_challenge {
@@ -1482,10 +1506,7 @@ pub async fn oauth2_token(
     Ok(Json(body))
 }
 
-pub async fn oauth2_userinfo(
-    State(pool): State<PgPool>,
-    headers: HeaderMap,
-) -> Result<Response> {
+pub async fn oauth2_userinfo(State(pool): State<PgPool>, headers: HeaderMap) -> Result<Response> {
     let token = extract_bearer_or_body_token(&headers, None)?;
     let claims = decode_userinfo_token(&pool, &token).await?;
 
@@ -1523,7 +1544,8 @@ pub async fn oauth2_revoke(
         .client_id
         .as_deref()
         .ok_or_else(|| AppError::InvalidQuery("缺少 client_id".to_string()))?;
-    let _client = authenticate_client(&pool, client_id, req.client_secret.as_deref(), false).await?;
+    let _client =
+        authenticate_client(&pool, client_id, req.client_secret.as_deref(), false).await?;
 
     let token_hash = hash_secret(&req.token);
     let family_row = sqlx::query(

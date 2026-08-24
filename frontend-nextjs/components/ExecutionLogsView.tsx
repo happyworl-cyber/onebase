@@ -211,12 +211,19 @@ function RefDetail({ d }: { d: ExecRefDetail }) {
 interface ExecutionLogsViewProps {
   /** 限定租户（项目页传当前 projectId）；不传 = 平台视角（按身份自动收敛）。 */
   tenantId?: number
+  /** 组织级聚合：限定该组织下属全部项目。 */
+  organizationId?: number
   /** 顶部标题；项目页可省略副标题以更紧凑。 */
   title?: string
   subtitle?: string
 }
 
-export default function ExecutionLogsView({ tenantId, title = '执行日志', subtitle }: ExecutionLogsViewProps) {
+export default function ExecutionLogsView({
+  tenantId,
+  organizationId,
+  title = '执行日志',
+  subtitle,
+}: ExecutionLogsViewProps) {
   const [rows, setRows] = useState<ExecutionIndex[]>([])
   const [total, setTotal] = useState(0)
   const [totalCapped, setTotalCapped] = useState(false)
@@ -257,13 +264,14 @@ export default function ExecutionLogsView({ tenantId, title = '执行日志', su
   const filterParams = useCallback(() => {
     const params: Record<string, unknown> = {}
     if (tenantId != null) params.tenant_id = tenantId
+    if (organizationId != null) params.organization_id = organizationId
     if (source) params.source = source
     if (filters.status) params.status = filters.status
     if (filters.name) params.name = filters.name
     if (filters.trace_id) params.trace_id = filters.trace_id
     if (filters.failed_only) params.failed_only = true
     return params
-  }, [source, filters, tenantId])
+  }, [source, filters, tenantId, organizationId])
 
   // 列表数据：翻页 / 改每页大小都会触发，但不再附带总数查询。
   const load = useCallback(async () => {

@@ -23,11 +23,12 @@ interface WorkflowNodeData {
 interface Props {
   node: WorkflowNodeData | null
   workflowSlug?: string
-  onChange: (node: WorkflowNodeData) => void
+  onChange?: (node: WorkflowNodeData) => void
   onClose: () => void
-  onDelete: () => void
+  onDelete?: () => void
   /** 条件节点分支改名时通知画布同步旧连线的 branch，避免失配 */
   onBranchRename?: (nodeId: string, oldBranch: string, newBranch: string) => void
+  readOnly?: boolean
 }
 
 const STORAGE_WIDTH_KEY = 'workflow-node-panel-width'
@@ -101,7 +102,15 @@ function validateJsonFieldValue(value: string, rule: JsonFieldRule): string | nu
   return null
 }
 
-export default function NodeConfigPanel({ node, workflowSlug, onChange, onClose, onDelete, onBranchRename }: Props) {
+export default function NodeConfigPanel({
+  node,
+  workflowSlug,
+  onChange,
+  onClose,
+  onDelete,
+  onBranchRename,
+  readOnly = false,
+}: Props) {
   // 面板宽度（受控 + localStorage 持久化），用户可拖拽左边缘调整。
   const [width, setWidth] = useState(DEFAULT_WIDTH)
   const [isResizing, setIsResizing] = useState(false)
@@ -203,7 +212,13 @@ export default function NodeConfigPanel({ node, workflowSlug, onChange, onClose,
 
   const meta = NODE_TYPE_META[node.type] || NODE_TYPE_META.code
 
-  const updateConfig = (key: string, value: any) => {
+  const patch = (next: WorkflowNodeData) => {
+    if (readOnly) return
+    onChange?.(next)
+  }
+
+  const updateConfig = (key: string, value: unknown) => {
+    if (readOnly || !onChange) return
     onChange({ ...node, config: { ...node.config, [key]: value } })
     setJsonFieldErrors((prev) => {
       if (!prev[key]) return prev
@@ -232,7 +247,7 @@ export default function NodeConfigPanel({ node, workflowSlug, onChange, onClose,
         : mode === 'count'
           ? { count: node.config.count || 1 }
           : { items: node.config.items || '', concurrency: 1 }
-    onChange({ ...node, config: { ...common, ...modeConfig } })
+    patch({ ...node, config: { ...common, ...modeConfig } })
   }
 
   const updateCondition = (idx: number, key: 'branch' | 'expression', value: string) => {
@@ -257,6 +272,7 @@ export default function NodeConfigPanel({ node, workflowSlug, onChange, onClose,
   }
 
   const commitBranchRename = (newValue: string) => {
+    if (readOnly) return
     const oldValue = branchEditStart.current
     const next = newValue || ''
     if (onBranchRename && oldValue && oldValue !== next) {
@@ -271,7 +287,7 @@ export default function NodeConfigPanel({ node, workflowSlug, onChange, onClose,
     const expr = typeof node.config.expression === 'string' ? node.config.expression : ''
     const { expression: _drop, ...rest } = node.config
     void _drop
-    onChange({
+    patch({
       ...node,
       config: {
         ...rest,
@@ -288,7 +304,7 @@ export default function NodeConfigPanel({ node, workflowSlug, onChange, onClose,
     const { conditions: _c, default_branch: _d, ...rest } = node.config
     void _c
     void _d
-    onChange({ ...node, config: { ...rest, expression: expr } })
+    patch({ ...node, config: { ...rest, expression: expr } })
   }
 
   const validateJsonField = (key: string, raw: string) => {
@@ -335,7 +351,10 @@ export default function NodeConfigPanel({ node, workflowSlug, onChange, onClose,
         <button onClick={onClose} className="w-6 h-6 rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600 text-lg leading-none flex items-center justify-center">&times;</button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <fieldset
+        disabled={readOnly}
+        className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0 min-w-0 border-0"
+      >
         <div>
           <label className="block text-xs font-medium text-gray-500 mb-1">节点 ID</label>
           <input
@@ -349,7 +368,10 @@ export default function NodeConfigPanel({ node, workflowSlug, onChange, onClose,
           <label className="block text-xs font-medium text-gray-500 mb-1">标签名称</label>
           <input
             value={node.label || ''}
-            onChange={e => onChange({ ...node, label: e.target.value })}
+            onChange={(e) => {
+              if (readOnly || !onChange) return
+              onChange({ ...node, label: e.target.value })
+            }}
             className="w-full px-3 py-2 border rounded-lg text-sm"
             placeholder="给节点起个名字"
           />
@@ -365,7 +387,7 @@ export default function NodeConfigPanel({ node, workflowSlug, onChange, onClose,
             const oldTemplate = CODE_TEMPLATES[lang]
             const newTemplate = CODE_TEMPLATES[nextLang]
             const nextCode = !currentCode.trim() || currentCode === oldTemplate ? newTemplate : currentCode
-            onChange({
+            patch({
               ...node,
               config: { ...node.config, language: nextLang, code: nextCode },
             })
@@ -423,11 +445,11 @@ export default function NodeConfigPanel({ node, workflowSlug, onChange, onClose,
                 // 同时存 id（本项目精确引用）与 ref（数据源名称，供跨项目/跨环境导入按名重映射）。
                 const v = e.target.value
                 if (v === '') {
-                  onChange({ ...node, config: { ...node.config, datasource_id: null, datasource_ref: null } })
+                  patch({ ...node, config: { ...node.config, datasource_id: null, datasource_ref: null } })
                 } else {
                   const id = parseInt(v, 10)
                   const ds = datasources.find((d) => d.id === id)
-                  onChange({ ...node, config: { ...node.config, datasource_id: id, datasource_ref: ds?.name ?? null } })
+                  patch({ ...node, config: { ...node.config, datasource_id: id, datasource_ref: ds?.name ?? null } })
                 }
               }}
               className="w-full px-3 py-2 border rounded-lg text-sm bg-white focus:border-blue-400 focus:ring-1 focus:ring-blue-100 outline-none"
@@ -1282,7 +1304,7 @@ export default function NodeConfigPanel({ node, workflowSlug, onChange, onClose,
                     if (on && (cfg.graceful_close_seconds === undefined || cfg.graceful_close_seconds === null || cfg.graceful_close_seconds === '')) {
                       cfg.graceful_close_seconds = 1500
                     }
-                    onChange({ ...node, config: cfg })
+                    patch({ ...node, config: cfg })
                   }}
                 />
                 <span className="text-xs font-medium text-gray-500">启用超时自动断开（不勾选 = 一直保持连接）</span>
@@ -1391,20 +1413,24 @@ export default function NodeConfigPanel({ node, workflowSlug, onChange, onClose,
             </label>
           </>
         )}
-      </div>
+      </fieldset>
 
       <div className="p-4 border-t bg-gray-50 flex justify-between">
+        {readOnly ? <span /> : (
+          <button
+            type="button"
+            onClick={() => onDelete?.()}
+            className="px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+          >
+            删除节点
+          </button>
+        )}
         <button
-          onClick={onDelete}
-          className="px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-        >
-          删除节点
-        </button>
-        <button
+          type="button"
           onClick={onClose}
           className="px-4 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
         >
-          完成
+          {readOnly ? '关闭' : '完成'}
         </button>
       </div>
     </div>

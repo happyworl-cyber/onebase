@@ -240,7 +240,11 @@ export const authAPI = {
   me: () => api.get('/auth/me'),
   
   changePassword: (old_password: string, new_password: string) =>
-    api.post('/auth/change-password', { old_password, new_password }),
+    api.post<{ message: string; other_sessions_revoked: number }>(
+      '/auth/change-password',
+      { old_password, new_password },
+      { suppressErrorToast: true } as ApiRequestConfig,
+    ),
 }
 
 /** "函数管理"页拉到的函数 / 存储过程元数据。字段与后端 FunctionMetadata 对齐。 */
@@ -402,6 +406,20 @@ export interface DashboardHourlyBucket {
   err_5xx: number
 }
 
+export interface DashboardResources {
+  workflows: number
+  workflows_enabled: number
+  scheduled_tasks: number
+  scheduled_tasks_active: number
+  webhooks: number
+  webhooks_active: number
+  members: number
+  workflow_runs_24h: number
+  workflow_failed_24h: number
+  scheduled_runs_24h: number
+  scheduled_failed_24h: number
+}
+
 export interface DashboardOverview {
   qps_5min: number
   p95_ms_5min: number | null
@@ -410,6 +428,7 @@ export interface DashboardOverview {
   active_api_keys: number
   calls_24h: number
   hourly_24h: DashboardHourlyBucket[]  // 总是 24 条
+  resources?: DashboardResources
 }
 
 export interface DashboardActivityRow {
@@ -683,8 +702,13 @@ export interface ProvisionRequestBody {
   slug: string
   pg_pool_id?: number
   pg_connection?: ManualPgConnection
+  use_platform_pg?: boolean
+  use_provision_webhook?: boolean
+  requested_resources?: string[]
   template_slug: string
   scenario?: string
+  /** 所属组织；新客户端应始终传入 */
+  organization_id?: number
 }
 
 export interface ProvisionResponse {
@@ -695,6 +719,122 @@ export interface ProvisionResponse {
   database_id: number | null
   db_name: string | null
   user_role: string
+}
+
+export interface OrganizationDto {
+  id: number
+  name: string
+  slug: string
+  status: string
+  contact_email?: string | null
+  user_role: string
+}
+
+export interface OrgMemberDto {
+  user_id: number
+  username: string
+  email: string
+  is_superadmin: boolean
+  is_active: boolean
+  role: string
+  created_at: string
+}
+
+export const organizationAPI = {
+  list: () => api.get<{ organizations: OrganizationDto[] }>('/api/organizations'),
+  create: (body: {
+    name: string
+    slug: string
+    contact_email?: string
+    owner_user_id?: number
+  }) => api.post<{ organization: OrganizationDto }>('/api/organizations', body),
+  get: (id: number) =>
+    api.get<{ organization: OrganizationDto }>(`/api/organizations/${id}`),
+  patch: (
+    id: number,
+    body: { name?: string; contact_email?: string; status?: string },
+  ) => api.patch<{ organization: OrganizationDto }>(`/api/organizations/${id}`, body),
+  listProjects: (id: number, view?: 'all') =>
+    api.get<{ projects: import('./store').Project[] }>(
+      `/api/organizations/${id}/projects`,
+      view ? { params: { view } } : undefined,
+    ),
+  createProject: (id: number, body: ProvisionRequestBody) =>
+    api.post<ProvisionResponse>(`/api/organizations/${id}/projects`, {
+      ...body,
+      organization_id: id,
+    }),
+  /** 租户 admin 把租户成员加入下属项目（无需自己先是项目成员） */
+  addProjectMember: (
+    orgId: number,
+    projectId: number,
+    body:
+      | { user_id: number; role: string; org_role?: string }
+      | {
+          username: string
+          email: string
+          password: string
+          role: string
+          org_role?: string
+        },
+  ) =>
+    api.post(`/api/organizations/${orgId}/projects/${projectId}/members`, body),
+  stats: (id: number) =>
+    api.get<{
+      organization_id: number
+      projects_active: number
+      projects_archived: number
+      members_active: number
+      audit_calls_24h: number
+      audit_errors_24h: number
+      slow_queries_24h: number
+      exec_total_24h: number
+      exec_failed_24h: number
+    }>(`/api/organizations/${id}/stats`),
+  listMembers: (id: number) =>
+    api.get<{ members: OrgMemberDto[] }>(`/api/organizations/${id}/members`),
+  searchMemberCandidates: (id: number, q: string) =>
+    api.get<{
+      candidates: Array<{
+        user_id: number
+        username: string
+        email: string
+        is_superadmin: boolean
+      }>
+    }>(`/api/organizations/${id}/member-candidates`, { params: { q } }),
+  addMember: (id: number, body: { user_id: number; role: string }) =>
+    api.post(`/api/organizations/${id}/members`, body),
+  updateMember: (id: number, userId: number, body: { role: string }) =>
+    api.patch(`/api/organizations/${id}/members/${userId}`, body),
+  removeMember: (id: number, userId: number) =>
+    api.delete(`/api/organizations/${id}/members/${userId}`),
+  /** 转让租户 owner：目标升为 owner，调用方降为 admin */
+  transferOwner: (id: number, userId: number) =>
+    api.post(`/api/organizations/${id}/transfer-owner`, { user_id: userId }),
+  /** 归档/恢复项目（status: suspended | active） */
+  patchProject: (orgId: number, projectId: number, body: { status: 'active' | 'suspended' }) =>
+    api.patch(`/api/organizations/${orgId}/projects/${projectId}`, body),
+  memberProjectMatrix: (id: number) =>
+    api.get<{
+      organization_id: number
+      members: Array<{ user_id: number; username: string; email: string; org_role: string }>
+      projects: Array<{ id: number; name: string; slug: string }>
+      cells: Array<{ user_id: number; project_id: number; role: string }>
+    }>(`/api/organizations/${id}/member-project-matrix`),
+  securityOverview: (id: number) =>
+    api.get<{
+      organization_id: number
+      projects: Array<{
+        id: number
+        name: string
+        slug: string
+        api_keys: number
+        webhooks: number
+        sso_providers: number
+        idp_providers: number
+        databases: number
+      }>
+    }>(`/api/organizations/${id}/security-overview`),
 }
 
 export const projectTemplateAPI = {
@@ -796,7 +936,7 @@ export const adminAPI = {
   // 获取项目列表（包含数据库连接信息）
   listTenants: () => api.get('/api/admin/all-tenants'),
   
-  // 创建新项目（使用新接口）
+  /** @deprecated 请用 organizationAPI.create + 租户控制台开通项目 */
   createTenant: (data: {
     name: string
     slug: string
@@ -1290,6 +1430,8 @@ export interface ScheduledTask {
   claimed_at: string | null
   claimed_by: string | null
   created_by: number
+  created_by_name?: string | null
+  created_by_email?: string | null
   created_at: string
   updated_at: string
 }
@@ -2918,6 +3060,10 @@ export interface OperationLogRow {
   high_risk: boolean
   ip: string | null
   created_at: string
+  /** 组织级聚合列表才有 */
+  tenant_id?: number
+  project_name?: string
+  project_slug?: string
 }
 
 export interface OperationLogListResp {
@@ -2966,6 +3112,8 @@ export interface OperationLogDetail extends OperationLogRow {
   duration_ms: number | null
   detail: Record<string, unknown> | null
   change_view: OperationChangeView | null
+  project_name?: string
+  project_slug?: string
 }
 
 export interface OperationLogFilterParams {
@@ -2979,6 +3127,8 @@ export interface OperationLogFilterParams {
   start_date?: string
   end_date?: string
   tab?: 'all' | 'failed' | 'highRisk' | 'mine'
+  /** 组织级：只看某一个下属项目 */
+  project_id?: number
   limit?: number
   offset?: number
 }
@@ -3013,6 +3163,35 @@ export const operationLogAPI = {
 
   export: (projectId: number, params: OperationLogFilterParams = {}) =>
     api.get<Blob>(`/api/projects/${projectId}/operation-logs/export`, {
+      params,
+      responseType: 'blob',
+    }),
+}
+
+/** 租户控制台：聚合组织下属全部项目的操作日志 */
+export const orgOperationLogAPI = {
+  list: (orgId: number, params: OperationLogFilterParams = {}) =>
+    api.get<OperationLogListResp>(`/api/organizations/${orgId}/operation-logs`, { params }),
+
+  detail: (orgId: number, logId: number) =>
+    api.get<OperationLogDetail>(`/api/organizations/${orgId}/operation-logs/${logId}`),
+
+  stats: (orgId: number, params: OperationLogFilterParams = {}) =>
+    api.get<OperationLogStats>(`/api/organizations/${orgId}/operation-logs/stats`, { params }),
+
+  actors: (orgId: number, q?: string) =>
+    api.get<{ data: OperationLogActor[] }>(
+      `/api/organizations/${orgId}/operation-logs/actors`,
+      { params: q ? { q } : undefined },
+    ),
+
+  facets: (orgId: number) =>
+    api.get<{ actions: string[]; resource_types: string[] }>(
+      `/api/organizations/${orgId}/operation-logs/facets`,
+    ),
+
+  export: (orgId: number, params: OperationLogFilterParams = {}) =>
+    api.get<Blob>(`/api/organizations/${orgId}/operation-logs/export`, {
       params,
       responseType: 'blob',
     }),

@@ -150,8 +150,7 @@ pub async fn exec(
     .await?;
 
     let handle = client_cache::get_or_create(&access.connection).await?;
-    let result =
-        commands::execute(&handle, &access.connection.bucket, &op, &body.args).await?;
+    let result = commands::execute(&handle, &access.connection.bucket, &op, &body.args).await?;
     spawn_usage_update(pool, access.token.id);
     Ok(ok_result(&op, result))
 }
@@ -173,12 +172,8 @@ pub async fn health(
     .await?;
 
     let handle = client_cache::get_or_create(&access.connection).await?;
-    let budget_secs = (access
-        .connection
-        .connect_timeout_secs
-        .clamp(1, 60) as u64
-        * 2)
-    .clamp(10, 60);
+    let budget_secs =
+        (access.connection.connect_timeout_secs.clamp(1, 60) as u64 * 2).clamp(10, 60);
     let budget = Duration::from_secs(budget_secs);
     let started = Instant::now();
     let probe = tokio::time::timeout(

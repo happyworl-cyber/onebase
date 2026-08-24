@@ -1,6 +1,4 @@
-use crate::auth::{
-    hash_password, validate_email, validate_password, validate_username, Claims,
-};
+use crate::auth::{hash_password, validate_email, validate_password, validate_username, Claims};
 use crate::error::{AppError, Result};
 use crate::permissions;
 use crate::redis_manager::RedisManager;
@@ -89,13 +87,20 @@ pub async fn list_tenants(
     Ok(Json(result))
 }
 
-/// POST /api/admin/tenants - 创建租户（仅超管）
+/// POST /api/admin/tenants - **Deprecated**：请改用
+/// `POST /api/organizations` 建租户，再在租户下开通项目。
+/// 本接口仍会 1:1 创建组织+项目以兼容旧客户端。
 pub async fn create_tenant(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
     Json(req): Json<CreateTenantRequest>,
 ) -> Result<Json<Tenant>> {
     require_super_admin(&claims)?;
+    tracing::warn!(
+        target: "deprecated_api",
+        "POST /api/admin/tenants used by user {}; prefer POST /api/organizations",
+        claims.sub
+    );
 
     // 检查 slug 是否已存在
     let existing = sqlx::query_scalar::<_, bool>(
@@ -109,18 +114,43 @@ pub async fn create_tenant(
         return Err(AppError::InvalidQuery("租户标识 (slug) 已存在".to_string()));
     }
 
+    let mut tx = pool.begin().await?;
+
+    // 1:1 组织 + 项目（平台超管创建「租户」时同步建组织容器）
+    let org_id: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO management.organizations (name, slug, status, contact_email)
+        VALUES ($1, $2, 'active', $3)
+        RETURNING id
+        "#,
+    )
+    .bind(&req.name)
+    .bind(&req.slug)
+    .bind(&req.contact_email)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| match &e {
+        sqlx::Error::Database(db) if db.constraint() == Some("organizations_slug_key") => {
+            AppError::InvalidQuery("组织标识 (slug) 已存在".to_string())
+        }
+        _ => AppError::Database(e),
+    })?;
+
     let tenant = sqlx::query_as::<_, Tenant>(
         r#"
-        INSERT INTO management.tenants (name, slug, contact_email)
-        VALUES ($1, $2, $3)
+        INSERT INTO management.tenants (name, slug, contact_email, organization_id, kind)
+        VALUES ($1, $2, $3, $4, 'project')
         RETURNING id, name, slug, status, contact_email
         "#,
     )
     .bind(&req.name)
     .bind(&req.slug)
     .bind(&req.contact_email)
-    .fetch_one(&pool)
+    .bind(org_id)
+    .fetch_one(&mut *tx)
     .await?;
+
+    tx.commit().await?;
 
     // 给新租户种入开箱可用的 RBAC 默认数据
     if let Err(e) = crate::rbac_handlers::seed_tenant_rbac_defaults(&pool, tenant.id).await {
@@ -132,10 +162,11 @@ pub async fn create_tenant(
     }
 
     tracing::info!(
-        "超管 {} 创建了新租户: {} ({})",
+        "超管 {} 创建了新租户(项目)+组织: {} ({}) org_id={}",
         claims.email,
         tenant.name,
-        tenant.slug
+        tenant.slug,
+        org_id
     );
 
     Ok(Json(tenant))
@@ -267,12 +298,39 @@ pub async fn add_user_to_tenant(
         return Err(AppError::NotFound("用户不存在".to_string()));
     }
 
-    // 检查租户是否存在
+    // 检查租户（项目）是否存在
     let tenant_exists = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM management.tenants WHERE id = $1)",
     )
     .bind(req.tenant_id)
     .fetch_one(&pool)
+    .await?;
+
+    // 同步写入组织成员，满足两级成员不变量
+    let org_id = permissions::lookup_organization_for_project(&pool, req.tenant_id).await?;
+    let org_role = match req.role.as_str() {
+        "owner" => "owner",
+        "admin" => "admin",
+        _ => "member",
+    };
+    sqlx::query(
+        r#"
+        INSERT INTO management.organization_members (user_id, organization_id, role, is_active)
+        VALUES ($1, $2, $3, true)
+        ON CONFLICT (user_id, organization_id)
+        DO UPDATE SET
+          is_active = true,
+          role = CASE
+            WHEN management.organization_members.role = 'owner' OR EXCLUDED.role = 'owner' THEN 'owner'
+            WHEN management.organization_members.role = 'admin' OR EXCLUDED.role = 'admin' THEN 'admin'
+            ELSE 'member'
+          END
+        "#,
+    )
+    .bind(req.user_id)
+    .bind(org_id)
+    .bind(org_role)
+    .execute(&pool)
     .await?;
 
     if !tenant_exists {

@@ -33,8 +33,11 @@ interface WorkflowRowProps {
   onShowRuns: () => void
   onDuplicate: () => void
   onShare: () => void
+  onOpenVersionHistory?: () => void
   onExport: () => void
   onDelete: () => void
+  /** 多入口 focus（P1.3⑤）：在依赖图中查看此工作流。缺省则行菜单不出现该项。 */
+  onOpenGraph?: () => void
   selected?: boolean
   onSelectToggle?: () => void
 }
@@ -117,8 +120,10 @@ export default function WorkflowRow({
   onShowRuns,
   onDuplicate,
   onShare,
+  onOpenVersionHistory,
   onExport,
   onDelete,
+  onOpenGraph,
   selected = false,
   onSelectToggle,
 }: WorkflowRowProps & { folderId: string }) {
@@ -214,8 +219,10 @@ export default function WorkflowRow({
           onShowRuns={onShowRuns}
           onDuplicate={onDuplicate}
           onShare={onShare}
+          onOpenVersionHistory={onOpenVersionHistory}
           onExport={onExport}
           onDelete={onDelete}
+          onOpenGraph={onOpenGraph}
           size="compact"
           onMenuOpenChange={setMenuOpen}
         />
@@ -236,8 +243,10 @@ export function WorkflowCard({
   onShowRuns,
   onDuplicate,
   onShare,
+  onOpenVersionHistory,
   onExport,
   onDelete,
+  onOpenGraph,
   selected = false,
   onSelectToggle,
 }: WorkflowRowProps & { folderId: string }) {
@@ -307,8 +316,10 @@ export function WorkflowCard({
             onShowRuns={onShowRuns}
             onDuplicate={onDuplicate}
             onShare={onShare}
+            onOpenVersionHistory={onOpenVersionHistory}
             onExport={onExport}
             onDelete={onDelete}
+            onOpenGraph={onOpenGraph}
             size="card"
             onMenuOpenChange={setMenuOpen}
           />

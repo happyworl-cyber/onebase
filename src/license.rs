@@ -27,7 +27,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use rsa::pkcs1v15::{Signature, SigningKey, VerifyingKey};
-use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding};
+use rsa::pkcs8::{
+    DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding,
+};
 use rsa::signature::{RandomizedSigner, SignatureEncoding, Verifier};
 use rsa::{RsaPrivateKey, RsaPublicKey};
 use sha2::{Digest, Sha256};
@@ -408,9 +410,9 @@ impl LicenseState {
             EnforceMode::Enforce => {
                 let snap = self.snapshot();
                 match snap.status {
-                    LicenseStatus::Active
-                    | LicenseStatus::Grace
-                    | LicenseStatus::Unlicensed => (true, None),
+                    LicenseStatus::Active | LicenseStatus::Grace | LicenseStatus::Unlicensed => {
+                        (true, None)
+                    }
                     LicenseStatus::Expired | LicenseStatus::Invalid | LicenseStatus::Missing => {
                         (false, Some(snap.message.clone()))
                     }
@@ -709,6 +711,9 @@ mod tests {
             evaluate(&claims, 1_500, "other-fp").0,
             LicenseStatus::Invalid
         );
-        assert_eq!(evaluate(&claims, 1_500, "bound-fp").0, LicenseStatus::Active);
+        assert_eq!(
+            evaluate(&claims, 1_500, "bound-fp").0,
+            LicenseStatus::Active
+        );
     }
 }

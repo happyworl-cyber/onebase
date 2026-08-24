@@ -80,19 +80,36 @@ pub async fn is_platform_superadmin(pool: &PgPool, user_id: i32) -> bool {
 /// 语义约定：
 /// - 平台超管 → 返回 **空向量** 表示"无 tenant 限制"。调用方拿到空向量后应当
 ///   走"全表查询、不加 tenant 过滤"分支，而 **不是** 认为该用户无权限。
-/// - 非超管 → 仅返回 `user_tenants.role IN ('owner','admin')` 且 active 的 tenant_id。
+/// - 非超管 → 返回项目 owner/admin 与所属组织 owner/admin 可管理的 active tenant_id 并集。
+const TENANT_ADMIN_IDS_SQL: &str = r#"
+    SELECT DISTINCT tid FROM (
+      SELECT ut.tenant_id AS tid
+      FROM management.user_tenants ut
+      JOIN management.tenants t ON t.id = ut.tenant_id
+      JOIN management.organization_members om
+        ON om.organization_id = t.organization_id
+       AND om.user_id = ut.user_id AND om.is_active = true
+      WHERE ut.user_id = $1 AND ut.is_active = true
+        AND ut.role IN ('owner', 'admin') AND t.status = 'active'
+      UNION
+      SELECT t.id AS tid
+      FROM management.tenants t
+      JOIN management.organization_members om
+        ON om.organization_id = t.organization_id
+       AND om.user_id = $1 AND om.is_active = true
+       AND om.role IN ('owner', 'admin')
+      WHERE t.status = 'active'
+    ) s
+"#;
+
 pub async fn tenant_admin_ids(pool: &PgPool, claims: &Claims) -> Result<Vec<i32>> {
     if claims.is_superadmin {
         return Ok(vec![]);
     }
-    let rows = sqlx::query_scalar::<_, i32>(
-        "SELECT tenant_id \
-         FROM management.user_tenants \
-         WHERE user_id = $1 AND is_active = true AND role IN ('owner', 'admin')",
-    )
-    .bind(claims.sub)
-    .fetch_all(pool)
-    .await?;
+    let rows = sqlx::query_scalar::<_, i32>(TENANT_ADMIN_IDS_SQL)
+        .bind(claims.sub)
+        .fetch_all(pool)
+        .await?;
     Ok(rows)
 }
 
@@ -101,14 +118,20 @@ pub async fn tenant_admin_ids(pool: &PgPool, claims: &Claims) -> Result<Vec<i32>
 /// 与 `tenant_admin_ids` 语义一致（超管 → 空向量表示"无 tenant 限制"），但把 `member`
 /// 也纳入。用于"业务级资产"（如工作流）的默认列表作用域：开发者（member）应能看到
 /// 自己所在租户的工作流。viewer 不含。
+/// 须同时是项目所属组织的 active 成员。
 pub async fn tenant_member_ids(pool: &PgPool, claims: &Claims) -> Result<Vec<i32>> {
     if claims.is_superadmin {
         return Ok(vec![]);
     }
     let rows = sqlx::query_scalar::<_, i32>(
-        "SELECT tenant_id \
-         FROM management.user_tenants \
-         WHERE user_id = $1 AND is_active = true AND role IN ('owner', 'admin', 'member')",
+        "SELECT ut.tenant_id \
+         FROM management.user_tenants ut \
+         JOIN management.tenants t ON t.id = ut.tenant_id \
+         JOIN management.organization_members om \
+           ON om.organization_id = t.organization_id \
+          AND om.user_id = ut.user_id AND om.is_active = true \
+         WHERE ut.user_id = $1 AND ut.is_active = true \
+           AND ut.role IN ('owner', 'admin', 'member')",
     )
     .bind(claims.sub)
     .fetch_all(pool)
@@ -116,25 +139,32 @@ pub async fn tenant_member_ids(pool: &PgPool, claims: &Claims) -> Result<Vec<i32
     Ok(rows)
 }
 
-/// 检查指定 user 是不是指定 tenant 的 owner/admin。
+/// 检查指定 user 是不是指定项目的 owner/admin，或项目所属组织的 owner/admin。
 ///
-/// 不考虑平台超管——超管路径调用方应当自己短路（`if claims.is_superadmin { return Ok(()) }`），
-/// 或者使用 `require_tenant_admin` 让本函数帮你处理超管放行。
+/// 项目角色路径必须同时是所属组织的 active 成员；组织管理员路径不要求项目成员身份。
+/// 不考虑平台超管——超管路径调用方应当自己短路，或使用 `require_tenant_admin`。
 pub async fn is_tenant_admin(pool: &PgPool, user_id: i32, tenant_id: i32) -> Result<bool> {
-    let exists: bool = sqlx::query_scalar(
+    let via_project: bool = sqlx::query_scalar(
         "SELECT EXISTS( \
-            SELECT 1 FROM management.user_tenants \
-            WHERE user_id = $1 AND tenant_id = $2 AND is_active = true \
-              AND role IN ('owner', 'admin'))",
+            SELECT 1 FROM management.user_tenants ut \
+            JOIN management.tenants t ON t.id = ut.tenant_id \
+            JOIN management.organization_members om \
+              ON om.organization_id = t.organization_id \
+             AND om.user_id = ut.user_id AND om.is_active = true \
+            WHERE ut.user_id = $1 AND ut.tenant_id = $2 AND ut.is_active = true \
+              AND ut.role IN ('owner', 'admin'))",
     )
     .bind(user_id)
     .bind(tenant_id)
     .fetch_one(pool)
     .await?;
-    Ok(exists)
+    if via_project {
+        return Ok(true);
+    }
+    is_org_admin_for_project(pool, user_id, tenant_id).await
 }
 
-/// 要求调用者是"平台超管"或"该 tenant 的 owner/admin"。
+/// 要求调用者是平台超管、项目 owner/admin，或项目所属组织 owner/admin。
 ///
 /// 用于所有 per-tenant 元数据写操作（Webhook、SSO Provider、RBAC 角色/权限、租户连接 等）。
 pub async fn require_tenant_admin(pool: &PgPool, claims: &Claims, tenant_id: i32) -> Result<()> {
@@ -145,7 +175,7 @@ pub async fn require_tenant_admin(pool: &PgPool, claims: &Claims, tenant_id: i32
         Ok(())
     } else {
         Err(AppError::Forbidden(format!(
-            "需要租户 owner/admin 角色或平台超管才能管理租户 {} 的资源",
+            "需要项目 owner/admin、所属组织 owner/admin，或平台超管才能管理项目 {} 的资源",
             tenant_id
         )))
     }
@@ -160,9 +190,13 @@ pub async fn require_tenant_admin(pool: &PgPool, claims: &Claims, tenant_id: i32
 pub async fn is_tenant_member(pool: &PgPool, user_id: i32, tenant_id: i32) -> Result<bool> {
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS( \
-            SELECT 1 FROM management.user_tenants \
-            WHERE user_id = $1 AND tenant_id = $2 AND is_active = true \
-              AND role IN ('owner', 'admin', 'member'))",
+            SELECT 1 FROM management.user_tenants ut \
+            JOIN management.tenants t ON t.id = ut.tenant_id \
+            JOIN management.organization_members om \
+              ON om.organization_id = t.organization_id \
+             AND om.user_id = ut.user_id AND om.is_active = true \
+            WHERE ut.user_id = $1 AND ut.tenant_id = $2 AND ut.is_active = true \
+              AND ut.role IN ('owner', 'admin', 'member'))",
     )
     .bind(user_id)
     .bind(tenant_id)
@@ -178,8 +212,12 @@ pub async fn is_tenant_member(pool: &PgPool, user_id: i32, tenant_id: i32) -> Re
 pub async fn is_tenant_membership_any(pool: &PgPool, user_id: i32, tenant_id: i32) -> Result<bool> {
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS( \
-            SELECT 1 FROM management.user_tenants \
-            WHERE user_id = $1 AND tenant_id = $2 AND is_active = true)",
+            SELECT 1 FROM management.user_tenants ut \
+            JOIN management.tenants t ON t.id = ut.tenant_id \
+            JOIN management.organization_members om \
+              ON om.organization_id = t.organization_id \
+             AND om.user_id = ut.user_id AND om.is_active = true \
+            WHERE ut.user_id = $1 AND ut.tenant_id = $2 AND ut.is_active = true)",
     )
     .bind(user_id)
     .bind(tenant_id)
@@ -234,15 +272,203 @@ pub async fn require_tenant_member(pool: &PgPool, claims: &Claims, tenant_id: i3
 pub async fn is_tenant_owner(pool: &PgPool, user_id: i32, tenant_id: i32) -> Result<bool> {
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS( \
-            SELECT 1 FROM management.user_tenants \
-            WHERE user_id = $1 AND tenant_id = $2 AND is_active = true \
-              AND role = 'owner')",
+            SELECT 1 FROM management.user_tenants ut \
+            JOIN management.tenants t ON t.id = ut.tenant_id \
+            JOIN management.organization_members om \
+              ON om.organization_id = t.organization_id \
+             AND om.user_id = ut.user_id AND om.is_active = true \
+            WHERE ut.user_id = $1 AND ut.tenant_id = $2 AND ut.is_active = true \
+              AND ut.role = 'owner')",
     )
     .bind(user_id)
     .bind(tenant_id)
     .fetch_one(pool)
     .await?;
     Ok(exists)
+}
+
+// ───── 2b. 组织（Organization）层 ───────────────────────────
+
+/// 组织层管理员角色（owner / admin）。与项目 `user_tenants` 独立。
+#[allow(dead_code)]
+pub const ORG_ADMIN_ROLES: &[&str] = &["owner", "admin"];
+
+const IS_ORG_ADMIN_FOR_PROJECT_SQL: &str = r#"
+    SELECT EXISTS(
+        SELECT 1
+        FROM management.tenants t
+        JOIN management.organization_members om
+          ON om.organization_id = t.organization_id
+         AND om.user_id = $1
+         AND om.is_active = true
+         AND om.role IN ('owner', 'admin')
+        WHERE t.id = $2 AND t.status = 'active'
+    )
+"#;
+
+/// 用户是否为该 active 项目所属组织的 active owner/admin。
+pub async fn is_org_admin_for_project(
+    pool: &PgPool,
+    user_id: i32,
+    project_id: i32,
+) -> Result<bool> {
+    let exists: bool = sqlx::query_scalar(IS_ORG_ADMIN_FOR_PROJECT_SQL)
+        .bind(user_id)
+        .bind(project_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(exists)
+}
+
+pub async fn is_organization_admin(
+    pool: &PgPool,
+    user_id: i32,
+    organization_id: i32,
+) -> Result<bool> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+            SELECT 1 FROM management.organization_members \
+            WHERE user_id = $1 AND organization_id = $2 AND is_active = true \
+              AND role IN ('owner', 'admin'))",
+    )
+    .bind(user_id)
+    .bind(organization_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(exists)
+}
+
+pub async fn is_organization_member(
+    pool: &PgPool,
+    user_id: i32,
+    organization_id: i32,
+) -> Result<bool> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+            SELECT 1 FROM management.organization_members \
+            WHERE user_id = $1 AND organization_id = $2 AND is_active = true)",
+    )
+    .bind(user_id)
+    .bind(organization_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(exists)
+}
+
+pub async fn is_organization_owner(
+    pool: &PgPool,
+    user_id: i32,
+    organization_id: i32,
+) -> Result<bool> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+            SELECT 1 FROM management.organization_members \
+            WHERE user_id = $1 AND organization_id = $2 AND is_active = true \
+              AND role = 'owner')",
+    )
+    .bind(user_id)
+    .bind(organization_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(exists)
+}
+
+pub async fn require_organization_admin(
+    pool: &PgPool,
+    claims: &Claims,
+    organization_id: i32,
+) -> Result<()> {
+    if claims.is_superadmin {
+        return Ok(());
+    }
+    if is_organization_admin(pool, claims.sub, organization_id).await? {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(format!(
+            "需要组织 owner/admin 角色或平台超管才能管理组织 {}",
+            organization_id
+        )))
+    }
+}
+
+pub async fn require_organization_member(
+    pool: &PgPool,
+    claims: &Claims,
+    organization_id: i32,
+) -> Result<()> {
+    if claims.is_superadmin {
+        return Ok(());
+    }
+    if is_organization_member(pool, claims.sub, organization_id).await? {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(format!(
+            "需要组织 {} 的成员身份或平台超管",
+            organization_id
+        )))
+    }
+}
+
+pub async fn require_organization_owner(
+    pool: &PgPool,
+    claims: &Claims,
+    organization_id: i32,
+) -> Result<()> {
+    if claims.is_superadmin {
+        return Ok(());
+    }
+    if is_organization_owner(pool, claims.sub, organization_id).await? {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(format!(
+            "需要组织 owner 角色或平台超管才能修改组织 {}",
+            organization_id
+        )))
+    }
+}
+
+/// 组织下属项目 id（含已归档 suspended）。
+pub async fn organization_project_ids(pool: &PgPool, organization_id: i32) -> Result<Vec<i32>> {
+    let ids: Vec<i32> = sqlx::query_scalar(
+        r#"
+        SELECT id FROM management.tenants
+        WHERE organization_id = $1 AND status IN ('active', 'suspended')
+        ORDER BY id
+        "#,
+    )
+    .bind(organization_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(ids)
+}
+
+/// 项目所属组织 id；项目不存在则 NotFound。
+pub async fn lookup_organization_for_project(pool: &PgPool, project_id: i32) -> Result<i32> {
+    let row: Option<i32> = sqlx::query_scalar(
+        "SELECT organization_id FROM management.tenants \
+         WHERE id = $1 AND status = 'active'",
+    )
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await?;
+    row.ok_or_else(|| AppError::NotFound(format!("项目 {} 不存在或已停用", project_id)))
+}
+
+/// 把用户加入项目前：必须已是该项目所属组织的 active 成员。
+pub async fn require_user_is_org_member_of_project(
+    pool: &PgPool,
+    user_id: i32,
+    project_id: i32,
+) -> Result<()> {
+    let org_id = lookup_organization_for_project(pool, project_id).await?;
+    if is_organization_member(pool, user_id, org_id).await? {
+        Ok(())
+    } else {
+        Err(AppError::InvalidQuery(format!(
+            "用户 {} 还不是该项目所属组织（id={}）的成员，请先加入组织再加入项目",
+            user_id, org_id
+        )))
+    }
 }
 
 /// 要求调用者是"平台超管"或"该 tenant 的 owner"（**不放 admin**）。
@@ -259,6 +485,41 @@ pub async fn require_tenant_owner(pool: &PgPool, claims: &Claims, tenant_id: i32
         Err(AppError::Forbidden(format!(
             "需要 owner 角色或平台超管才能管理项目 {} 的元信息",
             tenant_id
+        )))
+    }
+}
+
+fn can_grant_project_owner(
+    is_superadmin: bool,
+    is_project_owner: bool,
+    is_organization_owner: bool,
+) -> bool {
+    is_superadmin || is_project_owner || is_organization_owner
+}
+
+/// 授予项目 owner 角色时，调用者必须是平台超管、项目 owner，或所属组织 owner。
+pub async fn require_project_owner_grant(
+    pool: &PgPool,
+    claims: &Claims,
+    project_id: i32,
+) -> Result<()> {
+    if claims.is_superadmin {
+        return Ok(());
+    }
+
+    let is_project_owner = is_tenant_owner(pool, claims.sub, project_id).await?;
+    if is_project_owner {
+        return Ok(());
+    }
+
+    let organization_id = lookup_organization_for_project(pool, project_id).await?;
+    let is_org_owner = is_organization_owner(pool, claims.sub, organization_id).await?;
+    if can_grant_project_owner(false, false, is_org_owner) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(format!(
+            "只有项目 owner、项目所属组织的 owner 或平台超管才能授予项目 {} 的 owner 角色",
+            project_id
         )))
     }
 }
@@ -299,7 +560,19 @@ pub async fn lookup_tenant_for_database(pool: &PgPool, database_id: i32) -> Resu
 /// 规则：
 /// - 若 slug 可解析为数字，直接按 id 使用（兼容历史调用方）
 /// - 超管：可解析任意 active 库；若同 slug 在多租户冲突，返回歧义错误
-/// - 普通用户：仅可解析自己所属租户里的库；冲突同样返回歧义错误
+/// - 普通用户：可解析自己所属租户或自己管理的组织下项目里的库；冲突同样返回歧义错误
+const ORG_ADMIN_DATABASE_IDS_BY_SLUG_SQL: &str = r#"
+    SELECT td.id
+    FROM management.tenant_databases td
+    JOIN management.tenants t ON t.id = td.tenant_id AND t.status = 'active'
+    JOIN management.organization_members om
+      ON om.organization_id = t.organization_id
+     AND om.user_id = $1 AND om.is_active = true
+     AND om.role IN ('owner', 'admin')
+    WHERE td.slug = $2 AND td.is_active = true
+    ORDER BY td.id ASC LIMIT 2
+"#;
+
 pub async fn resolve_database_id_by_slug_for_claims(
     pool: &PgPool,
     claims: &Claims,
@@ -309,7 +582,7 @@ pub async fn resolve_database_id_by_slug_for_claims(
         return Ok(id);
     }
 
-    let ids: Vec<i32> = if claims.is_superadmin {
+    let mut ids: Vec<i32> = if claims.is_superadmin {
         sqlx::query_scalar(
             "SELECT id FROM management.tenant_databases \
              WHERE slug = $1 AND is_active = true \
@@ -334,6 +607,14 @@ pub async fn resolve_database_id_by_slug_for_claims(
         .fetch_all(pool)
         .await?
     };
+
+    if !claims.is_superadmin && ids.is_empty() {
+        ids = sqlx::query_scalar(ORG_ADMIN_DATABASE_IDS_BY_SLUG_SQL)
+            .bind(claims.sub)
+            .bind(database_slug)
+            .fetch_all(pool)
+            .await?;
+    }
 
     match ids.len() {
         0 => Err(AppError::NotFound(format!(
@@ -554,6 +835,10 @@ pub fn parse_explicit_tenant_id(headers: &HeaderMap, query: Option<&str>) -> Opt
     None
 }
 
+fn explicit_tenant_access_allowed(is_member: bool, is_org_admin: bool) -> bool {
+    is_member || is_org_admin
+}
+
 /// 解析"本次请求要操作的租户 ID"。
 ///
 /// 调用方一般通过 `TenantContext` 提取器隐式调用，但也支持手工调用（test / handler 复用）。
@@ -575,7 +860,7 @@ pub async fn resolve_tenant_context(
             }
             return Ok(tid);
         }
-        // 普通用户：必须是该租户的 active 成员
+        // 普通用户：必须是该租户的 active 成员，或是项目所属组织的 owner/admin
         let member: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM management.user_tenants \
              WHERE user_id = $1 AND tenant_id = $2 AND is_active = true)",
@@ -584,9 +869,14 @@ pub async fn resolve_tenant_context(
         .bind(tid)
         .fetch_one(pool)
         .await?;
-        if !member {
+        let org_admin = if member {
+            false
+        } else {
+            is_org_admin_for_project(pool, claims.sub, tid).await?
+        };
+        if !explicit_tenant_access_allowed(member, org_admin) {
             return Err(AppError::Forbidden(format!(
-                "您不属于租户 {}，无权操作",
+                "您不是项目 {} 的 active 成员，也不是其所属组织的 owner/admin，无权操作",
                 tid
             )));
         }
@@ -949,6 +1239,44 @@ mod tests {
         // 一旦未来要新增 super_owner 之类的角色，必须同步更新这个列表
         // 并修复所有使用它的 SQL（grep `TENANT_ADMIN_ROLES`）。
         assert_eq!(TENANT_ADMIN_ROLES, &["owner", "admin"]);
+    }
+
+    #[test]
+    fn org_admin_project_query_requires_active_project_and_admin_role() {
+        assert!(IS_ORG_ADMIN_FOR_PROJECT_SQL.contains("t.status = 'active'"));
+        assert!(IS_ORG_ADMIN_FOR_PROJECT_SQL.contains("om.is_active = true"));
+        assert!(IS_ORG_ADMIN_FOR_PROJECT_SQL.contains("om.role IN ('owner', 'admin')"));
+    }
+
+    #[test]
+    fn tenant_admin_ids_query_includes_direct_and_org_admin_projects() {
+        assert!(TENANT_ADMIN_IDS_SQL.contains("UNION"));
+        assert!(TENANT_ADMIN_IDS_SQL.contains("ut.role IN ('owner', 'admin')"));
+        assert!(TENANT_ADMIN_IDS_SQL.contains("om.role IN ('owner', 'admin')"));
+        assert!(TENANT_ADMIN_IDS_SQL.contains("t.status = 'active'"));
+    }
+
+    #[test]
+    fn explicit_tenant_access_allows_member_or_org_admin() {
+        assert!(explicit_tenant_access_allowed(true, false));
+        assert!(explicit_tenant_access_allowed(false, true));
+        assert!(!explicit_tenant_access_allowed(false, false));
+    }
+
+    #[test]
+    fn project_owner_grant_requires_project_or_organization_owner() {
+        assert!(can_grant_project_owner(true, false, false));
+        assert!(can_grant_project_owner(false, true, false));
+        assert!(can_grant_project_owner(false, false, true));
+        assert!(!can_grant_project_owner(false, false, false));
+    }
+
+    #[test]
+    fn org_admin_database_slug_query_is_active_and_bounded() {
+        assert!(ORG_ADMIN_DATABASE_IDS_BY_SLUG_SQL.contains("t.status = 'active'"));
+        assert!(ORG_ADMIN_DATABASE_IDS_BY_SLUG_SQL.contains("td.is_active = true"));
+        assert!(ORG_ADMIN_DATABASE_IDS_BY_SLUG_SQL.contains("om.role IN ('owner', 'admin')"));
+        assert!(ORG_ADMIN_DATABASE_IDS_BY_SLUG_SQL.contains("LIMIT 2"));
     }
 
     fn headers_with_tenant(value: &str) -> HeaderMap {

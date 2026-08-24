@@ -143,11 +143,7 @@ pub async fn connect_dedicated_listener(config: &DatabaseConfig) -> Result<(PgPo
         .connect_with(config.connect_options())
         .await
         .map_err(|e| {
-            tracing::error!(
-                "LISTEN 独立连接池创建失败 id={}: {}",
-                config.id,
-                e
-            );
+            tracing::error!("LISTEN 独立连接池创建失败 id={}: {}", config.id, e);
             AppError::Internal(format!("连接数据库失败: {}", e))
         })?;
 
@@ -658,12 +654,10 @@ impl TenantPoolOptions {
     where
         F: FnMut(&str) -> Option<String>,
     {
-        let parse_u32 = |raw: Option<String>, default: u32| {
-            raw.and_then(|s| s.parse().ok()).unwrap_or(default)
-        };
-        let parse_u64 = |raw: Option<String>, default: u64| {
-            raw.and_then(|s| s.parse().ok()).unwrap_or(default)
-        };
+        let parse_u32 =
+            |raw: Option<String>, default: u32| raw.and_then(|s| s.parse().ok()).unwrap_or(default);
+        let parse_u64 =
+            |raw: Option<String>, default: u64| raw.and_then(|s| s.parse().ok()).unwrap_or(default);
         Self {
             min_connections: parse_u32(get("TENANT_DB_MIN_CONNECTIONS"), 1).max(1),
             idle_timeout_secs: parse_u64(get("TENANT_DB_IDLE_TIMEOUT"), 600).max(1),
@@ -721,30 +715,15 @@ mod tests {
 
     #[test]
     fn effective_acquire_timeout_env_overrides_db() {
-        assert_eq!(
-            effective_acquire_timeout_from(30, Some("5".into())),
-            5
-        );
-        assert_eq!(
-            effective_acquire_timeout_from(8, Some("60".into())),
-            60
-        );
+        assert_eq!(effective_acquire_timeout_from(30, Some("5".into())), 5);
+        assert_eq!(effective_acquire_timeout_from(8, Some("60".into())), 60);
     }
 
     #[test]
     fn effective_acquire_timeout_invalid_env_falls_back() {
-        assert_eq!(
-            effective_acquire_timeout_from(8, Some("0".into())),
-            8
-        );
-        assert_eq!(
-            effective_acquire_timeout_from(8, Some("601".into())),
-            8
-        );
-        assert_eq!(
-            effective_acquire_timeout_from(8, Some("abc".into())),
-            8
-        );
+        assert_eq!(effective_acquire_timeout_from(8, Some("0".into())), 8);
+        assert_eq!(effective_acquire_timeout_from(8, Some("601".into())), 8);
+        assert_eq!(effective_acquire_timeout_from(8, Some("abc".into())), 8);
     }
 
     #[test]
@@ -759,30 +738,15 @@ mod tests {
 
     #[test]
     fn effective_max_connections_env_overrides_db() {
-        assert_eq!(
-            effective_max_connections_from(10, Some("30".into())),
-            30
-        );
-        assert_eq!(
-            effective_max_connections_from(50, Some("5".into())),
-            5
-        );
+        assert_eq!(effective_max_connections_from(10, Some("30".into())), 30);
+        assert_eq!(effective_max_connections_from(50, Some("5".into())), 5);
     }
 
     #[test]
     fn effective_max_connections_invalid_env_falls_back() {
-        assert_eq!(
-            effective_max_connections_from(20, Some("0".into())),
-            20
-        );
-        assert_eq!(
-            effective_max_connections_from(20, Some("51".into())),
-            20
-        );
-        assert_eq!(
-            effective_max_connections_from(20, Some("abc".into())),
-            20
-        );
+        assert_eq!(effective_max_connections_from(20, Some("0".into())), 20);
+        assert_eq!(effective_max_connections_from(20, Some("51".into())), 20);
+        assert_eq!(effective_max_connections_from(20, Some("abc".into())), 20);
     }
 
     #[test]

@@ -755,10 +755,7 @@ fn select_has_aggregate(select: &Option<String>) -> bool {
 /// 引用的列（聚合参数或分组列）必须在白名单内，否则 403。`SUM`/`AVG` 结果可能是
 /// `numeric`（本项目 sqlx 未启用 decimal，解码会得 null），统一 cast 成 float8 保证
 /// JSON 里是数字。
-fn build_aggregate_select(
-    select: &str,
-    allowed: &Option<Vec<String>>,
-) -> Result<(String, String)> {
+fn build_aggregate_select(select: &str, allowed: &Option<Vec<String>>) -> Result<(String, String)> {
     let col_allowed = |c: &str| -> bool {
         match allowed {
             Some(list) if !list.is_empty() => list.iter().any(|a| a == c),
@@ -812,7 +809,9 @@ fn build_aggregate_select(
     }
 
     if aggregates.is_empty() {
-        return Err(AppError::InvalidQuery("select 中未解析到聚合函数".to_string()));
+        return Err(AppError::InvalidQuery(
+            "select 中未解析到聚合函数".to_string(),
+        ));
     }
 
     let mut select_parts = group_cols.clone();
@@ -2072,13 +2071,7 @@ pub async fn update_record(
     let set_clauses: Vec<String> = obj
         .keys()
         .enumerate()
-        .map(|(i, k)| {
-            format!(
-                "\"{}\" = {}",
-                k,
-                typed_placeholder(i + 1, k, &col_types)
-            )
-        })
+        .map(|(i, k)| format!("\"{}\" = {}", k, typed_placeholder(i + 1, k, &col_types)))
         .collect();
 
     // pk 占用 $N+1，RBAC 行条件从 $N+2 开始
@@ -2352,7 +2345,8 @@ pub async fn update_records(
     let filters = parse_filters_from_query(query_string);
     if filters.is_empty() {
         return Err(AppError::InvalidQuery(
-            "批量更新必须提供至少一个过滤条件（如 ?id.eq=123 或 ?id.in=1,2,3），禁止裸 PATCH 整表".to_string(),
+            "批量更新必须提供至少一个过滤条件（如 ?id.eq=123 或 ?id.in=1,2,3），禁止裸 PATCH 整表"
+                .to_string(),
         ));
     }
 
@@ -2380,13 +2374,7 @@ pub async fn update_records(
     let set_clauses: Vec<String> = obj
         .keys()
         .enumerate()
-        .map(|(i, k)| {
-            format!(
-                "\"{}\" = {}",
-                k,
-                typed_placeholder(i + 1, k, &col_types)
-            )
-        })
+        .map(|(i, k)| format!("\"{}\" = {}", k, typed_placeholder(i + 1, k, &col_types)))
         .collect();
     let mut next_param_idx = obj.len() + 1;
 
@@ -2575,7 +2563,8 @@ pub async fn delete_records(
     let filters = parse_filters_from_query(query_string);
     if filters.is_empty() {
         return Err(AppError::InvalidQuery(
-            "批量删除必须提供至少一个过滤条件（如 ?id.eq=123 或 ?id.in=1,2,3），禁止裸 DELETE 整表".to_string(),
+            "批量删除必须提供至少一个过滤条件（如 ?id.eq=123 或 ?id.in=1,2,3），禁止裸 DELETE 整表"
+                .to_string(),
         ));
     }
 
@@ -2949,6 +2938,10 @@ pub struct ApiKeyInfo {
     pub last_used_at: Option<String>,
     pub created_at: String,
     pub expires_at: Option<String>,
+    /// 创建者用户 id；存量 Key 可能为 NULL
+    pub created_by: Option<i32>,
+    pub created_by_name: Option<String>,
+    pub created_by_email: Option<String>,
 }
 
 // 旧的 `verify_database_owner(pool, user_id, database_id)` 已下沉到
@@ -2968,11 +2961,15 @@ pub async fn list_api_keys(
     permissions::require_database_admin(&pool, &claims.0, database_id).await?;
     let keys = sqlx::query(
         r#"
-        SELECT id, name, key_prefix, permissions, is_active, 
-               last_used_at::TEXT, created_at::TEXT, expires_at::TEXT
-        FROM management.api_keys
-        WHERE database_id = $1
-        ORDER BY created_at DESC
+        SELECT k.id, k.name, k.key_prefix, k.permissions, k.is_active,
+               k.last_used_at::TEXT, k.created_at::TEXT, k.expires_at::TEXT,
+               k.created_by,
+               cu.username AS created_by_name,
+               cu.email AS created_by_email
+        FROM management.api_keys k
+        LEFT JOIN users cu ON cu.id = k.created_by
+        WHERE k.database_id = $1
+        ORDER BY k.created_at DESC
         "#,
     )
     .bind(database_id)
@@ -2990,6 +2987,9 @@ pub async fn list_api_keys(
             last_used_at: row.get("last_used_at"),
             created_at: row.get("created_at"),
             expires_at: row.get("expires_at"),
+            created_by: row.get("created_by"),
+            created_by_name: row.get("created_by_name"),
+            created_by_email: row.get("created_by_email"),
         })
         .collect();
 
@@ -3291,10 +3291,7 @@ mod tests {
 
     #[test]
     fn sql_with_session_user_wraps_select() {
-        let out = sql_with_session_user(
-            r#"SELECT * FROM "public"."t" WHERE "id" = $1"#,
-            42,
-        );
+        let out = sql_with_session_user(r#"SELECT * FROM "public"."t" WHERE "id" = $1"#, 42);
         assert!(out.starts_with(
             "WITH __onebase_sess AS (SELECT set_config('app.current_user_id', '42', true))"
         ));

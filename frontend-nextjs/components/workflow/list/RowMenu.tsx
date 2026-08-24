@@ -8,8 +8,11 @@ export interface RowMenuProps {
   onShowRuns: () => void
   onDuplicate: () => void
   onShare: () => void
+  onOpenVersionHistory?: () => void
   onExport: () => void
   onDelete: () => void
+  /** 多入口 focus（P1.3⑤）：在依赖图中查看此工作流，带 focus 参数进图并自动定位。缺省则不渲染该菜单项。 */
+  onOpenGraph?: () => void
   size?: 'compact' | 'card'
   onOpenChange?: (open: boolean) => void
 }
@@ -48,8 +51,10 @@ export default function RowMenu({
   onShowRuns,
   onDuplicate,
   onShare,
+  onOpenVersionHistory,
   onExport,
   onDelete,
+  onOpenGraph,
   size = 'compact',
   onOpenChange,
 }: RowMenuProps) {
@@ -110,10 +115,22 @@ export default function RowMenu({
             <i className="fas fa-link text-[10px] w-3.5 text-slate-400" />
             复制编辑链接
           </MenuItem>
+          {onOpenVersionHistory && (
+            <MenuItem onClick={onOpenVersionHistory} close={() => setMenuOpen(false)}>
+              <i className="fas fa-clock-rotate-left text-[10px] w-3.5 text-slate-400" />
+              版本历史
+            </MenuItem>
+          )}
           <MenuItem onClick={onExport} close={() => setMenuOpen(false)}>
             <i className="fas fa-download text-[10px] w-3.5 text-slate-400" />
             导出
           </MenuItem>
+          {onOpenGraph && (
+            <MenuItem onClick={onOpenGraph} close={() => setMenuOpen(false)}>
+              <i className="fas fa-share-nodes text-[10px] w-3.5 text-slate-400" />
+              在依赖图中查看
+            </MenuItem>
+          )}
           <div className="h-px bg-slate-100 my-1" />
           <MenuItem onClick={onDelete} destructive close={() => setMenuOpen(false)}>
             <i className="fas fa-trash text-[10px] w-3.5" />
@@ -133,8 +150,10 @@ interface WorkflowRowActionsProps {
   onShowRuns: () => void
   onDuplicate: () => void
   onShare: () => void
+  onOpenVersionHistory?: () => void
   onExport: () => void
   onDelete: () => void
+  onOpenGraph?: () => void
   size?: 'compact' | 'card'
   onMenuOpenChange?: (open: boolean) => void
 }
@@ -147,8 +166,10 @@ export function WorkflowRowActions({
   onShowRuns,
   onDuplicate,
   onShare,
+  onOpenVersionHistory,
   onExport,
   onDelete,
+  onOpenGraph,
   size = 'compact',
   onMenuOpenChange,
 }: WorkflowRowActionsProps) {
@@ -194,8 +215,10 @@ export function WorkflowRowActions({
         onShowRuns={onShowRuns}
         onDuplicate={onDuplicate}
         onShare={onShare}
+        onOpenVersionHistory={onOpenVersionHistory}
         onExport={onExport}
         onDelete={onDelete}
+        onOpenGraph={onOpenGraph}
         onOpenChange={onMenuOpenChange}
       />
     </div>

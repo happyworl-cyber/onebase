@@ -311,7 +311,7 @@ export default function SsoManagementPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-5xl">
+    <div className="w-full space-y-6">
       {/* 标题栏 */}
       <div className="flex items-center justify-between">
         <div>

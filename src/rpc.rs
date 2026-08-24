@@ -359,8 +359,7 @@ async fn run_rpc(
     // 严禁让客户端通过 header / body 自带——否则 `assert_project_access` 形同虚设。
     // 先在管理库池上把 session GUC 解析完（含 session_rules 查询），再开租户事务。
     // 顺序不能反：否则会在持有租户连接的同时去抢管理库连接，管理库打满时形成跨池连锁耗尽。
-    let session_gucs =
-        resolve_rpc_session_gucs(main_pool, database_id, subject, headers).await;
+    let session_gucs = resolve_rpc_session_gucs(main_pool, database_id, subject, headers).await;
     let mut tx: Transaction<'_, Postgres> = pool.begin().await.map_err(AppError::Database)?;
     apply_rpc_session_gucs(&mut tx, &session_gucs).await?;
 
@@ -1739,10 +1738,11 @@ pub async fn revoke_rpc_acl(
     Query(req): Query<RevokeAclQuery>,
 ) -> Result<StatusCode, AppError> {
     // 用 permission_id 反查 tenant_id，再校验调用者是该租户管理员。
-    let tenant_row = sqlx::query("SELECT tenant_id, resource FROM management.permissions WHERE id = $1")
-        .bind(req.permission_id)
-        .fetch_optional(&pool)
-        .await?;
+    let tenant_row =
+        sqlx::query("SELECT tenant_id, resource FROM management.permissions WHERE id = $1")
+            .bind(req.permission_id)
+            .fetch_optional(&pool)
+            .await?;
     let tenant_row = tenant_row.ok_or_else(|| AppError::NotFound("权限不存在".to_string()))?;
     let tenant_id: i32 = tenant_row.get("tenant_id");
     let resource: String = tenant_row.get("resource");

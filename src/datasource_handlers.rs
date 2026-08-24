@@ -232,7 +232,12 @@ pub async fn update_credential(
     // 凭证连接信息可能变化：淘汰所有引用该凭证的数据源的内存池，下次执行按新配置重建。
     evict_pools_for_credential(&pool, project_id, cred_id).await;
 
-    tracing::info!(user_id = claims.sub, tenant_id = project_id, cred_id, "wf credential updated");
+    tracing::info!(
+        user_id = claims.sub,
+        tenant_id = project_id,
+        cred_id,
+        "wf credential updated"
+    );
     Ok(Json(credential_row_to_json(&row, 0)))
 }
 
@@ -261,19 +266,23 @@ pub async fn delete_credential(
         )));
     }
 
-    let affected = sqlx::query(
-        "DELETE FROM management.wf_credentials WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(cred_id)
-    .bind(project_id)
-    .execute(&pool)
-    .await?
-    .rows_affected();
+    let affected =
+        sqlx::query("DELETE FROM management.wf_credentials WHERE id = $1 AND tenant_id = $2")
+            .bind(cred_id)
+            .bind(project_id)
+            .execute(&pool)
+            .await?
+            .rows_affected();
     if affected == 0 {
         return Err(AppError::NotFound(format!("凭证 {} 不存在", cred_id)));
     }
 
-    tracing::info!(user_id = claims.sub, tenant_id = project_id, cred_id, "wf credential deleted");
+    tracing::info!(
+        user_id = claims.sub,
+        tenant_id = project_id,
+        cred_id,
+        "wf credential deleted"
+    );
     Ok(Json(json!({ "deleted": true })))
 }
 
@@ -297,10 +306,7 @@ pub struct DatasourceRequest {
     pub credential_id: Option<i32>,
 }
 
-fn datasource_row_to_json(
-    row: &sqlx::postgres::PgRow,
-    ref_count: i64,
-) -> serde_json::Value {
+fn datasource_row_to_json(row: &sqlx::postgres::PgRow, ref_count: i64) -> serde_json::Value {
     json!({
         "id": row.get::<i32, _>("id"),
         "name": row.get::<String, _>("name"),
@@ -504,7 +510,12 @@ pub async fn update_datasource(
     // 淘汰内存池（PG/MySQL 两处缓存），下次执行按新配置重建。
     crate::workflow_engine::evict_datasource_pool(ds_id).await;
 
-    tracing::info!(user_id = claims.sub, tenant_id = project_id, ds_id, "wf datasource updated");
+    tracing::info!(
+        user_id = claims.sub,
+        tenant_id = project_id,
+        ds_id,
+        "wf datasource updated"
+    );
     Ok(Json(datasource_row_to_json(&row, 0)))
 }
 
@@ -528,21 +539,25 @@ pub async fn delete_datasource(
         }
     }
 
-    let affected = sqlx::query(
-        "DELETE FROM management.wf_datasources WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(ds_id)
-    .bind(project_id)
-    .execute(&pool)
-    .await?
-    .rows_affected();
+    let affected =
+        sqlx::query("DELETE FROM management.wf_datasources WHERE id = $1 AND tenant_id = $2")
+            .bind(ds_id)
+            .bind(project_id)
+            .execute(&pool)
+            .await?
+            .rows_affected();
     if affected == 0 {
         return Err(AppError::NotFound(format!("数据源 {} 不存在", ds_id)));
     }
 
     crate::workflow_engine::evict_datasource_pool(ds_id).await;
 
-    tracing::info!(user_id = claims.sub, tenant_id = project_id, ds_id, "wf datasource deleted");
+    tracing::info!(
+        user_id = claims.sub,
+        tenant_id = project_id,
+        ds_id,
+        "wf datasource deleted"
+    );
     Ok(Json(json!({ "deleted": true })))
 }
 
@@ -580,7 +595,9 @@ pub async fn test_datasource(
 
     match outcome {
         Ok(()) => Ok(Json(json!({ "ok": true, "status": "connected" }))),
-        Err(e) => Ok(Json(json!({ "ok": false, "status": "failed", "error": e.to_string() }))),
+        Err(e) => Ok(Json(
+            json!({ "ok": false, "status": "failed", "error": e.to_string() }),
+        )),
     }
 }
 

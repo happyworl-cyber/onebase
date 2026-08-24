@@ -30,9 +30,7 @@ fn require_database_id(opt: Option<Extension<CurrentDatabaseId>>) -> Result<i32>
 /// 甚至读到函数源码 / 触发器体。统一在这里 fail-closed。
 fn require_tenant_pool(dynamic_pool: &Option<Extension<PgPool>>) -> Result<&PgPool> {
     dynamic_pool.as_deref().ok_or_else(|| {
-        AppError::InvalidQuery(
-            "缺少有效的 X-Database-Id 请求头，无法定位目标数据库".to_string(),
-        )
+        AppError::InvalidQuery("缺少有效的 X-Database-Id 请求头，无法定位目标数据库".to_string())
     })
 }
 
@@ -352,7 +350,11 @@ pub async fn drop_schema(
         operation_log::resource_type::SCHEMA,
         Some(schema.clone()),
         None,
-        format!("删除 Schema「{}」{}", schema, if cascade { "（级联）" } else { "" }),
+        format!(
+            "删除 Schema「{}」{}",
+            schema,
+            if cascade { "（级联）" } else { "" }
+        ),
         Status::Success,
         None, // derive_high_risk → 高危
         Some(serde_json::json!({

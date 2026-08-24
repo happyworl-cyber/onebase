@@ -19,33 +19,39 @@
 //! 这是最小必要集——多加任何 handler 模块会引入和 main.rs 的双重 mod 树，
 //! 容易踩 once_cell static 重复初始化等坑。
 
-pub mod auth;
 pub mod alert_webhook;
+pub mod auth;
 pub mod crypto;
 pub mod crypto_primitives;
 pub mod error;
 /// 统一执行日志（执行索引层 + 保留清理）。被 lib crate 的 `scheduler` 与 bin crate 的
 /// handler 共用，故放在 lib；刻意不依赖 bin-only 的 `request_id` / `logging`。
 pub mod execution_log;
+pub mod http_async_poll;
+pub mod js_deps;
+pub mod js_host_bridge;
+pub mod js_runner;
+/// Redis 数据源：连接注册表 + 客户端缓存 + 精选命令。随 `workflow_engine` 编进 lib
+/// crate（`redis` 节点要用），刻意只依赖 crypto/error/redis/sqlx，保持 lib-safe。
+pub mod kafka_ds;
 /// 商用离线 License（授权 / 续保控制）。服务端中间件与 `license_tool` CLI 共用，
 /// 只依赖 rsa / sha2 / serde / chrono / axum，保持 lib-safe。
 pub mod license;
 pub mod lua_builtins;
 pub mod lua_engine;
 pub mod migrate;
+pub mod object_storage_ds;
 pub mod operation_log;
 pub mod pg_row_json;
 pub mod pool_manager;
 /// 连接池 acquire 超时计数 + 饱和 fail-fast。`workflow_engine` 的 Postgres 节点埋点
 /// 要用，故随其编进 lib crate；依赖 sqlx/chrono/serde/dashmap/pool_manager。
 pub mod pool_metrics;
+pub mod py_deps;
+pub mod py_runner;
 /// 工作流 Postgres 节点复用其 `apply_session_guards` / `reset_session_guards`；
 /// 与 bin 侧超管 raw SQL 通道同源文件，lib 只依赖 error/sqlx，保持 lib-safe。
 pub mod raw_sql_guard;
-/// Redis 数据源：连接注册表 + 客户端缓存 + 精选命令。随 `workflow_engine` 编进 lib
-/// crate（`redis` 节点要用），刻意只依赖 crypto/error/redis/sqlx，保持 lib-safe。
-pub mod kafka_ds;
-pub mod object_storage_ds;
 pub mod redis_ds;
 pub mod redis_manager;
 pub mod rpc;
@@ -53,12 +59,6 @@ pub mod scheduler;
 pub mod session_hooks;
 pub mod sse_batch_config;
 pub mod sse_publisher;
-pub mod http_async_poll;
-pub mod js_deps;
-pub mod js_host_bridge;
-pub mod js_runner;
-pub mod py_deps;
-pub mod py_runner;
 pub mod workflow_engine;
 
 // `rpc` 的传递依赖——本身不暴露给集成测试用，只是让 lib 能完整编译。

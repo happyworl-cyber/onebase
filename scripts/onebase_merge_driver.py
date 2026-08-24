@@ -144,7 +144,7 @@ def brandify_tree(root: Path) -> None:
         if not raw_path:
             continue
         repo_path = os.fsdecode(raw_path)
-        if repo_path == "scripts/onebase_merge_driver.py":
+        if repo_path in {".gitattributes", "scripts/onebase_merge_driver.py"}:
             continue
         path = root / repo_path
         if not path.is_file():

@@ -90,9 +90,7 @@ async fn resolve_access(
     .ok_or_else(|| AppError::NotFound(format!("Kafka 连接 {connection_id} 不存在")))?;
 
     if !connection.is_active {
-        return Err(AppError::ServiceUnavailable(
-            "Kafka 连接已停用".to_string(),
-        ));
+        return Err(AppError::ServiceUnavailable("Kafka 连接已停用".to_string()));
     }
     if let Some(scope) = tenant_scope {
         if connection.tenant_id != scope.tenant_id {
@@ -144,11 +142,7 @@ pub async fn produce(
 
     let producer = client_cache::get_or_create(&access.connection).await?;
     let headers_val = body.headers.unwrap_or(Value::Null);
-    let key = body
-        .key
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let key = body.key.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let value = match &body.value {
         Value::String(s) => s.clone(),
         Value::Object(_) | Value::Array(_) => body.value.to_string(),

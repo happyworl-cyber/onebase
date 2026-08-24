@@ -2,7 +2,7 @@
 //!
 //! 两个 endpoint：
 //!   GET /api/dashboard/overview?tenant_id=N
-//!     → 6 个核心指标 + 24 个 hourly 分桶（供 sparkline）
+//!     → 6 个核心指标 + 资源计数 + 24 个 hourly 分桶（供 sparkline）
 //!     → 单 CTE 查询一次拿全；走 (tenant_id, created_at) 索引
 //!   GET /api/dashboard/recent-activity?tenant_id=N&limit=10
 //!     → sanitized 最近活动 feed；不返回 IP / user_agent / request_body
@@ -45,6 +45,23 @@ pub struct DashboardOverview {
     pub calls_24h: i64,
     /// 24 个 hourly bucket（缺失小时填 0），最旧 → 最新
     pub hourly_24h: Vec<HourlyBucket>,
+    /// 项目资源与自动化计数（工作流 / 定时任务 / Webhook 等）
+    pub resources: DashboardResources,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DashboardResources {
+    pub workflows: i64,
+    pub workflows_enabled: i64,
+    pub scheduled_tasks: i64,
+    pub scheduled_tasks_active: i64,
+    pub webhooks: i64,
+    pub webhooks_active: i64,
+    pub members: i64,
+    pub workflow_runs_24h: i64,
+    pub workflow_failed_24h: i64,
+    pub scheduled_runs_24h: i64,
+    pub scheduled_failed_24h: i64,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -114,6 +131,49 @@ pub async fn get_overview(
             FROM management.api_keys
             WHERE tenant_id = $1 AND COALESCE(is_active, false) = true
         ),
+        wf AS (
+            SELECT
+                COUNT(*)::bigint AS total,
+                COUNT(*) FILTER (WHERE is_enabled)::bigint AS enabled
+            FROM management.workflows
+            WHERE tenant_id = $1
+        ),
+        st AS (
+            SELECT
+                COUNT(*)::bigint AS total,
+                COUNT(*) FILTER (WHERE is_active)::bigint AS active
+            FROM management.scheduled_tasks
+            WHERE tenant_id = $1
+        ),
+        wh AS (
+            SELECT
+                COUNT(*)::bigint AS total,
+                COUNT(*) FILTER (WHERE COALESCE(is_active, false))::bigint AS active
+            FROM management.webhooks
+            WHERE tenant_id = $1
+        ),
+        members AS (
+            SELECT COUNT(*)::bigint AS n
+            FROM management.user_tenants
+            WHERE tenant_id = $1 AND COALESCE(is_active, true) = true
+        ),
+        wf_runs AS (
+            SELECT
+                COUNT(*)::bigint AS total,
+                COUNT(*) FILTER (WHERE status IN ('failed', 'timeout'))::bigint AS failed
+            FROM management.workflow_runs
+            WHERE tenant_id = $1
+              AND started_at >= now() - INTERVAL '24 hours'
+        ),
+        st_runs AS (
+            SELECT
+                COUNT(*)::bigint AS total,
+                COUNT(*) FILTER (WHERE r.status IN ('failed', 'timeout'))::bigint AS failed
+            FROM management.scheduled_task_runs r
+            JOIN management.scheduled_tasks t ON t.id = r.task_id
+            WHERE t.tenant_id = $1
+              AND r.started_at >= now() - INTERVAL '24 hours'
+        ),
         hourly AS (
             SELECT
                 h AS hour,
@@ -133,6 +193,17 @@ pub async fn get_overview(
             END AS error_rate_24h,
             (SELECT n FROM slow) AS slow_queries_24h,
             (SELECT n FROM keys) AS active_api_keys,
+            (SELECT total FROM wf) AS workflows,
+            (SELECT enabled FROM wf) AS workflows_enabled,
+            (SELECT total FROM st) AS scheduled_tasks,
+            (SELECT active FROM st) AS scheduled_tasks_active,
+            (SELECT total FROM wh) AS webhooks,
+            (SELECT active FROM wh) AS webhooks_active,
+            (SELECT n FROM members) AS members,
+            (SELECT total FROM wf_runs) AS workflow_runs_24h,
+            (SELECT failed FROM wf_runs) AS workflow_failed_24h,
+            (SELECT total FROM st_runs) AS scheduled_runs_24h,
+            (SELECT failed FROM st_runs) AS scheduled_failed_24h,
             COALESCE(
                 (SELECT jsonb_agg(
                     jsonb_build_object('hour', hour, 'cnt', cnt, 'err_5xx', err_5xx)
@@ -164,6 +235,19 @@ pub async fn get_overview(
         active_api_keys,
         calls_24h,
         hourly_24h: fill_hourly_buckets(&hourly_raw),
+        resources: DashboardResources {
+            workflows: row.try_get("workflows").unwrap_or(0),
+            workflows_enabled: row.try_get("workflows_enabled").unwrap_or(0),
+            scheduled_tasks: row.try_get("scheduled_tasks").unwrap_or(0),
+            scheduled_tasks_active: row.try_get("scheduled_tasks_active").unwrap_or(0),
+            webhooks: row.try_get("webhooks").unwrap_or(0),
+            webhooks_active: row.try_get("webhooks_active").unwrap_or(0),
+            members: row.try_get("members").unwrap_or(0),
+            workflow_runs_24h: row.try_get("workflow_runs_24h").unwrap_or(0),
+            workflow_failed_24h: row.try_get("workflow_failed_24h").unwrap_or(0),
+            scheduled_runs_24h: row.try_get("scheduled_runs_24h").unwrap_or(0),
+            scheduled_failed_24h: row.try_get("scheduled_failed_24h").unwrap_or(0),
+        },
     }))
 }
 

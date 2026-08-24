@@ -733,9 +733,7 @@ pub fn diagnose(input: &VerdictInput) -> Verdict {
                 "LISTEN 独立连接偏多（{} 条），建议合并 channel",
                 input.dedicated_connections
             ),
-            hints: vec![
-                "检查 sse_notify_bridges 与 notify 工作流是否有冗余 channel".into(),
-            ],
+            hints: vec!["检查 sse_notify_bridges 与 notify 工作流是否有冗余 channel".into()],
         };
     }
 
@@ -848,12 +846,10 @@ pub async fn get_pool_health(
     .await
     .unwrap_or(0);
 
-    let notify_workflows = crate::workflow_notify_trigger::active_listener_count(
-        &main_pool,
-        database_id,
-    )
-    .await
-    .unwrap_or(0) as i64;
+    let notify_workflows =
+        crate::workflow_notify_trigger::active_listener_count(&main_pool, database_id)
+            .await
+            .unwrap_or(0) as i64;
 
     let dedicated_connections = sse_bridges + notify_workflows;
 

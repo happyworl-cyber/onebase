@@ -36,7 +36,9 @@ impl PgAdminCredentials {
             return Err(AppError::InvalidQuery("admin_user 不能为空".to_string()));
         }
         if self.admin_password.is_empty() {
-            return Err(AppError::InvalidQuery("admin_password 不能为空".to_string()));
+            return Err(AppError::InvalidQuery(
+                "admin_password 不能为空".to_string(),
+            ));
         }
         if !(1..=65535).contains(&self.db_port) {
             return Err(AppError::InvalidQuery(
@@ -144,9 +146,10 @@ pub async fn ensure_platform_pg_pool_entry(pool: &PgPool) -> Result<()> {
     let creds = platform_provision_credentials()?;
     let platform = platform_instance_from_env()?;
     let pools = list_active_pools(pool).await?;
-    if pools.iter().any(|e| {
-        same_pg_endpoint(&e.db_host, e.db_port, &platform.db_host, platform.db_port)
-    }) {
+    if pools
+        .iter()
+        .any(|e| same_pg_endpoint(&e.db_host, e.db_port, &platform.db_host, platform.db_port))
+    {
         return Ok(());
     }
 
@@ -200,9 +203,8 @@ fn provision_connection_url() -> Result<String> {
             return Ok(trimmed.to_string());
         }
     }
-    let db_url = std::env::var("DATABASE_URL").map_err(|_| {
-        AppError::Internal("DATABASE_URL 未设置，无法使用平台 PG 实例".to_string())
-    })?;
+    let db_url = std::env::var("DATABASE_URL")
+        .map_err(|_| AppError::Internal("DATABASE_URL 未设置，无法使用平台 PG 实例".to_string()))?;
     let parsed = parse_pg_connection_url(&db_url)?;
     Ok(format!(
         "postgresql://{}:{}@{}:{}/postgres",
@@ -214,7 +216,9 @@ fn provision_connection_url() -> Result<String> {
 }
 
 fn normalize_pg_host(host: &str) -> String {
-    host.trim().trim_matches(&['[', ']'][..]).to_ascii_lowercase()
+    host.trim()
+        .trim_matches(&['[', ']'][..])
+        .to_ascii_lowercase()
 }
 
 /// 解析 `postgresql://` / `postgres://` 连接串。
@@ -376,15 +380,12 @@ async fn admin_connect(entry: &PgPoolEntryWithSecret, target_db: &str) -> Result
 pub async fn test_connection(creds: &PgAdminCredentials) -> Result<()> {
     creds.validate()?;
     let temp = admin_connect_creds(creds, "postgres").await?;
-    sqlx::query("SELECT 1")
-        .execute(&temp)
-        .await
-        .map_err(|e| {
-            AppError::Internal(format!(
-                "PG 探活 SELECT 1 失败（{}:{}）: {}",
-                creds.db_host, creds.db_port, e
-            ))
-        })?;
+    sqlx::query("SELECT 1").execute(&temp).await.map_err(|e| {
+        AppError::Internal(format!(
+            "PG 探活 SELECT 1 失败（{}:{}）: {}",
+            creds.db_host, creds.db_port, e
+        ))
+    })?;
     Ok(())
 }
 
@@ -622,7 +623,10 @@ pub async fn create_project_role(
         admin.db_port
     );
 
-    Ok(ProvisionedRole { user: role, password })
+    Ok(ProvisionedRole {
+        user: role,
+        password,
+    })
 }
 
 /// 模板 DDL 跑完后，把库内**已存在**对象的权限补授给项目角色（幂等，兜底用）。
@@ -637,7 +641,10 @@ pub async fn grant_existing_objects_to_role(
     let dbconn = admin_connect_creds(admin, db_name).await?;
     let stmts = [
         format!(r#"GRANT ALL ON ALL TABLES IN SCHEMA public TO "{}""#, role),
-        format!(r#"GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "{}""#, role),
+        format!(
+            r#"GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "{}""#,
+            role
+        ),
         format!(
             r#"GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO "{}""#,
             role
@@ -661,9 +668,10 @@ pub async fn drop_project_role(admin: &PgAdminCredentials, role: &str) -> Result
     }
     let temp = admin_connect_creds(admin, "postgres").await?;
     let sql = format!(r#"DROP ROLE IF EXISTS "{}""#, role);
-    sqlx::query(&sql).execute(&temp).await.map_err(|e| {
-        AppError::Internal(format!("DROP ROLE \"{}\" 失败: {}", role, e))
-    })?;
+    sqlx::query(&sql)
+        .execute(&temp)
+        .await
+        .map_err(|e| AppError::Internal(format!("DROP ROLE \"{}\" 失败: {}", role, e)))?;
     tracing::warn!("M2 provisioning 回滚：已删除项目角色 {}", role);
     Ok(())
 }
@@ -838,10 +846,9 @@ fn url_decode(input: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(v) = u8::from_str_radix(
-                std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""),
-                16,
-            ) {
+            if let Ok(v) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
                 out.push(v);
                 i += 3;
                 continue;
@@ -903,10 +910,9 @@ mod tests {
 
     #[test]
     fn parse_pg_url_basic() {
-        let parsed = parse_pg_connection_url(
-            "postgresql://onebase:secret%40word@10.0.5.33:5432/onebase",
-        )
-        .unwrap();
+        let parsed =
+            parse_pg_connection_url("postgresql://onebase:secret%40word@10.0.5.33:5432/onebase")
+                .unwrap();
         assert_eq!(parsed.creds.db_host, "10.0.5.33");
         assert_eq!(parsed.creds.db_port, 5432);
         assert_eq!(parsed.creds.admin_user, "onebase");

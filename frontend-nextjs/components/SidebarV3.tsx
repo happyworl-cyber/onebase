@@ -339,10 +339,15 @@ export default function SidebarV3() {
             <div className="absolute bottom-full left-3 right-3 mb-2 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
               <div className="py-1">
                 <button
+                  type="button"
+                  onClick={() => {
+                    setShowUserMenu(false)
+                    router.push('/account')
+                  }}
                   className="w-full flex items-center space-x-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
                 >
                   <i className="fas fa-user text-xs w-4 text-gray-400"></i>
-                  <span>个人资料</span>
+                  <span>账号设置</span>
                 </button>
                 <button
                   className="w-full flex items-center space-x-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"

@@ -453,7 +453,7 @@ pub async fn list_tasks(
                 return Err(AppError::Forbidden("无权查看该租户的定时任务".to_string()));
             }
             bind_idx += 1;
-            where_parts.push(format!("tenant_id = ${}", bind_idx));
+            where_parts.push(format!("t.tenant_id = ${}", bind_idx));
             int_binds.push(t);
         } else {
             let placeholders = admins
@@ -464,28 +464,31 @@ pub async fn list_tasks(
                 })
                 .collect::<Vec<_>>()
                 .join(",");
-            where_parts.push(format!("tenant_id IN ({placeholders})"));
+            where_parts.push(format!("t.tenant_id IN ({placeholders})"));
             int_binds.extend(admins);
         }
     } else if let Some(t) = q.tenant_id {
         bind_idx += 1;
-        where_parts.push(format!("tenant_id = ${}", bind_idx));
+        where_parts.push(format!("t.tenant_id = ${}", bind_idx));
         int_binds.push(t);
     }
 
     if let Some(k) = &q.kind {
         bind_idx += 1;
-        where_parts.push(format!("kind = ${}", bind_idx));
+        where_parts.push(format!("t.kind = ${}", bind_idx));
         str_binds.push(k.clone());
     }
     if let Some(a) = q.is_active {
         bind_idx += 1;
-        where_parts.push(format!("is_active = ${}", bind_idx));
+        where_parts.push(format!("t.is_active = ${}", bind_idx));
         bool_binds.push(a);
     }
 
     let sql = format!(
-        "SELECT * FROM management.scheduled_tasks WHERE {} ORDER BY id DESC LIMIT {} OFFSET {}",
+        "SELECT t.*, cu.username AS created_by_name, cu.email AS created_by_email \
+         FROM management.scheduled_tasks t \
+         LEFT JOIN users cu ON cu.id = t.created_by \
+         WHERE {} ORDER BY t.id DESC LIMIT {} OFFSET {}",
         where_parts.join(" AND "),
         limit,
         offset,
@@ -768,7 +771,11 @@ async fn set_active(
         crate::operation_log::action::UPDATE,
         id,
         &task.name,
-        format!("{}定时任务「{}」", if active { "启用" } else { "停用" }, task.name),
+        format!(
+            "{}定时任务「{}」",
+            if active { "启用" } else { "停用" },
+            task.name
+        ),
         None,
     );
     Ok(Json(json!({"id": id, "is_active": active})))
@@ -1057,6 +1064,8 @@ pub async fn dry_run(
         claimed_at: None,
         claimed_by: None,
         created_by: claims.sub,
+        created_by_name: None,
+        created_by_email: None,
         created_at: now,
         updated_at: now,
     };

@@ -67,7 +67,7 @@
 ### P0 · 本周（让「能交付」变「敢交付」）
 
 - [x] 商用 License 授权层 + 模块闸门（pipeline / ai）
-- [x] 代码隔离：品牌 + ShireHub + token 前缀去血缘
+- [x] 代码隔离：品牌 + Acme + token 前缀去血缘
 - [ ] 在 Docker/Linux 编译 + 跑 License 单测，确认后端 build 通过
 - [ ] 生成正式密钥对，内嵌公钥重编；私钥离线保管、永不入库
 - [ ] 打私有化交付包：Docker/compose + K8s 脚本 + 一键部署 + .env 样例

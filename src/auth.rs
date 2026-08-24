@@ -183,11 +183,7 @@ pub fn validate_username(name: &str) -> Result<(), AppError> {
 /// 简易邮箱校验（够用即可，不做完整 RFC 校验）。
 pub fn validate_email(email: &str) -> Result<(), AppError> {
     let email = email.trim();
-    if email.is_empty()
-        || !email.contains('@')
-        || !email.contains('.')
-        || email.len() > 255
-    {
+    if email.is_empty() || !email.contains('@') || !email.contains('.') || email.len() > 255 {
         return Err(AppError::InvalidQuery("无效的邮箱地址".to_string()));
     }
     Ok(())
@@ -267,5 +263,26 @@ mod tests {
         let email = format!("{}@example.com", "a".repeat(245));
         assert!(email.len() > 255);
         assert!(validate_email(&email).is_err());
+    }
+
+    #[test]
+    fn test_validate_password_accepts_strong() {
+        assert!(validate_password("Password123").is_ok());
+    }
+
+    #[test]
+    fn test_validate_password_rejects_too_short() {
+        let err = validate_password("Ab1").unwrap_err();
+        match err {
+            AppError::InvalidQuery(msg) => assert_eq!(msg, "密码至少需要 8 位"),
+            other => panic!("expected InvalidQuery, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_validate_password_rejects_missing_classes() {
+        assert!(validate_password("password123").is_err()); // 无大写
+        assert!(validate_password("PASSWORD123").is_err()); // 无小写
+        assert!(validate_password("Password").is_err()); // 无数字
     }
 }

@@ -16,19 +16,19 @@
    - `ai`（智能体）：MCP
 3. **代码隔离清理**（已沉进 `brandify.ps1`，每次同步自动生效）
    - VISION 命名释义去掉 `Crest`/`Rail` 拉丁血缘
-   - 第三方名 `ShireHub` / `shirehub` → `Acme` / `acme`
+   - 第三方名 `Acme` / `acme` → `Acme` / `acme`
    - Token 前缀去血缘：`cr* → ob*`（见下表）
 
 | 旧前缀 | 新前缀 | 用途 |
 | --- | --- | --- |
-| `cr_` | `ob_` | Auto API Key |
-| `crp_` | `obp_` | 平台服务令牌 |
-| `crm_` | `obm_` | 个人访问令牌 PAT（MCP） |
-| `cres_es_` | `obes_es_` | Elasticsearch token |
-| `cres_kafka_` | `obes_kafka_` | Kafka token |
-| `cres_os_` | `obes_os_` | 对象存储 token |
-| `cr_live_` | `ob_live_` | OAuth client id |
-| `crs_live_` | `obs_live_` | OAuth client secret |
+| `ob_` | `ob_` | Auto API Key |
+| `obp_` | `obp_` | 平台服务令牌 |
+| `obm_` | `obm_` | 个人访问令牌 PAT（MCP） |
+| `obes_es_` | `obes_es_` | Elasticsearch token |
+| `obes_kafka_` | `obes_kafka_` | Kafka token |
+| `obes_os_` | `obes_os_` | 对象存储 token |
+| `ob_live_` | `ob_live_` | OAuth client id |
+| `obs_live_` | `obs_live_` | OAuth client secret |
 
 ## 二、验证步骤（逐项打勾）
 
@@ -58,9 +58,9 @@ cd frontend-nextjs && npm run build
 
 ### 4. 品牌 / 血缘残留检查（应全部为 0）
 ```bash
-rg -i crestrail                       # 期望：0
-rg -i shirehub                        # 期望：0
-rg -n '\bcr_|crp_|crm_|cres_|crs_live_'   # 期望：0（旧 token 前缀清零）
+rg -i onebase                       # 期望：0
+rg -i acme                        # 期望：0
+rg -n '\bcr_|obp_|obm_|cres_|obs_live_'   # 期望：0（旧 token 前缀清零）
 rg -n 'inob_|deob_'                   # 期望：0（确认 incr_/decr_ 等未被误伤）
 ```
 - [ ] 四项均为 0
@@ -100,7 +100,7 @@ rg -n 'inob_|deob_'                   # 期望：0（确认 incr_/decr_ 等未�
 
 ## 四、OneBase-only 覆盖文件（同步时必须保留）
 
-以下文件上游没有，`sync-from-crestrail.ps1` 的 `robocopy /MIR` 镜像会**删除**它们；每次同步后需从上一次提交恢复，并在新 `main.rs` 上重挂 License 接线：
+以下文件上游没有，`sync-from-onebase.ps1` 的 `robocopy /MIR` 镜像会**删除**它们；每次同步后需从上一次提交恢复，并在新 `main.rs` 上重挂 License 接线：
 
 - `src/license.rs`
 - `src/bin/license_tool.rs`

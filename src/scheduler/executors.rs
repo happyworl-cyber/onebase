@@ -746,6 +746,8 @@ mod tests {
             claimed_at: None,
             claimed_by: None,
             created_by: 1,
+            created_by_name: None,
+            created_by_email: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

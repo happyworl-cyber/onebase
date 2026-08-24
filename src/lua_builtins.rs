@@ -1003,8 +1003,8 @@ fn do_http_request<'lua>(
     if !async_poll_config.enabled {
         return http_exchange_to_lua(lua, initial, None);
     }
-    let mut poll_builder = reqwest::blocking::Client::builder()
-        .redirect(reqwest::redirect::Policy::none());
+    let mut poll_builder =
+        reqwest::blocking::Client::builder().redirect(reqwest::redirect::Policy::none());
     if timeout_secs > 0 {
         poll_builder = poll_builder.timeout(std::time::Duration::from_secs(timeout_secs));
     }
@@ -1093,11 +1093,26 @@ mQIDAQAB\n\
         let b = derive_fcm_secret_name("im30-way", 4, "salt-x");
         assert_eq!(a, b, "同输入应确定性一致");
         assert_eq!(a.len(), 64, "sha256 hex 应为 64 字符");
-        assert!(a.chars().all(|c| c.is_ascii_hexdigit()), "应为 hex（path-safe）");
+        assert!(
+            a.chars().all(|c| c.is_ascii_hexdigit()),
+            "应为 hex（path-safe）"
+        );
         // 任一因子变化 → 派生名变化
-        assert_ne!(a, derive_fcm_secret_name("im30-way", 5, "salt-x"), "换 tenant 应变");
-        assert_ne!(a, derive_fcm_secret_name("other", 4, "salt-x"), "换 project 应变");
-        assert_ne!(a, derive_fcm_secret_name("im30-way", 4, "salt-y"), "换盐应变");
+        assert_ne!(
+            a,
+            derive_fcm_secret_name("im30-way", 5, "salt-x"),
+            "换 tenant 应变"
+        );
+        assert_ne!(
+            a,
+            derive_fcm_secret_name("other", 4, "salt-x"),
+            "换 project 应变"
+        );
+        assert_ne!(
+            a,
+            derive_fcm_secret_name("im30-way", 4, "salt-y"),
+            "换盐应变"
+        );
     }
 
     #[test]

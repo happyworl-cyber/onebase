@@ -651,12 +651,11 @@ mod tests {
             nodes: None,
         };
 
-        let result =
-            tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                engine.execute_plugin(script, "on_request", &ctx).await
-            })
-            .await
-            .expect("plugin should return within 5s, not hang the blocking thread forever");
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            engine.execute_plugin(script, "on_request", &ctx).await
+        })
+        .await
+        .expect("plugin should return within 5s, not hang the blocking thread forever");
         assert!(result.is_err(), "infinite loop should be aborted by hook");
     }
 
@@ -737,7 +736,10 @@ mod tests {
             })),
         };
 
-        let result = engine.execute_plugin(script, "execute", &ctx).await.unwrap();
+        let result = engine
+            .execute_plugin(script, "execute", &ctx)
+            .await
+            .unwrap();
         assert_eq!(
             result.modified_body.unwrap()["prompt"],
             "line1\nline2\nline3"

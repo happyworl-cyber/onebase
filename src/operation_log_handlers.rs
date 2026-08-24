@@ -1,7 +1,8 @@
 //! 操作日志查询侧 handler：list / detail / stats / actors / export。
 //!
-//! 全部为项目（租户）级，`require_tenant_admin` 隔离。设计见
-//! `docs/superpowers/specs/2026-08-04-operation-logs-design.md`。
+//! - 项目级：`/api/projects/:id/operation-logs*`（`require_tenant_admin`）
+//! - 组织级：`/api/organizations/:id/operation-logs*`（`require_organization_admin`，
+//!   聚合下属全部项目；见 `docs/superpowers/specs/2026-08-13-org-console-logs-design.md`）
 //!
 //! 读取时把 `detail.change`（结构化事实）经 [`crate::operation_log::format_change`]
 //! 渲染成视图返回前端（写事实、读格式化）。
@@ -17,7 +18,7 @@ use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 
 use crate::auth::Claims;
-use crate::error::Result;
+use crate::error::{AppError, Result};
 use crate::operation_log;
 use crate::permissions;
 
@@ -206,7 +207,9 @@ pub async fn list_operation_logs(
         .get("total");
 
     let data: Vec<Value> = rows.iter().map(row_to_list_json).collect();
-    Ok(Json(json!({ "data": data, "total": total, "limit": limit, "offset": offset })))
+    Ok(Json(
+        json!({ "data": data, "total": total, "limit": limit, "offset": offset }),
+    ))
 }
 
 /// GET /api/projects/:id/operation-logs/:log_id —— 单条详情（含 detail + 格式化后的变更视图）。
@@ -374,7 +377,9 @@ pub async fn operation_log_facets(
     .fetch_all(&pool)
     .await?;
 
-    Ok(Json(json!({ "actions": actions, "resource_types": resource_types })))
+    Ok(Json(
+        json!({ "actions": actions, "resource_types": resource_types }),
+    ))
 }
 
 /// CSV 字段转义，并防止 Excel/表格软件把用户可控文本解释成公式。
@@ -425,8 +430,10 @@ pub async fn export_operation_logs(
             .to_rfc3339();
         let values = [
             created_at,
-            row.get::<Option<String>, _>("actor_name").unwrap_or_default(),
-            row.get::<Option<String>, _>("actor_role").unwrap_or_default(),
+            row.get::<Option<String>, _>("actor_name")
+                .unwrap_or_default(),
+            row.get::<Option<String>, _>("actor_role")
+                .unwrap_or_default(),
             row.get::<String, _>("source"),
             row.get::<String, _>("action"),
             row.get::<Option<String>, _>("resource_type")
@@ -489,6 +496,491 @@ pub async fn export_operation_logs(
     Ok((StatusCode::OK, headers, csv).into_response())
 }
 
+// ─── 组织级聚合（租户控制台）────────────────────────────────────────
+
+/// 组织级 WHERE：`$1` = 项目 id 列表；其余与项目级 bar/tab 对齐（占位从 $2 起）。
+const ORG_FILTER_WHERE: &str = "\
+    tenant_id = ANY($1) \
+    AND ($2::int IS NULL OR actor_id = $2) \
+    AND ($3::text IS NULL OR actor_name = $3) \
+    AND ($4::text IS NULL OR action = $4) \
+    AND ($5::text IS NULL OR resource_type = $5) \
+    AND ($6::text IS NULL OR resource_name ILIKE '%'||$6||'%') \
+    AND ($7::text IS NULL OR source = $7) \
+    AND ($8::text IS NULL OR status = $8) \
+    AND ($9::timestamptz IS NULL OR created_at >= $9::timestamptz) \
+    AND ($10::timestamptz IS NULL OR created_at <= $10::timestamptz) \
+    AND ($11::bool IS NULL OR high_risk = $11) \
+    AND ($12::text IS NULL OR status = $12) \
+    AND ($13::int IS NULL OR (actor_type = 'user' AND actor_id = $13))";
+
+#[derive(Debug, Deserialize)]
+pub struct OrgListQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+    pub tab: Option<String>,
+    /// 可选：只看某一个下属项目
+    pub project_id: Option<i32>,
+    pub actor_id: Option<i32>,
+    pub actor_name: Option<String>,
+    pub action: Option<String>,
+    pub resource_type: Option<String>,
+    pub q_resource: Option<String>,
+    pub source: Option<String>,
+    pub status: Option<String>,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+}
+
+impl OrgListQuery {
+    fn filters(&self) -> LogFilters {
+        LogFilters {
+            actor_id: self.actor_id,
+            actor_name: self.actor_name.clone(),
+            action: self.action.clone(),
+            resource_type: self.resource_type.clone(),
+            q_resource: self.q_resource.clone(),
+            source: self.source.clone(),
+            status: self.status.clone(),
+            start_date: self.start_date.clone(),
+            end_date: self.end_date.clone(),
+        }
+    }
+}
+
+async fn org_project_ids(pool: &PgPool, organization_id: i32) -> Result<Vec<i32>> {
+    let ids: Vec<i32> = sqlx::query_scalar(
+        r#"
+        SELECT id FROM management.tenants
+        WHERE organization_id = $1 AND status IN ('active', 'suspended')
+        ORDER BY id
+        "#,
+    )
+    .bind(organization_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(ids)
+}
+
+/// 解析组织下可见项目 id；可选 `project_id` 必须属于该组织。
+async fn resolve_org_project_scope(
+    pool: &PgPool,
+    organization_id: i32,
+    project_id: Option<i32>,
+) -> Result<Vec<i32>> {
+    let all = org_project_ids(pool, organization_id).await?;
+    if let Some(pid) = project_id {
+        if all.contains(&pid) {
+            Ok(vec![pid])
+        } else {
+            Err(AppError::NotFound(format!(
+                "项目 {} 不属于组织 {}",
+                pid, organization_id
+            )))
+        }
+    } else {
+        Ok(all)
+    }
+}
+
+fn bind_org_filters<'q>(
+    q: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
+    project_ids: &'q [i32],
+    f: &'q LogFilters,
+    tab: &'q TabBinds,
+) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
+    q.bind(project_ids)
+        .bind(f.actor_id)
+        .bind(norm(&f.actor_name))
+        .bind(norm(&f.action))
+        .bind(norm(&f.resource_type))
+        .bind(norm(&f.q_resource))
+        .bind(norm(&f.source))
+        .bind(norm(&f.status))
+        .bind(norm(&f.start_date))
+        .bind(norm(&f.end_date))
+        .bind(tab.high_risk)
+        .bind(tab.failed.clone())
+        .bind(tab.mine_actor)
+}
+
+fn org_row_to_list_json(r: &sqlx::postgres::PgRow) -> Value {
+    let mut v = row_to_list_json(r);
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert("tenant_id".into(), json!(r.get::<i32, _>("tenant_id")));
+        obj.insert(
+            "project_name".into(),
+            json!(r.get::<String, _>("project_name")),
+        );
+        obj.insert(
+            "project_slug".into(),
+            json!(r.get::<String, _>("project_slug")),
+        );
+    }
+    v
+}
+
+/// GET /api/organizations/:id/operation-logs
+pub async fn list_organization_operation_logs(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Path(organization_id): Path<i32>,
+    Query(q): Query<OrgListQuery>,
+) -> Result<Json<Value>> {
+    permissions::require_organization_admin(&pool, &claims, organization_id).await?;
+    let project_ids = resolve_org_project_scope(&pool, organization_id, q.project_id).await?;
+    if project_ids.is_empty() {
+        return Ok(Json(json!({
+            "data": [],
+            "total": 0,
+            "limit": q.limit.unwrap_or(20).clamp(1, 100),
+            "offset": q.offset.unwrap_or(0).max(0),
+        })));
+    }
+
+    let limit = q.limit.unwrap_or(20).clamp(1, 100);
+    let offset = q.offset.unwrap_or(0).max(0);
+    let tab = tab_binds(q.tab.as_deref(), claims.sub);
+    let filters = q.filters();
+
+    // JOIN 查询用 ol. 前缀；ORG_FILTER_WHERE 留给无别名的 stats/export。
+    const WHERE_OL: &str = "\
+        ol.tenant_id = ANY($1) \
+        AND ($2::int IS NULL OR ol.actor_id = $2) \
+        AND ($3::text IS NULL OR ol.actor_name = $3) \
+        AND ($4::text IS NULL OR ol.action = $4) \
+        AND ($5::text IS NULL OR ol.resource_type = $5) \
+        AND ($6::text IS NULL OR ol.resource_name ILIKE '%'||$6||'%') \
+        AND ($7::text IS NULL OR ol.source = $7) \
+        AND ($8::text IS NULL OR ol.status = $8) \
+        AND ($9::timestamptz IS NULL OR ol.created_at >= $9::timestamptz) \
+        AND ($10::timestamptz IS NULL OR ol.created_at <= $10::timestamptz) \
+        AND ($11::bool IS NULL OR ol.high_risk = $11) \
+        AND ($12::text IS NULL OR ol.status = $12) \
+        AND ($13::int IS NULL OR (ol.actor_type = 'user' AND ol.actor_id = $13))";
+
+    let sql = format!(
+        "SELECT ol.id, ol.tenant_id, ol.actor_type, ol.actor_id, ol.actor_name, ol.actor_role, \
+                ol.source, ol.action, ol.resource_type, ol.resource_name, ol.resource_id, \
+                ol.summary, ol.status, ol.high_risk, ol.ip, ol.created_at, \
+                t.name AS project_name, t.slug AS project_slug \
+         FROM management.operation_logs ol \
+         JOIN management.tenants t ON t.id = ol.tenant_id \
+         WHERE {WHERE_OL} \
+         ORDER BY ol.created_at DESC LIMIT $14 OFFSET $15"
+    );
+
+    let rows = bind_org_filters(sqlx::query(&sql), &project_ids, &filters, &tab)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&pool)
+        .await?;
+
+    let count_sql =
+        format!("SELECT COUNT(*) AS total FROM management.operation_logs ol WHERE {WHERE_OL}");
+    let total: i64 = bind_org_filters(sqlx::query(&count_sql), &project_ids, &filters, &tab)
+        .fetch_one(&pool)
+        .await?
+        .get("total");
+
+    let data: Vec<Value> = rows.iter().map(org_row_to_list_json).collect();
+    Ok(Json(
+        json!({ "data": data, "total": total, "limit": limit, "offset": offset }),
+    ))
+}
+
+/// GET /api/organizations/:id/operation-logs/:log_id
+pub async fn get_organization_operation_log(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Path((organization_id, log_id)): Path<(i32, i64)>,
+) -> Result<Json<Value>> {
+    permissions::require_organization_admin(&pool, &claims, organization_id).await?;
+    let project_ids = org_project_ids(&pool, organization_id).await?;
+    if project_ids.is_empty() {
+        return Err(AppError::NotFound("操作日志不存在".to_string()));
+    }
+
+    let row = sqlx::query(
+        "SELECT ol.id, ol.tenant_id, ol.actor_type, ol.actor_id, ol.actor_name, ol.actor_role, \
+                ol.source, ol.action, ol.resource_type, ol.resource_name, ol.resource_id, \
+                ol.summary, ol.status, ol.high_risk, ol.ip, ol.user_agent, ol.session_id, \
+                ol.trace_id, ol.duration_ms, ol.detail, ol.created_at, \
+                t.name AS project_name, t.slug AS project_slug \
+         FROM management.operation_logs ol \
+         JOIN management.tenants t ON t.id = ol.tenant_id \
+         WHERE ol.id = $1 AND ol.tenant_id = ANY($2)",
+    )
+    .bind(log_id)
+    .bind(&project_ids)
+    .fetch_optional(&pool)
+    .await?;
+
+    let row = row.ok_or_else(|| AppError::NotFound("操作日志不存在".to_string()))?;
+
+    let action = row.get::<String, _>("action");
+    let resource_type = row.get::<Option<String>, _>("resource_type");
+    let detail: Option<Value> = row.try_get::<Option<Value>, _>("detail").ok().flatten();
+    let change_view = detail
+        .as_ref()
+        .and_then(|d| d.get("change"))
+        .and_then(|c| operation_log::format_change(&action, resource_type.as_deref(), c));
+
+    Ok(Json(json!({
+        "id": row.get::<i64, _>("id"),
+        "tenant_id": row.get::<i32, _>("tenant_id"),
+        "project_name": row.get::<String, _>("project_name"),
+        "project_slug": row.get::<String, _>("project_slug"),
+        "actor_type": row.get::<String, _>("actor_type"),
+        "actor_id": row.get::<Option<i32>, _>("actor_id"),
+        "actor_name": row.get::<Option<String>, _>("actor_name"),
+        "actor_role": row.get::<Option<String>, _>("actor_role"),
+        "source": row.get::<String, _>("source"),
+        "action": action,
+        "resource_type": resource_type,
+        "resource_name": row.get::<Option<String>, _>("resource_name"),
+        "resource_id": row.get::<Option<String>, _>("resource_id"),
+        "summary": row.get::<String, _>("summary"),
+        "status": row.get::<String, _>("status"),
+        "high_risk": row.get::<bool, _>("high_risk"),
+        "ip": row.get::<Option<String>, _>("ip"),
+        "user_agent": row.get::<Option<String>, _>("user_agent"),
+        "session_id": row.get::<Option<String>, _>("session_id"),
+        "trace_id": row.get::<Option<String>, _>("trace_id"),
+        "duration_ms": row.get::<Option<i32>, _>("duration_ms"),
+        "detail": detail,
+        "change_view": change_view,
+        "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
+    })))
+}
+
+/// GET /api/organizations/:id/operation-logs/stats
+pub async fn organization_operation_log_stats(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Path(organization_id): Path<i32>,
+    Query(q): Query<OrgListQuery>,
+) -> Result<Json<Value>> {
+    permissions::require_organization_admin(&pool, &claims, organization_id).await?;
+    let project_ids = resolve_org_project_scope(&pool, organization_id, q.project_id).await?;
+    if project_ids.is_empty() {
+        return Ok(Json(json!({
+            "total": 0, "today": 0, "active_users": 0,
+            "failed": 0, "high_risk": 0, "mine": 0,
+        })));
+    }
+    let filters = q.filters();
+    let no_tab = TabBinds {
+        high_risk: None,
+        failed: None,
+        mine_actor: None,
+    };
+    let sql = format!(
+        "SELECT \
+            COUNT(*) AS total, \
+            COUNT(*) FILTER (WHERE created_at >= date_trunc('day', now())) AS today, \
+            COUNT(DISTINCT actor_id) AS active_users, \
+            COUNT(*) FILTER (WHERE status = 'failed') AS failed, \
+            COUNT(*) FILTER (WHERE high_risk) AS high_risk, \
+            COUNT(*) FILTER (WHERE actor_type = 'user' AND actor_id = $14) AS mine \
+         FROM management.operation_logs WHERE {}",
+        ORG_FILTER_WHERE
+    );
+    let r = bind_org_filters(sqlx::query(&sql), &project_ids, &filters, &no_tab)
+        .bind(claims.sub)
+        .fetch_one(&pool)
+        .await?;
+
+    Ok(Json(json!({
+        "total": r.get::<i64, _>("total"),
+        "today": r.get::<i64, _>("today"),
+        "active_users": r.get::<i64, _>("active_users"),
+        "failed": r.get::<i64, _>("failed"),
+        "high_risk": r.get::<i64, _>("high_risk"),
+        "mine": r.get::<i64, _>("mine"),
+    })))
+}
+
+/// GET /api/organizations/:id/operation-logs/actors
+pub async fn list_organization_operation_log_actors(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Path(organization_id): Path<i32>,
+    Query(q): Query<ActorsQuery>,
+) -> Result<Json<Value>> {
+    permissions::require_organization_admin(&pool, &claims, organization_id).await?;
+    let project_ids = org_project_ids(&pool, organization_id).await?;
+    if project_ids.is_empty() {
+        return Ok(Json(json!({ "data": [] })));
+    }
+
+    let rows = sqlx::query(
+        "SELECT actor_name, MIN(actor_type) AS actor_type, MAX(actor_id) AS actor_id, COUNT(*) AS cnt \
+         FROM management.operation_logs \
+         WHERE tenant_id = ANY($1) AND actor_name IS NOT NULL \
+           AND ($2::text IS NULL OR actor_name ILIKE '%'||$2||'%') \
+         GROUP BY actor_name \
+         ORDER BY cnt DESC, actor_name ASC \
+         LIMIT 200",
+    )
+    .bind(&project_ids)
+    .bind(norm(&q.q))
+    .fetch_all(&pool)
+    .await?;
+
+    let data: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "actor_name": r.get::<Option<String>, _>("actor_name"),
+                "actor_type": r.get::<Option<String>, _>("actor_type"),
+                "actor_id": r.get::<Option<i32>, _>("actor_id"),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "data": data })))
+}
+
+/// GET /api/organizations/:id/operation-logs/facets
+pub async fn organization_operation_log_facets(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Path(organization_id): Path<i32>,
+) -> Result<Json<Value>> {
+    permissions::require_organization_admin(&pool, &claims, organization_id).await?;
+    let project_ids = org_project_ids(&pool, organization_id).await?;
+    if project_ids.is_empty() {
+        return Ok(Json(json!({ "actions": [], "resource_types": [] })));
+    }
+
+    let actions: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT action FROM management.operation_logs \
+         WHERE tenant_id = ANY($1) AND action IS NOT NULL ORDER BY action",
+    )
+    .bind(&project_ids)
+    .fetch_all(&pool)
+    .await?;
+
+    let resource_types: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT resource_type FROM management.operation_logs \
+         WHERE tenant_id = ANY($1) AND resource_type IS NOT NULL ORDER BY resource_type",
+    )
+    .bind(&project_ids)
+    .fetch_all(&pool)
+    .await?;
+
+    Ok(Json(
+        json!({ "actions": actions, "resource_types": resource_types }),
+    ))
+}
+
+/// GET /api/organizations/:id/operation-logs/export
+pub async fn export_organization_operation_logs(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Path(organization_id): Path<i32>,
+    Query(q): Query<OrgListQuery>,
+) -> Result<Response> {
+    permissions::require_organization_admin(&pool, &claims, organization_id).await?;
+    let project_ids = resolve_org_project_scope(&pool, organization_id, q.project_id).await?;
+    let filters = q.filters();
+    let no_tab = TabBinds {
+        high_risk: None,
+        failed: None,
+        mine_actor: None,
+    };
+
+    let where_ol = "\
+        ol.tenant_id = ANY($1) \
+        AND ($2::int IS NULL OR ol.actor_id = $2) \
+        AND ($3::text IS NULL OR ol.actor_name = $3) \
+        AND ($4::text IS NULL OR ol.action = $4) \
+        AND ($5::text IS NULL OR ol.resource_type = $5) \
+        AND ($6::text IS NULL OR ol.resource_name ILIKE '%'||$6||'%') \
+        AND ($7::text IS NULL OR ol.source = $7) \
+        AND ($8::text IS NULL OR ol.status = $8) \
+        AND ($9::timestamptz IS NULL OR ol.created_at >= $9::timestamptz) \
+        AND ($10::timestamptz IS NULL OR ol.created_at <= $10::timestamptz) \
+        AND ($11::bool IS NULL OR ol.high_risk = $11) \
+        AND ($12::text IS NULL OR ol.status = $12) \
+        AND ($13::int IS NULL OR (ol.actor_type = 'user' AND ol.actor_id = $13))";
+
+    let sql = format!(
+        "SELECT ol.id, ol.tenant_id, ol.actor_type, ol.actor_id, ol.actor_name, ol.actor_role, \
+                ol.source, ol.action, ol.resource_type, ol.resource_name, ol.resource_id, \
+                ol.summary, ol.status, ol.high_risk, ol.ip, ol.created_at, \
+                t.name AS project_name \
+         FROM management.operation_logs ol \
+         JOIN management.tenants t ON t.id = ol.tenant_id \
+         WHERE {where_ol} \
+         ORDER BY ol.created_at DESC LIMIT 10000"
+    );
+    let rows = if project_ids.is_empty() {
+        vec![]
+    } else {
+        bind_org_filters(sqlx::query(&sql), &project_ids, &filters, &no_tab)
+            .fetch_all(&pool)
+            .await?
+    };
+
+    let mut csv = String::from(
+        "\u{feff}时间,项目,操作人,角色,来源,动作,资源类型,资源对象,资源ID,操作内容,状态,高危,IP\r\n",
+    );
+    for row in &rows {
+        let created_at = row
+            .get::<chrono::DateTime<chrono::Utc>, _>("created_at")
+            .to_rfc3339();
+        let values = [
+            created_at,
+            row.get::<String, _>("project_name"),
+            row.get::<Option<String>, _>("actor_name")
+                .unwrap_or_default(),
+            row.get::<Option<String>, _>("actor_role")
+                .unwrap_or_default(),
+            row.get::<String, _>("source"),
+            row.get::<String, _>("action"),
+            row.get::<Option<String>, _>("resource_type")
+                .unwrap_or_default(),
+            row.get::<Option<String>, _>("resource_name")
+                .unwrap_or_default(),
+            row.get::<Option<String>, _>("resource_id")
+                .unwrap_or_default(),
+            row.get::<String, _>("summary"),
+            row.get::<String, _>("status"),
+            if row.get::<bool, _>("high_risk") {
+                "是".to_string()
+            } else {
+                "否".to_string()
+            },
+            row.get::<Option<String>, _>("ip").unwrap_or_default(),
+        ];
+        csv.push_str(
+            &values
+                .iter()
+                .map(|value| csv_field(value))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        csv.push_str("\r\n");
+    }
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/csv; charset=utf-8"),
+    );
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!(
+            "attachment; filename=\"org-{organization_id}-operation-logs.csv\""
+        ))
+        .unwrap_or_else(|_| {
+            HeaderValue::from_static("attachment; filename=\"operation-logs.csv\"")
+        }),
+    );
+    Ok((StatusCode::OK, headers, csv).into_response())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -525,7 +1017,10 @@ mod tests {
 
     #[test]
     fn norm_trims_and_nulls_empty() {
-        assert_eq!(norm(&Some("  wf250  ".to_string())).as_deref(), Some("wf250"));
+        assert_eq!(
+            norm(&Some("  wf250  ".to_string())).as_deref(),
+            Some("wf250")
+        );
         assert_eq!(norm(&Some("   ".to_string())), None);
         assert_eq!(norm(&None), None);
     }

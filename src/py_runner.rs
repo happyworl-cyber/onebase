@@ -36,9 +36,7 @@ pub fn py_enabled() -> bool {
         .map(str::trim)
         .map(|value| value.to_ascii_lowercase())
     {
-        Some(value) if !value.is_empty() => {
-            !matches!(value.as_str(), "false" | "0" | "no" | "off")
-        }
+        Some(value) if !value.is_empty() => !matches!(value.as_str(), "false" | "0" | "no" | "off"),
         _ => true,
     }
 }
@@ -491,9 +489,8 @@ mod tests {
         std::env::set_var("WORKFLOW_PY_CODE_ENABLED", "true");
         std::env::set_var("WORKFLOW_PY_SANDBOX", "direct");
 
-        let mut req = request(
-            "import six\n\ndef execute(ctx):\n    return { 'six': six.__version__ }\n",
-        );
+        let mut req =
+            request("import six\n\ndef execute(ctx):\n    return { 'six': six.__version__ }\n");
         req.py_dependencies = Some(PyDependencies {
             requirements: "six==1.17.0".to_string(),
         });

@@ -317,10 +317,11 @@ pub async fn health_check(
     };
     let mut c = manager.clone();
 
-    let pong: Result<String, redis::RedisError> =
-        redis::cmd("PING").query_async(&mut c).await;
+    let pong: Result<String, redis::RedisError> = redis::cmd("PING").query_async(&mut c).await;
     if let Err(e) = pong {
-        return Ok(Json(json!({ "ok": false, "error": format!("PING 失败: {e}") })));
+        return Ok(Json(
+            json!({ "ok": false, "error": format!("PING 失败: {e}") }),
+        ));
     }
 
     let info: Option<String> = redis::cmd("INFO")
@@ -328,13 +329,11 @@ pub async fn health_check(
         .query_async(&mut c)
         .await
         .ok();
-    let version = info
-        .as_deref()
-        .and_then(|s| {
-            s.lines()
-                .find_map(|l| l.strip_prefix("redis_version:"))
-                .map(|v| v.trim().to_string())
-        });
+    let version = info.as_deref().and_then(|s| {
+        s.lines()
+            .find_map(|l| l.strip_prefix("redis_version:"))
+            .map(|v| v.trim().to_string())
+    });
 
     Ok(Json(json!({
         "ok": true,

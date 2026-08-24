@@ -22,7 +22,9 @@ fn main() {
     if args.len() != 3 {
         eprintln!(
             "用法: FCM_KEY_SALT=<盐> {} <project> <tenant_id>",
-            args.first().map(String::as_str).unwrap_or("fcm_secret_name")
+            args.first()
+                .map(String::as_str)
+                .unwrap_or("fcm_secret_name")
         );
         std::process::exit(2);
     }

@@ -31,6 +31,7 @@ import WorkflowDocContent, {
   CopyMarkdownButton,
 } from '@/components/workflow/WorkflowDocContent'
 import WorkflowListView from '@/components/workflow/list/WorkflowListView'
+import ExecutionReplayView from '@/components/workflow/replay/ExecutionReplayView'
 import WorkflowConfirmDialog from '@/components/workflow/list/WorkflowConfirmDialog'
 import { showToast } from '@/components/Toast'
 import {
@@ -47,6 +48,7 @@ import { fetchWorkflowSummary, fetchWorkflowsByCategory } from '@/components/wor
 import { downloadWorkflowJson, auditWorkflowExport } from '@/components/workflow/list/exportUtils'
 import { fetchApiFolders, type ApiWorkflowFolder } from '@/components/workflow/list/folderApi'
 import { UNCATEGORIZED_FOLDER_NAME } from '@/components/workflow/list/types'
+import { workflowVersionsPath } from '@/components/workflow/version/paths'
 
 // 来自 /api/tenants/my-connections 的一行连接信息（数据库下拉数据源）。
 interface ConnRow {
@@ -193,6 +195,10 @@ const DEFAULT_ALERT_WEBHOOK_TEMPLATE = JSON.stringify(
   null,
   2,
 )
+
+/** 依赖图入口按钮的隐藏门 localStorage 键——执行回放入口复用同一把门（同一暗号一起放出来）。
+ *  必须与 components/workflow/list/WorkflowListView.tsx 里的同名常量保持完全一致的字符串值。 */
+const DEP_GRAPH_ENTRY_STORAGE_KEY = 'onebase:dep-graph-entry'
 
 const STATUS_COLORS: Record<string, string> = {
   pending: 'bg-yellow-100 text-yellow-700',
@@ -755,6 +761,23 @@ export default function WorkflowsManager({
   const [debugRunning, setDebugRunning] = useState(false)
   const [debugResult, setDebugResult] = useState<any>(null)
   const [debugError, setDebugError] = useState<string | null>(null)
+
+  // 执行回放（P0）：全屏层开关，入口沿用依赖图那套控制台暗号门控（同一 localStorage 键，
+  // window.__depGraph 解锁时依赖图+回放两个入口一起放出来，见 WorkflowListView 里的注册）。
+  const [showReplay, setShowReplay] = useState(false)
+  const [replayEntryUnlocked, setReplayEntryUnlocked] = useState(false)
+  useEffect(() => {
+    setReplayEntryUnlocked(window.localStorage.getItem(DEP_GRAPH_ENTRY_STORAGE_KEY) === 'on')
+    // 暗号在本页也常驻注册：列表页组件卸载后会 delete window.__depGraph，
+    // 导致编辑器/执行记录页控制台敲不到——这里兜底挂一份（不做卸载清理，全局常驻）。
+    ;(window as any).__depGraph = (unlock = true) => {
+      window.localStorage.setItem(DEP_GRAPH_ENTRY_STORAGE_KEY, unlock ? 'on' : 'off')
+      window.location.reload()
+    }
+  }, [])
+  // 从"执行记录"某一行的"查看执行回放"点进来时，带上要预选的 run id；关闭回放层要清掉，
+  // 避免下次从别处（比如依赖图入口）打开回放时被上一次的预选值污染。
+  const [replayInitialRunId, setReplayInitialRunId] = useState<number | null>(null)
 
   // 版本控制：历史抽屉 + 本次保存备注。
   const [showVersions, setShowVersions] = useState(false)
@@ -1353,6 +1376,19 @@ export default function WorkflowsManager({
     } catch {}
   }
 
+  // "执行记录"某一行点"查看执行回放"：预选这次 run 并打开回放层。回放图要画节点/连线结构，
+  // 而"执行记录"弹层可能是从列表直接打开的（没进编辑器、editorNodes/editorEdges 是空的）——
+  // 此时借用 openEditor 把该工作流的最新定义拉进编辑器状态，和"编辑"按钮走的是同一条路径，
+  // 不重复发明一套加载逻辑；已经在编辑同一个工作流时跳过这一步，避免多余的网络请求。
+  const handleViewReplay = async (run: WorkflowRun) => {
+    setReplayInitialRunId(run.id)
+    if (editing?.id !== run.workflow_id) {
+      await openEditor({ id: run.workflow_id } as Workflow)
+    }
+    setShowRuns(null)
+    setShowReplay(true)
+  }
+
   const handleToggle = async (wf: Workflow) => {
     try {
       await api.patch(`/api/admin/workflows/${wf.id}`, { is_enabled: !wf.is_enabled })
@@ -1444,6 +1480,7 @@ export default function WorkflowsManager({
         <WorkflowListView
           cleaning={cleaning}
           defaultDatabaseId={defaultDatabaseId}
+          projectId={projectId}
           refreshToken={listRefreshToken}
           onSummaryChange={handleSummaryChange}
           onNewWorkflow={(folderPlacement) => openEditor(undefined, folderPlacement)}
@@ -1453,6 +1490,11 @@ export default function WorkflowsManager({
           onShowRuns={(wf) => loadRuns(wf.id)}
           onDuplicate={(wf) => handleDuplicate(wf.id)}
           onShare={(wf) => void handleCopyWorkflowLink(wf.id)}
+          onOpenVersionHistory={
+            projectId != null
+              ? (wf) => router.push(workflowVersionsPath(projectId, wf.id))
+              : undefined
+          }
           onExport={(wf) => handleExport(wf as Workflow)}
           onDelete={handleDeleteRequest}
           onCleanupRuns={handleCleanupRuns}
@@ -1550,7 +1592,21 @@ export default function WorkflowsManager({
                   <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                   版本历史
                 </h3>
-                <button onClick={() => setShowVersions(false)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+                <div className="flex items-center gap-2 shrink-0">
+                  {projectId != null && editing && (
+                    <a
+                      href={workflowVersionsPath(projectId, editing.id)}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        router.push(workflowVersionsPath(projectId, editing.id))
+                      }}
+                      className="text-xs text-indigo-600 hover:underline"
+                    >
+                      在页面中打开
+                    </a>
+                  )}
+                  <button onClick={() => setShowVersions(false)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+                </div>
               </div>
 
               <div className="p-5 overflow-y-auto flex-1 space-y-3">
@@ -1572,6 +1628,15 @@ export default function WorkflowsManager({
                         </div>
                         <div className="flex items-center gap-2">
                           <button onClick={() => viewVersion(v.version)} className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50">查看</button>
+                          {projectId != null && editing && (
+                            <button
+                              type="button"
+                              onClick={() => router.push(workflowVersionsPath(projectId, editing.id, v.version))}
+                              className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+                            >
+                              页面
+                            </button>
+                          )}
                           {idx !== 0 && (
                             <button onClick={() => restoreVersion(v.version)} className="text-xs px-2 py-0.5 rounded border border-indigo-300 text-indigo-600 hover:bg-indigo-50">恢复</button>
                           )}
@@ -1711,6 +1776,19 @@ export default function WorkflowsManager({
       </div>
       )}
 
+      {showReplay && editing && (
+        <ExecutionReplayView
+          workflowId={editing.id}
+          nodes={editorNodes}
+          edges={editorEdges}
+          initialRunId={replayInitialRunId}
+          onClose={() => {
+            setShowReplay(false)
+            setReplayInitialRunId(null)
+          }}
+        />
+      )}
+
       {showRuns !== null && (
         <div
           className="fixed bg-black/30 flex items-center justify-center z-50"
@@ -1752,7 +1830,17 @@ export default function WorkflowsManager({
                               </span>
                             )}
                           </div>
-                          <span className="text-xs text-gray-400 shrink-0">{formatDateTime(run.started_at)}</span>
+                          <div className="flex items-center gap-3 shrink-0">
+                            <span className="text-xs text-gray-400">{formatDateTime(run.started_at)}</span>
+                            {replayEntryUnlocked && (
+                              <button
+                                onClick={() => handleViewReplay(run)}
+                                className="text-xs text-indigo-600 hover:text-indigo-800 whitespace-nowrap"
+                              >
+                                <i className="fas fa-diagram-project mr-1"></i>查看执行回放
+                              </button>
+                            )}
+                          </div>
                         </div>
                         {run.error_message && (
                           <div className="mt-2 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg p-2 font-mono">

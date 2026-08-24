@@ -9,7 +9,7 @@
  *
  * 行为细节：
  *   - 列表：表格 + 角色 inline 改 + 移除按钮
- *   - 添加：抽屉里输入 user_id（v1 不支持 email 邀请）
+ *   - 添加：抽屉里搜索本租户成员（须先是 organization_members）
  *   - 自己一行：角色 select / 移除按钮 disable + tooltip（与后端 self-protect 对齐）
  *   - owner 角色降级 / 移除时如果是最后一个 owner，后端返回 400，前端直接弹 toast
  */
@@ -689,7 +689,7 @@ export default function ProjectMembersPage() {
 
             <p className="text-sm text-gray-500 mb-4">
               {addMode === 'search'
-                ? '按用户名或邮箱搜索平台已注册账号，选中后加入本项目。'
+                ? '按用户名或邮箱搜索本租户成员（须先加入租户），选中后加入本项目。'
                 : '为还没有账号的人直接创建平台账号并加入本项目。请把初始密码线下告知对方，建议其登录后自行修改。'}
             </p>
 
