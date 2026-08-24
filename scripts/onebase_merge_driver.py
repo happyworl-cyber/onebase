@@ -143,7 +143,10 @@ def brandify_tree(root: Path) -> None:
     for raw_path in tracked:
         if not raw_path:
             continue
-        path = root / os.fsdecode(raw_path)
+        repo_path = os.fsdecode(raw_path)
+        if repo_path == "scripts/onebase_merge_driver.py":
+            continue
+        path = root / repo_path
         if not path.is_file():
             continue
         data = path.read_bytes()
