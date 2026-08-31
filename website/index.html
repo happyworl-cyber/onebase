@@ -1,275 +1,1034 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>OneBase — 建库即得数据后端，私有部署、随时可交付</title>
-  <meta name="description" content="OneBase：关系数据库自动生成 REST / 实时 API，内置权限、工作流与 AI（MCP）接入。私有化部署，数据留在你自己的机房，省掉 6–12 个月自研。" />
+  <title>PlaneOS — The Unified Control Plane for Data &amp; Automation</title>
+  <meta name="description" content="PlaneOS is a private-deployment operating system that unifies databases, APIs, access control, workflows, data sources, and AI." />
+  <meta name="theme-color" content="#07111f" />
+  <meta property="og:title" content="PlaneOS — The Unified Control Plane for Data &amp; Automation" />
+  <meta property="og:description" content="One control plane for databases, APIs, workflows, and AI." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://planeos.net/" />
+  <link rel="canonical" href="https://planeos.net/" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M18 18h18v9H27v19h-9zM37 37h9v9h-9z' fill='%2332d3c8'/%3E%3C/svg%3E" />
   <style>
     :root {
-      --bg: #ffffff;
-      --bg-soft: #f6f7f9;
-      --ink: #0f172a;
-      --ink-soft: #475569;
-      --ink-mute: #94a3b8;
-      --line: #e6e8ec;
-      --accent: #4f46e5;
-      --accent-ink: #ffffff;
-      --radius: 12px;
-      --maxw: 1080px;
+      --navy: #07111f;
+      --navy-soft: #0d1b2e;
+      --paper: #f5f7fb;
+      --white: #ffffff;
+      --ink: #102036;
+      --muted: #64748b;
+      --line: #dfe6ef;
+      --cyan: #32d3c8;
+      --blue: #4f7cff;
+      --lime: #b8f36b;
+      --radius: 18px;
+      --max: 1160px;
+      --shadow: 0 24px 70px rgba(7, 17, 31, .12);
     }
+
     * { box-sizing: border-box; }
     html { scroll-behavior: smooth; }
     body {
       margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-        "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+      font-family: Inter, "SF Pro Display", "Segoe UI", "PingFang SC",
+        "Microsoft YaHei", sans-serif;
       color: var(--ink);
-      background: var(--bg);
+      background: var(--paper);
       line-height: 1.65;
       -webkit-font-smoothing: antialiased;
     }
     a { color: inherit; text-decoration: none; }
-    .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
-    .muted { color: var(--ink-soft); }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    .wrap { width: min(calc(100% - 40px), var(--max)); margin: 0 auto; }
 
-    /* Header */
     header {
-      position: sticky; top: 0; z-index: 10;
-      background: rgba(255,255,255,.86);
-      backdrop-filter: saturate(180%) blur(8px);
-      border-bottom: 1px solid var(--line);
+      position: fixed;
+      inset: 0 0 auto;
+      z-index: 20;
+      background: rgba(7, 17, 31, .78);
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      backdrop-filter: blur(18px);
     }
-    .nav { display: flex; align-items: center; gap: 24px; height: 62px; }
-    .brand { font-weight: 700; letter-spacing: .2px; font-size: 18px; }
-    .brand span { color: var(--accent); }
-    .nav-links { display: flex; gap: 22px; margin-left: 8px; }
-    .nav-links a { color: var(--ink-soft); font-size: 14px; }
-    .nav-links a:hover { color: var(--ink); }
-    .nav-spacer { flex: 1; }
+    .nav {
+      height: 68px;
+      display: flex;
+      align-items: center;
+      gap: 30px;
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--white);
+      font-weight: 750;
+      font-size: 19px;
+      letter-spacing: -.2px;
+    }
+    .brand-mark {
+      position: relative;
+      width: 28px;
+      height: 28px;
+      border: 1px solid rgba(50,211,200,.55);
+      border-radius: 8px;
+      transform: rotate(45deg);
+    }
+    .brand-mark::before,
+    .brand-mark::after {
+      content: "";
+      position: absolute;
+      border-radius: 4px;
+      background: var(--cyan);
+    }
+    .brand-mark::before { width: 12px; height: 5px; top: 5px; left: 5px; }
+    .brand-mark::after { width: 5px; height: 12px; right: 5px; bottom: 5px; }
+    .nav-links { display: flex; align-items: center; gap: 26px; margin-left: auto; }
+    .nav-links a { color: #aebbcf; font-size: 14px; transition: color .2s ease; }
+    .nav-links a:hover { color: var(--white); }
+    .language-picker {
+      position: relative;
+      display: flex;
+      align-items: center;
+      margin-left: auto;
+    }
+    .language-picker::before {
+      content: "文";
+      position: absolute;
+      left: 11px;
+      color: var(--cyan);
+      font-size: 11px;
+      font-weight: 800;
+      pointer-events: none;
+    }
+    .language-picker select {
+      height: 38px;
+      padding: 0 30px 0 30px;
+      border: 1px solid rgba(255,255,255,.16);
+      border-radius: 10px;
+      color: #c5d0df;
+      background: rgba(255,255,255,.05);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 650;
+      cursor: pointer;
+      outline: none;
+    }
+    .language-picker select:hover,
+    .language-picker select:focus { border-color: rgba(50,211,200,.55); }
+    .language-picker option { color: var(--ink); background: var(--white); }
+
     .btn {
-      display: inline-block; border-radius: 999px; font-size: 14px; font-weight: 600;
-      padding: 9px 18px; border: 1px solid var(--accent); cursor: pointer; white-space: nowrap;
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 19px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 700;
+      transition: transform .2s ease, background .2s ease, border-color .2s ease;
     }
-    .btn-primary { background: var(--accent); color: var(--accent-ink); }
-    .btn-primary:hover { background: #4338ca; border-color: #4338ca; }
-    .btn-ghost { background: transparent; color: var(--accent); }
-    .btn-ghost:hover { background: #eef0fe; }
-    @media (max-width: 720px) { .nav-links { display: none; } }
+    .btn:hover { transform: translateY(-1px); }
+    .btn-primary { background: var(--cyan); color: #041516; }
+    .btn-primary:hover { background: #54e4da; }
+    .btn-dark { background: var(--navy); color: var(--white); }
+    .btn-outline { color: var(--white); border-color: rgba(255,255,255,.24); }
+    .btn-outline:hover { border-color: rgba(255,255,255,.55); background: rgba(255,255,255,.06); }
+    .nav .btn { min-height: 38px; padding: 8px 15px; margin-left: 4px; }
 
-    /* Hero */
-    .hero { padding: 78px 0 56px; }
+    .hero {
+      position: relative;
+      min-height: 780px;
+      padding: 150px 0 90px;
+      overflow: hidden;
+      color: var(--white);
+      background:
+        radial-gradient(circle at 78% 24%, rgba(79,124,255,.24), transparent 28%),
+        radial-gradient(circle at 20% 70%, rgba(50,211,200,.12), transparent 30%),
+        var(--navy);
+    }
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      opacity: .23;
+      background-image:
+        linear-gradient(rgba(255,255,255,.08) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.08) 1px, transparent 1px);
+      background-size: 64px 64px;
+      mask-image: linear-gradient(to bottom, black, transparent 88%);
+    }
+    .hero-grid {
+      position: relative;
+      display: grid;
+      grid-template-columns: 1.03fr .97fr;
+      align-items: center;
+      gap: 72px;
+    }
     .eyebrow {
-      display: inline-block; font-size: 13px; font-weight: 600; color: var(--accent);
-      background: #eef0fe; border-radius: 999px; padding: 5px 12px; margin-bottom: 18px;
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      margin-bottom: 22px;
+      color: #b7c6da;
+      font-size: 12px;
+      font-weight: 750;
+      letter-spacing: 1.4px;
+      text-transform: uppercase;
     }
-    h1 { font-size: 42px; line-height: 1.18; margin: 0 0 18px; letter-spacing: -.5px; }
-    .sub { font-size: 18px; color: var(--ink-soft); max-width: 720px; margin: 0 0 28px; }
-    .cta-row { display: flex; gap: 12px; flex-wrap: wrap; }
-    @media (max-width: 640px) { h1 { font-size: 32px; } }
+    .eyebrow::before {
+      content: "";
+      width: 25px;
+      height: 2px;
+      background: var(--cyan);
+    }
+    h1 {
+      max-width: 690px;
+      margin: 0 0 24px;
+      font-size: clamp(42px, 5.1vw, 68px);
+      line-height: 1.08;
+      letter-spacing: -2.5px;
+    }
+    .hero .lead {
+      max-width: 650px;
+      margin: 0 0 32px;
+      color: #aebbcf;
+      font-size: 18px;
+    }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+    .hero-note { margin-top: 22px; color: #7f91aa; font-size: 13px; }
 
-    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 46px; }
-    .stat { border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; background: var(--bg-soft); }
-    .stat .n { font-size: 26px; font-weight: 700; color: var(--ink); }
-    .stat .l { font-size: 13.5px; color: var(--ink-soft); margin-top: 4px; }
-    @media (max-width: 720px) { .stats { grid-template-columns: 1fr; } }
+    .console {
+      position: relative;
+      padding: 17px;
+      border: 1px solid rgba(255,255,255,.13);
+      border-radius: 22px;
+      background: rgba(13,27,46,.86);
+      box-shadow: 0 35px 100px rgba(0,0,0,.4);
+    }
+    .console::before {
+      content: "";
+      position: absolute;
+      inset: -1px;
+      z-index: -1;
+      border-radius: inherit;
+      background: linear-gradient(135deg, rgba(50,211,200,.5), transparent 32%, rgba(79,124,255,.35));
+      filter: blur(18px);
+      opacity: .35;
+    }
+    .console-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      color: #8092aa;
+      font-size: 11px;
+      letter-spacing: .8px;
+      text-transform: uppercase;
+    }
+    .dots { display: flex; gap: 6px; }
+    .dots i { width: 7px; height: 7px; border-radius: 50%; background: #32445b; }
+    .dots i:first-child { background: var(--cyan); }
+    .plane {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .plane-card {
+      min-height: 100px;
+      padding: 15px;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 13px;
+      background: rgba(255,255,255,.035);
+    }
+    .plane-card strong { display: block; margin: 8px 0 2px; font-size: 14px; }
+    .plane-card span { color: #8092aa; font-size: 11px; }
+    .plane-icon {
+      width: 29px;
+      height: 29px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      color: var(--cyan);
+      background: rgba(50,211,200,.1);
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .pulse {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin-top: 10px;
+      padding: 11px 13px;
+      border-radius: 11px;
+      color: #aebbcf;
+      background: rgba(50,211,200,.07);
+      font-size: 11px;
+    }
+    .pulse-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--lime);
+      box-shadow: 0 0 0 5px rgba(184,243,107,.09);
+    }
 
-    /* Sections */
-    section.block { padding: 62px 0; border-top: 1px solid var(--line); }
-    .kicker { font-size: 13px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: .8px; }
-    h2 { font-size: 28px; margin: 8px 0 8px; letter-spacing: -.3px; }
-    .lead { color: var(--ink-soft); max-width: 680px; margin: 0 0 28px; }
+    .proof {
+      position: relative;
+      z-index: 2;
+      margin-top: -34px;
+    }
+    .proof-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      border-radius: var(--radius);
+      background: var(--white);
+      box-shadow: var(--shadow);
+    }
+    .proof-item { padding: 24px; border-right: 1px solid var(--line); }
+    .proof-item:last-child { border-right: 0; }
+    .proof-item strong { display: block; font-size: 15px; }
+    .proof-item span { color: var(--muted); font-size: 12px; }
 
-    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
-    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
-    @media (max-width: 820px) { .grid-3, .grid-2 { grid-template-columns: 1fr; } }
+    section { padding: 100px 0; }
+    .section-head { max-width: 720px; margin-bottom: 42px; }
+    .kicker {
+      color: #256e83;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 1.3px;
+      text-transform: uppercase;
+    }
+    h2 {
+      margin: 10px 0 14px;
+      font-size: clamp(30px, 4vw, 46px);
+      line-height: 1.16;
+      letter-spacing: -1.5px;
+    }
+    .section-head p { margin: 0; color: var(--muted); font-size: 17px; }
 
-    .card { border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; background: #fff; }
-    .card h3 { margin: 0 0 8px; font-size: 17px; }
-    .card p { margin: 0; color: var(--ink-soft); font-size: 14.5px; }
-    .card .tag { font-size: 12.5px; font-weight: 600; color: var(--accent); }
+    .capabilities {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+    .capability {
+      min-height: 240px;
+      padding: 26px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--white);
+      transition: transform .25s ease, box-shadow .25s ease;
+    }
+    .capability:hover { transform: translateY(-4px); box-shadow: 0 20px 50px rgba(26,45,72,.09); }
+    .number { color: #94a3b8; font: 700 12px ui-monospace, monospace; }
+    .capability h3 { margin: 34px 0 10px; font-size: 20px; }
+    .capability p { margin: 0; color: var(--muted); font-size: 14px; }
+    .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 20px; }
+    .tags span {
+      padding: 4px 8px;
+      border-radius: 6px;
+      color: #426178;
+      background: #eef4f7;
+      font-size: 11px;
+      font-weight: 650;
+    }
 
-    /* Table */
-    .cmp { width: 100%; border-collapse: collapse; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; font-size: 14.5px; }
-    .cmp th, .cmp td { text-align: left; padding: 13px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
-    .cmp thead th { background: var(--bg-soft); font-size: 13.5px; color: var(--ink-soft); }
-    .cmp td:first-child { font-weight: 600; }
-    .cmp .ob { color: var(--accent); font-weight: 600; }
-    .cmp tr:last-child td { border-bottom: none; }
-    .cmp-wrap { overflow-x: auto; }
+    .flow-section { color: var(--white); background: var(--navy); }
+    .flow-section .kicker { color: var(--cyan); }
+    .flow-section .section-head p { color: #94a3b8; }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 34px;
+      counter-reset: flow;
+    }
+    .flow-step { position: relative; padding-top: 20px; }
+    .flow-step::before {
+      counter-increment: flow;
+      content: "0" counter(flow);
+      display: block;
+      margin-bottom: 22px;
+      color: var(--cyan);
+      font: 700 12px ui-monospace, monospace;
+    }
+    .flow-step:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      top: 28px;
+      left: 42px;
+      right: -18px;
+      height: 1px;
+      background: linear-gradient(90deg, rgba(50,211,200,.45), rgba(255,255,255,.08));
+    }
+    .flow-step h3 { margin: 0 0 8px; font-size: 18px; }
+    .flow-step p { margin: 0; color: #94a3b8; font-size: 14px; }
 
-    /* Secure list */
-    .checks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
-    .check { display: flex; gap: 12px; align-items: flex-start; }
-    .dot { flex: none; width: 22px; height: 22px; border-radius: 999px; background: #eef0fe; color: var(--accent); display: grid; place-items: center; font-size: 13px; font-weight: 700; margin-top: 2px; }
+    .deploy-grid {
+      display: grid;
+      grid-template-columns: .9fr 1.1fr;
+      align-items: center;
+      gap: 76px;
+    }
+    .check-list { display: grid; gap: 18px; margin-top: 32px; }
+    .check {
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 13px;
+      align-items: start;
+    }
+    .check-icon {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border-radius: 9px;
+      color: #126c68;
+      background: #dcf8f4;
+      font-weight: 800;
+    }
     .check strong { display: block; font-size: 15px; }
-    .check span { color: var(--ink-soft); font-size: 14px; }
-    @media (max-width: 820px) { .checks { grid-template-columns: 1fr; } }
+    .check span { color: var(--muted); font-size: 13px; }
+    .deploy-panel {
+      padding: 30px;
+      border-radius: 24px;
+      color: var(--white);
+      background: var(--navy-soft);
+      box-shadow: var(--shadow);
+    }
+    .deploy-panel h3 { margin: 0 0 22px; font-size: 20px; }
+    .deploy-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 0;
+      border-top: 1px solid rgba(255,255,255,.09);
+    }
+    .deploy-row span { color: #91a2b9; font-size: 13px; }
+    .status { color: var(--lime) !important; font: 700 11px ui-monospace, monospace !important; }
 
-    /* CTA band */
-    .band { background: var(--ink); color: #fff; border-radius: 16px; padding: 40px; text-align: center; }
-    .band h2 { color: #fff; margin: 0 0 8px; }
-    .band p { color: #cbd5e1; margin: 0 0 22px; }
-    .band .btn-primary { border-color: #fff; }
+    .audiences { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .audience {
+      padding: 26px;
+      border-top: 3px solid var(--blue);
+      border-radius: 0 0 var(--radius) var(--radius);
+      background: var(--white);
+    }
+    .audience:nth-child(2) { border-color: var(--cyan); }
+    .audience:nth-child(3) { border-color: var(--lime); }
+    .audience small { color: var(--muted); font-weight: 700; }
+    .audience h3 { margin: 22px 0 9px; font-size: 20px; }
+    .audience p { margin: 0; color: var(--muted); font-size: 14px; }
 
-    /* Footer */
-    footer { border-top: 1px solid var(--line); padding: 34px 0; color: var(--ink-mute); font-size: 13.5px; }
-    .foot { display: flex; gap: 16px; justify-content: space-between; flex-wrap: wrap; }
-    footer a { color: var(--ink-soft); }
+    .cta { padding-top: 20px; }
+    .cta-box {
+      position: relative;
+      overflow: hidden;
+      padding: 68px;
+      border-radius: 28px;
+      color: var(--white);
+      background: linear-gradient(125deg, #0b2033, #102c48);
+    }
+    .cta-box::after {
+      content: "";
+      position: absolute;
+      width: 330px;
+      height: 330px;
+      right: -100px;
+      top: -160px;
+      border: 60px solid rgba(50,211,200,.1);
+      border-radius: 50%;
+    }
+    .cta-box h2 { max-width: 650px; margin-top: 0; }
+    .cta-box p { max-width: 620px; color: #9fb0c5; }
+    .cta-box .hero-actions { margin-top: 28px; }
+
+    footer { padding: 46px 0; }
+    .footer-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding-top: 30px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+    footer .brand { color: var(--ink); }
+    footer .brand-mark { border-color: rgba(15,32,54,.3); }
+    .footer-links { display: flex; gap: 22px; }
+
+    @media (max-width: 940px) {
+      .hero { min-height: auto; }
+      .hero-grid, .deploy-grid { grid-template-columns: 1fr; }
+      .console { max-width: 620px; }
+      .capabilities, .audiences { grid-template-columns: repeat(2, 1fr); }
+      .flow { grid-template-columns: repeat(2, 1fr); }
+      .proof-grid { grid-template-columns: repeat(2, 1fr); }
+      .proof-item:nth-child(2) { border-right: 0; }
+      .proof-item:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+    }
+    @media (max-width: 680px) {
+      .wrap { width: min(calc(100% - 28px), var(--max)); }
+      .nav { height: 62px; }
+      .nav-links a:not(.btn) { display: none; }
+      .nav .btn { display: inline-flex; }
+      .language-picker select { width: 44px; padding-right: 8px; color: transparent; }
+      .hero { padding: 120px 0 76px; }
+      h1 { letter-spacing: -1.5px; }
+      .hero .lead { font-size: 16px; }
+      section { padding: 76px 0; }
+      .proof { margin-top: -24px; }
+      .proof-grid, .capabilities, .audiences, .flow { grid-template-columns: 1fr; }
+      .proof-item { border-right: 0; border-bottom: 1px solid var(--line); }
+      .proof-item:last-child { border-bottom: 0; }
+      .flow-step:not(:last-child)::after { display: none; }
+      .cta-box { padding: 42px 26px; }
+      .footer-row { align-items: flex-start; flex-direction: column; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition: none !important; }
+    }
   </style>
 </head>
 <body>
   <header>
     <div class="wrap nav">
-      <div class="brand">One<span>Base</span></div>
-      <nav class="nav-links">
-        <a href="#capabilities">核心能力</a>
-        <a href="#compare">对比</a>
-        <a href="#who">适用团队</a>
-        <a href="#secure">部署与安全</a>
+      <a class="brand" href="#" aria-label="PlaneOS 首页">
+        <i class="brand-mark" aria-hidden="true"></i>
+        PlaneOS
+      </a>
+      <nav class="nav-links" aria-label="主导航">
+        <a href="#platform">平台能力</a>
+        <a href="#workflow">运行方式</a>
+        <a href="#deployment">部署与安全</a>
+        <label class="language-picker">
+          <span style="position:absolute;width:1px;height:1px;overflow:hidden">Language</span>
+          <select id="language" aria-label="Language">
+            <option value="en">English</option>
+            <option value="zh">简体中文</option>
+            <option value="ja">日本語</option>
+            <option value="ko">한국어</option>
+            <option value="es">Español</option>
+            <option value="fr">Français</option>
+            <option value="de">Deutsch</option>
+            <option value="pt">Português</option>
+            <option value="it">Italiano</option>
+          </select>
+        </label>
+        <a href="#contact" class="btn btn-primary">预约演示</a>
       </nav>
-      <div class="nav-spacer"></div>
-      <a class="btn btn-primary" href="#contact">预约演示</a>
     </div>
   </header>
 
-  <!-- Hero -->
-  <section class="hero">
-    <div class="wrap">
-      <span class="eyebrow">私有化 · 一体化数据后端</span>
-      <h1>建库即得数据后端，<br />私有部署、随时可交付</h1>
-      <p class="sub">
-        关系数据库自动生成 REST / 实时 API，内置权限、工作流与 AI（MCP）接入。
-        把 Supabase 级的开发效率装进你自己的机房——省掉 6–12 个月自研，还能打包私有交付给你的客户。
-      </p>
-      <div class="cta-row">
-        <a class="btn btn-primary" href="#contact">预约演示</a>
-        <a class="btn btn-ghost" href="#contact">联系渠道</a>
-      </div>
-
-      <div class="stats">
-        <div class="stat"><div class="n">6–12 个月</div><div class="l">省下的后端自研周期</div></div>
-        <div class="stat"><div class="n">100% 内网</div><div class="l">数据留在自己机房 · 私有可交付</div></div>
-        <div class="stat"><div class="n">4–5 合 1</div><div class="l">替代 API 网关 + 权限 + 实时 + 编排 + 存储接入</div></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Pain points -->
-  <section class="block" id="pain">
-    <div class="wrap">
-      <div class="kicker">你是否也在经历</div>
-      <h2>后端，正在拖慢你的交付</h2>
-      <p class="lead">不是缺功能，而是每次都要为「数据 + 接口 + 权限 + 实时 + 编排」重新拼一套、自己扛运维。</p>
-      <div class="grid-3">
-        <div class="card"><h3>每个项目都在重造后端</h3><p>建表、写 API、配权限、接实时——重复劳动，交付慢、维护重。</p></div>
-        <div class="card"><h3>数据必须留在自己机房</h3><p>合规或客户要求数据不出内网，但自建一套要 6–12 个月。</p></div>
-        <div class="card"><h3>AI 要接数据和工具</h3><p>自己拼数据层 + 工具层又慢又不可控，难以规模化。</p></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Capabilities -->
-  <section class="block" id="capabilities">
-    <div class="wrap">
-      <div class="kicker">核心能力</div>
-      <h2>一套数据底座，覆盖后端该有的一切</h2>
-      <p class="lead">从建库到上线，OneBase 把散落的后端组件收敛成一个可私有化、可交付的底座。</p>
-      <div class="grid-3">
-        <div class="card"><h3>关系库自动 API</h3><p>建表即得 REST 与实时接口，无需手写 CRUD 后端。</p></div>
-        <div class="card"><h3>权限与安全</h3><p>RBAC / SSO / 行级权限 / 操作审计，开箱即用。</p></div>
-        <div class="card"><h3>工作流自动化</h3><p>可视化编排，打通内部系统与外部服务。</p></div>
-        <div class="card"><h3>AI / MCP 接入</h3><p>让 AI 应用直接、安全地连上你的业务数据与工具。</p></div>
-        <div class="card"><h3>实时订阅</h3><p>数据变更实时推送，前端与下游即时感知。</p></div>
-        <div class="card"><h3>私有化交付</h3><p>Docker / K8s 一键部署，License 离线可控。</p></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Compare -->
-  <section class="block" id="compare">
-    <div class="wrap">
-      <div class="kicker">为什么选 OneBase</div>
-      <h2>比自建更快，比公有 BaaS 更可控</h2>
-      <p class="lead">同样是「一体化数据后端」，差别在于上线速度、数据主权和可交付性。</p>
-      <div class="cmp-wrap">
-        <table class="cmp">
-          <thead>
-            <tr><th>维度</th><th>自建后端</th><th>公有云 BaaS</th><th>OneBase</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>上线周期</td><td>6–12 个月</td><td>快，但受平台约束</td><td class="ob">建库即得，快速上线</td></tr>
-            <tr><td>数据主权</td><td>在自己机房</td><td>在厂商云上</td><td class="ob">私有化 · 数据不出内网</td></tr>
-            <tr><td>维护成本</td><td>高（多组件自运维）</td><td>低，但受制于人</td><td class="ob">一套底座，统一维护</td></tr>
-            <tr><td>可私有交付</td><td>可以，但慢</td><td>否</td><td class="ob">是，可打包交付给客户</td></tr>
-            <tr><td>售后与可控</td><td>自负其责</td><td>依赖平台</td><td class="ob">原厂 + 渠道 · License 可控</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </section>
-
-  <!-- Who -->
-  <section class="block" id="who">
-    <div class="wrap">
-      <div class="kicker">适用团队</div>
-      <h2>为这三类团队而建</h2>
-      <div class="grid-3">
-        <div class="card">
-          <div class="tag">软件公司 / SI / 外包</div>
-          <h3>把后端做成标准底座</h3>
-          <p>建库即得 API、私有交付给甲方，一套方法交付 N 个项目。</p>
+  <main>
+    <section class="hero">
+      <div class="wrap hero-grid">
+        <div>
+          <div class="eyebrow">The operating system for data &amp; automation</div>
+          <h1>数据与自动化的<br />统一控制平面</h1>
+          <p class="lead">
+            一个控制平面，连接数据库、API、工作流与 AI。
+            PlaneOS 把复杂的数据基础设施收敛成可部署、可审计、可持续扩展的平台。
+          </p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="#contact">预约产品演示 <span>→</span></a>
+            <a class="btn btn-outline" href="#platform">了解平台能力</a>
+          </div>
+          <div class="hero-note">私有化部署 · 数据不出内网 · 面向企业交付</div>
         </div>
-        <div class="card">
-          <div class="tag">传统企业 IT / 数字化</div>
-          <h3>不扩团队也能快上线</h3>
-          <p>快速上线内部数据服务，数据 100% 留在自己内网。</p>
-        </div>
-        <div class="card">
-          <div class="tag">AI 应用团队 / ISV</div>
-          <h3>现成的数据 + 工具层</h3>
-          <p>私有可控的数据 + MCP 工具层，让 AI 应用直接连业务数据。</p>
+
+        <div class="console" aria-label="PlaneOS 控制平面能力概览">
+          <div class="console-top">
+            <div class="dots"><i></i><i></i><i></i></div>
+            <span>PlaneOS / Control Plane</span>
+          </div>
+          <div class="plane">
+            <div class="plane-card">
+              <div class="plane-icon">DB</div>
+              <strong>Data Plane</strong>
+              <span>PostgreSQL · Redis · Kafka · S3</span>
+            </div>
+            <div class="plane-card">
+              <div class="plane-icon">↗</div>
+              <strong>API Plane</strong>
+              <span>REST · Realtime · Gateway</span>
+            </div>
+            <div class="plane-card">
+              <div class="plane-icon">◇</div>
+              <strong>Automation</strong>
+              <span>Visual DAG · Tasks · Triggers</span>
+            </div>
+            <div class="plane-card">
+              <div class="plane-icon">AI</div>
+              <strong>Agent Plane</strong>
+              <span>MCP · Tools · Runtime</span>
+            </div>
+          </div>
+          <div class="pulse"><i class="pulse-dot"></i> All systems operational · Private cluster</div>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- Secure -->
-  <section class="block" id="secure">
-    <div class="wrap">
-      <div class="kicker">部署与安全</div>
-      <h2>装进你的机房，交付即可控</h2>
-      <div class="checks">
-        <div class="check"><div class="dot">✓</div><div><strong>私有化部署</strong><span>Docker / K8s 一键部署，数据 100% 留在你的内网。</span></div></div>
-        <div class="check"><div class="dot">✓</div><div><strong>离线 License</strong><span>离线授权、可控可审计，续期换文件、不停机。</span></div></div>
-        <div class="check"><div class="dot">✓</div><div><strong>双重售后</strong><span>原厂 + 授权渠道，交付与运维有人兜底。</span></div></div>
+    <div class="proof">
+      <div class="wrap proof-grid">
+        <div class="proof-item"><strong>统一数据入口</strong><span>数据库与外部数据源</span></div>
+        <div class="proof-item"><strong>自动生成 API</strong><span>从数据模型直接交付</span></div>
+        <div class="proof-item"><strong>可视化自动化</strong><span>编排、调度与事件驱动</span></div>
+        <div class="proof-item"><strong>企业级控制</strong><span>权限、审计与可观测性</span></div>
       </div>
     </div>
-  </section>
 
-  <!-- CTA -->
-  <section class="block" id="contact">
-    <div class="wrap">
-      <div class="band">
-        <h2>先在你的内网跑一次 POC</h2>
-        <p>用真实数据验证，再决定采购。预约演示或联系你就近的授权渠道。</p>
-        <div class="cta-row" style="justify-content:center">
-          <a class="btn btn-primary" href="mailto:contact@onebase.example?subject=OneBase%20演示预约">预约演示</a>
-          <a class="btn btn-ghost" style="color:#fff;border-color:#fff" href="mailto:contact@onebase.example?subject=OneBase%20渠道合作">联系渠道</a>
+    <section id="platform">
+      <div class="wrap">
+        <div class="section-head">
+          <div class="kicker">One control plane</div>
+          <h2>不再拼装后端，直接运行你的数据系统</h2>
+          <p>PlaneOS 将数据、服务、流程和 AI 置于同一个治理边界中，让团队从连接资源到交付能力都在一个平台完成。</p>
+        </div>
+        <div class="capabilities">
+          <article class="capability">
+            <div class="number">01 / DATA</div>
+            <h3>统一数据底座</h3>
+            <p>管理 PostgreSQL 与多种外部数据源，统一连接、Schema、查询、备份和性能诊断。</p>
+            <div class="tags"><span>PostgreSQL</span><span>Redis</span><span>Kafka</span><span>S3</span></div>
+          </article>
+          <article class="capability">
+            <div class="number">02 / API</div>
+            <h3>数据即 API</h3>
+            <p>根据数据模型自动提供 REST 与实时接口，并叠加网关、限流、熔断和访问策略。</p>
+            <div class="tags"><span>REST</span><span>Realtime</span><span>Gateway</span></div>
+          </article>
+          <article class="capability">
+            <div class="number">03 / FLOW</div>
+            <h3>工作流自动化</h3>
+            <p>通过可视化 DAG 编排数据库、HTTP、代码、消息队列和对象存储，支持调度与事件触发。</p>
+            <div class="tags"><span>DAG</span><span>Scheduler</span><span>Event</span></div>
+          </article>
+          <article class="capability">
+            <div class="number">04 / TRUST</div>
+            <h3>身份与安全</h3>
+            <p>在平台、组织和项目层级落实身份、权限和数据隔离，所有关键操作均可追溯。</p>
+            <div class="tags"><span>SSO</span><span>RBAC</span><span>RLS</span><span>Audit</span></div>
+          </article>
+          <article class="capability">
+            <div class="number">05 / AI</div>
+            <h3>AI 与 MCP</h3>
+            <p>让模型和 Agent 在明确授权边界内访问业务数据、调用工具并执行自动化任务。</p>
+            <div class="tags"><span>MCP</span><span>Agent</span><span>Tools</span></div>
+          </article>
+          <article class="capability">
+            <div class="number">06 / OPS</div>
+            <h3>可观测与交付</h3>
+            <p>集中查看执行、审计、连接池和平台状态，通过容器化与离线授权完成私有交付。</p>
+            <div class="tags"><span>Metrics</span><span>Logs</span><span>Docker</span><span>K8s</span></div>
+          </article>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
+
+    <section class="flow-section" id="workflow">
+      <div class="wrap">
+        <div class="section-head">
+          <div class="kicker">From resource to outcome</div>
+          <h2>从连接数据，到运行自动化</h2>
+          <p>一个连续的交付路径，减少组件切换、重复开发和分散治理。</p>
+        </div>
+        <div class="flow">
+          <div class="flow-step"><h3>连接</h3><p>接入数据库、消息队列、缓存、对象存储与企业服务。</p></div>
+          <div class="flow-step"><h3>建模</h3><p>管理 Schema、权限和访问策略，形成统一数据边界。</p></div>
+          <div class="flow-step"><h3>编排</h3><p>组合 API、数据和代码节点，构建可视化业务流程。</p></div>
+          <div class="flow-step"><h3>运行</h3><p>调度、监控和审计每次执行，并持续扩展到 AI Agent。</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="deployment">
+      <div class="wrap deploy-grid">
+        <div>
+          <div class="kicker">Private by design</div>
+          <h2>部署在你的环境，控制权始终属于你</h2>
+          <p style="color:var(--muted)">从身份认证到数据访问，从运行日志到商业授权，PlaneOS 为私有化交付保留完整控制面。</p>
+          <div class="check-list">
+            <div class="check"><div class="check-icon">✓</div><div><strong>数据不出内网</strong><span>部署到自有服务器、私有云或隔离网络。</span></div></div>
+            <div class="check"><div class="check-icon">✓</div><div><strong>细粒度权限</strong><span>JWT、SSO、API Key、RBAC 与行级安全协同控制。</span></div></div>
+            <div class="check"><div class="check-icon">✓</div><div><strong>全链路审计</strong><span>记录操作、请求和流程执行，为合规与排障提供依据。</span></div></div>
+          </div>
+        </div>
+        <div class="deploy-panel">
+          <h3>Enterprise-ready control</h3>
+          <div class="deploy-row"><strong>Deployment</strong><span>Docker / Kubernetes</span></div>
+          <div class="deploy-row"><strong>Identity</strong><span>JWT / SSO / OIDC</span></div>
+          <div class="deploy-row"><strong>Data Security</strong><span>RBAC / RLS / Audit</span></div>
+          <div class="deploy-row"><strong>Observability</strong><span>Logs / Metrics / Alerts</span></div>
+          <div class="deploy-row"><strong>Platform</strong><span class="status">● CONTROLLED BY YOU</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="audiences" style="padding-top:20px">
+      <div class="wrap">
+        <div class="section-head">
+          <div class="kicker">Built for delivery</div>
+          <h2>为需要真正掌控数据的团队而建</h2>
+        </div>
+        <div class="audiences">
+          <article class="audience"><small>软件公司与系统集成商</small><h3>把后端能力标准化</h3><p>用同一套平台快速交付多个项目，减少重复建设与长期维护成本。</p></article>
+          <article class="audience"><small>企业 IT 与数字化团队</small><h3>让数据服务更快上线</h3><p>在不牺牲数据主权和内部治理的前提下，提高业务响应速度。</p></article>
+          <article class="audience"><small>AI 应用与 Agent 团队</small><h3>获得可信的数据工具层</h3><p>为模型提供受控、可审计的数据和操作能力，不再从零搭建连接层。</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta" id="contact">
+      <div class="wrap">
+        <div class="cta-box">
+          <div class="kicker" style="color:var(--cyan)">Start with your own data</div>
+          <h2>用真实数据，验证一个统一控制平面</h2>
+          <p>从一套数据库和一个工作流开始，在你的环境中完成 PlaneOS 概念验证。</p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="mailto:contact@planeos.net?subject=PlaneOS%20产品演示">预约产品演示 <span>→</span></a>
+            <a class="btn btn-outline" href="mailto:contact@planeos.net?subject=PlaneOS%20合作咨询">联系合作</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
 
   <footer>
-    <div class="wrap foot">
-      <div>© <span id="y"></span> OneBase · 私有化的一体化数据后端</div>
-      <div>联系：<a href="mailto:contact@onebase.example">contact@onebase.example</a></div>
+    <div class="wrap footer-row">
+      <a class="brand" href="#"><i class="brand-mark" aria-hidden="true"></i>PlaneOS</a>
+      <div>© <span id="year"></span> PlaneOS · The Operating System for Data &amp; Automation</div>
+      <div class="footer-links"><a href="mailto:contact@planeos.net">contact@planeos.net</a></div>
     </div>
   </footer>
 
   <script>
-    document.getElementById("y").textContent = new Date().getFullYear();
+    const translations = {
+      zh: {
+        meta: ["PlaneOS — 数据与自动化的统一控制平面", "PlaneOS 是面向私有化部署的数据与自动化操作系统，统一管理数据库、API、权限、工作流、多数据源与 AI 能力。"],
+        nav: ["平台能力", "运行方式", "部署与安全", "预约演示"],
+        hero: ["数据与自动化操作系统", "数据与自动化的<br />统一控制平面", "一个控制平面，连接数据库、API、工作流与 AI。PlaneOS 把复杂的数据基础设施收敛成可部署、可审计、可持续扩展的平台。", "预约产品演示 <span>→</span>", "了解平台能力", "私有化部署 · 数据不出内网 · 面向企业交付", "所有系统运行正常 · 私有集群"],
+        proof: [["统一数据入口", "数据库与外部数据源"], ["自动生成 API", "从数据模型直接交付"], ["可视化自动化", "编排、调度与事件驱动"], ["企业级控制", "权限、审计与可观测性"]],
+        platform: {
+          kicker: "统一控制平面", title: "不再拼装后端，直接运行你的数据系统", desc: "PlaneOS 将数据、服务、流程和 AI 置于同一个治理边界中，让团队从连接资源到交付能力都在一个平台完成。",
+          cards: [["统一数据底座", "管理 PostgreSQL 与多种外部数据源，统一连接、Schema、查询、备份和性能诊断。"], ["数据即 API", "根据数据模型自动提供 REST 与实时接口，并叠加网关、限流、熔断和访问策略。"], ["工作流自动化", "通过可视化 DAG 编排数据库、HTTP、代码、消息队列和对象存储，支持调度与事件触发。"], ["身份与安全", "在平台、组织和项目层级落实身份、权限和数据隔离，所有关键操作均可追溯。"], ["AI 与 MCP", "让模型和 Agent 在明确授权边界内访问业务数据、调用工具并执行自动化任务。"], ["可观测与交付", "集中查看执行、审计、连接池和平台状态，通过容器化与离线授权完成私有交付。"]]
+        },
+        flow: {
+          kicker: "从资源到结果", title: "从连接数据，到运行自动化", desc: "一个连续的交付路径，减少组件切换、重复开发和分散治理。",
+          steps: [["连接", "接入数据库、消息队列、缓存、对象存储与企业服务。"], ["建模", "管理 Schema、权限和访问策略，形成统一数据边界。"], ["编排", "组合 API、数据和代码节点，构建可视化业务流程。"], ["运行", "调度、监控和审计每次执行，并持续扩展到 AI Agent。"]]
+        },
+        deploy: {
+          kicker: "私有化设计", title: "部署在你的环境，控制权始终属于你", desc: "从身份认证到数据访问，从运行日志到商业授权，PlaneOS 为私有化交付保留完整控制面。",
+          checks: [["数据不出内网", "部署到自有服务器、私有云或隔离网络。"], ["细粒度权限", "JWT、SSO、API Key、RBAC 与行级安全协同控制。"], ["全链路审计", "记录操作、请求和流程执行，为合规与排障提供依据。"]],
+          panel: "企业级控制", status: "● 由你掌控"
+        },
+        audiences: {
+          kicker: "为交付而生", title: "为需要真正掌控数据的团队而建",
+          cards: [["软件公司与系统集成商", "把后端能力标准化", "用同一套平台快速交付多个项目，减少重复建设与长期维护成本。"], ["企业 IT 与数字化团队", "让数据服务更快上线", "在不牺牲数据主权和内部治理的前提下，提高业务响应速度。"], ["AI 应用与 Agent 团队", "获得可信的数据工具层", "为模型提供受控、可审计的数据和操作能力，不再从零搭建连接层。"]]
+        },
+        cta: ["从你的数据开始", "用真实数据，验证一个统一控制平面", "从一套数据库和一个工作流开始，在你的环境中完成 PlaneOS 概念验证。", "预约产品演示 <span>→</span>", "联系合作"],
+        footer: "数据与自动化操作系统"
+      },
+      en: {
+        meta: ["PlaneOS — The Unified Control Plane for Data & Automation", "PlaneOS is a private-deployment operating system that unifies databases, APIs, access control, workflows, data sources, and AI."],
+        nav: ["Platform", "How it works", "Security", "Book a demo"],
+        hero: ["The operating system for data & automation", "The unified control plane<br />for data and automation", "One control plane for databases, APIs, workflows, and AI. PlaneOS turns complex data infrastructure into a deployable, auditable, and extensible platform.", "Book a demo <span>→</span>", "Explore the platform", "Private deployment · Data stays in your network · Built for enterprise delivery", "All systems operational · Private cluster"],
+        proof: [["One data entry point", "Databases and external sources"], ["Instant APIs", "Deliver directly from data models"], ["Visual automation", "Orchestration, schedules, and events"], ["Enterprise control", "Access, audit, and observability"]],
+        platform: {
+          kicker: "One control plane", title: "Stop assembling backends. Start running your data system.", desc: "PlaneOS brings data, services, workflows, and AI into one governance boundary, from connecting resources to delivering production capabilities.",
+          cards: [["Unified data foundation", "Manage PostgreSQL and external data sources with unified connections, schemas, queries, backups, and diagnostics."], ["Data becomes API", "Generate REST and realtime APIs from data models, with gateway policies, rate limits, circuit breakers, and access control."], ["Workflow automation", "Orchestrate databases, HTTP, code, queues, and object storage in a visual DAG with schedules and event triggers."], ["Identity and security", "Enforce identity, permissions, and data isolation across platform, organization, and project boundaries with full traceability."], ["AI and MCP", "Let models and agents access business data, call tools, and execute automation within explicit authorization boundaries."], ["Observability and delivery", "Monitor runs, audits, pools, and platform health, then deliver privately with containers and offline licensing."]]
+        },
+        flow: {
+          kicker: "From resource to outcome", title: "Connect data. Run automation.", desc: "A continuous delivery path that reduces context switching, repeated development, and fragmented governance.",
+          steps: [["Connect", "Bring in databases, queues, caches, object storage, and enterprise services."], ["Model", "Manage schemas, permissions, and policies within a consistent data boundary."], ["Orchestrate", "Combine API, data, and code nodes into visual business workflows."], ["Operate", "Schedule, monitor, and audit every run, then extend it to AI agents."]]
+        },
+        deploy: {
+          kicker: "Private by design", title: "Run it in your environment. Keep control.", desc: "From identity to data access, runtime logs to commercial licensing, PlaneOS preserves a complete control surface for private delivery.",
+          checks: [["Data stays private", "Deploy on your servers, private cloud, or isolated network."], ["Fine-grained access", "Coordinate JWT, SSO, API keys, RBAC, and row-level security."], ["End-to-end audit", "Record operations, requests, and workflow runs for compliance and diagnosis."]],
+          panel: "Enterprise-ready control", status: "● CONTROLLED BY YOU"
+        },
+        audiences: {
+          kicker: "Built for delivery", title: "Built for teams that need real control of their data",
+          cards: [["Software vendors and integrators", "Standardize backend delivery", "Deliver multiple projects on one platform while reducing repeated work and long-term maintenance."], ["Enterprise IT teams", "Launch data services faster", "Move faster without compromising data sovereignty or internal governance."], ["AI and agent teams", "Use a trusted data tool layer", "Give models controlled, auditable data and actions without rebuilding the integration layer."]]
+        },
+        cta: ["Start with your own data", "Prove one control plane with real data", "Start with one database and one workflow, then validate PlaneOS inside your environment.", "Book a demo <span>→</span>", "Talk to us"],
+        footer: "The Operating System for Data & Automation"
+      },
+      ja: {
+        meta: ["PlaneOS — データと自動化の統合コントロールプレーン", "PlaneOS は、データベース、API、権限、ワークフロー、データソース、AI を統合するプライベート導入型のデータ自動化 OS です。"],
+        nav: ["プラットフォーム", "仕組み", "導入とセキュリティ", "デモを予約"],
+        hero: ["データと自動化のオペレーティングシステム", "データと自動化を支える<br />統合コントロールプレーン", "データベース、API、ワークフロー、AI を一つのコントロールプレーンへ。PlaneOS は複雑なデータ基盤を、導入可能で監査可能、継続的に拡張できるプラットフォームに変えます。", "デモを予約 <span>→</span>", "機能を見る", "プライベート導入 · データは社内ネットワークに保持 · エンタープライズ向け", "すべて正常稼働中 · プライベートクラスター"],
+        proof: [["データ入口を統合", "データベースと外部データソース"], ["API を自動生成", "データモデルから直接提供"], ["ビジュアル自動化", "オーケストレーション、スケジュール、イベント"], ["企業向け統制", "権限、監査、可観測性"]],
+        platform: {
+          kicker: "一つのコントロールプレーン", title: "バックエンドを組み合わせるのではなく、データシステムを動かす", desc: "PlaneOS はデータ、サービス、ワークフロー、AI を一つのガバナンス境界に統合し、リソース接続から本番提供までを一つの基盤で実現します。",
+          cards: [["統合データ基盤", "PostgreSQL と外部データソースの接続、スキーマ、クエリ、バックアップ、診断を一元管理します。"], ["データを API に", "データモデルから REST／リアルタイム API を生成し、ゲートウェイ、レート制限、アクセス制御を適用します。"], ["ワークフロー自動化", "データベース、HTTP、コード、キュー、オブジェクトストレージを可視化 DAG で編成します。"], ["ID とセキュリティ", "プラットフォーム、組織、プロジェクト単位で権限とデータ分離を徹底し、操作を追跡可能にします。"], ["AI と MCP", "明確な認可境界の中で、モデルやエージェントがデータとツールを安全に利用できます。"], ["可観測性と提供", "実行、監査、接続プール、稼働状態を監視し、コンテナとオフラインライセンスで提供します。"]]
+        },
+        flow: {
+          kicker: "リソースから成果へ", title: "データを接続し、自動化を実行", desc: "ツール切り替え、重複開発、分散したガバナンスを減らす一貫した提供フロー。",
+          steps: [["接続", "データベース、キュー、キャッシュ、ストレージ、企業サービスを接続します。"], ["モデル化", "スキーマ、権限、ポリシーを統一されたデータ境界で管理します。"], ["編成", "API、データ、コードノードを組み合わせ、業務フローを可視化します。"], ["運用", "すべての実行をスケジュール、監視、監査し、AI エージェントへ拡張します。"]]
+        },
+        deploy: {
+          kicker: "プライベートを前提に設計", title: "自社環境で稼働し、制御権を保持", desc: "認証、データアクセス、実行ログ、商用ライセンスまで、PlaneOS はプライベート提供に必要な制御面を維持します。",
+          checks: [["データを社内に保持", "自社サーバー、プライベートクラウド、隔離ネットワークに導入。"], ["きめ細かな権限", "JWT、SSO、API キー、RBAC、行レベルセキュリティを連携。"], ["エンドツーエンド監査", "操作、リクエスト、ワークフロー実行を記録し、監査と診断に活用。"]],
+          panel: "エンタープライズ対応", status: "● あなたが管理"
+        },
+        audiences: {
+          kicker: "提供のために設計", title: "データを本当に管理したいチームのために",
+          cards: [["ソフトウェア企業／SI", "バックエンド提供を標準化", "一つの基盤で複数案件を迅速に提供し、重複開発と保守コストを削減します。"], ["企業 IT／DX チーム", "データサービスを迅速に公開", "データ主権と社内ガバナンスを維持しながら、提供速度を高めます。"], ["AI／エージェントチーム", "信頼できるデータツール層", "連携層を一から作らず、制御・監査可能なデータと操作をモデルに提供します。"]]
+        },
+        cta: ["自社データから開始", "実データで統合コントロールプレーンを検証", "一つのデータベースとワークフローから始め、自社環境で PlaneOS を検証してください。", "デモを予約 <span>→</span>", "お問い合わせ"],
+        footer: "データと自動化のオペレーティングシステム"
+      },
+      ko: {
+        meta: ["PlaneOS — 데이터와 자동화를 위한 통합 컨트롤 플레인", "PlaneOS는 데이터베이스, API, 권한, 워크플로, 데이터 소스 및 AI를 통합하는 프라이빗 배포형 데이터 자동화 OS입니다."],
+        nav: ["플랫폼", "작동 방식", "배포 및 보안", "데모 예약"],
+        hero: ["데이터와 자동화를 위한 운영 체제", "데이터와 자동화를 위한<br />통합 컨트롤 플레인", "하나의 컨트롤 플레인에서 데이터베이스, API, 워크플로와 AI를 연결합니다. PlaneOS는 복잡한 데이터 인프라를 배포 가능하고 감사 가능하며 지속적으로 확장할 수 있는 플랫폼으로 통합합니다.", "데모 예약 <span>→</span>", "플랫폼 살펴보기", "프라이빗 배포 · 데이터는 내부망에 유지 · 엔터프라이즈 제공", "모든 시스템 정상 · 프라이빗 클러스터"],
+        proof: [["통합 데이터 진입점", "데이터베이스와 외부 소스"], ["API 자동 생성", "데이터 모델에서 바로 제공"], ["시각적 자동화", "오케스트레이션, 일정 및 이벤트"], ["엔터프라이즈 제어", "권한, 감사 및 관측성"]],
+        platform: {
+          kicker: "하나의 컨트롤 플레인", title: "백엔드를 조립하지 말고 데이터 시스템을 운영하세요", desc: "PlaneOS는 데이터, 서비스, 워크플로와 AI를 하나의 거버넌스 경계에 통합하여 리소스 연결부터 프로덕션 제공까지 한 플랫폼에서 처리합니다.",
+          cards: [["통합 데이터 기반", "PostgreSQL과 외부 데이터 소스의 연결, 스키마, 쿼리, 백업 및 진단을 통합 관리합니다."], ["데이터를 API로", "데이터 모델에서 REST 및 실시간 API를 생성하고 게이트웨이, 속도 제한과 접근 정책을 적용합니다."], ["워크플로 자동화", "데이터베이스, HTTP, 코드, 큐 및 객체 스토리지를 시각적 DAG로 오케스트레이션합니다."], ["ID 및 보안", "플랫폼, 조직 및 프로젝트 경계에서 권한과 데이터 격리를 적용하고 모든 작업을 추적합니다."], ["AI 및 MCP", "명확한 권한 경계 안에서 모델과 에이전트가 데이터에 접근하고 도구를 실행합니다."], ["관측성 및 제공", "실행, 감사, 연결 풀과 플랫폼 상태를 모니터링하고 컨테이너로 프라이빗하게 제공합니다."]]
+        },
+        flow: {
+          kicker: "리소스에서 성과까지", title: "데이터를 연결하고 자동화를 실행하세요", desc: "도구 전환, 반복 개발 및 분산된 거버넌스를 줄이는 연속적인 제공 경로입니다.",
+          steps: [["연결", "데이터베이스, 큐, 캐시, 객체 스토리지 및 엔터프라이즈 서비스를 연결합니다."], ["모델링", "일관된 데이터 경계에서 스키마, 권한 및 정책을 관리합니다."], ["오케스트레이션", "API, 데이터 및 코드 노드를 결합하여 시각적 비즈니스 흐름을 구축합니다."], ["운영", "모든 실행을 예약, 모니터링 및 감사하고 AI 에이전트로 확장합니다."]]
+        },
+        deploy: {
+          kicker: "프라이빗 중심 설계", title: "자체 환경에서 실행하고 통제권을 유지하세요", desc: "인증과 데이터 접근부터 런타임 로그와 상용 라이선스까지 PlaneOS는 프라이빗 제공을 위한 완전한 제어면을 유지합니다.",
+          checks: [["데이터 비공개 유지", "자체 서버, 프라이빗 클라우드 또는 격리망에 배포합니다."], ["세분화된 접근", "JWT, SSO, API 키, RBAC 및 행 수준 보안을 함께 적용합니다."], ["엔드투엔드 감사", "작업, 요청 및 워크플로 실행을 기록하여 규정 준수와 진단에 활용합니다."]],
+          panel: "엔터프라이즈 제어", status: "● 직접 통제"
+        },
+        audiences: {
+          kicker: "제공을 위해 설계", title: "데이터를 진정으로 통제해야 하는 팀을 위해",
+          cards: [["소프트웨어 기업 및 SI", "백엔드 제공 표준화", "하나의 플랫폼으로 여러 프로젝트를 빠르게 제공하고 반복 구축과 유지비를 줄입니다."], ["엔터프라이즈 IT 팀", "데이터 서비스를 더 빠르게 출시", "데이터 주권과 내부 거버넌스를 유지하면서 업무 대응 속도를 높입니다."], ["AI 및 에이전트 팀", "신뢰할 수 있는 데이터 도구 계층", "연결 계층을 다시 만들지 않고 제어 및 감사 가능한 데이터와 작업을 모델에 제공합니다."]]
+        },
+        cta: ["자체 데이터로 시작", "실제 데이터로 하나의 컨트롤 플레인을 검증하세요", "하나의 데이터베이스와 워크플로로 시작해 자체 환경에서 PlaneOS를 검증하세요.", "데모 예약 <span>→</span>", "문의하기"],
+        footer: "데이터와 자동화를 위한 운영 체제"
+      },
+      de: {
+        meta: ["PlaneOS — Die einheitliche Steuerungsebene für Daten und Automatisierung", "PlaneOS vereint Datenbanken, APIs, Zugriffssteuerung, Workflows, Datenquellen und KI in einer privat betreibbaren Plattform."],
+        nav: ["Plattform", "Funktionsweise", "Bereitstellung & Sicherheit", "Demo buchen"],
+        hero: ["Das Betriebssystem für Daten und Automatisierung", "Die einheitliche Steuerungsebene<br />für Daten und Automatisierung", "Eine Steuerungsebene für Datenbanken, APIs, Workflows und KI. PlaneOS macht komplexe Dateninfrastruktur zu einer betreibbaren, auditierbaren und erweiterbaren Plattform.", "Demo buchen <span>→</span>", "Plattform entdecken", "Private Bereitstellung · Daten bleiben in Ihrem Netzwerk · Für Unternehmen entwickelt", "Alle Systeme betriebsbereit · Privater Cluster"],
+        proof: [["Ein Datenzugang", "Datenbanken und externe Quellen"], ["Sofortige APIs", "Direkt aus Datenmodellen"], ["Visuelle Automatisierung", "Orchestrierung, Zeitpläne und Events"], ["Unternehmenskontrolle", "Zugriff, Audit und Observability"]],
+        platform: {
+          kicker: "Eine Steuerungsebene", title: "Keine Backends mehr zusammensetzen. Betreiben Sie Ihr Datensystem.", desc: "PlaneOS bringt Daten, Dienste, Workflows und KI in eine gemeinsame Governance-Grenze – von der Verbindung bis zum produktiven Einsatz.",
+          cards: [["Einheitliche Datenbasis", "PostgreSQL und externe Datenquellen mit Verbindungen, Schemas, Abfragen, Backups und Diagnosen zentral verwalten."], ["Daten werden zur API", "REST- und Echtzeit-APIs aus Datenmodellen generieren und Gateway-, Raten- sowie Zugriffsregeln anwenden."], ["Workflow-Automatisierung", "Datenbanken, HTTP, Code, Queues und Objektspeicher in einem visuellen DAG orchestrieren."], ["Identität und Sicherheit", "Berechtigungen und Datenisolation über Plattform, Organisation und Projekte hinweg nachvollziehbar durchsetzen."], ["KI und MCP", "Modelle und Agenten greifen innerhalb klarer Berechtigungsgrenzen auf Daten und Werkzeuge zu."], ["Observability und Auslieferung", "Ausführungen, Audits, Pools und Plattformzustand überwachen und privat per Container ausliefern."]]
+        },
+        flow: {
+          kicker: "Von Ressourcen zu Ergebnissen", title: "Daten verbinden. Automatisierung ausführen.", desc: "Ein durchgängiger Weg, der Werkzeugwechsel, Doppelarbeit und fragmentierte Governance reduziert.",
+          steps: [["Verbinden", "Datenbanken, Queues, Caches, Objektspeicher und Unternehmensdienste anbinden."], ["Modellieren", "Schemas, Berechtigungen und Regeln innerhalb einer konsistenten Datengrenze verwalten."], ["Orchestrieren", "API-, Daten- und Code-Knoten zu visuellen Geschäftsabläufen kombinieren."], ["Betreiben", "Jede Ausführung planen, überwachen und auditieren und auf KI-Agenten erweitern."]]
+        },
+        deploy: {
+          kicker: "Von Grund auf privat", title: "In Ihrer Umgebung betreiben. Kontrolle behalten.", desc: "Von Identität und Datenzugriff bis zu Laufzeitprotokollen und Lizenzen bewahrt PlaneOS die vollständige Kontrolle für private Bereitstellung.",
+          checks: [["Daten bleiben privat", "Auf eigenen Servern, in der Private Cloud oder in isolierten Netzen bereitstellen."], ["Feingranularer Zugriff", "JWT, SSO, API-Schlüssel, RBAC und Zeilensicherheit gemeinsam steuern."], ["Lückenloses Audit", "Vorgänge, Anfragen und Workflow-Ausführungen für Compliance und Diagnose erfassen."]],
+          panel: "Unternehmensgerechte Kontrolle", status: "● UNTER IHRER KONTROLLE"
+        },
+        audiences: {
+          kicker: "Für die Auslieferung gebaut", title: "Für Teams, die echte Kontrolle über ihre Daten brauchen",
+          cards: [["Softwareanbieter und Integratoren", "Backend-Auslieferung standardisieren", "Mehrere Projekte auf einer Plattform liefern und Doppelarbeit sowie Wartung reduzieren."], ["Unternehmens-IT", "Datendienste schneller starten", "Schneller handeln, ohne Datensouveränität oder interne Governance aufzugeben."], ["KI- und Agententeams", "Vertrauenswürdige Datenwerkzeuge", "Modelle erhalten kontrollierte, auditierbare Daten und Aktionen ohne neue Integrationsschicht."]]
+        },
+        cta: ["Mit Ihren Daten beginnen", "Eine Steuerungsebene mit echten Daten validieren", "Starten Sie mit einer Datenbank und einem Workflow und testen Sie PlaneOS in Ihrer Umgebung.", "Demo buchen <span>→</span>", "Kontakt"],
+        footer: "Das Betriebssystem für Daten und Automatisierung"
+      },
+      fr: {
+        meta: ["PlaneOS — Le plan de contrôle unifié des données et de l’automatisation", "PlaneOS unifie bases de données, API, accès, workflows, sources de données et IA dans une plateforme déployable en privé."],
+        nav: ["Plateforme", "Fonctionnement", "Déploiement et sécurité", "Réserver une démo"],
+        hero: ["Le système d’exploitation des données et de l’automatisation", "Le plan de contrôle unifié<br />des données et de l’automatisation", "Un seul plan de contrôle pour les bases de données, les API, les workflows et l’IA. PlaneOS transforme une infrastructure complexe en plateforme déployable, auditable et extensible.", "Réserver une démo <span>→</span>", "Découvrir la plateforme", "Déploiement privé · Données conservées sur votre réseau · Conçu pour l’entreprise", "Tous les systèmes sont opérationnels · Cluster privé"],
+        proof: [["Un accès aux données", "Bases et sources externes"], ["API instantanées", "Livrées depuis les modèles de données"], ["Automatisation visuelle", "Orchestration, planification et événements"], ["Contrôle d’entreprise", "Accès, audit et observabilité"]],
+        platform: {
+          kicker: "Un seul plan de contrôle", title: "N’assemblez plus des backends. Exploitez votre système de données.", desc: "PlaneOS réunit données, services, workflows et IA dans une même gouvernance, de la connexion des ressources à la mise en production.",
+          cards: [["Socle de données unifié", "Gérez PostgreSQL et les sources externes avec connexions, schémas, requêtes, sauvegardes et diagnostics centralisés."], ["Les données deviennent API", "Générez des API REST et temps réel depuis les modèles, avec passerelle, limites et politiques d’accès."], ["Automatisation des workflows", "Orchestrez bases, HTTP, code, files et stockage objet dans un DAG visuel piloté par événements."], ["Identité et sécurité", "Appliquez permissions et isolation des données aux niveaux plateforme, organisation et projet, avec traçabilité."], ["IA et MCP", "Autorisez modèles et agents à accéder aux données et outils dans des limites explicites."], ["Observabilité et livraison", "Surveillez exécutions, audits, pools et santé de la plateforme, puis livrez-la en environnement privé."]]
+        },
+        flow: {
+          kicker: "De la ressource au résultat", title: "Connectez les données. Exécutez l’automatisation.", desc: "Un parcours continu qui réduit les changements d’outils, le développement répété et la gouvernance fragmentée.",
+          steps: [["Connecter", "Intégrez bases, files de messages, caches, stockage objet et services d’entreprise."], ["Modéliser", "Gérez schémas, permissions et politiques dans une frontière de données cohérente."], ["Orchestrer", "Combinez API, données et code dans des workflows métier visuels."], ["Exploiter", "Planifiez, surveillez et auditez chaque exécution, puis étendez-la aux agents IA."]]
+        },
+        deploy: {
+          kicker: "Privé par conception", title: "Exécutez dans votre environnement. Gardez le contrôle.", desc: "De l’identité à l’accès aux données, des journaux aux licences, PlaneOS conserve une surface de contrôle complète pour le déploiement privé.",
+          checks: [["Données privées", "Déployez sur vos serveurs, votre cloud privé ou un réseau isolé."], ["Accès granulaire", "Coordonnez JWT, SSO, clés API, RBAC et sécurité au niveau des lignes."], ["Audit de bout en bout", "Enregistrez opérations, requêtes et exécutions pour conformité et diagnostic."]],
+          panel: "Contrôle prêt pour l’entreprise", status: "● SOUS VOTRE CONTRÔLE"
+        },
+        audiences: {
+          kicker: "Conçu pour livrer", title: "Pour les équipes qui doivent vraiment maîtriser leurs données",
+          cards: [["Éditeurs et intégrateurs", "Standardiser la livraison backend", "Livrez plusieurs projets sur une plateforme et réduisez les développements répétés et la maintenance."], ["DSI et équipes numériques", "Lancer plus vite les services de données", "Accélérez sans compromettre la souveraineté des données ni la gouvernance interne."], ["Équipes IA et agents", "Une couche d’outils de confiance", "Fournissez aux modèles des données et actions contrôlées et auditables, sans reconstruire l’intégration."]]
+        },
+        cta: ["Commencez avec vos données", "Validez un plan de contrôle avec des données réelles", "Commencez par une base et un workflow, puis validez PlaneOS dans votre environnement.", "Réserver une démo <span>→</span>", "Nous contacter"],
+        footer: "Le système d’exploitation des données et de l’automatisation"
+      },
+      es: {
+        meta: ["PlaneOS — El plano de control unificado para datos y automatización", "PlaneOS unifica bases de datos, API, accesos, flujos de trabajo, fuentes de datos e IA en una plataforma de despliegue privado."],
+        nav: ["Plataforma", "Cómo funciona", "Despliegue y seguridad", "Solicitar demo"],
+        hero: ["El sistema operativo para datos y automatización", "El plano de control unificado<br />para datos y automatización", "Un único plano de control para bases de datos, API, flujos de trabajo e IA. PlaneOS convierte una infraestructura compleja en una plataforma desplegable, auditable y extensible.", "Solicitar demo <span>→</span>", "Explorar la plataforma", "Despliegue privado · Los datos permanecen en tu red · Diseñado para empresas", "Todos los sistemas en funcionamiento · Clúster privado"],
+        proof: [["Un acceso a los datos", "Bases y fuentes externas"], ["API instantáneas", "Entrega directa desde los modelos"], ["Automatización visual", "Orquestación, horarios y eventos"], ["Control empresarial", "Acceso, auditoría y observabilidad"]],
+        platform: {
+          kicker: "Un solo plano de control", title: "Deja de ensamblar backends. Ejecuta tu sistema de datos.", desc: "PlaneOS reúne datos, servicios, flujos e IA bajo un mismo límite de gobierno, desde la conexión de recursos hasta producción.",
+          cards: [["Base de datos unificada", "Gestiona PostgreSQL y fuentes externas con conexiones, esquemas, consultas, copias y diagnósticos centralizados."], ["Los datos se convierten en API", "Genera API REST y en tiempo real desde modelos, con gateway, límites y políticas de acceso."], ["Automatización de flujos", "Orquesta bases, HTTP, código, colas y almacenamiento de objetos en un DAG visual."], ["Identidad y seguridad", "Aplica permisos y aislamiento en plataforma, organización y proyecto con trazabilidad completa."], ["IA y MCP", "Permite que modelos y agentes usen datos y herramientas dentro de límites de autorización explícitos."], ["Observabilidad y entrega", "Supervisa ejecuciones, auditorías, pools y salud, y realiza entregas privadas con contenedores."]]
+        },
+        flow: {
+          kicker: "Del recurso al resultado", title: "Conecta datos. Ejecuta automatizaciones.", desc: "Un recorrido continuo que reduce cambios de herramientas, desarrollo repetido y gobierno fragmentado.",
+          steps: [["Conectar", "Integra bases, colas, cachés, almacenamiento de objetos y servicios empresariales."], ["Modelar", "Gestiona esquemas, permisos y políticas dentro de un límite de datos coherente."], ["Orquestar", "Combina nodos de API, datos y código en flujos empresariales visuales."], ["Operar", "Programa, supervisa y audita cada ejecución, y extiéndela a agentes de IA."]]
+        },
+        deploy: {
+          kicker: "Privado por diseño", title: "Ejecútalo en tu entorno. Mantén el control.", desc: "Desde identidad y acceso hasta registros y licencias, PlaneOS conserva una superficie de control completa para entrega privada.",
+          checks: [["Datos privados", "Despliega en tus servidores, nube privada o red aislada."], ["Acceso detallado", "Coordina JWT, SSO, claves API, RBAC y seguridad a nivel de fila."], ["Auditoría integral", "Registra operaciones, solicitudes y ejecuciones para cumplimiento y diagnóstico."]],
+          panel: "Control empresarial", status: "● BAJO TU CONTROL"
+        },
+        audiences: {
+          kicker: "Diseñado para entregar", title: "Para equipos que necesitan control real de sus datos",
+          cards: [["Proveedores e integradores", "Estandariza la entrega backend", "Entrega múltiples proyectos sobre una plataforma y reduce trabajo repetido y mantenimiento."], ["TI empresarial", "Lanza servicios de datos más rápido", "Avanza sin comprometer la soberanía de los datos ni el gobierno interno."], ["Equipos de IA y agentes", "Una capa de herramientas fiable", "Ofrece datos y acciones controlados y auditables sin reconstruir la integración."]]
+        },
+        cta: ["Empieza con tus datos", "Valida un plano de control con datos reales", "Comienza con una base y un flujo de trabajo y valida PlaneOS en tu entorno.", "Solicitar demo <span>→</span>", "Contactar"],
+        footer: "El sistema operativo para datos y automatización"
+      },
+      pt: {
+        meta: ["PlaneOS — O plano de controle unificado para dados e automação", "PlaneOS unifica bancos de dados, APIs, acesso, workflows, fontes de dados e IA em uma plataforma de implantação privada."],
+        nav: ["Plataforma", "Como funciona", "Implantação e segurança", "Agendar demonstração"],
+        hero: ["O sistema operacional para dados e automação", "O plano de controle unificado<br />para dados e automação", "Um único plano de controle para bancos de dados, APIs, workflows e IA. O PlaneOS transforma infraestrutura complexa em uma plataforma implantável, auditável e extensível.", "Agendar demonstração <span>→</span>", "Conhecer a plataforma", "Implantação privada · Dados permanecem na sua rede · Feito para empresas", "Todos os sistemas em operação · Cluster privado"],
+        proof: [["Um acesso aos dados", "Bancos e fontes externas"], ["APIs instantâneas", "Entrega direta dos modelos"], ["Automação visual", "Orquestração, agendas e eventos"], ["Controle empresarial", "Acesso, auditoria e observabilidade"]],
+        platform: {
+          kicker: "Um plano de controle", title: "Pare de montar backends. Execute seu sistema de dados.", desc: "O PlaneOS reúne dados, serviços, workflows e IA em um único limite de governança, da conexão dos recursos à produção.",
+          cards: [["Base de dados unificada", "Gerencie PostgreSQL e fontes externas com conexões, schemas, consultas, backups e diagnósticos centralizados."], ["Dados viram API", "Gere APIs REST e em tempo real a partir dos modelos, com gateway, limites e políticas de acesso."], ["Automação de workflows", "Orquestre bancos, HTTP, código, filas e armazenamento de objetos em um DAG visual."], ["Identidade e segurança", "Aplique permissões e isolamento em plataforma, organização e projeto com rastreabilidade completa."], ["IA e MCP", "Permita que modelos e agentes usem dados e ferramentas dentro de limites explícitos de autorização."], ["Observabilidade e entrega", "Monitore execuções, auditorias, pools e saúde e faça entregas privadas com contêineres."]]
+        },
+        flow: {
+          kicker: "Do recurso ao resultado", title: "Conecte dados. Execute automações.", desc: "Um caminho contínuo que reduz troca de ferramentas, desenvolvimento repetido e governança fragmentada.",
+          steps: [["Conectar", "Integre bancos, filas, caches, armazenamento de objetos e serviços empresariais."], ["Modelar", "Gerencie schemas, permissões e políticas dentro de um limite de dados consistente."], ["Orquestrar", "Combine nós de API, dados e código em workflows visuais de negócio."], ["Operar", "Agende, monitore e audite cada execução e estenda-a a agentes de IA."]]
+        },
+        deploy: {
+          kicker: "Privado por design", title: "Execute no seu ambiente. Mantenha o controle.", desc: "Da identidade e acesso aos logs e licenças, o PlaneOS mantém uma superfície completa de controle para entrega privada.",
+          checks: [["Dados privados", "Implante em seus servidores, nuvem privada ou rede isolada."], ["Acesso granular", "Coordene JWT, SSO, chaves de API, RBAC e segurança em nível de linha."], ["Auditoria ponta a ponta", "Registre operações, solicitações e execuções para conformidade e diagnóstico."]],
+          panel: "Controle empresarial", status: "● SOB SEU CONTROLE"
+        },
+        audiences: {
+          kicker: "Feito para entregar", title: "Para equipes que precisam de controle real dos dados",
+          cards: [["Fornecedores e integradores", "Padronize a entrega de backend", "Entregue vários projetos em uma plataforma e reduza trabalho repetido e manutenção."], ["TI empresarial", "Lance serviços de dados mais rápido", "Avance sem comprometer a soberania dos dados ou a governança interna."], ["Equipes de IA e agentes", "Uma camada confiável de ferramentas", "Ofereça dados e ações controlados e auditáveis sem reconstruir a integração."]]
+        },
+        cta: ["Comece com seus dados", "Valide um plano de controle com dados reais", "Comece com um banco e um workflow e valide o PlaneOS no seu ambiente.", "Agendar demonstração <span>→</span>", "Fale conosco"],
+        footer: "O sistema operacional para dados e automação"
+      },
+      it: {
+        meta: ["PlaneOS — Il control plane unificato per dati e automazione", "PlaneOS unifica database, API, accessi, workflow, sorgenti dati e IA in una piattaforma distribuibile privatamente."],
+        nav: ["Piattaforma", "Come funziona", "Distribuzione e sicurezza", "Prenota una demo"],
+        hero: ["Il sistema operativo per dati e automazione", "Il control plane unificato<br />per dati e automazione", "Un unico control plane per database, API, workflow e IA. PlaneOS trasforma un’infrastruttura complessa in una piattaforma distribuibile, verificabile ed estensibile.", "Prenota una demo <span>→</span>", "Scopri la piattaforma", "Distribuzione privata · I dati restano nella tua rete · Pensato per le imprese", "Tutti i sistemi operativi · Cluster privato"],
+        proof: [["Un solo accesso ai dati", "Database e sorgenti esterne"], ["API immediate", "Direttamente dai modelli dati"], ["Automazione visuale", "Orchestrazione, pianificazione ed eventi"], ["Controllo enterprise", "Accesso, audit e osservabilità"]],
+        platform: {
+          kicker: "Un solo control plane", title: "Smetti di assemblare backend. Esegui il tuo sistema dati.", desc: "PlaneOS riunisce dati, servizi, workflow e IA in un unico confine di governance, dalla connessione delle risorse alla produzione.",
+          cards: [["Base dati unificata", "Gestisci PostgreSQL e sorgenti esterne con connessioni, schemi, query, backup e diagnostica centralizzati."], ["I dati diventano API", "Genera API REST e realtime dai modelli, con gateway, limiti e politiche di accesso."], ["Automazione dei workflow", "Orchestra database, HTTP, codice, code e object storage in un DAG visuale."], ["Identità e sicurezza", "Applica permessi e isolamento a livello di piattaforma, organizzazione e progetto con piena tracciabilità."], ["IA e MCP", "Consenti a modelli e agenti di usare dati e strumenti entro confini di autorizzazione espliciti."], ["Osservabilità e distribuzione", "Monitora esecuzioni, audit, pool e stato della piattaforma e distribuiscila privatamente."]]
+        },
+        flow: {
+          kicker: "Dalla risorsa al risultato", title: "Collega i dati. Esegui l’automazione.", desc: "Un percorso continuo che riduce il cambio di strumenti, lo sviluppo ripetuto e la governance frammentata.",
+          steps: [["Collega", "Integra database, code, cache, object storage e servizi aziendali."], ["Modella", "Gestisci schemi, permessi e politiche entro un confine dati coerente."], ["Orchestra", "Combina nodi API, dati e codice in workflow aziendali visuali."], ["Gestisci", "Pianifica, monitora e verifica ogni esecuzione, estendendola agli agenti IA."]]
+        },
+        deploy: {
+          kicker: "Privato per progettazione", title: "Eseguilo nel tuo ambiente. Mantieni il controllo.", desc: "Dall’identità e accesso ai log e alle licenze, PlaneOS conserva una superficie di controllo completa per la distribuzione privata.",
+          checks: [["Dati privati", "Distribuisci sui tuoi server, cloud privato o rete isolata."], ["Accesso granulare", "Coordina JWT, SSO, chiavi API, RBAC e sicurezza a livello di riga."], ["Audit end-to-end", "Registra operazioni, richieste ed esecuzioni per conformità e diagnosi."]],
+          panel: "Controllo enterprise", status: "● SOTTO IL TUO CONTROLLO"
+        },
+        audiences: {
+          kicker: "Pensato per la distribuzione", title: "Per i team che necessitano del vero controllo sui dati",
+          cards: [["Software vendor e integratori", "Standardizza la distribuzione backend", "Distribuisci più progetti su una piattaforma riducendo lavoro ripetuto e manutenzione."], ["IT aziendale", "Lancia i servizi dati più velocemente", "Accelera senza compromettere la sovranità dei dati o la governance interna."], ["Team IA e agenti", "Un livello dati affidabile", "Offri a modelli dati e azioni controllati e verificabili senza ricostruire l’integrazione."]]
+        },
+        cta: ["Inizia con i tuoi dati", "Valida un control plane con dati reali", "Inizia con un database e un workflow e verifica PlaneOS nel tuo ambiente.", "Prenota una demo <span>→</span>", "Contattaci"],
+        footer: "Il sistema operativo per dati e automazione"
+      }
+    };
+
+    const setText = (selector, value) => {
+      const node = document.querySelector(selector);
+      if (node && value !== undefined) node.textContent = value;
+    };
+    const setHtml = (selector, value) => {
+      const node = document.querySelector(selector);
+      if (node && value !== undefined) node.innerHTML = value;
+    };
+    const setPairs = (selector, values, first, second) => {
+      document.querySelectorAll(selector).forEach((node, index) => {
+        if (!values[index]) return;
+        const firstNode = node.querySelector(first);
+        const secondNode = node.querySelector(second);
+        if (firstNode) firstNode.textContent = values[index][0];
+        if (secondNode) secondNode.textContent = values[index][1];
+      });
+    };
+
+    function applyLanguage(language) {
+      const t = translations[language] || translations.zh;
+      document.documentElement.lang = language === "zh" ? "zh-CN" : language;
+      document.title = t.meta[0];
+      document.querySelector('meta[name="description"]').content = t.meta[1];
+      document.querySelector('meta[property="og:title"]').content = t.meta[0];
+      document.querySelector('meta[property="og:description"]').content = t.hero[2];
+
+      document.querySelectorAll(".nav-links > a").forEach((node, index) => {
+        if (t.nav[index]) node.textContent = t.nav[index];
+      });
+      setText(".hero .eyebrow", t.hero[0]);
+      setHtml(".hero h1", t.hero[1]);
+      setText(".hero .lead", t.hero[2]);
+      setHtml(".hero .hero-actions .btn-primary", t.hero[3]);
+      setText(".hero .hero-actions .btn-outline", t.hero[4]);
+      setText(".hero-note", t.hero[5]);
+      setHtml(".pulse", `<i class="pulse-dot"></i>${t.hero[6]}`);
+      setPairs(".proof-item", t.proof, "strong", "span");
+
+      setText("#platform .kicker", t.platform.kicker);
+      setText("#platform .section-head h2", t.platform.title);
+      setText("#platform .section-head p", t.platform.desc);
+      setPairs("#platform .capability", t.platform.cards, "h3", "p");
+
+      setText("#workflow .kicker", t.flow.kicker);
+      setText("#workflow .section-head h2", t.flow.title);
+      setText("#workflow .section-head p", t.flow.desc);
+      setPairs("#workflow .flow-step", t.flow.steps, "h3", "p");
+
+      setText("#deployment .kicker", t.deploy.kicker);
+      setText("#deployment h2", t.deploy.title);
+      setText("#deployment .deploy-grid > div:first-child > p", t.deploy.desc);
+      setPairs("#deployment .check", t.deploy.checks, "strong", "span");
+      setText("#deployment .deploy-panel h3", t.deploy.panel);
+      setText("#deployment .status", t.deploy.status);
+
+      setText("#audiences .kicker", t.audiences.kicker);
+      setText("#audiences .section-head h2", t.audiences.title);
+      document.querySelectorAll("#audiences .audience").forEach((node, index) => {
+        const values = t.audiences.cards[index];
+        if (!values) return;
+        node.querySelector("small").textContent = values[0];
+        node.querySelector("h3").textContent = values[1];
+        node.querySelector("p").textContent = values[2];
+      });
+
+      setText("#contact .kicker", t.cta[0]);
+      setText("#contact h2", t.cta[1]);
+      setText("#contact p", t.cta[2]);
+      setHtml("#contact .btn-primary", t.cta[3]);
+      setText("#contact .btn-outline", t.cta[4]);
+      document.querySelector("footer .footer-row > div:not(.footer-links)").textContent =
+        `© ${new Date().getFullYear()} PlaneOS · ${t.footer}`;
+
+      document.getElementById("language").value = language;
+      localStorage.setItem("planeos-language", language);
+    }
+
+    const supportedLanguages = Object.keys(translations);
+    const params = new URLSearchParams(window.location.search);
+    const requestedLanguage = params.get("lang");
+    const savedLanguage = localStorage.getItem("planeos-language");
+    const initialLanguage = [requestedLanguage, savedLanguage, "en"]
+      .find(language => supportedLanguages.includes(language));
+
+    applyLanguage(initialLanguage);
+    document.getElementById("language").addEventListener("change", event => {
+      const language = event.target.value;
+      applyLanguage(language);
+      const url = new URL(window.location.href);
+      url.searchParams.set("lang", language);
+      window.history.replaceState({}, "", url);
+    });
   </script>
 </body>
 </html>
