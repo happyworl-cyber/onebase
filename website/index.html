@@ -87,6 +87,8 @@
     .nav-links { display: flex; align-items: center; gap: 26px; margin-left: auto; }
     .nav-links a { color: #aebbcf; font-size: 14px; transition: color .2s ease; }
     .nav-links a:hover { color: var(--white); }
+    .nav-links .btn-primary,
+    .nav-links .btn-primary:hover { color: #041516; }
     .language-picker {
       position: relative;
       display: flex;
@@ -341,6 +343,103 @@
     .flow-section { color: var(--white); background: var(--navy); }
     .flow-section .kicker { color: var(--cyan); }
     .flow-section .section-head p { color: #94a3b8; }
+    .workflow-lab {
+      display: grid;
+      grid-template-columns: 1.25fr .75fr;
+      gap: 18px;
+      margin-bottom: 54px;
+    }
+    .workflow-canvas {
+      position: relative;
+      min-height: 390px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 22px;
+      background:
+        linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px),
+        rgba(255,255,255,.025);
+      background-size: 28px 28px;
+    }
+    .workflow-canvas::after {
+      content: "";
+      position: absolute;
+      width: 240px;
+      height: 240px;
+      right: -80px;
+      bottom: -120px;
+      border-radius: 50%;
+      background: rgba(79,124,255,.16);
+      filter: blur(50px);
+    }
+    .workflow-lines { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .workflow-lines path {
+      fill: none;
+      stroke: rgba(50,211,200,.55);
+      stroke-width: 1.5;
+      stroke-dasharray: 5 5;
+      animation: signal 8s linear infinite;
+    }
+    @keyframes signal { to { stroke-dashoffset: -80; } }
+    .workflow-node {
+      position: absolute;
+      z-index: 2;
+      width: 142px;
+      padding: 12px 13px;
+      border: 1px solid rgba(255,255,255,.13);
+      border-radius: 12px;
+      background: #11243b;
+      box-shadow: 0 14px 32px rgba(0,0,0,.25);
+    }
+    .workflow-node::before {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: -4px;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--cyan);
+      transform: translateY(-50%);
+      box-shadow: 0 0 0 4px rgba(50,211,200,.1);
+    }
+    .workflow-node b { display: block; font-size: 12px; }
+    .workflow-node small { color: #8194ad; font: 600 10px ui-monospace, monospace; }
+    .workflow-node.trigger { left: 5%; top: 42%; }
+    .workflow-node.database { left: 34%; top: 14%; }
+    .workflow-node.transform { left: 34%; top: 64%; }
+    .workflow-node.branch { left: 64%; top: 39%; }
+    .workflow-node.output { right: 4%; top: 14%; }
+    .workflow-node.stream { right: 4%; top: 65%; }
+    .workflow-node.active { border-color: rgba(184,243,107,.5); }
+    .workflow-node.active::before { background: var(--lime); }
+    .lab-side {
+      display: grid;
+      gap: 10px;
+    }
+    .lab-feature {
+      display: grid;
+      grid-template-columns: 40px 1fr;
+      gap: 13px;
+      align-items: start;
+      padding: 18px;
+      border: 1px solid rgba(255,255,255,.09);
+      border-radius: 15px;
+      background: rgba(255,255,255,.035);
+    }
+    .lab-feature i {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      border-radius: 10px;
+      color: var(--cyan);
+      background: rgba(50,211,200,.09);
+      font: 750 11px ui-monospace, monospace;
+      font-style: normal;
+    }
+    .lab-feature strong { display: block; margin-bottom: 3px; font-size: 14px; }
+    .lab-feature span { display: block; color: #8497af; font-size: 12px; line-height: 1.5; }
     .flow {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -367,6 +466,102 @@
     }
     .flow-step h3 { margin: 0 0 8px; font-size: 18px; }
     .flow-step p { margin: 0; color: #94a3b8; font-size: 14px; }
+
+    .architecture-section { background: #edf2f7; }
+    .architecture-layout {
+      display: grid;
+      grid-template-columns: 1.08fr .92fr;
+      gap: 18px;
+      align-items: stretch;
+    }
+    .integration-map {
+      position: relative;
+      min-height: 450px;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background:
+        radial-gradient(circle at center, rgba(50,211,200,.09), transparent 36%),
+        var(--white);
+    }
+    .integration-map::before,
+    .integration-map::after {
+      content: "";
+      position: absolute;
+      inset: 15%;
+      border: 1px dashed #ccd8e5;
+      border-radius: 50%;
+    }
+    .integration-map::after { inset: 29%; }
+    .map-core {
+      position: relative;
+      z-index: 3;
+      width: 142px;
+      height: 142px;
+      display: flex;
+      flex-direction: column;
+      place-items: center;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid rgba(50,211,200,.6);
+      border-radius: 32px;
+      color: var(--white);
+      background: var(--navy);
+      box-shadow: 0 20px 50px rgba(7,17,31,.22);
+      font-size: 19px;
+      font-weight: 800;
+    }
+    .map-core small {
+      display: block;
+      margin-top: 4px;
+      color: var(--cyan);
+      font: 650 9px ui-monospace, monospace;
+      letter-spacing: .8px;
+    }
+    .map-chip {
+      position: absolute;
+      z-index: 2;
+      min-width: 82px;
+      padding: 8px 11px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      text-align: center;
+      color: #426178;
+      background: rgba(255,255,255,.92);
+      box-shadow: 0 8px 24px rgba(30,52,75,.08);
+      font: 700 11px ui-monospace, monospace;
+    }
+    .map-chip:nth-of-type(1) { left: 8%; top: 13%; }
+    .map-chip:nth-of-type(2) { right: 8%; top: 13%; }
+    .map-chip:nth-of-type(3) { left: 4%; top: 46%; }
+    .map-chip:nth-of-type(4) { right: 4%; top: 46%; }
+    .map-chip:nth-of-type(5) { left: 11%; bottom: 12%; }
+    .map-chip:nth-of-type(6) { right: 11%; bottom: 12%; }
+    .architecture-groups { display: grid; gap: 12px; }
+    .architecture-card {
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--white);
+    }
+    .architecture-card .number { color: var(--blue); }
+    .architecture-card h3 { margin: 12px 0 7px; font-size: 18px; }
+    .architecture-card p { margin: 0; color: var(--muted); font-size: 13px; }
+    .tech-line {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 15px;
+    }
+    .tech-line span {
+      padding: 4px 8px;
+      border-radius: 6px;
+      color: #335269;
+      background: #edf3f7;
+      font: 700 10px ui-monospace, monospace;
+    }
 
     .deploy-grid {
       display: grid;
@@ -410,6 +605,43 @@
     }
     .deploy-row span { color: #91a2b9; font-size: 13px; }
     .status { color: var(--lime) !important; font: 700 11px ui-monospace, monospace !important; }
+    .governance {
+      display: grid;
+      grid-template-columns: .75fr 1.25fr;
+      gap: 50px;
+      align-items: center;
+      margin-top: 72px;
+      padding: 32px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--white);
+    }
+    .governance-copy h3 { margin: 0 0 8px; font-size: 20px; }
+    .governance-copy p { margin: 0; color: var(--muted); font-size: 13px; }
+    .hierarchy {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      align-items: center;
+      gap: 22px;
+    }
+    .tier {
+      position: relative;
+      padding: 15px 10px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      text-align: center;
+      background: #f7f9fc;
+    }
+    .tier:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      right: -17px;
+      top: 50%;
+      color: #95a4b7;
+      transform: translateY(-50%);
+    }
+    .tier b { display: block; font-size: 13px; }
+    .tier small { color: var(--muted); font-size: 10px; }
 
     .audiences { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
     .audience {
@@ -464,7 +696,7 @@
 
     @media (max-width: 940px) {
       .hero { min-height: auto; }
-      .hero-grid, .deploy-grid { grid-template-columns: 1fr; }
+      .hero-grid, .deploy-grid, .workflow-lab, .architecture-layout, .governance { grid-template-columns: 1fr; }
       .console { max-width: 620px; }
       .capabilities, .audiences { grid-template-columns: repeat(2, 1fr); }
       .flow { grid-template-columns: repeat(2, 1fr); }
@@ -487,6 +719,17 @@
       .proof-item { border-right: 0; border-bottom: 1px solid var(--line); }
       .proof-item:last-child { border-bottom: 0; }
       .flow-step:not(:last-child)::after { display: none; }
+      .workflow-canvas { min-height: 410px; }
+      .workflow-lines { display: none; }
+      .workflow-node { width: 122px; padding: 10px; }
+      .workflow-node.trigger { left: 5%; top: 7%; }
+      .workflow-node.database { left: auto; right: 5%; top: 7%; }
+      .workflow-node.transform { left: 5%; top: 38%; }
+      .workflow-node.branch { left: auto; right: 5%; top: 38%; }
+      .workflow-node.output { left: 5%; right: auto; top: 69%; }
+      .workflow-node.stream { right: 5%; top: 69%; }
+      .hierarchy { grid-template-columns: 1fr 1fr; }
+      .tier:nth-child(2)::after { display: none; }
       .cta-box { padding: 42px 26px; }
       .footer-row { align-items: flex-start; flex-direction: column; }
     }
@@ -639,6 +882,30 @@
           <h2>从连接数据，到运行自动化</h2>
           <p>一个连续的交付路径，减少组件切换、重复开发和分散治理。</p>
         </div>
+        <div class="workflow-lab">
+          <div class="workflow-canvas" aria-label="可视化工作流示意图">
+            <svg class="workflow-lines" viewBox="0 0 700 390" preserveAspectRatio="none" aria-hidden="true">
+              <path d="M105 195 C190 195 180 70 300 70" />
+              <path d="M105 195 C190 195 180 290 300 290" />
+              <path d="M370 70 C455 70 430 195 510 195" />
+              <path d="M370 290 C455 290 430 195 510 195" />
+              <path d="M580 195 C635 195 615 70 660 70" />
+              <path d="M580 195 C635 195 615 290 660 290" />
+            </svg>
+            <div class="workflow-node trigger active"><b>Event Trigger</b><small>Kafka / Cron / Hook</small></div>
+            <div class="workflow-node database"><b>PostgreSQL</b><small>query · transaction</small></div>
+            <div class="workflow-node transform"><b>Code Runtime</b><small>JS · Python · Lua</small></div>
+            <div class="workflow-node branch active"><b>Condition</b><small>branch · foreach · loop</small></div>
+            <div class="workflow-node output"><b>API / RPC</b><small>HTTP · response</small></div>
+            <div class="workflow-node stream"><b>Realtime</b><small>SSE · notify</small></div>
+          </div>
+          <div class="lab-side">
+            <div class="lab-feature"><i>01</i><div><strong>多语言代码运行时</strong><span>在一个流程中组合 Lua、JavaScript 与 Python。</span></div></div>
+            <div class="lab-feature"><i>02</i><div><strong>多种事件触发方式</strong><span>支持 Endpoint、Cron、Hook、Notify 与 Kafka。</span></div></div>
+            <div class="lab-feature"><i>03</i><div><strong>版本、依赖与回放</strong><span>查看工作流关系，恢复历史版本并回放每个节点。</span></div></div>
+            <div class="lab-feature"><i>04</i><div><strong>面向复杂流程设计</strong><span>条件、循环、子工作流、依赖管理与大窗代码编辑。</span></div></div>
+          </div>
+        </div>
         <div class="flow">
           <div class="flow-step"><h3>连接</h3><p>接入数据库、消息队列、缓存、对象存储与企业服务。</p></div>
           <div class="flow-step"><h3>建模</h3><p>管理 Schema、权限和访问策略，形成统一数据边界。</p></div>
@@ -648,25 +915,80 @@
       </div>
     </section>
 
-    <section id="deployment">
-      <div class="wrap deploy-grid">
-        <div>
-          <div class="kicker">Private by design</div>
-          <h2>部署在你的环境，控制权始终属于你</h2>
-          <p style="color:var(--muted)">从身份认证到数据访问，从运行日志到商业授权，PlaneOS 为私有化交付保留完整控制面。</p>
-          <div class="check-list">
-            <div class="check"><div class="check-icon">✓</div><div><strong>数据不出内网</strong><span>部署到自有服务器、私有云或隔离网络。</span></div></div>
-            <div class="check"><div class="check-icon">✓</div><div><strong>细粒度权限</strong><span>JWT、SSO、API Key、RBAC 与行级安全协同控制。</span></div></div>
-            <div class="check"><div class="check-icon">✓</div><div><strong>全链路审计</strong><span>记录操作、请求和流程执行，为合规与排障提供依据。</span></div></div>
+    <section class="architecture-section" id="architecture">
+      <div class="wrap">
+        <div class="section-head">
+          <div class="kicker">Connected by design</div>
+          <h2>所有数据面，在同一个控制平面汇合</h2>
+          <p>从关系数据库到事件流，从实时推送到 AI 工具调用，PlaneOS 统一连接、运行和治理每条路径。</p>
+        </div>
+        <div class="architecture-layout">
+          <div class="integration-map" aria-label="PlaneOS 数据与集成架构">
+            <div class="map-core"><span>PlaneOS</span><small>CONTROL PLANE</small></div>
+            <span class="map-chip">PostgreSQL</span>
+            <span class="map-chip">Redis</span>
+            <span class="map-chip">Kafka</span>
+            <span class="map-chip">Elasticsearch</span>
+            <span class="map-chip">S3 Storage</span>
+            <span class="map-chip">AI / MCP</span>
+          </div>
+          <div class="architecture-groups">
+            <article class="architecture-card">
+              <div class="number">DATA FABRIC</div>
+              <h3>多数据源统一接入</h3>
+              <p>连接信息按项目隔离，凭证加密保存，并在工作流与数据接口中安全复用。</p>
+              <div class="tech-line"><span>PostgreSQL</span><span>Redis</span><span>Kafka</span><span>ES</span><span>S3</span></div>
+            </article>
+            <article class="architecture-card">
+              <div class="number">REALTIME FABRIC</div>
+              <h3>从数据库事件到实时应用</h3>
+              <p>通过 WebSocket、SSE、PostgreSQL Notify 与 Redis Pub/Sub，在多实例环境中传递变化。</p>
+              <div class="tech-line"><span>WebSocket</span><span>SSE</span><span>Notify</span><span>Pub/Sub</span></div>
+            </article>
+            <article class="architecture-card">
+              <div class="number">OPERATIONS</div>
+              <h3>诊断和治理内置于平台</h3>
+              <p>统一查看慢查询、锁、连接池、执行日志、网关策略、限流、熔断和告警。</p>
+              <div class="tech-line"><span>Tracing</span><span>Audit</span><span>Metrics</span><span>Alerts</span></div>
+            </article>
           </div>
         </div>
-        <div class="deploy-panel">
-          <h3>Enterprise-ready control</h3>
-          <div class="deploy-row"><strong>Deployment</strong><span>Docker / Kubernetes</span></div>
-          <div class="deploy-row"><strong>Identity</strong><span>JWT / SSO / OIDC</span></div>
-          <div class="deploy-row"><strong>Data Security</strong><span>RBAC / RLS / Audit</span></div>
-          <div class="deploy-row"><strong>Observability</strong><span>Logs / Metrics / Alerts</span></div>
-          <div class="deploy-row"><strong>Platform</strong><span class="status">● CONTROLLED BY YOU</span></div>
+      </div>
+    </section>
+
+    <section id="deployment">
+      <div class="wrap">
+        <div class="deploy-grid">
+          <div>
+            <div class="kicker">Private by design</div>
+            <h2>部署在你的环境，控制权始终属于你</h2>
+            <p style="color:var(--muted)">从身份认证到数据访问，从运行日志到商业授权，PlaneOS 为私有化交付保留完整控制面。</p>
+            <div class="check-list">
+              <div class="check"><div class="check-icon">✓</div><div><strong>数据不出内网</strong><span>部署到自有服务器、私有云或隔离网络。</span></div></div>
+              <div class="check"><div class="check-icon">✓</div><div><strong>细粒度权限</strong><span>JWT、SSO、API Key、RBAC 与行级安全协同控制。</span></div></div>
+              <div class="check"><div class="check-icon">✓</div><div><strong>全链路审计</strong><span>记录操作、请求和流程执行，为合规与排障提供依据。</span></div></div>
+            </div>
+          </div>
+          <div class="deploy-panel">
+            <h3>Enterprise-ready control</h3>
+            <div class="deploy-row"><strong>Deployment</strong><span>Docker / Kubernetes</span></div>
+            <div class="deploy-row"><strong>Identity</strong><span>JWT / SSO / OIDC</span></div>
+            <div class="deploy-row"><strong>Data Security</strong><span>RBAC / RLS / Audit</span></div>
+            <div class="deploy-row"><strong>Observability</strong><span>Logs / Metrics / Alerts</span></div>
+            <div class="deploy-row"><strong>Platform</strong><span class="status">● CONTROLLED BY YOU</span></div>
+          </div>
+        </div>
+        <div class="governance">
+          <div class="governance-copy">
+            <h3>从平台到资源，边界清晰</h3>
+            <p>组织、成员、项目、数据连接和自动化资源逐级隔离，让一个 PlaneOS 实例安全承载多个团队。</p>
+          </div>
+          <div class="hierarchy">
+            <div class="tier"><b>Platform</b><small>全局治理</small></div>
+            <div class="tier"><b>Organization</b><small>客户与业务单元</small></div>
+            <div class="tier"><b>Project</b><small>权限与资源边界</small></div>
+            <div class="tier"><b>Resources</b><small>数据、API、流程</small></div>
+          </div>
         </div>
       </div>
     </section>
@@ -721,12 +1043,19 @@
         },
         flow: {
           kicker: "从资源到结果", title: "从连接数据，到运行自动化", desc: "一个连续的交付路径，减少组件切换、重复开发和分散治理。",
-          steps: [["连接", "接入数据库、消息队列、缓存、对象存储与企业服务。"], ["建模", "管理 Schema、权限和访问策略，形成统一数据边界。"], ["编排", "组合 API、数据和代码节点，构建可视化业务流程。"], ["运行", "调度、监控和审计每次执行，并持续扩展到 AI Agent。"]]
+          steps: [["连接", "接入数据库、消息队列、缓存、对象存储与企业服务。"], ["建模", "管理 Schema、权限和访问策略，形成统一数据边界。"], ["编排", "组合 API、数据和代码节点，构建可视化业务流程。"], ["运行", "调度、监控和审计每次执行，并持续扩展到 AI Agent。"]],
+          features: [["多语言代码运行时", "在一个流程中组合 Lua、JavaScript 与 Python。"], ["多种事件触发方式", "支持 Endpoint、Cron、Hook、Notify 与 Kafka。"], ["版本、依赖与回放", "查看工作流关系，恢复历史版本并回放每个节点。"], ["面向复杂流程设计", "条件、循环、子工作流、依赖管理与大窗代码编辑。"]]
+        },
+        architecture: {
+          kicker: "连接原生", title: "所有数据面，在同一个控制平面汇合", desc: "从关系数据库到事件流，从实时推送到 AI 工具调用，PlaneOS 统一连接、运行和治理每条路径。",
+          cards: [["多数据源统一接入", "连接信息按项目隔离，凭证加密保存，并在工作流与数据接口中安全复用。"], ["从数据库事件到实时应用", "通过 WebSocket、SSE、PostgreSQL Notify 与 Redis Pub/Sub，在多实例环境中传递变化。"], ["诊断和治理内置于平台", "统一查看慢查询、锁、连接池、执行日志、网关策略、限流、熔断和告警。"]]
         },
         deploy: {
           kicker: "私有化设计", title: "部署在你的环境，控制权始终属于你", desc: "从身份认证到数据访问，从运行日志到商业授权，PlaneOS 为私有化交付保留完整控制面。",
           checks: [["数据不出内网", "部署到自有服务器、私有云或隔离网络。"], ["细粒度权限", "JWT、SSO、API Key、RBAC 与行级安全协同控制。"], ["全链路审计", "记录操作、请求和流程执行，为合规与排障提供依据。"]],
-          panel: "企业级控制", status: "● 由你掌控"
+          panel: "企业级控制", status: "● 由你掌控",
+          governance: ["从平台到资源，边界清晰", "组织、成员、项目、数据连接和自动化资源逐级隔离，让一个 PlaneOS 实例安全承载多个团队。"],
+          hierarchy: [["Platform", "全局治理"], ["Organization", "客户与业务单元"], ["Project", "权限与资源边界"], ["Resources", "数据、API、流程"]]
         },
         audiences: {
           kicker: "为交付而生", title: "为需要真正掌控数据的团队而建",
@@ -746,12 +1075,19 @@
         },
         flow: {
           kicker: "From resource to outcome", title: "Connect data. Run automation.", desc: "A continuous delivery path that reduces context switching, repeated development, and fragmented governance.",
-          steps: [["Connect", "Bring in databases, queues, caches, object storage, and enterprise services."], ["Model", "Manage schemas, permissions, and policies within a consistent data boundary."], ["Orchestrate", "Combine API, data, and code nodes into visual business workflows."], ["Operate", "Schedule, monitor, and audit every run, then extend it to AI agents."]]
+          steps: [["Connect", "Bring in databases, queues, caches, object storage, and enterprise services."], ["Model", "Manage schemas, permissions, and policies within a consistent data boundary."], ["Orchestrate", "Combine API, data, and code nodes into visual business workflows."], ["Operate", "Schedule, monitor, and audit every run, then extend it to AI agents."]],
+          features: [["Polyglot code runtime", "Combine Lua, JavaScript, and Python inside one workflow."], ["Event-driven by design", "Trigger with endpoints, cron, hooks, PostgreSQL Notify, or Kafka."], ["Versions, dependencies, replay", "Map workflow relationships, restore history, and inspect every node run."], ["Built for complex logic", "Use branches, loops, child workflows, dependency management, and a full code editor."]]
+        },
+        architecture: {
+          kicker: "Connected by design", title: "Every data plane meets in one control plane", desc: "From relational databases to event streams, realtime delivery to AI tool calls, PlaneOS connects, runs, and governs every path.",
+          cards: [["One fabric for every source", "Connections are isolated by project, credentials stay encrypted, and resources are reused safely across APIs and workflows."], ["From database events to realtime apps", "Move changes across instances with WebSocket, SSE, PostgreSQL Notify, and Redis Pub/Sub."], ["Diagnostics and governance built in", "Inspect slow queries, locks, pools, execution logs, gateway policies, rate limits, circuit breakers, and alerts."]]
         },
         deploy: {
           kicker: "Private by design", title: "Run it in your environment. Keep control.", desc: "From identity to data access, runtime logs to commercial licensing, PlaneOS preserves a complete control surface for private delivery.",
           checks: [["Data stays private", "Deploy on your servers, private cloud, or isolated network."], ["Fine-grained access", "Coordinate JWT, SSO, API keys, RBAC, and row-level security."], ["End-to-end audit", "Record operations, requests, and workflow runs for compliance and diagnosis."]],
-          panel: "Enterprise-ready control", status: "● CONTROLLED BY YOU"
+          panel: "Enterprise-ready control", status: "● CONTROLLED BY YOU",
+          governance: ["Clear boundaries from platform to resource", "Organizations, members, projects, data connections, and automation resources are isolated at every level, so one PlaneOS instance can safely serve many teams."],
+          hierarchy: [["Platform", "Global governance"], ["Organization", "Customer or business unit"], ["Project", "Access and resource boundary"], ["Resources", "Data, APIs, workflows"]]
         },
         audiences: {
           kicker: "Built for delivery", title: "Built for teams that need real control of their data",
@@ -771,12 +1107,19 @@
         },
         flow: {
           kicker: "リソースから成果へ", title: "データを接続し、自動化を実行", desc: "ツール切り替え、重複開発、分散したガバナンスを減らす一貫した提供フロー。",
-          steps: [["接続", "データベース、キュー、キャッシュ、ストレージ、企業サービスを接続します。"], ["モデル化", "スキーマ、権限、ポリシーを統一されたデータ境界で管理します。"], ["編成", "API、データ、コードノードを組み合わせ、業務フローを可視化します。"], ["運用", "すべての実行をスケジュール、監視、監査し、AI エージェントへ拡張します。"]]
+          steps: [["接続", "データベース、キュー、キャッシュ、ストレージ、企業サービスを接続します。"], ["モデル化", "スキーマ、権限、ポリシーを統一されたデータ境界で管理します。"], ["編成", "API、データ、コードノードを組み合わせ、業務フローを可視化します。"], ["運用", "すべての実行をスケジュール、監視、監査し、AI エージェントへ拡張します。"]],
+          features: [["多言語コードランタイム", "一つのフローで Lua、JavaScript、Python を組み合わせます。"], ["多様なイベントトリガー", "Endpoint、Cron、Hook、Notify、Kafka に対応します。"], ["バージョン、依存関係、リプレイ", "関係を可視化し、履歴を復元して各ノードの実行を確認します。"], ["複雑なフローに対応", "分岐、ループ、子フロー、依存管理、フル画面コード編集を提供します。"]]
+        },
+        architecture: {
+          kicker: "接続を前提に設計", title: "すべてのデータプレーンを一つの制御面へ", desc: "リレーショナルデータベースからイベントストリーム、リアルタイム配信、AI ツール呼び出しまで、すべての経路を統合管理します。",
+          cards: [["あらゆるデータソースを統合", "接続はプロジェクト単位で分離し、認証情報を暗号化して API とワークフローで安全に再利用します。"], ["DB イベントからリアルタイムアプリへ", "WebSocket、SSE、PostgreSQL Notify、Redis Pub/Sub で複数インスタンスに変更を配信します。"], ["診断とガバナンスを内蔵", "スロークエリ、ロック、接続プール、実行ログ、ゲートウェイ、レート制限、アラートを一元表示します。"]]
         },
         deploy: {
           kicker: "プライベートを前提に設計", title: "自社環境で稼働し、制御権を保持", desc: "認証、データアクセス、実行ログ、商用ライセンスまで、PlaneOS はプライベート提供に必要な制御面を維持します。",
           checks: [["データを社内に保持", "自社サーバー、プライベートクラウド、隔離ネットワークに導入。"], ["きめ細かな権限", "JWT、SSO、API キー、RBAC、行レベルセキュリティを連携。"], ["エンドツーエンド監査", "操作、リクエスト、ワークフロー実行を記録し、監査と診断に活用。"]],
-          panel: "エンタープライズ対応", status: "● あなたが管理"
+          panel: "エンタープライズ対応", status: "● あなたが管理",
+          governance: ["プラットフォームからリソースまで明確に分離", "組織、メンバー、プロジェクト、データ接続、ワークフローを階層ごとに分離し、一つの PlaneOS で複数チームを安全に運用します。"],
+          hierarchy: [["Platform", "全体ガバナンス"], ["Organization", "顧客・事業単位"], ["Project", "権限とリソース境界"], ["Resources", "データ、API、フロー"]]
         },
         audiences: {
           kicker: "提供のために設計", title: "データを本当に管理したいチームのために",
@@ -796,12 +1139,19 @@
         },
         flow: {
           kicker: "리소스에서 성과까지", title: "데이터를 연결하고 자동화를 실행하세요", desc: "도구 전환, 반복 개발 및 분산된 거버넌스를 줄이는 연속적인 제공 경로입니다.",
-          steps: [["연결", "데이터베이스, 큐, 캐시, 객체 스토리지 및 엔터프라이즈 서비스를 연결합니다."], ["모델링", "일관된 데이터 경계에서 스키마, 권한 및 정책을 관리합니다."], ["오케스트레이션", "API, 데이터 및 코드 노드를 결합하여 시각적 비즈니스 흐름을 구축합니다."], ["운영", "모든 실행을 예약, 모니터링 및 감사하고 AI 에이전트로 확장합니다."]]
+          steps: [["연결", "데이터베이스, 큐, 캐시, 객체 스토리지 및 엔터프라이즈 서비스를 연결합니다."], ["모델링", "일관된 데이터 경계에서 스키마, 권한 및 정책을 관리합니다."], ["오케스트레이션", "API, 데이터 및 코드 노드를 결합하여 시각적 비즈니스 흐름을 구축합니다."], ["운영", "모든 실행을 예약, 모니터링 및 감사하고 AI 에이전트로 확장합니다."]],
+          features: [["다중 언어 코드 런타임", "하나의 워크플로에서 Lua, JavaScript, Python을 조합합니다."], ["다양한 이벤트 트리거", "Endpoint, Cron, Hook, Notify 및 Kafka를 지원합니다."], ["버전, 종속성 및 재실행", "관계를 확인하고 이력을 복원하며 각 노드 실행을 추적합니다."], ["복잡한 흐름을 위한 설계", "분기, 반복, 하위 워크플로, 종속성 및 전체 코드 편집기를 제공합니다."]]
+        },
+        architecture: {
+          kicker: "연결 중심 설계", title: "모든 데이터 플레인이 하나의 컨트롤 플레인으로", desc: "관계형 데이터베이스와 이벤트 스트림부터 실시간 전송과 AI 도구 호출까지 모든 경로를 연결하고 운영하며 관리합니다.",
+          cards: [["모든 소스를 위한 하나의 패브릭", "연결은 프로젝트별로 격리되고 자격 증명은 암호화되며 API와 워크플로에서 안전하게 재사용됩니다."], ["DB 이벤트에서 실시간 앱까지", "WebSocket, SSE, PostgreSQL Notify 및 Redis Pub/Sub로 여러 인스턴스에 변경을 전달합니다."], ["진단과 거버넌스 내장", "느린 쿼리, 잠금, 연결 풀, 실행 로그, 게이트웨이 정책, 속도 제한 및 알림을 한곳에서 확인합니다."]]
         },
         deploy: {
           kicker: "프라이빗 중심 설계", title: "자체 환경에서 실행하고 통제권을 유지하세요", desc: "인증과 데이터 접근부터 런타임 로그와 상용 라이선스까지 PlaneOS는 프라이빗 제공을 위한 완전한 제어면을 유지합니다.",
           checks: [["데이터 비공개 유지", "자체 서버, 프라이빗 클라우드 또는 격리망에 배포합니다."], ["세분화된 접근", "JWT, SSO, API 키, RBAC 및 행 수준 보안을 함께 적용합니다."], ["엔드투엔드 감사", "작업, 요청 및 워크플로 실행을 기록하여 규정 준수와 진단에 활용합니다."]],
-          panel: "엔터프라이즈 제어", status: "● 직접 통제"
+          panel: "엔터프라이즈 제어", status: "● 직접 통제",
+          governance: ["플랫폼부터 리소스까지 명확한 경계", "조직, 구성원, 프로젝트, 데이터 연결 및 자동화 리소스를 계층별로 격리해 하나의 PlaneOS에서 여러 팀을 안전하게 운영합니다."],
+          hierarchy: [["Platform", "전역 거버넌스"], ["Organization", "고객·사업 단위"], ["Project", "접근·리소스 경계"], ["Resources", "데이터, API, 워크플로"]]
         },
         audiences: {
           kicker: "제공을 위해 설계", title: "데이터를 진정으로 통제해야 하는 팀을 위해",
@@ -821,12 +1171,19 @@
         },
         flow: {
           kicker: "Von Ressourcen zu Ergebnissen", title: "Daten verbinden. Automatisierung ausführen.", desc: "Ein durchgängiger Weg, der Werkzeugwechsel, Doppelarbeit und fragmentierte Governance reduziert.",
-          steps: [["Verbinden", "Datenbanken, Queues, Caches, Objektspeicher und Unternehmensdienste anbinden."], ["Modellieren", "Schemas, Berechtigungen und Regeln innerhalb einer konsistenten Datengrenze verwalten."], ["Orchestrieren", "API-, Daten- und Code-Knoten zu visuellen Geschäftsabläufen kombinieren."], ["Betreiben", "Jede Ausführung planen, überwachen und auditieren und auf KI-Agenten erweitern."]]
+          steps: [["Verbinden", "Datenbanken, Queues, Caches, Objektspeicher und Unternehmensdienste anbinden."], ["Modellieren", "Schemas, Berechtigungen und Regeln innerhalb einer konsistenten Datengrenze verwalten."], ["Orchestrieren", "API-, Daten- und Code-Knoten zu visuellen Geschäftsabläufen kombinieren."], ["Betreiben", "Jede Ausführung planen, überwachen und auditieren und auf KI-Agenten erweitern."]],
+          features: [["Mehrsprachige Code-Laufzeit", "Lua, JavaScript und Python in einem Workflow kombinieren."], ["Vielfältige Ereignisauslöser", "Endpoint, Cron, Hook, Notify und Kafka werden unterstützt."], ["Versionen, Abhängigkeiten, Replay", "Beziehungen abbilden, Historie wiederherstellen und jeden Knotenlauf prüfen."], ["Für komplexe Abläufe", "Verzweigungen, Schleifen, Subworkflows, Abhängigkeiten und vollständiger Code-Editor."]]
+        },
+        architecture: {
+          kicker: "Vernetzt konzipiert", title: "Alle Datenebenen in einer Steuerungsebene", desc: "Von relationalen Datenbanken und Event-Streams bis zu Echtzeitübertragung und KI-Tools verbindet, betreibt und steuert PlaneOS jeden Pfad.",
+          cards: [["Eine Fabric für jede Quelle", "Verbindungen sind projektweise isoliert, Zugangsdaten verschlüsselt und sicher in APIs und Workflows wiederverwendbar."], ["Von Datenbankevents zu Echtzeit-Apps", "Änderungen per WebSocket, SSE, PostgreSQL Notify und Redis Pub/Sub über Instanzen verteilen."], ["Diagnose und Governance integriert", "Langsame Abfragen, Sperren, Pools, Logs, Gateway-Regeln, Limits, Circuit Breaker und Alarme zentral prüfen."]]
         },
         deploy: {
           kicker: "Von Grund auf privat", title: "In Ihrer Umgebung betreiben. Kontrolle behalten.", desc: "Von Identität und Datenzugriff bis zu Laufzeitprotokollen und Lizenzen bewahrt PlaneOS die vollständige Kontrolle für private Bereitstellung.",
           checks: [["Daten bleiben privat", "Auf eigenen Servern, in der Private Cloud oder in isolierten Netzen bereitstellen."], ["Feingranularer Zugriff", "JWT, SSO, API-Schlüssel, RBAC und Zeilensicherheit gemeinsam steuern."], ["Lückenloses Audit", "Vorgänge, Anfragen und Workflow-Ausführungen für Compliance und Diagnose erfassen."]],
-          panel: "Unternehmensgerechte Kontrolle", status: "● UNTER IHRER KONTROLLE"
+          panel: "Unternehmensgerechte Kontrolle", status: "● UNTER IHRER KONTROLLE",
+          governance: ["Klare Grenzen von Plattform bis Ressource", "Organisationen, Mitglieder, Projekte, Datenverbindungen und Automatisierung werden auf jeder Ebene isoliert, damit eine PlaneOS-Instanz mehrere Teams sicher bedient."],
+          hierarchy: [["Platform", "Globale Governance"], ["Organization", "Kunde oder Bereich"], ["Project", "Zugriffs- und Ressourcengrenze"], ["Resources", "Daten, APIs, Workflows"]]
         },
         audiences: {
           kicker: "Für die Auslieferung gebaut", title: "Für Teams, die echte Kontrolle über ihre Daten brauchen",
@@ -846,12 +1203,19 @@
         },
         flow: {
           kicker: "De la ressource au résultat", title: "Connectez les données. Exécutez l’automatisation.", desc: "Un parcours continu qui réduit les changements d’outils, le développement répété et la gouvernance fragmentée.",
-          steps: [["Connecter", "Intégrez bases, files de messages, caches, stockage objet et services d’entreprise."], ["Modéliser", "Gérez schémas, permissions et politiques dans une frontière de données cohérente."], ["Orchestrer", "Combinez API, données et code dans des workflows métier visuels."], ["Exploiter", "Planifiez, surveillez et auditez chaque exécution, puis étendez-la aux agents IA."]]
+          steps: [["Connecter", "Intégrez bases, files de messages, caches, stockage objet et services d’entreprise."], ["Modéliser", "Gérez schémas, permissions et politiques dans une frontière de données cohérente."], ["Orchestrer", "Combinez API, données et code dans des workflows métier visuels."], ["Exploiter", "Planifiez, surveillez et auditez chaque exécution, puis étendez-la aux agents IA."]],
+          features: [["Runtime de code multilingue", "Combinez Lua, JavaScript et Python dans un même workflow."], ["Déclencheurs événementiels", "Endpoint, Cron, Hook, Notify et Kafka sont pris en charge."], ["Versions, dépendances, rejeu", "Cartographiez les relations, restaurez l’historique et inspectez chaque nœud."], ["Conçu pour les flux complexes", "Branches, boucles, sous-workflows, dépendances et éditeur de code complet."]]
+        },
+        architecture: {
+          kicker: "Connecté par conception", title: "Tous les plans de données dans un seul plan de contrôle", desc: "Bases relationnelles, flux d’événements, temps réel et appels d’outils IA : PlaneOS connecte, exécute et gouverne chaque chemin.",
+          cards: [["Une fabric pour chaque source", "Les connexions sont isolées par projet, les identifiants chiffrés et les ressources réutilisées en toute sécurité dans les API et workflows."], ["Des événements DB aux applications temps réel", "Diffusez les changements entre instances avec WebSocket, SSE, PostgreSQL Notify et Redis Pub/Sub."], ["Diagnostic et gouvernance intégrés", "Analysez requêtes lentes, verrous, pools, journaux, règles de passerelle, limites, circuit breakers et alertes."]]
         },
         deploy: {
           kicker: "Privé par conception", title: "Exécutez dans votre environnement. Gardez le contrôle.", desc: "De l’identité à l’accès aux données, des journaux aux licences, PlaneOS conserve une surface de contrôle complète pour le déploiement privé.",
           checks: [["Données privées", "Déployez sur vos serveurs, votre cloud privé ou un réseau isolé."], ["Accès granulaire", "Coordonnez JWT, SSO, clés API, RBAC et sécurité au niveau des lignes."], ["Audit de bout en bout", "Enregistrez opérations, requêtes et exécutions pour conformité et diagnostic."]],
-          panel: "Contrôle prêt pour l’entreprise", status: "● SOUS VOTRE CONTRÔLE"
+          panel: "Contrôle prêt pour l’entreprise", status: "● SOUS VOTRE CONTRÔLE",
+          governance: ["Des limites claires de la plateforme aux ressources", "Organisations, membres, projets, connexions et automatisations sont isolés à chaque niveau afin qu’une instance PlaneOS serve plusieurs équipes en sécurité."],
+          hierarchy: [["Platform", "Gouvernance globale"], ["Organization", "Client ou entité"], ["Project", "Frontière d’accès"], ["Resources", "Données, API, workflows"]]
         },
         audiences: {
           kicker: "Conçu pour livrer", title: "Pour les équipes qui doivent vraiment maîtriser leurs données",
@@ -871,12 +1235,19 @@
         },
         flow: {
           kicker: "Del recurso al resultado", title: "Conecta datos. Ejecuta automatizaciones.", desc: "Un recorrido continuo que reduce cambios de herramientas, desarrollo repetido y gobierno fragmentado.",
-          steps: [["Conectar", "Integra bases, colas, cachés, almacenamiento de objetos y servicios empresariales."], ["Modelar", "Gestiona esquemas, permisos y políticas dentro de un límite de datos coherente."], ["Orquestar", "Combina nodos de API, datos y código en flujos empresariales visuales."], ["Operar", "Programa, supervisa y audita cada ejecución, y extiéndela a agentes de IA."]]
+          steps: [["Conectar", "Integra bases, colas, cachés, almacenamiento de objetos y servicios empresariales."], ["Modelar", "Gestiona esquemas, permisos y políticas dentro de un límite de datos coherente."], ["Orquestar", "Combina nodos de API, datos y código en flujos empresariales visuales."], ["Operar", "Programa, supervisa y audita cada ejecución, y extiéndela a agentes de IA."]],
+          features: [["Runtime de código políglota", "Combina Lua, JavaScript y Python dentro de un solo flujo."], ["Activadores por eventos", "Admite Endpoint, Cron, Hook, Notify y Kafka."], ["Versiones, dependencias y repetición", "Mapea relaciones, restaura el historial e inspecciona cada ejecución."], ["Para lógica compleja", "Ramas, bucles, subflujos, dependencias y editor de código completo."]]
+        },
+        architecture: {
+          kicker: "Conectado por diseño", title: "Todos los planos de datos en un único plano de control", desc: "Desde bases relacionales y eventos hasta tiempo real y herramientas de IA, PlaneOS conecta, ejecuta y gobierna cada ruta.",
+          cards: [["Una malla para cada fuente", "Las conexiones se aíslan por proyecto, las credenciales se cifran y los recursos se reutilizan con seguridad en API y flujos."], ["De eventos de base de datos a apps en tiempo real", "Distribuye cambios entre instancias con WebSocket, SSE, PostgreSQL Notify y Redis Pub/Sub."], ["Diagnóstico y gobierno integrados", "Revisa consultas lentas, bloqueos, pools, registros, políticas, límites, circuit breakers y alertas."]]
         },
         deploy: {
           kicker: "Privado por diseño", title: "Ejecútalo en tu entorno. Mantén el control.", desc: "Desde identidad y acceso hasta registros y licencias, PlaneOS conserva una superficie de control completa para entrega privada.",
           checks: [["Datos privados", "Despliega en tus servidores, nube privada o red aislada."], ["Acceso detallado", "Coordina JWT, SSO, claves API, RBAC y seguridad a nivel de fila."], ["Auditoría integral", "Registra operaciones, solicitudes y ejecuciones para cumplimiento y diagnóstico."]],
-          panel: "Control empresarial", status: "● BAJO TU CONTROL"
+          panel: "Control empresarial", status: "● BAJO TU CONTROL",
+          governance: ["Límites claros desde la plataforma hasta los recursos", "Organizaciones, miembros, proyectos, conexiones y automatizaciones se aíslan en cada nivel para que una instancia de PlaneOS sirva a varios equipos con seguridad."],
+          hierarchy: [["Platform", "Gobierno global"], ["Organization", "Cliente o unidad"], ["Project", "Límite de acceso"], ["Resources", "Datos, API y flujos"]]
         },
         audiences: {
           kicker: "Diseñado para entregar", title: "Para equipos que necesitan control real de sus datos",
@@ -896,12 +1267,19 @@
         },
         flow: {
           kicker: "Do recurso ao resultado", title: "Conecte dados. Execute automações.", desc: "Um caminho contínuo que reduz troca de ferramentas, desenvolvimento repetido e governança fragmentada.",
-          steps: [["Conectar", "Integre bancos, filas, caches, armazenamento de objetos e serviços empresariais."], ["Modelar", "Gerencie schemas, permissões e políticas dentro de um limite de dados consistente."], ["Orquestrar", "Combine nós de API, dados e código em workflows visuais de negócio."], ["Operar", "Agende, monitore e audite cada execução e estenda-a a agentes de IA."]]
+          steps: [["Conectar", "Integre bancos, filas, caches, armazenamento de objetos e serviços empresariais."], ["Modelar", "Gerencie schemas, permissões e políticas dentro de um limite de dados consistente."], ["Orquestrar", "Combine nós de API, dados e código em workflows visuais de negócio."], ["Operar", "Agende, monitore e audite cada execução e estenda-a a agentes de IA."]],
+          features: [["Runtime de código multilíngue", "Combine Lua, JavaScript e Python em um único workflow."], ["Gatilhos orientados a eventos", "Suporta Endpoint, Cron, Hook, Notify e Kafka."], ["Versões, dependências e replay", "Mapeie relações, restaure o histórico e inspecione cada execução."], ["Para lógicas complexas", "Ramificações, loops, subworkflows, dependências e editor de código completo."]]
+        },
+        architecture: {
+          kicker: "Conectado por design", title: "Todos os planos de dados em um só plano de controle", desc: "De bancos relacionais e eventos a tempo real e ferramentas de IA, o PlaneOS conecta, executa e governa cada caminho.",
+          cards: [["Uma malha para cada fonte", "Conexões são isoladas por projeto, credenciais ficam criptografadas e recursos são reutilizados com segurança em APIs e workflows."], ["De eventos do banco a apps em tempo real", "Distribua mudanças entre instâncias com WebSocket, SSE, PostgreSQL Notify e Redis Pub/Sub."], ["Diagnóstico e governança integrados", "Analise consultas lentas, locks, pools, logs, políticas, limites, circuit breakers e alertas."]]
         },
         deploy: {
           kicker: "Privado por design", title: "Execute no seu ambiente. Mantenha o controle.", desc: "Da identidade e acesso aos logs e licenças, o PlaneOS mantém uma superfície completa de controle para entrega privada.",
           checks: [["Dados privados", "Implante em seus servidores, nuvem privada ou rede isolada."], ["Acesso granular", "Coordene JWT, SSO, chaves de API, RBAC e segurança em nível de linha."], ["Auditoria ponta a ponta", "Registre operações, solicitações e execuções para conformidade e diagnóstico."]],
-          panel: "Controle empresarial", status: "● SOB SEU CONTROLE"
+          panel: "Controle empresarial", status: "● SOB SEU CONTROLE",
+          governance: ["Limites claros da plataforma aos recursos", "Organizações, membros, projetos, conexões e automações são isolados em cada nível para uma instância PlaneOS atender vários times com segurança."],
+          hierarchy: [["Platform", "Governança global"], ["Organization", "Cliente ou unidade"], ["Project", "Limite de acesso"], ["Resources", "Dados, APIs e workflows"]]
         },
         audiences: {
           kicker: "Feito para entregar", title: "Para equipes que precisam de controle real dos dados",
@@ -921,12 +1299,19 @@
         },
         flow: {
           kicker: "Dalla risorsa al risultato", title: "Collega i dati. Esegui l’automazione.", desc: "Un percorso continuo che riduce il cambio di strumenti, lo sviluppo ripetuto e la governance frammentata.",
-          steps: [["Collega", "Integra database, code, cache, object storage e servizi aziendali."], ["Modella", "Gestisci schemi, permessi e politiche entro un confine dati coerente."], ["Orchestra", "Combina nodi API, dati e codice in workflow aziendali visuali."], ["Gestisci", "Pianifica, monitora e verifica ogni esecuzione, estendendola agli agenti IA."]]
+          steps: [["Collega", "Integra database, code, cache, object storage e servizi aziendali."], ["Modella", "Gestisci schemi, permessi e politiche entro un confine dati coerente."], ["Orchestra", "Combina nodi API, dati e codice in workflow aziendali visuali."], ["Gestisci", "Pianifica, monitora e verifica ogni esecuzione, estendendola agli agenti IA."]],
+          features: [["Runtime di codice multilingue", "Combina Lua, JavaScript e Python in un singolo workflow."], ["Trigger basati su eventi", "Supporta Endpoint, Cron, Hook, Notify e Kafka."], ["Versioni, dipendenze e replay", "Mappa le relazioni, ripristina lo storico e analizza ogni esecuzione."], ["Per logiche complesse", "Rami, cicli, sotto-workflow, dipendenze ed editor di codice completo."]]
+        },
+        architecture: {
+          kicker: "Connesso per design", title: "Tutti i data plane in un solo control plane", desc: "Dai database relazionali agli eventi, dal realtime agli strumenti IA, PlaneOS collega, esegue e governa ogni percorso.",
+          cards: [["Un fabric per ogni sorgente", "Le connessioni sono isolate per progetto, le credenziali cifrate e le risorse riutilizzate in sicurezza tra API e workflow."], ["Dagli eventi database alle app realtime", "Distribuisci le modifiche tra istanze con WebSocket, SSE, PostgreSQL Notify e Redis Pub/Sub."], ["Diagnostica e governance integrate", "Analizza query lente, lock, pool, log, regole gateway, limiti, circuit breaker e avvisi."]]
         },
         deploy: {
           kicker: "Privato per progettazione", title: "Eseguilo nel tuo ambiente. Mantieni il controllo.", desc: "Dall’identità e accesso ai log e alle licenze, PlaneOS conserva una superficie di controllo completa per la distribuzione privata.",
           checks: [["Dati privati", "Distribuisci sui tuoi server, cloud privato o rete isolata."], ["Accesso granulare", "Coordina JWT, SSO, chiavi API, RBAC e sicurezza a livello di riga."], ["Audit end-to-end", "Registra operazioni, richieste ed esecuzioni per conformità e diagnosi."]],
-          panel: "Controllo enterprise", status: "● SOTTO IL TUO CONTROLLO"
+          panel: "Controllo enterprise", status: "● SOTTO IL TUO CONTROLLO",
+          governance: ["Confini chiari dalla piattaforma alle risorse", "Organizzazioni, membri, progetti, connessioni e automazioni sono isolati a ogni livello, così una sola istanza PlaneOS serve più team in sicurezza."],
+          hierarchy: [["Platform", "Governance globale"], ["Organization", "Cliente o unità"], ["Project", "Confine di accesso"], ["Resources", "Dati, API e workflow"]]
         },
         audiences: {
           kicker: "Pensato per la distribuzione", title: "Per i team che necessitano del vero controllo sui dati",
@@ -983,7 +1368,13 @@
       setText("#workflow .kicker", t.flow.kicker);
       setText("#workflow .section-head h2", t.flow.title);
       setText("#workflow .section-head p", t.flow.desc);
+      setPairs("#workflow .lab-feature", t.flow.features, "strong", "span");
       setPairs("#workflow .flow-step", t.flow.steps, "h3", "p");
+
+      setText("#architecture .kicker", t.architecture.kicker);
+      setText("#architecture .section-head h2", t.architecture.title);
+      setText("#architecture .section-head p", t.architecture.desc);
+      setPairs("#architecture .architecture-card", t.architecture.cards, "h3", "p");
 
       setText("#deployment .kicker", t.deploy.kicker);
       setText("#deployment h2", t.deploy.title);
@@ -991,6 +1382,9 @@
       setPairs("#deployment .check", t.deploy.checks, "strong", "span");
       setText("#deployment .deploy-panel h3", t.deploy.panel);
       setText("#deployment .status", t.deploy.status);
+      setText("#deployment .governance-copy h3", t.deploy.governance[0]);
+      setText("#deployment .governance-copy p", t.deploy.governance[1]);
+      setPairs("#deployment .tier", t.deploy.hierarchy, "b", "small");
 
       setText("#audiences .kicker", t.audiences.kicker);
       setText("#audiences .section-head h2", t.audiences.title);
@@ -1018,7 +1412,10 @@
     const params = new URLSearchParams(window.location.search);
     const requestedLanguage = params.get("lang");
     const savedLanguage = localStorage.getItem("planeos-language");
-    const initialLanguage = [requestedLanguage, savedLanguage, "en"]
+    const browserLanguage = (navigator.languages || [navigator.language])
+      .map(language => language.toLowerCase().split("-")[0])
+      .find(language => supportedLanguages.includes(language));
+    const initialLanguage = [requestedLanguage, savedLanguage, browserLanguage, "en"]
       .find(language => supportedLanguages.includes(language));
 
     applyLanguage(initialLanguage);
