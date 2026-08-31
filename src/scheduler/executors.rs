@@ -658,6 +658,29 @@ impl ShellExecutor {
 
 pub type ShellExecutorRef = Arc<ShellExecutor>;
 
+/// kind=workflow 的执行体。
+///
+/// 真正实现必须调用 bin 侧的 `execute_workflow_internal`；`scheduler` 同时编进
+/// lib crate，不能直接依赖 `workflow_handlers`。因此这里只留 trait，由 bin
+/// 的 `scheduler_workflow::WorkflowExecutor` 实现。
+#[async_trait::async_trait]
+pub trait WorkflowKindExecutor: Send + Sync {
+    async fn execute(&self, task: &ScheduledTask) -> Result<Value, String>;
+}
+
+pub type WorkflowExecutorRef = Arc<dyn WorkflowKindExecutor>;
+
+/// 集成测试 / 未接线时的占位：kind=workflow 直接失败，不碰工作流表。
+#[allow(dead_code)]
+pub struct UnsupportedWorkflowExecutor;
+
+#[async_trait::async_trait]
+impl WorkflowKindExecutor for UnsupportedWorkflowExecutor {
+    async fn execute(&self, task: &ScheduledTask) -> Result<Value, String> {
+        Err(format!("workflow executor 未接线 task_id={}", task.id))
+    }
+}
+
 /// stdout / stderr 单流截断阈值：64KB；超过部分截掉并加 `... [truncated, total N bytes]` 尾注。
 const MAX_STREAM_BYTES: usize = 64 * 1024;
 
@@ -732,6 +755,9 @@ mod tests {
             shell_script: None,
             shell_env: None,
             shell_cwd: None,
+            workflow_id: None,
+            workflow_slug: None,
+            workflow_input: None,
             is_active: true,
             timeout_secs: 30,
             max_retries: 0,

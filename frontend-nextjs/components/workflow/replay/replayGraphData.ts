@@ -356,7 +356,10 @@ export function buildReplayGraphData(
         fill: swatch.fill,
         stroke,
         lineWidth: status === 'unvisited' ? 1.2 : 2.2,
-        opacity: status === 'unvisited' ? 0.35 : 1,
+        // 真数据踩坑：0.35 的未走到淡出叠在白底上约等于隐形，未走到的分支一"消失"，
+        // 剩下的执行路径看起来像凭空断开（boss 截图坐实）。提到 0.55——仍明显弱于
+        // 执行路径，但拓扑连通性肉眼可辨，"没走到"读作"淡"而不是"没有"。
+        opacity: status === 'unvisited' ? 0.55 : 1,
         labelText: n.label || n.id,
         labelPlacement: 'bottom',
         labelOffsetY: 6,
@@ -366,7 +369,13 @@ export function buildReplayGraphData(
         labelBackgroundFill: 'rgba(255,255,255,0.88)',
         labelBackgroundRadius: 4,
         labelPadding: [1, 5] as [number, number],
+        // 真数据修复：labelMaxWidth 不配 labelWordWrap 在 G6 v5 里不生效——长节点名会原样
+        // 单行铺开，相邻节点的名字连成一片互相压字。开换行 + 两行封顶 + 省略号截断，
+        // 完整名字靠 hover tooltip 兜底（tooltip 一直显示全名，信息不丢）。
         labelMaxWidth: 96,
+        labelWordWrap: true,
+        labelMaxLines: 2,
+        labelTextOverflow: 'ellipsis',
         badge: badges.length > 0,
         badges,
         // 空响应琥珀色空心环：与选中态的品牌紫 halo（14px）区分开，用更窄的圈层叠加在描边外，
@@ -397,9 +406,11 @@ export function buildReplayGraphData(
       // 执行方向靠 endArrow 箭头表达即可，回退成 G6 内置 line 边，不再需要自定义边类型。
       type: 'line',
       style: {
-        stroke: walked ? '#4f46e5' : '#cbd5e1',
+        // 未走过的边同步提可见度（理由见节点侧 opacity 注释）：描边加深一档 + 透明度提到
+        // 0.5，白底上能看出"这里有条没走的路"，与紫色虚线执行路径仍一眼可分。
+        stroke: walked ? '#4f46e5' : '#94a3b8',
         lineWidth: walked ? 2.4 : 1.2,
-        opacity: walked ? 1 : 0.35,
+        opacity: walked ? 1 : 0.5,
         endArrow: true,
         endArrowType: 'triangle',
         endArrowSize: 10,

@@ -65,8 +65,10 @@ export default function ReplayGraphCanvas({ nodes, edges, nodeResults, selectedN
         // DAG 执行流布局，非力导/combo：从左到右按拓扑层级排开，读作"触发 → … → 结束"。
         type: 'antv-dagre',
         rankdir: 'LR',
-        nodesep: 32,
-        ranksep: 64,
+        // 间距按"节点圆 + 下方两行名字标签"的真实占地给：dagre 只认节点尺寸不算标签，
+        // nodesep（LR 下是同层纵向间隙）不留够会让下一行节点压住上一行的名字。
+        nodesep: 56,
+        ranksep: 88,
       } as any,
       behaviors: ['drag-canvas', 'zoom-canvas', 'drag-element'],
       plugins: [

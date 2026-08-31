@@ -16,9 +16,46 @@ import { buildAskText, useAiAssistantStore } from '@/lib/aiAssistant'
 
 const STORAGE_OPEN_KEY = 'ai-assistant-open'
 const STORAGE_WIDTH_KEY = 'ai-assistant-width'
+const STORAGE_FAB_POS_KEY = 'ai-assistant-fab-pos'
 const MIN_WIDTH = 360
 const MAX_WIDTH = 900
 const DEFAULT_WIDTH = 440
+const FAB_SIZE = 56
+const FAB_EDGE = 8
+const FAB_DEFAULT_INSET = 24
+const FAB_DRAG_THRESHOLD = 6
+
+type FabPos = { x: number; y: number }
+
+function defaultFabPos(vw: number, vh: number): FabPos {
+  return { x: vw - FAB_SIZE - FAB_DEFAULT_INSET, y: vh - FAB_SIZE - FAB_DEFAULT_INSET }
+}
+
+function clampFabPos(pos: FabPos, vw: number, vh: number): FabPos {
+  return {
+    x: Math.min(Math.max(FAB_EDGE, pos.x), Math.max(FAB_EDGE, vw - FAB_SIZE - FAB_EDGE)),
+    y: Math.min(Math.max(FAB_EDGE, pos.y), Math.max(FAB_EDGE, vh - FAB_SIZE - FAB_EDGE)),
+  }
+}
+
+function readSavedFabPos(): FabPos | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_FAB_POS_KEY)
+    if (!raw) return null
+    const p = JSON.parse(raw) as FabPos
+    if (
+      typeof p?.x === 'number' &&
+      typeof p?.y === 'number' &&
+      Number.isFinite(p.x) &&
+      Number.isFinite(p.y)
+    ) {
+      return p
+    }
+  } catch {
+    /* ignore */
+  }
+  return null
+}
 
 /**
  * 全局 AI 助手面板：在页面右侧滑出一个嵌入 DeepWork AI 页面的窗口。
@@ -27,6 +64,7 @@ const DEFAULT_WIDTH = 440
  * - 通过 embed-bridge 协议向 Embed 注入平台上下文（meta 环境变量），
  *   并监听 AI 回答完成事件（关闭时在悬浮按钮上显示未读小圆点）。
  * - 面板宽度可拖拽调整，开关状态与宽度持久化到 localStorage。
+ * - 关闭时的悬浮按钮可拖到视口任意位置（点一下仍开关面板），位置也持久化。
  */
 export default function AiAssistantPanel() {
   const [open, setOpen] = useState(false)
@@ -38,8 +76,20 @@ export default function AiAssistantPanel() {
   // 拖拽中：用 state 驱动一层全屏透明遮罩，避免指针移到 iframe 上时事件被 iframe
   // 吞掉导致拖拽中断（经典 iframe resize 问题）。
   const [isResizing, setIsResizing] = useState(false)
+  const [fabPos, setFabPos] = useState<FabPos | null>(null)
+  const [draggingFab, setDraggingFab] = useState(false)
   // 当前视口宽度，用于自适应（小屏全屏、按视口夹取宽度）。0 表示尚未测量（SSR）。
   const [viewportWidth, setViewportWidth] = useState(0)
+  const fabPosRef = useRef(fabPos)
+  fabPosRef.current = fabPos
+  const fabDragRef = useRef<{
+    pointerId: number
+    startX: number
+    startY: number
+    origX: number
+    origY: number
+    moved: boolean
+  } | null>(null)
   const widthRef = useRef(width)
   widthRef.current = width
 
@@ -92,11 +142,20 @@ export default function AiAssistantPanel() {
       setOpen(true)
       setLoaded(true)
     }
+    const savedFab = readSavedFabPos()
+    if (savedFab) {
+      setFabPos(clampFabPos(savedFab, window.innerWidth, window.innerHeight))
+    }
   }, [])
 
   // 跟踪视口宽度，驱动自适应（小屏改全屏、按视口夹取宽度）。
   useEffect(() => {
-    const update = () => setViewportWidth(window.innerWidth)
+    const update = () => {
+      setViewportWidth(window.innerWidth)
+      setFabPos((prev) =>
+        prev ? clampFabPos(prev, window.innerWidth, window.innerHeight) : prev,
+      )
+    }
     update()
     window.addEventListener('resize', update)
     return () => window.removeEventListener('resize', update)
@@ -340,16 +399,75 @@ export default function AiAssistantPanel() {
     setIsResizing(true)
   }
 
+  const onFabPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (e.button !== 0) return
+    e.currentTarget.setPointerCapture(e.pointerId)
+    const current = fabPosRef.current ?? defaultFabPos(window.innerWidth, window.innerHeight)
+    fabDragRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: current.x,
+      origY: current.y,
+      moved: false,
+    }
+  }
+
+  const onFabPointerMove = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = fabDragRef.current
+    if (!drag || drag.pointerId !== e.pointerId) return
+    const dx = e.clientX - drag.startX
+    const dy = e.clientY - drag.startY
+    if (!drag.moved && dx * dx + dy * dy < FAB_DRAG_THRESHOLD * FAB_DRAG_THRESHOLD) return
+    drag.moved = true
+    setDraggingFab(true)
+    setFabPos(
+      clampFabPos(
+        { x: drag.origX + dx, y: drag.origY + dy },
+        window.innerWidth,
+        window.innerHeight,
+      ),
+    )
+  }
+
+  const endFabDrag = (
+    e: React.PointerEvent<HTMLButtonElement>,
+    openOnClick: boolean,
+  ) => {
+    const drag = fabDragRef.current
+    if (!drag || drag.pointerId !== e.pointerId) return
+    fabDragRef.current = null
+    setDraggingFab(false)
+    if (drag.moved) {
+      const pos = fabPosRef.current
+      if (pos) localStorage.setItem(STORAGE_FAB_POS_KEY, JSON.stringify(pos))
+      return
+    }
+    if (openOnClick) toggle()
+  }
+
   return (
     <>
       {/* 悬浮触发按钮 */}
       <button
-        onClick={toggle}
+        onPointerDown={onFabPointerDown}
+        onPointerMove={onFabPointerMove}
+        onPointerUp={(e) => endFabDrag(e, true)}
+        onPointerCancel={(e) => endFabDrag(e, false)}
         aria-label="AI 助手"
-        title="AI 助手"
-        className={`fixed bottom-6 right-6 z-[9998] flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-500/30 transition-all duration-300 hover:scale-105 hover:shadow-xl ${
-          open ? 'pointer-events-none scale-0 opacity-0' : 'scale-100 opacity-100'
-        }`}
+        title="拖动可挪开；点击打开 AI 助手"
+        style={
+          fabPos
+            ? { left: fabPos.x, top: fabPos.y, right: 'auto', bottom: 'auto' }
+            : undefined
+        }
+        className={`fixed z-[9998] flex h-14 w-14 touch-none items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-500/30 hover:shadow-xl ${
+          fabPos ? '' : 'bottom-6 right-6'
+        } ${
+          draggingFab
+            ? 'cursor-grabbing scale-105'
+            : 'cursor-grab transition-[transform,opacity] duration-300 hover:scale-105'
+        } ${open ? 'pointer-events-none scale-0 opacity-0' : 'scale-100 opacity-100'}`}
       >
         <i className="fas fa-robot text-xl"></i>
         {unread && (

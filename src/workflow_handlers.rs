@@ -1016,6 +1016,17 @@ pub async fn list_workflows(
 /// 依赖图关注的特殊节点类型：出现即给该工作流打角标（图例可筛）。
 const DEPENDENCY_GRAPH_SPECIAL_TYPES: &[&str] = &["sse_publish", "kafka", "redis", "http_call"];
 
+/// "定时执行""等待 notify" 不是节点类型，是工作流的 trigger_type 维度（见 node_spec
+/// 触发类型清单：endpoint/cron/hook/notify/manual/kafka）——按 trigger_type 派生成合成
+/// 特殊标记，塞进跟节点类型标记同一个 specialFlags 数组，前端筛选器不需要区分两套数据源。
+fn trigger_special_flag(trigger_type: &str) -> Option<&'static str> {
+    match trigger_type {
+        "cron" => Some("trigger_cron"),
+        "notify" => Some("trigger_notify"),
+        _ => None,
+    }
+}
+
 #[derive(Debug, sqlx::FromRow)]
 struct WorkflowDepRow {
     id: i32,
@@ -1027,6 +1038,7 @@ struct WorkflowDepRow {
     tenant_id: Option<i32>,
     database_id: Option<i32>,
     is_enabled: bool,
+    trigger_type: String,
 }
 
 /// 边解析用的候选行：**不受视图 scope / 分类主集限制**，覆盖来源工作流所在整个 tenant
@@ -1043,6 +1055,7 @@ struct WorkflowDepTargetRow {
     tenant_id: Option<i32>,
     database_id: Option<i32>,
     is_enabled: bool,
+    trigger_type: String,
 }
 
 /// 单条工作流的运行状态聚合结果（来自 `management.workflow_runs`，见
@@ -1114,6 +1127,7 @@ fn dependency_graph_node_json(
     nodes: &Value,
     external: bool,
     enabled: bool,
+    trigger_type: &str,
     run_stats: Option<&DependencyGraphRunStats>,
 ) -> Value {
     let node_count = nodes_count(nodes);
@@ -1123,6 +1137,7 @@ fn dependency_graph_node_json(
         .flatten()
         .filter_map(|n| n.get("type").and_then(|t| t.as_str()))
         .filter(|t| DEPENDENCY_GRAPH_SPECIAL_TYPES.contains(t))
+        .chain(trigger_special_flag(trigger_type))
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
@@ -1238,7 +1253,7 @@ pub async fn workflow_dependency_graph(
     // （+ 可选 department/category 精确匹配收窄）。
     let mut qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
         "SELECT w.id, w.slug, w.name, w.department, w.category, w.nodes, \
-                w.tenant_id, w.database_id, w.is_enabled \
+                w.tenant_id, w.database_id, w.is_enabled, w.trigger_type \
          FROM management.workflows w ",
     );
     push_list_scope(&mut qb, &scope);
@@ -1259,7 +1274,7 @@ pub async fn workflow_dependency_graph(
     let tenant_ids: std::collections::BTreeSet<Option<i32>> =
         primary_rows.iter().map(|r| r.tenant_id).collect();
     let mut target_qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
-        "SELECT id, slug, name, department, category, nodes, tenant_id, database_id, is_enabled \
+        "SELECT id, slug, name, department, category, nodes, tenant_id, database_id, is_enabled, trigger_type \
          FROM management.workflows WHERE ",
     );
     {
@@ -1383,6 +1398,7 @@ pub async fn workflow_dependency_graph(
                 &row.nodes,
                 false,
                 row.is_enabled,
+                &row.trigger_type,
                 run_stats.get(&row.id),
             )
         })
@@ -1398,6 +1414,7 @@ pub async fn workflow_dependency_graph(
                 &t.nodes,
                 true,
                 t.is_enabled,
+                &t.trigger_type,
                 run_stats.get(&t.id),
             ));
         }
@@ -2451,10 +2468,12 @@ async fn import_one_workflow(
     // - create / rename：按名重映射数据源引用（跨环境导入安全）。
     // - overwrite：数据源 / Redis 连接等「连接类配置」保留目标库现值（测试/线上集成不同），
     //   文件里新增的节点则连接字段留空，交给用户手动选择。
-    let (remapped_nodes, ds_warnings) = match existing_for_overwrite.as_ref() {
+    let (mut remapped_nodes, ds_warnings) = match existing_for_overwrite.as_ref() {
         Some(existing) => merge_connection_for_overwrite(&wf.nodes, &existing.nodes),
         None => remap_datasource_refs(pool, tenant_id, &wf.nodes).await,
     };
+    // 导入文件里 code 节点若把换行存成字面 `\n`，还原成真换行再落库。
+    workflow_engine::restore_script_newlines_in_nodes(&mut remapped_nodes);
 
     // 验证 DAG 结构（基于处理后的 nodes）
     let def = parse_definition(&remapped_nodes, &wf.edges)?;

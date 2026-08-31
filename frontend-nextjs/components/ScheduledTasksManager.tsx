@@ -21,7 +21,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import {
+import api, {
   scheduledTaskAPI,
   tenantAPI,
   type ScheduledTask,
@@ -69,7 +69,7 @@ type FormState = {
   description: string
   cron_expr: string
   timezone: string
-  kind: 'rpc' | 'http' | 'shell'
+  kind: 'rpc' | 'http' | 'shell' | 'workflow'
   database_id: string
   rpc_schema: string
   rpc_fn_name: string
@@ -84,6 +84,8 @@ type FormState = {
   shell_script: string
   shell_env: string
   shell_cwd: string
+  workflow_id: string
+  workflow_input: string
   timeout_secs: number
   max_retries: number
   overlap_policy: 'skip' | 'allow'
@@ -122,6 +124,8 @@ const EMPTY_FORM: FormState = {
   shell_script: '',
   shell_env: '{}',
   shell_cwd: '',
+  workflow_id: '',
+  workflow_input: '{}',
   timeout_secs: 60,
   max_retries: 0,
   overlap_policy: 'skip',
@@ -205,7 +209,7 @@ export default function ScheduledTasksManager({
   }))
   const [cronPreview, setCronPreview] = useState<CronValidationResult | null>(null)
   const [cronError, setCronError] = useState<string | null>(null)
-  const [filterKind, setFilterKind] = useState<'all' | 'rpc' | 'http' | 'shell'>('all')
+  const [filterKind, setFilterKind] = useState<'all' | 'rpc' | 'http' | 'shell' | 'workflow'>('all')
   const [filterActive, setFilterActive] = useState<'all' | 'on' | 'off'>('all')
 
   // 下拉数据：tenant / database 来自 my-connections；schema / function 按需懒取
@@ -216,6 +220,10 @@ export default function ScheduledTasksManager({
     Array<{ schema_name: string; function_name: string; argument_types: string }>
   >([])
   const [functionLoading, setFunctionLoading] = useState(false)
+  const [workflowOptions, setWorkflowOptions] = useState<
+    Array<{ id: number; name: string; slug: string; is_enabled: boolean }>
+  >([])
+  const [workflowLoading, setWorkflowLoading] = useState(false)
 
   // run history drawer
   const [runsTask, setRunsTask] = useState<ScheduledTask | null>(null)
@@ -230,6 +238,9 @@ export default function ScheduledTasksManager({
     const n = parseInt(v, 10)
     return Number.isFinite(n) ? n : null
   }, [form.tenant_id])
+
+  const workflowTenantId = tenantMode ? lockedTenantId ?? null : selectedTenantNum
+  const workflowKindAvailable = workflowTenantId != null || editing?.kind === 'workflow'
 
   // ─────────────────── 数据加载 ───────────────────
 
@@ -283,6 +294,38 @@ export default function ScheduledTasksManager({
   useEffect(() => {
     loadConnections()
   }, [loadConnections])
+
+  useEffect(() => {
+    if (workflowTenantId == null) {
+      setWorkflowOptions([])
+      return
+    }
+    let cancelled = false
+    setWorkflowLoading(true)
+    api
+      .get('/api/admin/workflows', {
+        params: { tenant_id: workflowTenantId, is_enabled: 'true' },
+      })
+      .then((res) => {
+        if (cancelled) return
+        const rows = (res.data?.workflows ?? []) as Array<{
+          id: number
+          name: string
+          slug: string
+          is_enabled: boolean
+        }>
+        setWorkflowOptions(rows.filter((w) => w.is_enabled))
+      })
+      .catch(() => {
+        if (!cancelled) setWorkflowOptions([])
+      })
+      .finally(() => {
+        if (!cancelled) setWorkflowLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [workflowTenantId])
 
   // cron 实时校验（debounce 400ms）
   useEffect(() => {
@@ -473,6 +516,8 @@ export default function ScheduledTasksManager({
       shell_script: task.shell_script ?? '',
       shell_env: JSON.stringify(task.shell_env ?? {}, null, 2),
       shell_cwd: task.shell_cwd ?? '',
+      workflow_id: task.workflow_id != null ? String(task.workflow_id) : '',
+      workflow_input: JSON.stringify(task.workflow_input ?? {}, null, 2),
       timeout_secs: task.timeout_secs,
       max_retries: task.max_retries,
       overlap_policy: (task.overlap_policy as 'skip' | 'allow') ?? 'skip',
@@ -553,6 +598,16 @@ export default function ScheduledTasksManager({
       }
       shellEnv = parseJsonField(form.shell_env, 'shell_env')
       if (shellEnv === null) return null
+    } else if (form.kind === 'workflow') {
+      if (!form.tenant_id.trim()) {
+        notify.error('工作流任务必须属于一个项目')
+        return null
+      }
+      if (!form.workflow_id.trim()) {
+        notify.error('请选择工作流')
+        return null
+      }
+      if (parseJsonField(form.workflow_input, 'workflow_input') === null) return null
     }
     if (form.alert_webhook_url.trim()) {
       alertTemplate = parseJsonField(form.alert_webhook_template, '告警 Webhook 模板')
@@ -597,6 +652,9 @@ export default function ScheduledTasksManager({
       payload.shell_script = form.shell_script
       payload.shell_env = shellEnv ?? {}
       if (form.shell_cwd.trim()) payload.shell_cwd = form.shell_cwd
+    } else if (form.kind === 'workflow') {
+      payload.workflow_id = Number(form.workflow_id)
+      payload.workflow_input = parseJsonField(form.workflow_input, 'workflow_input') ?? {}
     }
     return payload
   }
@@ -625,6 +683,8 @@ export default function ScheduledTasksManager({
           shell_script: payload.shell_script,
           shell_env: payload.shell_env,
           shell_cwd: payload.shell_cwd,
+          workflow_id: payload.workflow_id,
+          workflow_input: payload.workflow_input,
           timeout_secs: payload.timeout_secs,
           max_retries: payload.max_retries,
           overlap_policy: payload.overlap_policy,
@@ -964,7 +1024,7 @@ export default function ScheduledTasksManager({
                   onChange={(e) =>
                     setForm({
                       ...form,
-                      kind: e.target.value as 'rpc' | 'http' | 'shell',
+                      kind: e.target.value as 'rpc' | 'http' | 'shell' | 'workflow',
                     })
                   }
                   className="input-base w-full"
@@ -981,6 +1041,7 @@ export default function ScheduledTasksManager({
                       Shell 脚本{tenantMode ? '（本租户）' : '（平台级 / 超管）'}
                     </option>
                   )}
+                  {workflowKindAvailable && <option value="workflow">工作流</option>}
                 </select>
               </FormField>
               <FormField label="overlap_policy（上次未结束又到点了怎么办）">
@@ -1124,6 +1185,55 @@ export default function ScheduledTasksManager({
                   <textarea
                     value={form.rpc_args}
                     onChange={(e) => setForm({ ...form, rpc_args: e.target.value })}
+                    className="input-base w-full font-mono text-xs"
+                    rows={4}
+                  />
+                </FormField>
+              </div>
+            )}
+
+            {/* kind=workflow 字段 */}
+            {form.kind === 'workflow' && (
+              <div className="space-y-3 border-l-2 border-teal-200 pl-4">
+                <FormField
+                  label="工作流 *"
+                  hint={
+                    workflowTenantId == null
+                      ? '请先选择项目'
+                      : workflowLoading
+                        ? '正在加载已启用工作流…'
+                        : workflowOptions.length === 0
+                          ? '当前项目没有已启用的工作流'
+                          : '仅列出本项目已启用的工作流'
+                  }
+                >
+                  <select
+                    value={form.workflow_id}
+                    onChange={(e) => setForm({ ...form, workflow_id: e.target.value })}
+                    className="input-base w-full"
+                  >
+                    <option value="">— 选择工作流 —</option>
+                    {editing?.kind === 'workflow' &&
+                      editing.workflow_id != null &&
+                      !workflowOptions.some((w) => w.id === editing.workflow_id) && (
+                        <option value={String(editing.workflow_id)}>
+                          {editing.workflow_slug ?? `工作流 #${editing.workflow_id}`}（当前）
+                        </option>
+                      )}
+                    {workflowOptions.map((w) => (
+                      <option key={w.id} value={String(w.id)}>
+                        {w.name} ({w.slug})
+                      </option>
+                    ))}
+                  </select>
+                </FormField>
+                <FormField
+                  label="入参 (JSON 对象)"
+                  hint="作为 trigger_data；可留空，等价 {}"
+                >
+                  <textarea
+                    value={form.workflow_input}
+                    onChange={(e) => setForm({ ...form, workflow_input: e.target.value })}
                     className="input-base w-full font-mono text-xs"
                     rows={4}
                   />
@@ -1500,6 +1610,11 @@ export default function ScheduledTasksManager({
             active={filterKind === 'shell'}
             onClick={() => setFilterKind('shell')}
           />
+          <FilterChip
+            label="工作流"
+            active={filterKind === 'workflow'}
+            onClick={() => setFilterKind('workflow')}
+          />
           {/* (历史注释：曾因 DB CHECK 强制 shell 仅平台级，租户模式隐藏此 chip；
               017 删除该约束后已无意义) */}
           <span className="text-gray-300 px-1">|</span>
@@ -1671,7 +1786,9 @@ function TaskRow({
       ? `${task.rpc_schema}.${task.rpc_fn_name}() @ ${databaseLabel ?? `db#${task.database_id}`}`
       : task.kind === 'shell'
         ? `${task.shell_interpreter ?? '/bin/sh'} -c '${shellPreview}'`
-        : `${task.http_method} ${task.http_url}`
+        : task.kind === 'workflow'
+          ? `工作流 ${task.workflow_slug ?? (task.workflow_id != null ? `#${task.workflow_id}` : '—')}`
+          : `${task.http_method} ${task.http_url}`
   const tenantBadge = task.tenant_id === null ? '平台级' : tenantName ?? `租户 #${task.tenant_id}`
   return (
     <div className={`card p-5 ${!task.is_active ? 'opacity-60' : ''}`}>
@@ -1694,10 +1811,12 @@ function TaskRow({
                   ? 'bg-purple-100 text-purple-700'
                   : task.kind === 'shell'
                     ? 'bg-red-100 text-red-700'
-                    : 'bg-blue-100 text-blue-700'
+                    : task.kind === 'workflow'
+                      ? 'bg-teal-100 text-teal-700'
+                      : 'bg-blue-100 text-blue-700'
               }`}
             >
-              {task.kind.toUpperCase()}
+              {task.kind === 'workflow' ? '工作流' : task.kind.toUpperCase()}
             </span>
             <span className="px-2 py-0.5 rounded text-xs font-mono bg-gray-100 text-gray-700">
               {task.cron_expr} · {task.timezone}

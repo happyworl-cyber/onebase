@@ -726,6 +726,17 @@ pub fn diagnose(input: &VerdictInput) -> Verdict {
         };
     }
 
+    if input.dedicated_connections > 1 {
+        return Verdict {
+            level: VerdictLevel::Warn,
+            summary: format!(
+                "LISTEN 连接泄漏，同库不应超过 1 条（当前 {}）",
+                input.dedicated_connections
+            ),
+            hints: vec!["检查 pg_listen_hub 是否对同一 database_id 重复建连".into()],
+        };
+    }
+
     if input.dedicated_connections >= 20 {
         return Verdict {
             level: VerdictLevel::Warn,
@@ -780,6 +791,7 @@ pub async fn get_pool_health(
     Extension(claims): Extension<Claims>,
     db_id: Option<Extension<CurrentDatabaseId>>,
     dynamic_pool: Option<Extension<PgPool>>,
+    listen_hub: Option<Extension<crate::pg_listen_hub::ListenHub>>,
 ) -> Result<Json<PoolHealth>> {
     let database_id = require_monitor_access(&main_pool, &claims, db_id).await?;
     // 绝不能回退到管理库：否则 pg_stat_activity 会是平台元数据，结论完全误导。
@@ -846,12 +858,20 @@ pub async fn get_pool_health(
     .await
     .unwrap_or(0);
 
-    let notify_workflows =
-        crate::workflow_notify_trigger::active_listener_count(&main_pool, database_id)
-            .await
-            .unwrap_or(0) as i64;
+    let notify_workflows = crate::workflow_notify_trigger::load_active_notify_configs(&main_pool)
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter(|c| c.database_id == database_id)
+        .count() as i64;
 
-    let dedicated_connections = sse_bridges + notify_workflows;
+    let dedicated_connections = match listen_hub {
+        Some(Extension(hub)) => hub.listener_count(database_id) as i64,
+        None => {
+            tracing::warn!("ListenHub 未注入，dedicated_connections 记 0");
+            0
+        }
+    };
 
     let metrics = pool_metrics::snapshot();
     let acquire_failures = AcquireFailuresInfo {
@@ -1062,7 +1082,7 @@ mod pool_health_tests {
             app_idle: 10,
             app_in_use: 5,
             app_loaded: true,
-            dedicated_connections: 2,
+            dedicated_connections: 1,
             acquire_failures_for_db: 0,
             pg_max: 1600,
             pg_instance_backends: 100,
@@ -1124,12 +1144,33 @@ mod pool_health_tests {
     }
 
     #[test]
+    fn diagnose_warn_listen_leak_before_many() {
+        let mut input = base();
+        input.dedicated_connections = 2;
+        let v = diagnose(&input);
+        assert_eq!(v.level, VerdictLevel::Warn);
+        assert!(
+            v.summary.contains("泄漏"),
+            "2 条必须走泄漏而不是 >=20: {}",
+            v.summary
+        );
+    }
+
+    #[test]
+    fn diagnose_one_listener_does_not_warn_for_count() {
+        let mut input = base();
+        input.dedicated_connections = 1;
+        let v = diagnose(&input);
+        assert_eq!(v.level, VerdictLevel::Ok);
+    }
+
+    #[test]
     fn diagnose_warn_many_listeners() {
         let mut input = base();
         input.dedicated_connections = 25;
         let v = diagnose(&input);
         assert_eq!(v.level, VerdictLevel::Warn);
-        assert!(v.summary.contains("LISTEN"));
+        assert!(v.summary.contains("泄漏"));
     }
 
     #[test]

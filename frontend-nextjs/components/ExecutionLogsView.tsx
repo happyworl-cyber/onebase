@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import api from '@/lib/api'
 import Pagination from '@/components/Pagination'
+import { copyTextToClipboard } from '@/lib/clipboard'
 
 /**
  * 统一执行日志视图（平台级 + 项目级共用）。
@@ -123,12 +124,29 @@ const levelColor = (level: string) => {
 }
 
 function JsonBlock({ label, value }: { label: string; value: unknown }) {
+  const [copied, setCopied] = useState(false)
   if (value === null || value === undefined) return null
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
   if (text === '' || text === 'null' || text === '{}' || text === '[]') return null
   return (
     <div className="mt-2">
-      <div className="text-[11px] font-medium text-gray-500 mb-1">{label}</div>
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <div className="text-[11px] font-medium text-gray-500">{label}</div>
+        <button
+          type="button"
+          onClick={async (e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            const ok = await copyTextToClipboard(text)
+            if (!ok) return
+            setCopied(true)
+            window.setTimeout(() => setCopied(false), 1500)
+          }}
+          className="text-[11px] px-2 py-0.5 rounded border border-gray-300 text-gray-500 hover:bg-gray-100 shrink-0"
+        >
+          {copied ? '已复制' : '复制'}
+        </button>
+      </div>
       <pre className="text-[11px] bg-gray-50 border rounded p-2 overflow-x-auto max-h-72 whitespace-pre-wrap break-all text-gray-700">
         {text}
       </pre>

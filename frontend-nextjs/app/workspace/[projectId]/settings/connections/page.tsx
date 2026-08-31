@@ -6,6 +6,12 @@ import { useAppStore } from '@/lib/store'
 import { tenantAPI } from '@/lib/api'
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
+import {
+  DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS,
+  DEFAULT_TENANT_MAX_CONNECTIONS,
+  TENANT_MAX_CONNECTIONS_CAP,
+  TenantPoolSettingsForm,
+} from '@/components/TenantPoolSettings'
 
 export default function ConnectionsPage() {
   // W2：项目维度的连接管理。tenant_id 来自 URL 而不再来自 currentTenant
@@ -32,12 +38,13 @@ export default function ConnectionsPage() {
     db_name: '',
     db_user: '',
     db_password: '',
-    max_connections: 10,
-    connection_timeout: 30,
+    max_connections: DEFAULT_TENANT_MAX_CONNECTIONS,
+    connection_timeout: DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS,
   })
   const [editTestResult, setEditTestResult] = useState<any>(null)
   const [editTesting, setEditTesting] = useState(false)
   const [editSaving, setEditSaving] = useState(false)
+  const [poolConn, setPoolConn] = useState<any>(null)
 
   const [formData, setFormData] = useState({
     tenant_id: projectId,
@@ -51,8 +58,8 @@ export default function ConnectionsPage() {
     is_primary: false,
     db_role: 'primary' as 'primary' | 'replica',
     primary_id: null as number | null,
-    max_connections: 10,
-    connection_timeout: 30,
+    max_connections: DEFAULT_TENANT_MAX_CONNECTIONS,
+    connection_timeout: DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS,
   })
 
   useEffect(() => {
@@ -120,8 +127,8 @@ export default function ConnectionsPage() {
       is_primary: false,
       db_role: 'primary',
       primary_id: null,
-      max_connections: 10,
-      connection_timeout: 30,
+      max_connections: DEFAULT_TENANT_MAX_CONNECTIONS,
+      connection_timeout: DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS,
     })
     setTestResult(null)
   }
@@ -213,8 +220,8 @@ export default function ConnectionsPage() {
       db_name: conn.db_name || '',
       db_user: conn.db_user || 'postgres',
       db_password: '',
-      max_connections: conn.max_connections || 10,
-      connection_timeout: conn.connection_timeout || 30,
+      max_connections: conn.max_connections || DEFAULT_TENANT_MAX_CONNECTIONS,
+      connection_timeout: conn.connection_timeout || DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS,
     })
     setEditTestResult(null)
   }
@@ -315,6 +322,10 @@ export default function ConnectionsPage() {
               </p>
               <p className="text-xs text-blue-600 mt-1">
                 {currentConnection.db_host}:{currentConnection.db_port}/{currentConnection.db_name}
+                {' · '}
+                连接池 {currentConnection.max_connections ?? DEFAULT_TENANT_MAX_CONNECTIONS}
+                {' · '}
+                获取超时 {currentConnection.connection_timeout ?? DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS}s
               </p>
             </div>
           </div>
@@ -457,8 +468,11 @@ export default function ConnectionsPage() {
                   onChange={(e) => setFormData({ ...formData, max_connections: parseInt(e.target.value) })}
                   className="input-base w-full"
                   min="1"
-                  max="100"
+                  max={TENANT_MAX_CONNECTIONS_CAP}
                 />
+                <p className="text-xs text-gray-400 mt-1">
+                  建议 20–30。单次页面若并行打多个工作流，10 个连接很容易打满。上限 {TENANT_MAX_CONNECTIONS_CAP}。
+                </p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">连接超时（秒）</label>
@@ -467,8 +481,8 @@ export default function ConnectionsPage() {
                   value={formData.connection_timeout}
                   onChange={(e) => setFormData({ ...formData, connection_timeout: parseInt(e.target.value) })}
                   className="input-base w-full"
-                  min="5"
-                  max="300"
+                  min="1"
+                  max="600"
                 />
               </div>
             </div>
@@ -567,6 +581,11 @@ export default function ConnectionsPage() {
                           )}
                         </div>
                         <p className="text-xs text-gray-500 mt-0.5">{conn.db_host}:{conn.db_port}/{conn.db_name}</p>
+                        <p className="text-xs text-gray-600 mt-1">
+                          连接池 {conn.max_connections ?? DEFAULT_TENANT_MAX_CONNECTIONS}
+                          {' · '}
+                          获取超时 {conn.connection_timeout ?? DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS}s
+                        </p>
                         {replicas.length > 0 && (
                           <p className="text-xs text-green-600 mt-1">
                             <i className="fas fa-project-diagram mr-1"></i>
@@ -594,6 +613,12 @@ export default function ConnectionsPage() {
                           <i className="fas fa-chevron-down"></i>
                         </button>
                       </div>
+                      <button
+                        onClick={() => setPoolConn(conn)}
+                        className="px-3 py-2 rounded-lg text-xs font-medium bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+                      >
+                        连接池
+                      </button>
                       <button
                         onClick={() => openEditModal(conn)}
                         disabled={updatingId === conn.database_id}
@@ -761,8 +786,11 @@ export default function ConnectionsPage() {
                     onChange={(e) => setEditForm({ ...editForm, max_connections: parseInt(e.target.value) || 1 })}
                     className="input-base w-full"
                     min="1"
-                    max="200"
+                    max={TENANT_MAX_CONNECTIONS_CAP}
                   />
+                  <p className="text-xs text-gray-400 mt-1">
+                    建议 20–30。保存后立即重建该库连接池，无需重启服务。上限 {TENANT_MAX_CONNECTIONS_CAP}。
+                  </p>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">连接超时（秒）</label>
@@ -807,6 +835,43 @@ export default function ConnectionsPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {poolConn && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={() => setPoolConn(null)}>
+          <div className="absolute inset-0 bg-black/30" />
+          <div
+            className="relative w-full max-w-lg bg-white rounded-xl shadow-xl p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">连接池设置</h2>
+                <p className="text-xs text-gray-500 mt-0.5">{poolConn.connection_name}</p>
+              </div>
+              <button onClick={() => setPoolConn(null)} className="text-gray-400 hover:text-gray-600">
+                <i className="fas fa-times text-lg"></i>
+              </button>
+            </div>
+            <TenantPoolSettingsForm
+              databaseId={poolConn.database_id}
+              databaseSlug={poolConn.database_slug || poolConn.database_id}
+              initialMax={poolConn.max_connections || DEFAULT_TENANT_MAX_CONNECTIONS}
+              initialTimeout={poolConn.connection_timeout || DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS}
+              onSaved={async (max, timeout) => {
+                await loadConnections()
+                const current = useAppStore.getState().currentConnection
+                if (current?.database_id === poolConn.database_id) {
+                  useAppStore.getState().setCurrentConnection({
+                    ...current,
+                    max_connections: max,
+                    connection_timeout: timeout,
+                  })
+                }
+              }}
+            />
           </div>
         </div>
       )}

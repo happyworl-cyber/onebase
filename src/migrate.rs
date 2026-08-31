@@ -314,6 +314,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "060 organizations hierarchy",
         include_str!("../migrations/060_organizations.sql"),
     ),
+    (
+        "061 scheduled tasks workflow",
+        include_str!("../migrations/061_scheduled_tasks_workflow.sql"),
+    ),
 ];
 
 /// API Keys 表（内联 SQL，历史上由独立的 migrate_api_keys 维护，这里随主序列一起跑）。

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'next/navigation'
 import { NODE_TYPE_META } from './NodeTypes'
+import CodeSnippetEditor from './CodeSnippetEditor'
 import { wfDatasourceAPI, type WfDatasource } from '@/lib/api'
 import { redisAPI, REDIS_OPS, type RedisConnection, type RedisOp } from '@/lib/api'
 import { kafkaAPI, type KafkaConnection } from '@/lib/api'
@@ -408,12 +409,13 @@ export default function NodeConfigPanel({
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">代码</label>
-                <textarea
+                <CodeSnippetEditor
                   value={node.config.code || ''}
-                  onChange={e => updateConfig('code', e.target.value)}
-                  className="w-full px-3 py-2 border rounded-lg font-mono text-sm bg-gray-900 text-green-400 leading-relaxed"
-                  rows={12}
-                  spellCheck={false}
+                  onChange={readOnly ? undefined : (next) => updateConfig('code', next)}
+                  language={lang}
+                  label="代码"
+                  minRows={12}
+                  readOnly={readOnly}
                   placeholder={
                     lang === 'javascript'
                       ? 'async function execute(ctx) {\n  // ctx.body: trigger payload\n  // ctx.nodes.nodeId: upstream output\n  ctx.body = { ok: true };\n}'
@@ -525,11 +527,13 @@ export default function NodeConfigPanel({
           <>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">SQL 查询</label>
-              <textarea
+              <CodeSnippetEditor
                 value={node.config.sql || ''}
-                onChange={e => updateConfig('sql', e.target.value)}
-                className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
-                rows={5}
+                onChange={readOnly ? undefined : (next) => updateConfig('sql', next)}
+                language="sql"
+                label="SQL 查询"
+                minRows={5}
+                readOnly={readOnly}
                 placeholder="SELECT * FROM users WHERE id = $1"
               />
             </div>
@@ -550,11 +554,13 @@ export default function NodeConfigPanel({
           <>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">SQL 语句</label>
-              <textarea
+              <CodeSnippetEditor
                 value={node.config.sql || ''}
-                onChange={e => updateConfig('sql', e.target.value)}
-                className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
-                rows={5}
+                onChange={readOnly ? undefined : (next) => updateConfig('sql', next)}
+                language="sql"
+                label="SQL 语句"
+                minRows={5}
+                readOnly={readOnly}
                 placeholder="INSERT INTO logs(msg) VALUES($1)"
               />
             </div>
@@ -575,7 +581,7 @@ export default function NodeConfigPanel({
             <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-2.5 text-xs text-emerald-700 leading-5">
               <strong>数据库事务</strong>：下列语句在<strong>同一个事务</strong>内按顺序执行，全部成功才提交，任一失败整体回滚。仅支持 PostgreSQL。
             </div>
-            <StatementsEditor node={node} updateConfig={updateConfig} />
+            <StatementsEditor node={node} updateConfig={updateConfig} readOnly={readOnly} />
           </>
         )}
 
@@ -606,7 +612,7 @@ export default function NodeConfigPanel({
               />
               <p className="text-xs text-gray-400 mt-1">留空默认 <code className="font-mono">item</code>，语句内以 <code className="font-mono">{'{{'}变量名.字段{'}}'}</code> 引用当前元素。</p>
             </div>
-            <StatementsEditor node={node} updateConfig={updateConfig} />
+            <StatementsEditor node={node} updateConfig={updateConfig} readOnly={readOnly} />
           </>
         )}
 
@@ -637,12 +643,24 @@ export default function NodeConfigPanel({
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Headers (JSON)</label>
-              <textarea
+              <CodeSnippetEditor
                 value={node.config.headers ? (typeof node.config.headers === 'string' ? node.config.headers : JSON.stringify(node.config.headers, null, 2)) : ''}
-                onChange={e => updateConfig('headers', e.target.value)}
-                onBlur={e => validateJsonField('headers', e.target.value)}
-                className={`w-full px-3 py-2 border rounded-lg font-mono text-sm ${jsonFieldErrors.headers ? 'border-red-300 bg-red-50/30' : ''}`}
-                rows={3}
+                onChange={readOnly ? undefined : (next) => updateConfig('headers', next)}
+                onBlur={() =>
+                  validateJsonField(
+                    'headers',
+                    node.config.headers
+                      ? typeof node.config.headers === 'string'
+                        ? node.config.headers
+                        : JSON.stringify(node.config.headers, null, 2)
+                      : '',
+                  )
+                }
+                language="json"
+                label="Headers"
+                minRows={3}
+                readOnly={readOnly}
+                invalid={!!jsonFieldErrors.headers}
                 placeholder='{"Authorization": "Bearer xxx"}'
               />
               {jsonFieldErrors.headers && (
@@ -651,12 +669,24 @@ export default function NodeConfigPanel({
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Body (JSON)</label>
-              <textarea
+              <CodeSnippetEditor
                 value={node.config.body ? (typeof node.config.body === 'string' ? node.config.body : JSON.stringify(node.config.body, null, 2)) : ''}
-                onChange={e => updateConfig('body', e.target.value)}
-                onBlur={e => validateJsonField('body', e.target.value)}
-                className={`w-full px-3 py-2 border rounded-lg font-mono text-sm ${jsonFieldErrors.body ? 'border-red-300 bg-red-50/30' : ''}`}
-                rows={3}
+                onChange={readOnly ? undefined : (next) => updateConfig('body', next)}
+                onBlur={() =>
+                  validateJsonField(
+                    'body',
+                    node.config.body
+                      ? typeof node.config.body === 'string'
+                        ? node.config.body
+                        : JSON.stringify(node.config.body, null, 2)
+                      : '',
+                  )
+                }
+                language="json"
+                label="Body"
+                minRows={3}
+                readOnly={readOnly}
+                invalid={!!jsonFieldErrors.body}
                 placeholder='{"key": "{{trigger.value}}"}'
               />
               {jsonFieldErrors.body && (
@@ -1118,10 +1148,7 @@ export default function NodeConfigPanel({
         {node.type === 'transform' && (
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">转换映射 (JSON)</label>
-            <textarea
-              // 引擎读的是 config.output（见 workflow_engine.rs exec_transform_node / node_spec）。
-              // 兼容读取历史误写的 mapping：仅当 output 缺失或为空白字符串时才回退到 mapping，
-              // 杜绝「output:'' + mapping:有值」这类边界把已有 mapping 内容显示成空。
+            <CodeSnippetEditor
               value={(() => {
                 const rawOut = node.config.output
                 const outMeaningful =
@@ -1130,17 +1157,29 @@ export default function NodeConfigPanel({
                 if (out == null || out === '') return ''
                 return typeof out === 'string' ? out : JSON.stringify(out, null, 2)
               })()}
-              // 存成对象（而非原始字符串），让后端按字段逐个 resolve_template，避免译文含
-              // 引号/换行时把整段 JSON 串替换破坏；无法解析（半成品/整段 {{模板}}）时暂存原文。
-              onChange={e => {
-                const raw = e.target.value
-                let value: unknown = raw
-                try { value = raw.trim() ? JSON.parse(raw) : '' } catch { value = raw }
-                updateConfig('output', value)
+              onChange={readOnly ? undefined : (raw) => {
+                let parsed: unknown = raw
+                try { parsed = raw.trim() ? JSON.parse(raw) : '' } catch { parsed = raw }
+                updateConfig('output', parsed)
               }}
-              onBlur={e => validateJsonField('output', e.target.value)}
-              className={`w-full px-3 py-2 border rounded-lg font-mono text-sm ${jsonFieldErrors.output ? 'border-red-300 bg-red-50/30' : ''}`}
-              rows={6}
+              onBlur={() => {
+                const rawOut = node.config.output
+                const outMeaningful =
+                  rawOut != null && !(typeof rawOut === 'string' && rawOut.trim() === '')
+                const out = outMeaningful ? rawOut : node.config.mapping
+                const text =
+                  out == null || out === ''
+                    ? ''
+                    : typeof out === 'string'
+                      ? out
+                      : JSON.stringify(out, null, 2)
+                validateJsonField('output', text)
+              }}
+              language="json"
+              label="转换映射"
+              minRows={6}
+              readOnly={readOnly}
+              invalid={!!jsonFieldErrors.output}
               placeholder={'{\n  "user_name": "{{query.rows.0.name}}",\n  "total": "{{query.rows.length}}"\n}'}
             />
             {jsonFieldErrors.output && (
@@ -1163,12 +1202,24 @@ export default function NodeConfigPanel({
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">响应 Body (JSON 模板)</label>
-              <textarea
+              <CodeSnippetEditor
                 value={node.config.body ? (typeof node.config.body === 'string' ? node.config.body : JSON.stringify(node.config.body, null, 2)) : ''}
-                onChange={e => updateConfig('body', e.target.value)}
-                onBlur={e => validateJsonField('body', e.target.value)}
-                className={`w-full px-3 py-2 border rounded-lg font-mono text-sm ${jsonFieldErrors.body ? 'border-red-300 bg-red-50/30' : ''}`}
-                rows={5}
+                onChange={readOnly ? undefined : (next) => updateConfig('body', next)}
+                onBlur={() =>
+                  validateJsonField(
+                    'body',
+                    node.config.body
+                      ? typeof node.config.body === 'string'
+                        ? node.config.body
+                        : JSON.stringify(node.config.body, null, 2)
+                      : '',
+                  )
+                }
+                language="json"
+                label="响应 Body"
+                minRows={5}
+                readOnly={readOnly}
+                invalid={!!jsonFieldErrors.body}
                 placeholder={'{\n  "success": true,\n  "data": "{{transform.result}}"\n}'}
               />
               {jsonFieldErrors.body && (
@@ -1177,12 +1228,24 @@ export default function NodeConfigPanel({
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">响应 Headers (JSON)</label>
-              <textarea
+              <CodeSnippetEditor
                 value={node.config.headers ? (typeof node.config.headers === 'string' ? node.config.headers : JSON.stringify(node.config.headers, null, 2)) : ''}
-                onChange={e => updateConfig('headers', e.target.value)}
-                onBlur={e => validateJsonField('headers', e.target.value)}
-                className={`w-full px-3 py-2 border rounded-lg font-mono text-sm ${jsonFieldErrors.headers ? 'border-red-300 bg-red-50/30' : ''}`}
-                rows={2}
+                onChange={readOnly ? undefined : (next) => updateConfig('headers', next)}
+                onBlur={() =>
+                  validateJsonField(
+                    'headers',
+                    node.config.headers
+                      ? typeof node.config.headers === 'string'
+                        ? node.config.headers
+                        : JSON.stringify(node.config.headers, null, 2)
+                      : '',
+                  )
+                }
+                language="json"
+                label="响应 Headers"
+                minRows={2}
+                readOnly={readOnly}
+                invalid={!!jsonFieldErrors.headers}
                 placeholder='{"X-Custom": "value"}'
               />
               {jsonFieldErrors.headers && (
@@ -1273,7 +1336,7 @@ export default function NodeConfigPanel({
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">推送数据 (JSON)</label>
-              <textarea
+              <CodeSnippetEditor
                 value={
                   typeof node.config.data === 'string'
                     ? node.config.data
@@ -1281,10 +1344,22 @@ export default function NodeConfigPanel({
                       ? JSON.stringify(node.config.data, null, 2)
                       : ''
                 }
-                onChange={e => updateConfig('data', e.target.value)}
-                onBlur={e => validateJsonField('data', e.target.value)}
-                className={`w-full px-3 py-2 border rounded-lg font-mono text-sm ${jsonFieldErrors.data ? 'border-red-300 bg-red-50/30' : ''}`}
-                rows={5}
+                onChange={readOnly ? undefined : (next) => updateConfig('data', next)}
+                onBlur={() =>
+                  validateJsonField(
+                    'data',
+                    typeof node.config.data === 'string'
+                      ? node.config.data
+                      : node.config.data != null
+                        ? JSON.stringify(node.config.data, null, 2)
+                        : '',
+                  )
+                }
+                language="json"
+                label="推送数据"
+                minRows={5}
+                readOnly={readOnly}
+                invalid={!!jsonFieldErrors.data}
                 placeholder={'留空则推送本次触发数据，或填:\n{\n  "pct": 50,\n  "msg": "处理中"\n}'}
               />
               {jsonFieldErrors.data && (
@@ -1361,12 +1436,24 @@ export default function NodeConfigPanel({
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">入参 input (JSON)</label>
-              <textarea
+              <CodeSnippetEditor
                 value={node.config.input ? (typeof node.config.input === 'string' ? node.config.input : JSON.stringify(node.config.input, null, 2)) : ''}
-                onChange={e => updateConfig('input', e.target.value)}
-                onBlur={e => validateJsonField('input', e.target.value)}
-                className={`w-full px-3 py-2 border rounded-lg font-mono text-sm ${jsonFieldErrors.input ? 'border-red-300 bg-red-50/30' : ''}`}
-                rows={6}
+                onChange={readOnly ? undefined : (next) => updateConfig('input', next)}
+                onBlur={() =>
+                  validateJsonField(
+                    'input',
+                    node.config.input
+                      ? typeof node.config.input === 'string'
+                        ? node.config.input
+                        : JSON.stringify(node.config.input, null, 2)
+                      : '',
+                  )
+                }
+                language="json"
+                label="入参 input"
+                minRows={6}
+                readOnly={readOnly}
+                invalid={!!jsonFieldErrors.input}
                 placeholder={'{\n  "way_uid": "{{trigger.uid}}",\n  "lang": "{{trigger.lang}}"\n}'}
               />
               {jsonFieldErrors.input && (
@@ -1387,11 +1474,11 @@ export default function NodeConfigPanel({
         )}
 
         {node.type === 'kafka' && (
-          <KafkaNodeConfig node={node} updateConfig={updateConfig} />
+          <KafkaNodeConfig node={node} updateConfig={updateConfig} readOnly={readOnly} />
         )}
 
         {node.type === 'object_storage' && (
-          <ObjectStorageNodeConfig node={node} updateConfig={updateConfig} />
+          <ObjectStorageNodeConfig node={node} updateConfig={updateConfig} readOnly={readOnly} />
         )}
 
         {node.type !== 'response' && (
@@ -1463,9 +1550,11 @@ function statementToDraft(stmt: any): StatementDraft {
 function StatementsEditor({
   node,
   updateConfig,
+  readOnly = false,
 }: {
   node: WorkflowNodeData
   updateConfig: (key: string, value: any) => void
+  readOnly?: boolean
 }) {
   const buildInitial = (): StatementDraft[] => {
     const arr = Array.isArray(node.config.statements) ? node.config.statements : []
@@ -1513,11 +1602,13 @@ function StatementsEditor({
               &times;
             </button>
           </div>
-          <textarea
+          <CodeSnippetEditor
             value={d.sql}
-            onChange={(e) => updateDraft(idx, 'sql', e.target.value)}
-            className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
-            rows={4}
+            onChange={readOnly ? undefined : (next) => updateDraft(idx, 'sql', next)}
+            language="sql"
+            label={`SQL 语句 ${idx + 1}`}
+            minRows={4}
+            readOnly={readOnly}
             placeholder="UPDATE t SET x=$1 WHERE id=($2)::int"
           />
           <div>
@@ -1727,9 +1818,11 @@ function RedisNodeConfig({
 function KafkaNodeConfig({
   node,
   updateConfig,
+  readOnly = false,
 }: {
   node: WorkflowNodeData
   updateConfig: (key: string, value: any) => void
+  readOnly?: boolean
 }) {
   const params = useParams<{ projectId: string }>()
   const tenantId = parseInt(params?.projectId ?? '', 10)
@@ -1815,18 +1908,20 @@ function KafkaNodeConfig({
 
       <div>
         <label className="block text-xs font-medium text-gray-500 mb-1">Value *</label>
-        <textarea
+        <CodeSnippetEditor
           value={node.config.value || ''}
-          onChange={(e) => updateConfig('value', e.target.value)}
-          className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
-          rows={4}
+          onChange={readOnly ? undefined : (next) => updateConfig('value', next)}
+          language="json"
+          label="Value"
+          minRows={4}
+          readOnly={readOnly}
           placeholder={'{"id":"{{trigger.user_id}}"}'}
         />
       </div>
 
       <div>
         <label className="block text-xs font-medium text-gray-500 mb-1">Headers（可选 JSON 对象）</label>
-        <textarea
+        <CodeSnippetEditor
           value={
             typeof node.config.headers === 'string'
               ? node.config.headers
@@ -1834,8 +1929,7 @@ function KafkaNodeConfig({
                 ? JSON.stringify(node.config.headers, null, 2)
                 : ''
           }
-          onChange={(e) => {
-            const raw = e.target.value
+          onChange={readOnly ? undefined : (raw) => {
             try {
               const parsed = raw.trim() ? JSON.parse(raw) : undefined
               updateConfig('headers', parsed)
@@ -1843,8 +1937,10 @@ function KafkaNodeConfig({
               updateConfig('headers', raw)
             }
           }}
-          className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
-          rows={3}
+          language="json"
+          label="Headers"
+          minRows={3}
+          readOnly={readOnly}
           placeholder={'{\n  "x-trace-id": "{{trigger.trace_id}}"\n}'}
         />
       </div>
@@ -1873,9 +1969,11 @@ const OS_OP_FIELDS: Record<
 function ObjectStorageNodeConfig({
   node,
   updateConfig,
+  readOnly = false,
 }: {
   node: WorkflowNodeData
   updateConfig: (key: string, value: any) => void
+  readOnly?: boolean
 }) {
   const params = useParams<{ projectId: string }>()
   const tenantId = parseInt(params?.projectId ?? '', 10)
@@ -1970,7 +2068,7 @@ function ObjectStorageNodeConfig({
           <label className="block text-xs font-medium text-gray-500 mb-1">
             keys（可选，JSON 数组；优先于单个 key）
           </label>
-          <textarea
+          <CodeSnippetEditor
             value={
               typeof node.config.keys === 'string'
                 ? node.config.keys
@@ -1978,8 +2076,7 @@ function ObjectStorageNodeConfig({
                   ? JSON.stringify(node.config.keys, null, 2)
                   : ''
             }
-            onChange={(e) => {
-              const raw = e.target.value
+            onChange={readOnly ? undefined : (raw) => {
               try {
                 const parsed = raw.trim() ? JSON.parse(raw) : undefined
                 updateConfig('keys', parsed)
@@ -1987,8 +2084,10 @@ function ObjectStorageNodeConfig({
                 updateConfig('keys', raw)
               }
             }}
-            className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
-            rows={2}
+            language="json"
+            label="keys"
+            minRows={2}
+            readOnly={readOnly}
             placeholder={'["a.txt", "b.txt"]'}
           />
         </div>

@@ -23,6 +23,8 @@ pub enum TaskKind {
     /// 约束已被 017 删除（沙盒/白名单/env_clear 才是 shell 任务真正的安全边界）。
     /// 运行时是否走沙盒由 `SCHEDULER_SHELL_SANDBOX_MODE` 决定，与 schema 解耦。
     Shell,
+    /// 进程内调用 `execute_workflow_internal`。必须带 tenant_id + workflow_id。
+    Workflow,
 }
 
 #[allow(dead_code)]
@@ -32,6 +34,7 @@ impl TaskKind {
             TaskKind::Rpc => "rpc",
             TaskKind::Http => "http",
             TaskKind::Shell => "shell",
+            TaskKind::Workflow => "workflow",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -39,6 +42,7 @@ impl TaskKind {
             "rpc" => Some(TaskKind::Rpc),
             "http" => Some(TaskKind::Http),
             "shell" => Some(TaskKind::Shell),
+            "workflow" => Some(TaskKind::Workflow),
             _ => None,
         }
     }
@@ -139,6 +143,10 @@ pub struct ScheduledTask {
     pub shell_env: Option<serde_json::Value>,
     /// 子进程工作目录；NULL → 沙盒内的 /tmp。
     pub shell_cwd: Option<String>,
+    // ── kind='workflow' 专属列；其它 kind 始终 NULL ──
+    pub workflow_id: Option<i32>,
+    pub workflow_slug: Option<String>,
+    pub workflow_input: Option<serde_json::Value>,
     pub is_active: bool,
     pub timeout_secs: i32,
     pub max_retries: i32,

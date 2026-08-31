@@ -428,7 +428,25 @@ function generateHugeFixture(): DependencyGraphResponse {
   // 核心分类条数远超"关注/举报"这类边缘分类，用固定循环表模拟这种偏斜而不是均匀切块。
   const COUNT_CYCLE = [3, 5, 6, 8, 10, 12, 14, 18, 22, 28, 34, 4, 7, 9]
   const NODE_COUNT_CYCLE = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 22, 26, 32, 40]
-  const FLAG_CYCLE: string[][] = [[], [], ['http_call'], ['redis'], ['kafka'], ['sse_publish'], [], ['http_call', 'redis'], ['kafka', 'sse_publish'], []]
+  // trigger_cron / trigger_notify 是特殊节点筛选器新增的两类（对齐后端按 trigger_type 派生
+  // 的合成标记，见 graphData.ts SPECIAL_FLAG_META 注释）——补进循环表让筛选器四类必选项
+  // （定时执行/Redis/Kafka/等待Notify）在这份验收 fixture 里都有非零命中。
+  const FLAG_CYCLE: string[][] = [
+    [],
+    [],
+    ['http_call'],
+    ['redis'],
+    ['kafka'],
+    ['sse_publish'],
+    ['trigger_cron'],
+    ['http_call', 'redis'],
+    ['kafka', 'sse_publish'],
+    ['trigger_notify'],
+    [],
+    ['redis', 'trigger_cron'],
+    ['kafka', 'trigger_notify'],
+    [],
+  ]
   const STATUS_CYCLE: DependencyGraphNode['lastRunStatus'][] = ['success', 'success', 'failed', 'none', 'success']
   const ACTIVITY_CYCLE: DependencyGraphNode['activity'][] = ['active', 'active', 'idle', 'dormant', 'idle']
 

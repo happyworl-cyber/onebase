@@ -241,11 +241,14 @@ export const gatewayControlAPI = {
       headers: { 'Content-Type': 'application/json' },
     }),
 
-  listRoutes: async (host: string) => {
+  listRoutes: async (host: string, project?: string) => {
     const resp = await gatewayApi.get<{
       host: string
+      project?: string
       routes: Record<string, GatewayRoutePolicy>
-    }>('/route-policies', { params: { host, redact: '1' } })
+    }>('/route-policies', {
+      params: { host, redact: '1', ...(project ? { project } : {}) },
+    })
     return Object.entries(resp.data.routes || {})
       .map(([prefix, policy]) => ({ prefix, policy }))
       .sort((a, b) => a.prefix.localeCompare(b.prefix))
@@ -254,8 +257,8 @@ export const gatewayControlAPI = {
   publishRoute: (input: PublishGatewayRouteInput) =>
     gatewayApi.post('/route-policies', input),
 
-  deleteRoute: (host: string, prefix: string) =>
-    gatewayApi.delete('/route-policies', { params: { host, prefix } }),
+  deleteRoute: (host: string, prefix: string, project: string) =>
+    gatewayApi.delete('/route-policies', { params: { host, prefix, project } }),
 
   getGlobalBlacklist: (host: string) =>
     gatewayApi.get<{ host: string; list: string[] }>('/global-blacklist', {
@@ -274,7 +277,9 @@ export const gatewayControlAPI = {
     gatewayApi.post('/secret-assets', input),
 
   replaceAsset: (name: string, input: CreateGatewayAssetInput) =>
-    gatewayApi.put(`/secret-assets/${encodeURIComponent(name)}`, input),
+    gatewayApi.put(`/secret-assets/${encodeURIComponent(name)}`, input, {
+      params: input.project ? { project: input.project } : undefined,
+    }),
 
   listPlugins: () =>
     gatewayApi.get<{ plugins: GatewayPlugin[] }>('/plugins'),

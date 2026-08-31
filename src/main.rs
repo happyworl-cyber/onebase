@@ -49,6 +49,7 @@ mod organization_handlers;
 mod pat_handlers;
 mod permission_cache;
 mod permissions;
+mod pg_listen_hub;
 mod pg_pool_handlers;
 mod pg_pool_helpers;
 mod pg_row_json;
@@ -80,6 +81,7 @@ mod request_id;
 mod rpc;
 mod scheduler;
 mod scheduler_handlers;
+mod scheduler_workflow;
 mod schema_handlers;
 mod session_hooks;
 mod session_rules_handlers;
@@ -2172,7 +2174,14 @@ async fn main() -> anyhow::Result<()> {
     // PG NOTIFY → SSE 监听桥（按 management.sse_notify_bridges 配置 LISTEN 业务库，定向推送）
     let sse_bridge_metrics = sse_notify_bridge::BridgeMetrics::new();
     app = app.layer(axum::Extension(sse_bridge_metrics.clone()));
-    sse_notify_bridge::start(pool.clone(), sse_hub.clone(), sse_bridge_metrics.clone());
+    let listen_hub = pg_listen_hub::ListenHub::start_with_pool(pool.clone());
+    app = app.layer(axum::Extension(listen_hub.clone()));
+    sse_notify_bridge::start(
+        pool.clone(),
+        sse_hub.clone(),
+        sse_bridge_metrics.clone(),
+        listen_hub.clone(),
+    );
 
     // 跨实例 Redis Pub/Sub 事件桥接
     if let Some(ref redis) = redis {
@@ -2205,7 +2214,7 @@ async fn main() -> anyhow::Result<()> {
     // 工作流事件触发器：订阅 EventBus，自动触发 event 类型工作流
     workflow_trigger::start_event_trigger(event_bus.clone(), pool.clone());
     // 工作流 NOTIFY 触发器：按 trigger_type='notify' 的工作流配置 LISTEN 业务库 channel。
-    workflow_notify_trigger::start_notify_trigger(pool.clone());
+    workflow_notify_trigger::start_notify_trigger(pool.clone(), listen_hub.clone());
     workflow_kafka_trigger::start_kafka_trigger(pool.clone());
     workflow_cron_trigger::start_cron_trigger(pool.clone());
 
@@ -2233,12 +2242,15 @@ async fn main() -> anyhow::Result<()> {
     let shell_exec = std::sync::Arc::new(scheduler::executors::ShellExecutor::new(
         config.scheduler_shell_sandbox_mode,
     ));
+    let workflow_exec: scheduler::executors::WorkflowExecutorRef =
+        std::sync::Arc::new(scheduler_workflow::WorkflowExecutor::new(pool.clone()));
     let scheduler_runner = std::sync::Arc::new(scheduler::runner::SchedulerRunner::new(
         pool.clone(),
         scheduler_cfg,
         rpc_exec,
         http_exec,
         shell_exec,
+        workflow_exec,
     ));
     let scheduler_shutdown = scheduler_runner.shutdown_handle();
     app = app.layer(axum::Extension(scheduler_runner.clone()));
@@ -2454,7 +2466,17 @@ async fn execute_sql_query(
     use serde_json::json;
 
     let start = std::time::Instant::now();
-    let sql_type = raw_sql_guard::get_sql_type(&req.sql);
+    let sql = raw_sql_guard::strip_sql_comments(&req.sql);
+    if sql.is_empty() {
+        return Ok(Json(json!({
+            "type": "EMPTY",
+            "data": [],
+            "row_count": 0,
+            "elapsed_ms": start.elapsed().as_millis(),
+            "message": "没有可执行的 SQL（内容仅为注释或空白）",
+        })));
+    }
+    let sql_type = raw_sql_guard::get_sql_type(&sql);
     let user_id = claims.as_deref().map(|c| c.sub).unwrap_or(-1);
     let target_db_id = db_id.as_deref().map(|d| d.0).unwrap_or(0);
     tracing::warn!(
@@ -2492,11 +2514,11 @@ async fn execute_sql_query(
             return Err(e);
         }
     };
-    if let Err(e) = raw_sql_guard::check_management_references(&req.sql) {
+    if let Err(e) = raw_sql_guard::check_management_references(&sql) {
         push_audit("raw_sql_query_blocked", Some("management_schema_reference"));
         return Err(e);
     }
-    if let Err(e) = raw_sql_guard::check_forbidden_session_commands(&req.sql) {
+    if let Err(e) = raw_sql_guard::check_forbidden_session_commands(&sql) {
         push_audit(
             "raw_sql_query_blocked",
             Some("forbidden_listen_unlisten_command"),
@@ -2520,7 +2542,7 @@ async fn execute_sql_query(
             "只读模式下只允许执行 SELECT 查询语句".to_string(),
         ));
     }
-    if raw_sql_guard::is_dangerous_operation(&req.sql) {
+    if raw_sql_guard::is_dangerous_operation(&sql) {
         push_audit("raw_sql_query_blocked", Some("dangerous_keyword_blacklist"));
         return Err(AppError::InvalidQuery(
             "检测到危险操作，请使用专门的管理工具执行此类操作".to_string(),
@@ -2547,7 +2569,7 @@ async fn execute_sql_query(
 
     let exec_result: Result<Value, AppError> = match sql_type {
         "SELECT" => {
-            let rows = sqlx::query(&req.sql)
+            let rows = sqlx::query(&sql)
                 .fetch_all(&mut *conn)
                 .await
                 .map_err(raw_sql_guard::map_user_sql_err);
@@ -2571,10 +2593,10 @@ async fn execute_sql_query(
             })
         }
         "INSERT" | "UPDATE" | "DELETE" => {
-            let sql_with_returning = if !req.sql.to_uppercase().contains("RETURNING") {
-                format!("{} RETURNING *", req.sql.trim().trim_end_matches(';'))
+            let sql_with_returning = if !sql.to_uppercase().contains("RETURNING") {
+                format!("{} RETURNING *", sql.trim().trim_end_matches(';'))
             } else {
-                req.sql.clone()
+                sql.clone()
             };
             match sqlx::query(&sql_with_returning).fetch_all(&mut *conn).await {
                 Ok(rows) => {
@@ -2599,7 +2621,7 @@ async fn execute_sql_query(
                 }
                 Err(_) => {
                     // 部分表 RETURNING * 不可用——回退到 execute，只拿到 rows_affected。
-                    let r = sqlx::query(&req.sql)
+                    let r = sqlx::query(&sql)
                         .execute(&mut *conn)
                         .await
                         .map_err(raw_sql_guard::map_user_sql_err)?;
@@ -2625,7 +2647,7 @@ async fn execute_sql_query(
         // `current transaction is aborted`。改用 `conn.begin()` 后，失败时 `tx.rollback()`
         // 会把连接清干净再还池；且 `conn` 已 `apply_session_guards`（SET statement_timeout），
         // 无需再拼 `SET LOCAL`。
-        "CREATE" | "ALTER" | "DROP" => raw_sql_guard::execute_raw_on_conn(&mut conn, &req.sql)
+        "CREATE" | "ALTER" | "DROP" => raw_sql_guard::execute_raw_on_conn(&mut conn, &sql)
             .await
             .map_err(raw_sql_guard::map_user_sql_err)
             .map(|_| {
@@ -2636,7 +2658,7 @@ async fn execute_sql_query(
                     "message": format!("{} 操作执行成功", sql_type)
                 })
             }),
-        _ => raw_sql_guard::execute_raw_on_conn(&mut conn, &req.sql)
+        _ => raw_sql_guard::execute_raw_on_conn(&mut conn, &sql)
             .await
             .map_err(raw_sql_guard::map_user_sql_err)
             .map(|_| {

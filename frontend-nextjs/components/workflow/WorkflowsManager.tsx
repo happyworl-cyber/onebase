@@ -196,10 +196,6 @@ const DEFAULT_ALERT_WEBHOOK_TEMPLATE = JSON.stringify(
   2,
 )
 
-/** 依赖图入口按钮的隐藏门 localStorage 键——执行回放入口复用同一把门（同一暗号一起放出来）。
- *  必须与 components/workflow/list/WorkflowListView.tsx 里的同名常量保持完全一致的字符串值。 */
-const DEP_GRAPH_ENTRY_STORAGE_KEY = 'onebase:dep-graph-entry'
-
 const STATUS_COLORS: Record<string, string> = {
   pending: 'bg-yellow-100 text-yellow-700',
   running: 'bg-blue-100 text-blue-700',
@@ -293,6 +289,21 @@ function extractOutputHint(output: unknown): string | null {
   return null
 }
 
+function JsonLogBlock({ title, value }: { title?: string; value: unknown }) {
+  const text = JSON.stringify(value, null, 2)
+  return (
+    <>
+      <div className={`flex items-center gap-2 ${title ? 'mt-2 justify-between' : 'mt-1 justify-end'}`}>
+        {title ? <div className="text-[11px] font-medium text-gray-500">{title}</div> : null}
+        <CopyButton text={text} />
+      </div>
+      <pre className="mt-1 p-2 bg-white border rounded font-mono overflow-auto max-h-48 text-[11px] leading-relaxed">
+        {text}
+      </pre>
+    </>
+  )
+}
+
 function NodeResultCard({ nr, defaultOpen = false }: { nr: NodeResultItem; defaultOpen?: boolean }) {
   const hint = extractOutputHint(nr.output)
   const borderClass =
@@ -336,20 +347,10 @@ function NodeResultCard({ nr, defaultOpen = false }: { nr: NodeResultItem; defau
       <div className="px-3 pb-3 border-t border-black/5">
         {nr.error && <p className="text-red-600 mt-2 font-mono">{nr.error}</p>}
         {nr.input != null && (
-          <>
-            <div className="mt-2 text-[11px] font-medium text-gray-500">入参（实际传递的参数）</div>
-            <pre className="mt-1 p-2 bg-white border rounded font-mono overflow-auto max-h-48 text-[11px] leading-relaxed">
-              {JSON.stringify(nr.input, null, 2)}
-            </pre>
-          </>
+          <JsonLogBlock title="入参（实际传递的参数）" value={nr.input} />
         )}
         {nr.output != null && (
-          <>
-            <div className="mt-2 text-[11px] font-medium text-gray-500">输出（对方响应）</div>
-            <pre className="mt-1 p-2 bg-white border rounded font-mono overflow-auto max-h-48 text-[11px] leading-relaxed">
-              {JSON.stringify(nr.output, null, 2)}
-            </pre>
-          </>
+          <JsonLogBlock title="输出（对方响应）" value={nr.output} />
         )}
       </div>
     </details>
@@ -762,19 +763,9 @@ export default function WorkflowsManager({
   const [debugResult, setDebugResult] = useState<any>(null)
   const [debugError, setDebugError] = useState<string | null>(null)
 
-  // 执行回放（P0）：全屏层开关，入口沿用依赖图那套控制台暗号门控（同一 localStorage 键，
-  // window.__depGraph 解锁时依赖图+回放两个入口一起放出来，见 WorkflowListView 里的注册）。
+  // 执行回放（P0）：全屏层开关。入口原先与依赖图共用控制台暗号隐藏门（window.__depGraph +
+  // localStorage），boss 拍板功能转正后整套门已拆除，入口默认展示。
   const [showReplay, setShowReplay] = useState(false)
-  const [replayEntryUnlocked, setReplayEntryUnlocked] = useState(false)
-  useEffect(() => {
-    setReplayEntryUnlocked(window.localStorage.getItem(DEP_GRAPH_ENTRY_STORAGE_KEY) === 'on')
-    // 暗号在本页也常驻注册：列表页组件卸载后会 delete window.__depGraph，
-    // 导致编辑器/执行记录页控制台敲不到——这里兜底挂一份（不做卸载清理，全局常驻）。
-    ;(window as any).__depGraph = (unlock = true) => {
-      window.localStorage.setItem(DEP_GRAPH_ENTRY_STORAGE_KEY, unlock ? 'on' : 'off')
-      window.location.reload()
-    }
-  }, [])
   // 从"执行记录"某一行的"查看执行回放"点进来时，带上要预选的 run id；关闭回放层要清掉，
   // 避免下次从别处（比如依赖图入口）打开回放时被上一次的预选值污染。
   const [replayInitialRunId, setReplayInitialRunId] = useState<number | null>(null)
@@ -1762,9 +1753,7 @@ export default function WorkflowsManager({
                     {debugResult.final_output != null && (
                       <details>
                         <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-600">最终输出</summary>
-                        <pre className="mt-1 p-2 bg-gray-50 rounded text-xs font-mono overflow-auto max-h-48">
-                          {JSON.stringify(debugResult.final_output, null, 2)}
-                        </pre>
+                        <JsonLogBlock value={debugResult.final_output} />
                       </details>
                     )}
                   </div>
@@ -1832,14 +1821,12 @@ export default function WorkflowsManager({
                           </div>
                           <div className="flex items-center gap-3 shrink-0">
                             <span className="text-xs text-gray-400">{formatDateTime(run.started_at)}</span>
-                            {replayEntryUnlocked && (
-                              <button
-                                onClick={() => handleViewReplay(run)}
-                                className="text-xs text-indigo-600 hover:text-indigo-800 whitespace-nowrap"
-                              >
-                                <i className="fas fa-diagram-project mr-1"></i>查看执行回放
-                              </button>
-                            )}
+                            <button
+                              onClick={() => handleViewReplay(run)}
+                              className="text-xs text-indigo-600 hover:text-indigo-800 whitespace-nowrap"
+                            >
+                              <i className="fas fa-diagram-project mr-1"></i>查看执行回放
+                            </button>
                           </div>
                         </div>
                         {run.error_message && (
@@ -1860,9 +1847,7 @@ export default function WorkflowsManager({
                         {run.final_output && (
                           <details className="mt-2">
                             <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-600">最终输出</summary>
-                            <pre className="mt-1 p-2 bg-gray-50 rounded text-xs font-mono overflow-auto max-h-40">
-                              {JSON.stringify(run.final_output, null, 2)}
-                            </pre>
+                            <JsonLogBlock value={run.final_output} />
                           </details>
                         )}
                       </div>

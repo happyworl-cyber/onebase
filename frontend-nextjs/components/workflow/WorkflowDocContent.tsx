@@ -12,6 +12,7 @@
 
 import { useMemo, useState } from 'react'
 import type { WorkflowNodeDef } from '@/components/workflow/WorkflowCanvas'
+import { copyTextToClipboard } from '@/lib/clipboard'
 
 /** 提炼后的接口文档模型：前后端一致的数据契约（不含 nodes/edges）。 */
 export interface DocModel {
@@ -239,13 +240,16 @@ export function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
   return (
     <button
-      onClick={() => {
-        navigator.clipboard?.writeText(text).then(() => {
-          setCopied(true)
-          setTimeout(() => setCopied(false), 1500)
-        })
+      type="button"
+      onClick={async (e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        const ok = await copyTextToClipboard(text)
+        if (!ok) return
+        setCopied(true)
+        window.setTimeout(() => setCopied(false), 1500)
       }}
-      className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-500 hover:bg-gray-100"
+      className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-500 hover:bg-gray-100 shrink-0"
     >
       {copied ? '已复制' : '复制'}
     </button>

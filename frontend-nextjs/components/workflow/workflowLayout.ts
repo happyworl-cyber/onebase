@@ -1,4 +1,4 @@
-import type { Edge, Node, ReactFlowInstance } from 'reactflow'
+import type { Edge, Node, NodeChange, ReactFlowInstance } from 'reactflow'
 import ELK, { type ElkNode } from 'elkjs/lib/elk.bundled.js'
 
 export const WF_NODE_WIDTH = 180
@@ -240,6 +240,53 @@ export function clampDragToCanvas(
     x: (clampedX - vx) / zoom,
     y: (clampedY - vy) / zoom,
   }
+}
+
+export function clampGroupDragToCanvas(
+  changes: NodeChange[],
+  nodes: Array<{ id: string; position: { x: number; y: number } }>,
+  instance: ReactFlowInstance,
+  canvasEl: HTMLElement,
+): NodeChange[] {
+  const dragging = changes.filter(
+    (ch): ch is NodeChange & { id: string; type: 'position'; position: { x: number; y: number }; dragging: true } =>
+      ch.type === 'position' && !!ch.position && ch.dragging === true,
+  )
+
+  if (dragging.length <= 1) {
+    return changes.map((ch) => {
+      if (ch.type !== 'position' || !ch.position || !ch.dragging) return ch
+      return { ...ch, position: clampDragToCanvas(ch.position, instance, canvasEl) }
+    })
+  }
+
+  const currentById = new Map(nodes.map((n) => [n.id, n.position]))
+  let tx: number | null = null
+  let ty: number | null = null
+  const allowedTx: number[] = []
+  const allowedTy: number[] = []
+
+  for (const ch of dragging) {
+    const cur = currentById.get(ch.id)
+    if (!cur) continue
+    tx = ch.position.x - cur.x
+    ty = ch.position.y - cur.y
+    const clamped = clampDragToCanvas(ch.position, instance, canvasEl)
+    allowedTx.push(clamped.x - cur.x)
+    allowedTy.push(clamped.y - cur.y)
+  }
+
+  if (tx == null || ty == null || allowedTx.length === 0) return changes
+
+  const finalTx = tx >= 0 ? Math.min(tx, ...allowedTx) : Math.max(tx, ...allowedTx)
+  const finalTy = ty >= 0 ? Math.min(ty, ...allowedTy) : Math.max(ty, ...allowedTy)
+
+  return changes.map((ch) => {
+    if (ch.type !== 'position' || !ch.position || !ch.dragging) return ch
+    const cur = currentById.get(ch.id)
+    if (!cur) return { ...ch, position: clampDragToCanvas(ch.position, instance, canvasEl) }
+    return { ...ch, position: { x: cur.x + finalTx, y: cur.y + finalTy } }
+  })
 }
 
 /** 详情面板打开后，将节点平移进当前画布可见区（不改变缩放） */

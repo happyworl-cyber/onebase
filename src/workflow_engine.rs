@@ -439,6 +439,132 @@ pub enum NodeStatus {
 
 // ─── 模板变量引擎 ─────────────────────────────────────────
 
+/// 导入 / 多一层 JSON 转义后，code 节点脚本会变成「没有真换行、只剩字面 `\n`」。
+/// Lua 把两条语句粘在同一行就会报 `unexpected symbol near 'local'`。
+///
+/// 仅在整段还没有真换行时才还原；已是多行的脚本原样返回。单行里 Lua/JS 字符串
+/// 自带的 `\n`（如 `"hello\nworld"`）还原后不像多条语句，也原样返回。
+pub fn restore_escaped_script_newlines(code: &str) -> String {
+    if code.contains('\n') || code.contains('\r') || !code.contains('\\') {
+        return code.to_string();
+    }
+    let restored = unescape_json_string_escapes(code);
+    if restored != code && looks_like_restored_multiline_script(&restored) {
+        restored
+    } else {
+        code.to_string()
+    }
+}
+
+fn unescape_json_string_escapes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some('\\') => out.push('\\'),
+            Some('"') => out.push('"'),
+            Some('\'') => out.push('\''),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+fn looks_like_restored_multiline_script(s: &str) -> bool {
+    let lines: Vec<&str> = s
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if lines.len() < 2 {
+        return false;
+    }
+    const LEADERS: &[&str] = &[
+        "local ",
+        "function ",
+        "end",
+        "return ",
+        "if ",
+        "for ",
+        "while ",
+        "repeat",
+        "--",
+        "ctx.",
+        "const ",
+        "let ",
+        "var ",
+        "def ",
+        "async ",
+        "import ",
+        "#",
+    ];
+    lines
+        .iter()
+        .filter(|line| LEADERS.iter().any(|prefix| line.starts_with(prefix)))
+        .count()
+        >= 2
+}
+
+/// 导入落库前：把 code 节点 `config.code` 里被吃成字面 `\n` 的换行还原回来，
+/// 避免编辑器里看到一整行、运行时 lua.load 再炸。
+pub fn restore_script_newlines_in_nodes(nodes: &mut JsonValue) {
+    let Some(arr) = nodes.as_array_mut() else {
+        return;
+    };
+    for node in arr {
+        let is_code = node
+            .get("type")
+            .and_then(|t| t.as_str())
+            .is_some_and(|t| t == "code");
+        if !is_code {
+            continue;
+        }
+        let Some(code) = node
+            .get("config")
+            .and_then(|c| c.get("code"))
+            .and_then(|c| c.as_str())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        let restored = restore_escaped_script_newlines(&code);
+        if restored == code {
+            continue;
+        }
+        if let Some(cfg) = node.get_mut("config").and_then(|c| c.as_object_mut()) {
+            cfg.insert("code".into(), JsonValue::String(restored));
+        }
+    }
+}
+
+/// 按节点类型解析 config 模板。code 的脚本正文、SQL、call_workflow.input
+/// 必须跳过字符串替换，其余字段照常。
+fn resolve_node_config(
+    node_type: &NodeType,
+    config: &JsonValue,
+    ctx: &ExecutionContext,
+) -> JsonValue {
+    match node_type {
+        NodeType::DbQuery | NodeType::DbExecute | NodeType::DbTransaction => {
+            resolve_template_skip_keys(config, ctx, &["sql"])
+        }
+        NodeType::CallWorkflow => resolve_template_skip_keys(config, ctx, &["input"]),
+        NodeType::Code => resolve_template_skip_keys(config, ctx, &["code"]),
+        _ => resolve_template(config, ctx),
+    }
+}
+
 /// 解析并替换 `{{nodeId.field}}` 模板变量
 ///
 /// 支持嵌套路径：`{{nodeA.data.items[0].name}}`
@@ -2338,20 +2464,9 @@ impl DagEngine {
                     None => continue,
                 };
 
-                // DB 节点的 SQL 文本保持原样（含 {{}}）不做字符串替换，交由各 exec_db_*
-                // 走 parameterize_sql_templates 改写成参数占位符再绑定，从根上防 SQL 注入。
-                // 其余字段（params / database_id 等）正常解析。
-                let config = match node.node_type {
-                    NodeType::DbQuery | NodeType::DbExecute | NodeType::DbTransaction => {
-                        resolve_template_skip_keys(&node.config, ctx, &["sql"])
-                    }
-                    // call_workflow 的 input 保持原文（可能是 JSON 字符串），交由执行器先解析成
-                    // 对象再逐字段套模板——避免"先把模板拼进 JSON 文本"导致引号破坏 JSON。
-                    NodeType::CallWorkflow => {
-                        resolve_template_skip_keys(&node.config, ctx, &["input"])
-                    }
-                    _ => resolve_template(&node.config, ctx),
-                };
+                // DB 节点的 SQL、code 节点的脚本、call_workflow.input 保持原样（含 {{}}），
+                // 其余字段正常解析。code 若走字符串替换，Lua 嵌套表 `{{ ... }}` 会被掏空。
+                let config = resolve_node_config(&node.node_type, &node.config, ctx);
                 // 入参快照须在执行前抓取：此刻 ctx.node_outputs 仅含上游输出，
                 // 正是当前节点运行时真正能读到的数据（执行后会混入自身输出）。
                 // loop 节点用**原始** config 快照（保留 {{loop.*}} 字面量，避免此刻误解析为空）。
@@ -3377,10 +3492,12 @@ impl DagEngine {
     ) -> Result<(JsonValue, Option<String>)> {
         use crate::lua_engine::{LuaEngine, PluginContext};
 
-        let code = config
+        let raw_code = config
             .get("code")
             .and_then(|v| v.as_str())
             .ok_or_else(|| AppError::InvalidQuery("code 节点缺少 code 字段".to_string()))?;
+        // 导入时若 JSON 多转义一层，脚本只剩字面 `\n`，lua.load 会把两条语句粘成一行。
+        let code = restore_escaped_script_newlines(raw_code);
 
         let plugin_ctx = PluginContext {
             method: "WORKFLOW".to_string(),
@@ -3515,13 +3632,9 @@ end
                 .ok_or_else(|| AppError::InvalidQuery("db_query 节点缺少 sql 字段".to_string()))?
         };
 
-        // 安全检查：只允许 SELECT / WITH（动态模式对解析后的文本同样校验）
-        let first_word = sql
-            .trim()
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_uppercase();
+        // 安全检查：只允许 SELECT / WITH（动态模式对解析后的文本同样校验）。
+        // 必须先剥注释，否则 `-- 说明\nSELECT ...` 会被当成非法首词 `--`。
+        let first_word = sql_leading_keyword(sql);
         if !matches!(first_word.as_str(), "SELECT" | "WITH") {
             return Err(AppError::InvalidQuery(
                 "db_query 节点只允许 SELECT/WITH 语句".to_string(),
@@ -3634,12 +3747,7 @@ end
         };
 
         // DDL 拦截（动态模式对解析后的文本同样校验）
-        let first_word = sql
-            .trim()
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_uppercase();
+        let first_word = sql_leading_keyword(sql);
         if matches!(first_word.as_str(), "DROP" | "TRUNCATE") {
             return Err(AppError::InvalidQuery(
                 "db_execute 节点禁止 DROP/TRUNCATE 操作".to_string(),
@@ -3737,12 +3845,7 @@ end
                     AppError::InvalidQuery("db_transaction statements 缺少 sql 字段".to_string())
                 })?;
 
-                let first_word = sql
-                    .trim()
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_uppercase();
+                let first_word = sql_leading_keyword(sql);
                 if matches!(first_word.as_str(), "DROP" | "TRUNCATE") {
                     return Err(AppError::InvalidQuery(
                         "db_transaction 禁止 DROP/TRUNCATE".to_string(),
@@ -3845,12 +3948,7 @@ end
                         AppError::InvalidQuery("foreach statement 缺少 sql 字段".to_string())
                     })?;
 
-                    let first_word = sql
-                        .trim()
-                        .split_whitespace()
-                        .next()
-                        .unwrap_or("")
-                        .to_uppercase();
+                    let first_word = sql_leading_keyword(sql);
                     if matches!(first_word.as_str(), "DROP" | "TRUNCATE") {
                         return Err(AppError::InvalidQuery(
                             "foreach 禁止 DROP/TRUNCATE".to_string(),
@@ -4580,6 +4678,18 @@ static DATA_MODIFYING_CTE_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::s
         .expect("数据修改型 CTE 正则应当合法")
     },
 );
+
+/// 剥掉 `--` / `/* */` 注释后的首个 SQL 关键字（大写）。
+///
+/// `db_query` 用它判断是不是 SELECT/WITH。若只 `trim().split_whitespace()`，
+/// `-- 注释\nSELECT ...` 的首词会变成 `--`，动态 SQL 节点会误拒。
+fn sql_leading_keyword(sql: &str) -> String {
+    crate::raw_sql_guard::strip_sql_comments(sql)
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_uppercase()
+}
 
 /// 剥掉 SQL 里的块注释 / 行注释 / 单引号字符串字面量（含 `''` 转义），
 /// 避免写关键字藏在注释或字面量里造成误判。替换成空格以保持词边界。
@@ -5856,6 +5966,32 @@ mod tests {
     }
 
     #[test]
+    fn sql_leading_keyword_skips_comments() {
+        assert_eq!(sql_leading_keyword("SELECT 1"), "SELECT");
+        assert_eq!(
+            sql_leading_keyword("  with x as (select 1) select * from x"),
+            "WITH"
+        );
+        assert_eq!(
+            sql_leading_keyword("-- 注释\nSELECT\n all_proj.project AS project"),
+            "SELECT"
+        );
+        assert_eq!(
+            sql_leading_keyword("-- lastshelter (UTC+0, +8h)\nSELECT COUNT(*) FROM t"),
+            "SELECT"
+        );
+        assert_eq!(
+            sql_leading_keyword("/* block */ -- line\n  SELECT 1"),
+            "SELECT"
+        );
+        assert_eq!(sql_leading_keyword("-- 只有注释"), "");
+        assert_eq!(
+            sql_leading_keyword("-- no\nINSERT INTO t VALUES (1)"),
+            "INSERT"
+        );
+    }
+
+    #[test]
     fn mysql_inline_sql_escapes_values_and_blocks_injection() {
         // MySQL 走文本协议、内联参数：必须对值做转义，杜绝注入。
         let ctx = ExecutionContext {
@@ -6157,6 +6293,77 @@ mod tests {
             parameterize_sql_templates("UPDATE t SET note = 'a''b {{trigger.name}}'", &ctx, 1);
         assert_eq!(sql, "UPDATE t SET note = ('a''b ' || $1)");
         assert_eq!(binds, vec![json!("Bob")]);
+    }
+
+    #[test]
+    fn restore_escaped_script_newlines_splits_json_escaped_lua_locals() {
+        // 导入 JSON 多转义一层后，脚本里只剩字面 `\n`、没有真换行。
+        let escaped = "local a = 1\\nlocal b = 2\\nreturn { a = a, b = b }";
+        assert!(
+            !escaped.contains('\n'),
+            "fixture must be a single physical line"
+        );
+        let restored = restore_escaped_script_newlines(escaped);
+        assert!(
+            restored.contains('\n'),
+            "escaped \\n should become real newlines: {restored:?}"
+        );
+        assert_eq!(
+            restored,
+            "local a = 1\nlocal b = 2\nreturn { a = a, b = b }"
+        );
+    }
+
+    #[test]
+    fn restore_escaped_script_newlines_leaves_oneliner_lua_string_escape() {
+        // 合法单行脚本：`\n` 在 Lua 字符串里，不能当成「整段被 JSON 转义」。
+        let code = r#"ctx.body = { msg = "hello\nworld" }"#;
+        assert_eq!(restore_escaped_script_newlines(code), code);
+    }
+
+    #[test]
+    fn restore_escaped_script_newlines_leaves_real_newlines() {
+        let code = "local a = 1\nlocal b = 2\nreturn { a = a, b = b }";
+        assert_eq!(restore_escaped_script_newlines(code), code);
+    }
+
+    #[test]
+    fn resolve_node_config_keeps_lua_nested_table_in_code() {
+        // Lua 嵌套表 `{{ x = 1 }}` 含 `{{`，绝不能走字符串模板替换，否则表构造被掏空，
+        // 相邻 `local` 还会被粘成一行 → unexpected symbol near 'local'。
+        let ctx = exec_ctx();
+        let code = "local t = {{ x = 1 }}\nreturn t";
+        let config = json!({ "code": code, "language": "lua" });
+        let resolved = resolve_node_config(&NodeType::Code, &config, &ctx);
+        assert_eq!(resolved["code"], json!(code));
+    }
+
+    #[tokio::test]
+    async fn lua_code_node_accepts_json_escaped_newlines() {
+        let code = "local a = 1\\nlocal b = 2\\nreturn { a = a, b = b }";
+        assert!(!code.contains('\n'));
+        let (output, _) = lazy_engine()
+            .exec_code_node(&json!({ "code": code }), &exec_ctx())
+            .await
+            .expect("JSON-escaped newlines should be restored before lua.load");
+        assert_eq!(output, json!({ "a": 1, "b": 2 }));
+    }
+
+    #[test]
+    fn restore_script_newlines_in_nodes_fixes_code_field() {
+        let escaped = "local a = ctx.nodes.x.matched_branch\\nlocal b = ctx.nodes.y.matched_branch";
+        let mut nodes = json!([{
+            "id": "build_state",
+            "type": "code",
+            "config": { "language": "lua", "code": escaped }
+        }]);
+        restore_script_newlines_in_nodes(&mut nodes);
+        let code = nodes[0]["config"]["code"].as_str().unwrap();
+        assert!(
+            code.contains('\n'),
+            "import must restore newlines so the editor/runtime see two statements"
+        );
+        assert!(!code.contains("branchlocal"));
     }
 
     #[test]
