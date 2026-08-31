@@ -23,7 +23,9 @@ use std::time::Duration;
 use tokio::sync::Semaphore;
 
 use crate::scheduler::cron_parser::next_after;
-use crate::scheduler::executors::{HttpExecutorRef, RpcExecutorRef, ShellExecutorRef};
+use crate::scheduler::executors::{
+    HttpExecutorRef, RpcExecutorRef, ShellExecutorRef, WorkflowExecutorRef,
+};
 use crate::scheduler::models::ScheduledTask;
 
 #[derive(Clone, Debug)]
@@ -62,6 +64,7 @@ pub struct SchedulerRunner {
     rpc_exec: RpcExecutorRef,
     http_exec: HttpExecutorRef,
     shell_exec: ShellExecutorRef,
+    workflow_exec: WorkflowExecutorRef,
     running: Arc<AtomicBool>,
     /// 并发闸门：限制同时在跑的 `execute_one` 数量（见 `SchedulerConfig::max_concurrency`）。
     exec_sem: Arc<Semaphore>,
@@ -74,6 +77,7 @@ impl SchedulerRunner {
         rpc_exec: RpcExecutorRef,
         http_exec: HttpExecutorRef,
         shell_exec: ShellExecutorRef,
+        workflow_exec: WorkflowExecutorRef,
     ) -> Self {
         let hostname = hostname_best_effort();
         let pid = std::process::id();
@@ -90,6 +94,7 @@ impl SchedulerRunner {
             rpc_exec,
             http_exec,
             shell_exec,
+            workflow_exec,
             running: Arc::new(AtomicBool::new(true)),
             exec_sem,
         }
@@ -334,6 +339,11 @@ impl SchedulerRunner {
                 let shell = self.shell_exec.clone();
                 let t = task.clone();
                 async move { shell.execute(&t).await }
+            }),
+            "workflow" => Box::pin({
+                let exec = self.workflow_exec.clone();
+                let t = task.clone();
+                async move { exec.execute(&t).await }
             }),
             other => {
                 tracing::error!("未知任务类型 kind={} task_id={}", other, task.id);

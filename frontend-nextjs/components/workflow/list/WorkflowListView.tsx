@@ -63,16 +63,6 @@ import {
 } from './folderApi'
 import { fetchWorkflowList, fetchWorkflowSummary } from './listApi'
 
-/** 依赖图入口按钮的隐藏门 localStorage 键，值为 'on' / 'off'。 */
-const DEP_GRAPH_ENTRY_STORAGE_KEY = 'onebase:dep-graph-entry'
-
-declare global {
-  interface Window {
-    /** 控制台暗号：不传或传 true 显示"依赖图"入口按钮，传 false 隐藏。 */
-    __depGraph?: (unlock?: boolean) => void
-  }
-}
-
 export interface WorkflowListViewProps {
   cleaning: boolean
   defaultDatabaseId?: number | null
@@ -150,7 +140,6 @@ export default function WorkflowListView({
   const [selectedMap, setSelectedMap] = useState<Map<number, WorkflowListItem>>(new Map())
   const [batchModal, setBatchModal] = useState<BatchModalType>(null)
   const [showBatchImport, setShowBatchImport] = useState(false)
-  const [depGraphEntryUnlocked, setDepGraphEntryUnlocked] = useState(false)
   const bannerCheckboxRef = useRef<HTMLInputElement>(null)
 
   const useServerFolders = defaultDatabaseId != null
@@ -199,17 +188,6 @@ export default function WorkflowListView({
       perPage: normalizeListPerPage(prefs.perPage) ?? DEFAULT_LIST_PER_PAGE,
     }
   })
-
-  // 依赖图入口隐藏门：默认不展示，读 localStorage 标记决定是否显示；
-  // 并把控制台暗号 window.__depGraph 挂到 window 上，供作者本人切换。
-  useEffect(() => {
-    setDepGraphEntryUnlocked(window.localStorage.getItem(DEP_GRAPH_ENTRY_STORAGE_KEY) === 'on')
-    window.__depGraph = (unlock = true) => {
-      window.localStorage.setItem(DEP_GRAPH_ENTRY_STORAGE_KEY, unlock ? 'on' : 'off')
-      window.location.reload()
-    }
-    // 不做卸载清理：暗号全局常驻，避免列表页卸载后在编辑器/执行记录页控制台敲不到。
-  }, [])
 
   useEffect(() => {
     if (useServerFolders) {
@@ -699,7 +677,7 @@ export default function WorkflowListView({
                 <i className="fas fa-layer-group text-[10px]" />
                 批量导入
               </button>
-              {projectId != null && depGraphEntryUnlocked && (
+              {projectId != null && (
                 <button
                   type="button"
                   data-alt="open-dependency-graph-button"
@@ -810,7 +788,7 @@ export default function WorkflowListView({
                     onOpenVersionHistory={onOpenVersionHistory ? () => onOpenVersionHistory(wf) : undefined}
                     onExport={() => onExport(wf)}
                     onDelete={() => onDelete(wf)}
-                    onOpenGraph={projectId != null && depGraphEntryUnlocked ? () => openWorkflowInGraph(wf) : undefined}
+                    onOpenGraph={projectId != null ? () => openWorkflowInGraph(wf) : undefined}
                     selected={selectedMap.has(wf.id)}
                     onSelectToggle={() => toggleSelect(wf)}
                   />
@@ -835,7 +813,7 @@ export default function WorkflowListView({
                     onOpenVersionHistory={onOpenVersionHistory ? () => onOpenVersionHistory(wf) : undefined}
                     onExport={() => onExport(wf)}
                     onDelete={() => onDelete(wf)}
-                    onOpenGraph={projectId != null && depGraphEntryUnlocked ? () => openWorkflowInGraph(wf) : undefined}
+                    onOpenGraph={projectId != null ? () => openWorkflowInGraph(wf) : undefined}
                     selected={selectedMap.has(wf.id)}
                     onSelectToggle={() => toggleSelect(wf)}
                   />

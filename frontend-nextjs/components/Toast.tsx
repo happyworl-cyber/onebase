@@ -101,10 +101,7 @@ interface ToastContainerProps {
 
 function ToastContainer({ toasts, removeToast }: ToastContainerProps) {
   return (
-    <div
-      className="fixed bottom-4 z-[10000] flex flex-col-reverse gap-2 pointer-events-none"
-      style={{ right: 'calc(1rem + var(--ai-panel-offset, 0px))' }}
-    >
+    <div className="fixed top-4 left-1/2 z-[10000] flex -translate-x-1/2 flex-col gap-2 pointer-events-none">
       {toasts.map((toast) => (
         <ToastItem key={toast.id} toast={toast} onClose={() => removeToast(toast.id)} />
       ))}
@@ -179,7 +176,7 @@ function ToastItem({ toast, onClose }: ToastItemProps) {
         pointer-events-auto min-w-[320px] max-w-[420px] rounded-lg border shadow-lg overflow-hidden
         ${style.bg} ${style.border}
         transform transition-all duration-200 ease-out
-        ${isVisible && !isLeaving ? 'translate-x-0 opacity-100' : 'translate-x-4 opacity-0'}
+        ${isVisible && !isLeaving ? 'translate-y-0 opacity-100' : '-translate-y-2 opacity-0'}
       `}
     >
       <div className="p-4 flex items-start gap-3">

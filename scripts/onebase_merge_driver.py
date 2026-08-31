@@ -16,7 +16,7 @@ import tempfile
 from pathlib import Path
 
 
-UPSTREAM_BASE = "e66aac1cea6f3b970727147225a586fb8a452469"
+UPSTREAM_BASE = "29b3b1060fb540db64b34296503d14550b10cc09"
 UPSTREAM_HEAD = "crestrail/develop"
 
 RENAMED_PATHS = {
@@ -166,12 +166,38 @@ def post_merge() -> int:
     return status
 
 
+def resolve_conflicts() -> int:
+    root = Path(run_git("rev-parse", "--show-toplevel").stdout.decode().strip())
+    conflicted = run_git(
+        "diff", "--name-only", "--diff-filter=U", "-z"
+    ).stdout.split(b"\0")
+    status = 0
+    for raw_path in conflicted:
+        if not raw_path:
+            continue
+        repo_path = os.fsdecode(raw_path)
+        current = git_blob("HEAD", repo_path) or b""
+        base = brandify(git_blob(UPSTREAM_BASE, repo_path) or b"")
+        incoming = brandify(git_blob(UPSTREAM_HEAD, repo_path) or b"")
+        merged, merge_status = merge_bytes(current, base, incoming)
+        path = root / repo_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(merged)
+        if merge_status == 0:
+            run_git("add", "--", repo_path)
+        status = max(status, merge_status)
+    return status
+
+
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--post-merge":
         return post_merge()
+    if len(sys.argv) == 2 and sys.argv[1] == "--resolve-conflicts":
+        return resolve_conflicts()
     if len(sys.argv) != 5:
         print(
-            "usage: onebase_merge_driver.py <ancestor> <current> <incoming> <path>",
+            "usage: onebase_merge_driver.py "
+            "[--post-merge|--resolve-conflicts|<ancestor> <current> <incoming> <path>]",
             file=sys.stderr,
         )
         return 2

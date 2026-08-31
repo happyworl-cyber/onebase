@@ -191,6 +191,8 @@ pub async fn get_my_connections(
                     td.db_port,
                     td.db_name,
                     td.is_primary,
+                    td.max_connections,
+                    td.connection_timeout,
                     td.sort_order,
                     'superadmin' AS user_role
                 FROM management.tenants t
@@ -219,6 +221,8 @@ pub async fn get_my_connections(
                     td.db_port,
                     td.db_name,
                     td.is_primary,
+                    td.max_connections,
+                    td.connection_timeout,
                     td.sort_order,
                     'superadmin' AS user_role
                 FROM management.tenants t
@@ -249,6 +253,8 @@ pub async fn get_my_connections(
                     v.db_port,
                     v.db_name,
                     v.is_primary,
+                    td.max_connections,
+                    td.connection_timeout,
                     v.user_role
                 FROM management.v_user_connections v
                 JOIN management.tenant_databases td ON td.id = v.database_id
@@ -275,6 +281,8 @@ pub async fn get_my_connections(
                     v.db_port,
                     v.db_name,
                     v.is_primary,
+                    td.max_connections,
+                    td.connection_timeout,
                     v.user_role
                 FROM management.v_user_connections v
                 JOIN management.tenant_databases td ON td.id = v.database_id

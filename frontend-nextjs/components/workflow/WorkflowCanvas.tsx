@@ -16,6 +16,7 @@ import ReactFlow, {
   useReactFlow,
   ReactFlowProvider,
   useOnViewportChange,
+  SelectionMode,
 } from 'reactflow'
 import { nodeTypes, NODE_TYPE_META } from './NodeTypes'
 import NodeConfigPanel from './NodeConfigPanel'
@@ -23,7 +24,7 @@ import WorkflowEdge from './WorkflowEdge'
 import {
   layoutWorkflow,
   nodesOverlap,
-  clampDragToCanvas,
+  clampGroupDragToCanvas,
   ensureNodeVisibleInCanvas,
   fitWorkflowToCanvas,
   normalizeSourceHandle,
@@ -139,6 +140,7 @@ function toFlowEdges(defs: WorkflowEdgeDef[], nodes: WorkflowNodeDef[]): Edge[] 
     return {
       id: `e-${e.from}-${e.to}-${i}`,
       type: 'workflowEdge',
+      selectable: false,
       source: e.from,
       target: e.to,
       sourceHandle: handle,
@@ -233,6 +235,29 @@ function WorkflowCanvasInner({ initialNodes, initialEdges, workflowSlug, onChang
   const canvasRef = useRef<HTMLDivElement | null>(null)
   const didAutoLayout = useRef(false)
   const { setViewport } = useReactFlow()
+  const [canvasDeleteEnabled, setCanvasDeleteEnabled] = useState(true)
+
+  useEffect(() => {
+    const isEditableTarget = (target: EventTarget | null): boolean => {
+      if (!(target instanceof Element)) return false
+      return !!target.closest(
+        'input, textarea, select, [contenteditable="true"], .cm-editor, .cm-content',
+      )
+    }
+    const onFocusIn = (e: FocusEvent) => {
+      setCanvasDeleteEnabled(!isEditableTarget(e.target))
+    }
+    const onFocusOut = (e: FocusEvent) => {
+      if (isEditableTarget(e.relatedTarget)) return
+      setCanvasDeleteEnabled(true)
+    }
+    document.addEventListener('focusin', onFocusIn)
+    document.addEventListener('focusout', onFocusOut)
+    return () => {
+      document.removeEventListener('focusin', onFocusIn)
+      document.removeEventListener('focusout', onFocusOut)
+    }
+  }, [])
 
   // 始终指向最新的 nodes/edges，避免回调闭包在同一批更新里拿到过期值。
   const nodesRef = useRef(nodes)
@@ -434,8 +459,18 @@ function WorkflowCanvasInner({ initialNodes, initialEdges, workflowSlug, onChang
     return true
   }, [])
 
-  const onNodeClick = useCallback((_: unknown, node: Node) => {
-    setSelectedNode({ id: node.id, type: node.data.nodeType, label: node.data.label, config: node.data.config })
+  const onSelectionChange = useCallback(({ nodes: selected }: { nodes: Node[] }) => {
+    if (selected.length === 1) {
+      const node = selected[0]
+      setSelectedNode({
+        id: node.id,
+        type: node.data.nodeType,
+        label: node.data.label,
+        config: node.data.config,
+      })
+      return
+    }
+    setSelectedNode(null)
   }, [])
 
   const onPaneClick = useCallback(() => {
@@ -492,9 +527,14 @@ function WorkflowCanvasInner({ initialNodes, initialEdges, workflowSlug, onChang
     const cy = vp ? (-vp.y + 200) / vp.zoom : 150 + nodes.length * 40
     const newNode: Node = {
       id, type: 'workflowNode', position: { x: cx, y: cy },
+      selected: true,
       data: { id, nodeType: type, label: '', config: getDefaultConfig(type) },
     }
-    setNodes((nds) => { const nn = [...nds, newNode]; syncChange(nn, edges); return nn })
+    setNodes((nds) => {
+      const nn = [...nds.map((n) => (n.selected ? { ...n, selected: false } : n)), newNode]
+      syncChange(nn, edges)
+      return nn
+    })
     setShowPalette(false)
     setSelectedNode({ id, type, label: '', config: getDefaultConfig(type) })
   }, [nodes, edges, setNodes, syncChange])
@@ -503,10 +543,7 @@ function WorkflowCanvasInner({ initialNodes, initialEdges, workflowSlug, onChang
     const inst = reactFlowInstance.current
     const el = canvasRef.current
     const clamped = inst && el
-      ? changes.map((ch) => {
-          if (ch.type !== 'position' || !ch.position || !ch.dragging) return ch
-          return { ...ch, position: clampDragToCanvas(ch.position, inst, el) }
-        })
+      ? clampGroupDragToCanvas(changes, inst.getNodes(), inst, el)
       : changes
     onNodesChange(clamped)
     const hasDragEnd = changes.some((ch) => ch.type === 'position' && ch.dragging === false)
@@ -536,7 +573,10 @@ function WorkflowCanvasInner({ initialNodes, initialEdges, workflowSlug, onChang
           onEdgesChange={readOnly ? undefined : onEdgesChangeWrapper}
           onConnect={readOnly ? undefined : onConnect}
           isValidConnection={isValidConnection}
-          onNodeClick={onNodeClick}
+          selectionKeyCode="Shift"
+          multiSelectionKeyCode={['Meta', 'Control', 'Shift']}
+          selectionMode={SelectionMode.Partial}
+          onSelectionChange={onSelectionChange}
           onPaneClick={onPaneClick}
           onInit={(instance) => {
             reactFlowInstance.current = instance
@@ -570,7 +610,7 @@ function WorkflowCanvasInner({ initialNodes, initialEdges, workflowSlug, onChang
           maxZoom={2}
           snapToGrid
           snapGrid={[16, 16]}
-          deleteKeyCode={readOnly ? [] : ['Backspace', 'Delete']}
+          deleteKeyCode={readOnly || !canvasDeleteEnabled ? [] : ['Backspace', 'Delete']}
           className="bg-slate-50 workflow-canvas-flow"
           proOptions={{ hideAttribution: true }}
         >

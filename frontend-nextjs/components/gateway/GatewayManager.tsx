@@ -139,6 +139,15 @@ function readGatewayWorkspaceConfig(workspaceConfig?: Record<string, unknown> | 
   }
 }
 
+function inferRouteOwnerProject(prefix: string, policy: GatewayRoutePolicy): string {
+  const fromPolicy = typeof policy.project === 'string' ? policy.project.trim() : ''
+  if (fromPolicy) return fromPolicy
+  const parts = prefix.split('/').filter(Boolean)
+  if (parts[0] === 'api' && parts[1] === 'v1' && parts[2]) return parts[2]
+  if (parts[0] === 'workflow' && parts[1]) return parts[1]
+  return ''
+}
+
 function inferRouteType(prefix: string, policy: GatewayRoutePolicy) {
   if (policy.es_app_token || prefix.includes('/es-app/')) return 'es_app'
   if (policy.auth === 'supabase' || prefix.startsWith('/api/v1/')) return 'supabase'
@@ -776,7 +785,7 @@ export default function GatewayManager({
     try {
       const [nextRoutes, blacklistResp, assetsResp, pluginsResp, projectPluginsResp, versionsResp, targetsResp] =
         await Promise.all([
-          host ? gatewayControlAPI.listRoutes(host) : Promise.resolve([] as GatewayRouteRow[]),
+          host ? gatewayControlAPI.listRoutes(host, project) : Promise.resolve([] as GatewayRouteRow[]),
           host ? gatewayControlAPI.getGlobalBlacklist(host) : Promise.resolve({ data: { host: '', list: [] } }),
           gatewayControlAPI.listAssets(project),
           gatewayControlAPI.listPlugins(),
@@ -1086,9 +1095,13 @@ export default function GatewayManager({
 
   const deleteRoute = async () => {
     if (!host || !selectedPrefix) return
+    if (!project) {
+      notify.warning('当前页面缺少项目标识，无法删除路由')
+      return
+    }
     if (!window.confirm(`确认删除 route ${selectedPrefix}？`)) return
     try {
-      await gatewayControlAPI.deleteRoute(host, selectedPrefix)
+      await gatewayControlAPI.deleteRoute(host, selectedPrefix, project)
       notify.success('Route policy 已删除')
       setSelectedPrefix('')
       setPolicy(clonePolicy(EMPTY_POLICY))
@@ -1434,7 +1447,9 @@ export default function GatewayManager({
                       }`}
                     >
                       <div className="font-mono text-xs font-semibold text-gray-900 break-all">{row.prefix}</div>
-                      <div className="text-[11px] text-gray-500 mt-1">{projectName} · {type}</div>
+                      <div className="text-[11px] text-gray-500 mt-1">
+                        {inferRouteOwnerProject(row.prefix, row.policy) || project} · {type}
+                      </div>
                       <div className="flex flex-wrap gap-1 mt-2">
                         <span className="px-2 py-0.5 text-[10px] rounded-full bg-purple-50 text-purple-700">
                           {row.policy.auth || 'none'}

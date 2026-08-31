@@ -189,7 +189,7 @@ const PROHIBITED_PREFIXES: &[&str] = &[
 ///   - 用户在字符串字面量里写 `'management.foo'` 也会被误杀，可接受
 ///     （超管要在 SQL 里硬编码 management 字面量是很奇怪的需求）。
 pub fn check_management_references(sql: &str) -> Result<()> {
-    let lower = sql.to_lowercase();
+    let lower = strip_sql_comments(sql).to_lowercase();
     for needle in PROHIBITED_PREFIXES {
         if lower.contains(needle) {
             return Err(AppError::Forbidden(format!(
@@ -210,7 +210,7 @@ pub fn check_management_references(sql: &str) -> Result<()> {
 ///   `unexpected message: NotificationResponse` 协议错误；
 /// - `SELECT pg_notify(...)` 不会污染会话状态，因此允许。
 pub fn check_forbidden_session_commands(sql: &str) -> Result<()> {
-    let body = strip_leading_sql_comments(sql);
+    let body = strip_sql_comments(sql);
     let first_word = body
         .split_whitespace()
         .next()
@@ -296,7 +296,7 @@ pub async fn reset_session_guards(conn: &mut PoolConnection<Postgres>) {
 
 /// 识别 SQL 首关键字类型（剥掉前导注释后）。
 pub fn get_sql_type(sql: &str) -> &'static str {
-    let body = strip_leading_sql_comments(sql);
+    let body = strip_sql_comments(sql);
     let sql_upper = body.to_uppercase();
     let first_word = sql_upper.split_whitespace().next().unwrap_or("");
 
@@ -330,7 +330,7 @@ pub fn require_ddl_only_sql_type(sql_type: &str) -> Result<()> {
 
 /// 黑名单：DROP DATABASE / DROP SCHEMA / TRUNCATE 等灾难级操作。
 pub fn is_dangerous_operation(sql: &str) -> bool {
-    let body = strip_leading_sql_comments(sql);
+    let body = strip_sql_comments(sql);
     let sql_upper = body.to_uppercase();
     sql_upper.contains("DROP DATABASE")
         || sql_upper.contains("DROP SCHEMA")
@@ -373,7 +373,7 @@ pub fn strip_sql_comments(sql: &str) -> String {
         DoubleQuote,
         DollarQuote(String),
         LineComment,
-        BlockComment,
+        BlockComment(usize),
     }
 
     let chars: Vec<char> = sql.chars().collect();
@@ -398,7 +398,7 @@ pub fn strip_sql_comments(sql: &str) -> String {
                     state = State::LineComment;
                     i += 2;
                 } else if c == '/' && i + 1 < n && chars[i + 1] == '*' {
-                    state = State::BlockComment;
+                    state = State::BlockComment(1);
                     i += 2;
                 } else if c == '$' {
                     let mut j = i + 1;
@@ -466,9 +466,16 @@ pub fn strip_sql_comments(sql: &str) -> String {
                 }
                 i += 1;
             }
-            State::BlockComment => {
-                if c == '*' && i + 1 < n && chars[i + 1] == '/' {
-                    state = State::Normal;
+            State::BlockComment(depth) => {
+                if c == '/' && i + 1 < n && chars[i + 1] == '*' {
+                    state = State::BlockComment(depth + 1);
+                    i += 2;
+                } else if c == '*' && i + 1 < n && chars[i + 1] == '/' {
+                    if *depth <= 1 {
+                        state = State::Normal;
+                    } else {
+                        state = State::BlockComment(depth - 1);
+                    }
                     i += 2;
                 } else if c == '\n' {
                     out.push('\n');
@@ -637,6 +644,35 @@ mod tests {
             strip_sql_comments("INSERT INTO t VALUES ('-- not a comment')"),
             "INSERT INTO t VALUES ('-- not a comment')"
         );
+        assert_eq!(
+            strip_sql_comments("INSERT INTO t VALUES (1) -- 测试数据"),
+            "INSERT INTO t VALUES (1)"
+        );
+        // PG 嵌套块注释：内层 */ 不能提前结束外层
+        assert_eq!(
+            strip_sql_comments("SELECT 1 /* a /* b */ c */ , 2"),
+            "SELECT 1  , 2"
+        );
+    }
+
+    #[test]
+    fn get_sql_type_ignores_inline_comments() {
+        assert_eq!(get_sql_type("SELECT 1 -- DROP DATABASE later"), "SELECT");
+        assert_eq!(
+            get_sql_type("-- 查询用户\nSELECT * FROM public.users LIMIT 10"),
+            "SELECT"
+        );
+        assert_eq!(get_sql_type("/* 全是注释 */"), "OTHER");
+        assert_eq!(get_sql_type("INSERT INTO t VALUES (1) -- 注释"), "INSERT");
+    }
+
+    #[test]
+    fn inline_comment_must_not_trip_dangerous_or_management_scanners() {
+        assert!(!is_dangerous_operation(
+            "SELECT 1 -- 切勿 DROP DATABASE production"
+        ));
+        assert!(check_management_references("SELECT 1 -- 不要碰 management.users").is_ok());
+        assert!(check_forbidden_session_commands("SELECT 1 -- LISTEN foo").is_ok());
     }
 
     #[test]

@@ -53,6 +53,8 @@ pub struct CreateTaskReq {
     pub shell_script: Option<String>,
     pub shell_env: Option<Value>,
     pub shell_cwd: Option<String>,
+    pub workflow_id: Option<i32>,
+    pub workflow_input: Option<Value>,
     pub timeout_secs: Option<i32>,
     pub max_retries: Option<i32>,
     pub overlap_policy: Option<String>,
@@ -81,6 +83,8 @@ pub struct UpdateTaskReq {
     pub shell_script: Option<String>,
     pub shell_env: Option<Value>,
     pub shell_cwd: Option<String>,
+    pub workflow_id: Option<i32>,
+    pub workflow_input: Option<Value>,
     pub timeout_secs: Option<i32>,
     pub max_retries: Option<i32>,
     pub overlap_policy: Option<String>,
@@ -150,6 +154,38 @@ fn validate_alert_throttle_hours(hours: Option<i32>) -> Result<(), AppError> {
     Ok(())
 }
 
+async fn load_enabled_workflow_for_tenant(
+    pool: &PgPool,
+    workflow_id: i32,
+    tenant_id: i32,
+) -> Result<crate::workflow_handlers::Workflow, AppError> {
+    let wf = sqlx::query_as::<_, crate::workflow_handlers::Workflow>(
+        "SELECT * FROM management.workflows WHERE id = $1",
+    )
+    .bind(workflow_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("工作流不存在".into()))?;
+
+    if wf.tenant_id != Some(tenant_id) {
+        return Err(AppError::InvalidQuery("工作流不属于当前项目".to_string()));
+    }
+    if !wf.is_enabled {
+        return Err(AppError::InvalidQuery("只能选择已启用的工作流".to_string()));
+    }
+    Ok(wf)
+}
+
+fn workflow_input_or_empty(v: Option<Value>) -> Result<Value, AppError> {
+    let v = v.unwrap_or_else(|| json!({}));
+    if !v.is_object() {
+        return Err(AppError::InvalidQuery(
+            "workflow_input 必须是 JSON 对象".to_string(),
+        ));
+    }
+    Ok(v)
+}
+
 /// 试运行：把表单里的"未保存任务"直接喂给 executor 跑一遍，不写 DB（不入 scheduled_tasks，
 /// 也不入 scheduled_task_runs）。
 ///
@@ -173,6 +209,8 @@ pub struct DryRunReq {
     pub shell_script: Option<String>,
     pub shell_env: Option<Value>,
     pub shell_cwd: Option<String>,
+    pub workflow_id: Option<i32>,
+    pub workflow_input: Option<Value>,
 }
 
 // ─── 鉴权辅助 ────────────────────────────────
@@ -302,9 +340,9 @@ pub async fn create_task(
     validate_can_manage(&claims, req.tenant_id, &pool).await?;
 
     let kind = req.kind.as_str();
-    if kind != "rpc" && kind != "http" && kind != "shell" {
+    if kind != "rpc" && kind != "http" && kind != "shell" && kind != "workflow" {
         return Err(AppError::InvalidQuery(
-            "kind 必须是 rpc / http / shell".to_string(),
+            "kind 必须是 rpc / http / shell / workflow".to_string(),
         ));
     }
     // shell 任务的鉴权完全交给 `validate_can_manage`：
@@ -349,6 +387,22 @@ pub async fn create_task(
         }
     }
 
+    let mut workflow_id: Option<i32> = None;
+    let mut workflow_slug: Option<String> = None;
+    let mut workflow_input: Option<Value> = None;
+    if kind == "workflow" {
+        let tenant_id = req.tenant_id.ok_or_else(|| {
+            AppError::InvalidQuery("工作流任务必须属于一个项目（tenant_id）".into())
+        })?;
+        let wf_id = req
+            .workflow_id
+            .ok_or_else(|| AppError::InvalidQuery("工作流任务必须提供 workflow_id".into()))?;
+        let wf = load_enabled_workflow_for_tenant(&pool, wf_id, tenant_id).await?;
+        workflow_id = Some(wf.id);
+        workflow_slug = Some(wf.slug.clone());
+        workflow_input = Some(workflow_input_or_empty(req.workflow_input.clone())?);
+    }
+
     let http_secret_enc = match req.http_secret.as_deref() {
         Some(s) if !s.is_empty() => Some(crate::crypto::encrypt_secret(s)?),
         _ => None,
@@ -363,9 +417,10 @@ pub async fn create_task(
             database_id, rpc_schema, rpc_fn_name, rpc_args, \
             http_method, http_url, http_headers, http_body, http_secret_enc, \
             shell_interpreter, shell_script, shell_env, shell_cwd, \
+            workflow_id, workflow_slug, workflow_input, \
             timeout_secs, max_retries, overlap_policy, alert_webhook_url, \
             alert_webhook_template, alert_throttle_hours, next_run_at, created_by) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30) \
          RETURNING *",
     )
     .bind(req.tenant_id)
@@ -389,6 +444,9 @@ pub async fn create_task(
     .bind(if kind == "shell" { req.shell_script.as_deref() } else { None })
     .bind(if kind == "shell" { req.shell_env.as_ref() } else { None })
     .bind(if kind == "shell" { req.shell_cwd.as_deref() } else { None })
+    .bind(workflow_id)
+    .bind(&workflow_slug)
+    .bind(&workflow_input)
     .bind(req.timeout_secs.unwrap_or(60))
     .bind(req.max_retries.unwrap_or(0))
     .bind(req.overlap_policy.as_deref().unwrap_or("skip"))
@@ -599,6 +657,23 @@ pub async fn update_task(
         .unwrap_or(task.alert_throttle_hours);
     validate_alert_throttle_hours(Some(alert_throttle_hours))?;
 
+    let mut workflow_id: Option<i32> = None;
+    let mut workflow_slug: Option<String> = None;
+    let mut workflow_input: Option<Value> = None;
+    if task.kind == "workflow" {
+        if let Some(wf_id) = req.workflow_id {
+            let tenant_id = task
+                .tenant_id
+                .ok_or_else(|| AppError::InvalidQuery("工作流任务缺少 tenant_id".into()))?;
+            let wf = load_enabled_workflow_for_tenant(&pool, wf_id, tenant_id).await?;
+            workflow_id = Some(wf.id);
+            workflow_slug = Some(wf.slug);
+        }
+        if req.workflow_input.is_some() {
+            workflow_input = Some(workflow_input_or_empty(req.workflow_input.clone())?);
+        }
+    }
+
     // shell_* 字段仅对 shell kind 有意义。这里仍走 COALESCE 语义（None → 保留原值）
     // 而不是无条件覆盖，避免 patch http 任务时把 shell_* 当成"清空"误传。
     // 即使有人给 http 任务传了 shell_script，DB 的 chk_st_kind_shell 等约束也只在
@@ -618,15 +693,18 @@ pub async fn update_task(
             shell_script = COALESCE($12, shell_script), \
             shell_env = COALESCE($13, shell_env), \
             shell_cwd = COALESCE($14, shell_cwd), \
-            timeout_secs = COALESCE($15, timeout_secs), \
-            max_retries = COALESCE($16, max_retries), \
-            overlap_policy = COALESCE($17, overlap_policy), \
-            is_active = COALESCE($18, is_active), \
-            alert_webhook_url = $19, \
-            alert_webhook_template = $20, \
-            alert_throttle_hours = $21, \
+            workflow_id = COALESCE($15, workflow_id), \
+            workflow_slug = COALESCE($16, workflow_slug), \
+            workflow_input = COALESCE($17, workflow_input), \
+            timeout_secs = COALESCE($18, timeout_secs), \
+            max_retries = COALESCE($19, max_retries), \
+            overlap_policy = COALESCE($20, overlap_policy), \
+            is_active = COALESCE($21, is_active), \
+            alert_webhook_url = $22, \
+            alert_webhook_template = $23, \
+            alert_throttle_hours = $24, \
             updated_at = NOW() \
-         WHERE id = $22 RETURNING *",
+         WHERE id = $25 RETURNING *",
     )
     .bind(req.name)
     .bind(req.description)
@@ -642,6 +720,9 @@ pub async fn update_task(
     .bind(req.shell_script)
     .bind(req.shell_env)
     .bind(req.shell_cwd)
+    .bind(workflow_id)
+    .bind(workflow_slug)
+    .bind(workflow_input)
     .bind(req.timeout_secs)
     .bind(req.max_retries)
     .bind(req.overlap_policy)
@@ -967,9 +1048,9 @@ pub async fn dry_run(
     );
 
     let kind = req.kind.as_str();
-    if kind != "rpc" && kind != "http" && kind != "shell" {
+    if kind != "rpc" && kind != "http" && kind != "shell" && kind != "workflow" {
         return Err(AppError::InvalidQuery(
-            "kind 必须是 rpc / http / shell".to_string(),
+            "kind 必须是 rpc / http / shell / workflow".to_string(),
         ));
     }
 
@@ -1012,6 +1093,31 @@ pub async fn dry_run(
                 "http 任务必须提供 http_method / http_url".to_string(),
             ));
         }
+    } else if kind == "workflow" {
+        let tenant_id = req.tenant_id.ok_or_else(|| {
+            AppError::InvalidQuery("工作流任务必须属于一个项目（tenant_id）".into())
+        })?;
+        let wf_id = req
+            .workflow_id
+            .ok_or_else(|| AppError::InvalidQuery("工作流任务必须提供 workflow_id".into()))?;
+        let wf = load_enabled_workflow_for_tenant(&pool, wf_id, tenant_id).await?;
+        let _ = workflow_input_or_empty(req.workflow_input.clone())?;
+        return Ok(Json(json!({
+            "dry_run": true,
+            "ok": true,
+            "kind": "workflow",
+            "workflow_id": wf.id,
+            "workflow_slug": wf.slug,
+            "status": "success",
+            "output": {
+                "ok": true,
+                "kind": "workflow",
+                "workflow_id": wf.id,
+                "workflow_slug": wf.slug,
+            },
+            "error_message": null,
+            "duration_ms": 0,
+        })));
     }
 
     // 试运行单次超时：上限沿用 schema 的 1..=86400（24h）；前端不传时默认 60。
@@ -1050,6 +1156,9 @@ pub async fn dry_run(
         shell_script: req.shell_script.clone(),
         shell_env: req.shell_env.clone(),
         shell_cwd: req.shell_cwd.clone(),
+        workflow_id: req.workflow_id,
+        workflow_slug: None,
+        workflow_input: req.workflow_input.clone(),
         is_active: true,
         timeout_secs: timeout_secs,
         max_retries: 0,

@@ -9,7 +9,10 @@
 //!   单个 due 任务只会被其中一个 runner claim，最终 `scheduled_task_runs` 只有 1 行。
 //! - HTTP 调用本身会失败（example.test 不存在），无所谓——我们只验证 claim 去重。
 
-use onebase::scheduler::executors::{HttpExecutor, RpcExecutor, ShellExecutor, ShellSandboxMode};
+use onebase::scheduler::executors::{
+    HttpExecutor, RpcExecutor, ShellExecutor, ShellSandboxMode, UnsupportedWorkflowExecutor,
+    WorkflowKindExecutor,
+};
 use onebase::scheduler::runner::{SchedulerConfig, SchedulerRunner};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -61,12 +64,14 @@ async fn two_runners_do_not_double_claim() {
     // 测试任务是 http kind，shell executor 不会被触发；用 Off 沙盒模式避免依赖 bwrap/nsjail。
     let shell = Arc::new(ShellExecutor::new(ShellSandboxMode::Off));
 
+    let workflow: Arc<dyn WorkflowKindExecutor> = Arc::new(UnsupportedWorkflowExecutor);
     let r1 = Arc::new(SchedulerRunner::new(
         pool.clone(),
         SchedulerConfig::default(),
         rpc.clone(),
         http.clone(),
         shell.clone(),
+        workflow.clone(),
     ));
     let r2 = Arc::new(SchedulerRunner::new(
         pool.clone(),
@@ -74,6 +79,7 @@ async fn two_runners_do_not_double_claim() {
         rpc,
         http,
         shell,
+        workflow,
     ));
 
     // tick 是 private，通过 start() 启循环 + 短暂 sleep 观察。

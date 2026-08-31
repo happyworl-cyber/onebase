@@ -57,6 +57,12 @@ pub struct UserConnection {
     pub db_name: String,
     pub is_primary: bool,
     pub user_role: String,
+    #[serde(default)]
+    #[sqlx(default)]
+    pub max_connections: Option<i32>,
+    #[serde(default)]
+    #[sqlx(default)]
+    pub connection_timeout: Option<i32>,
 }
 
 /// 测试连接请求

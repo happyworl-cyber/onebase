@@ -22,10 +22,10 @@ use serde_json::Value;
 use sqlx::{PgPool, Row};
 use tokio::task::JoinHandle;
 
+use crate::pg_listen_hub::ListenHub;
 use crate::sse::{SseEnvelope, SseHub};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(10);
-const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
 /// 一条监听桥配置。`(database_id, channel, topic_template, event_name)` 任一变化都视为
 /// 新 listener（旧的 abort），从而无需在运行中热更模板。
@@ -104,8 +104,13 @@ impl BridgeMetrics {
 // ───── 启动 / 配置刷新 ─────────────────────────────────────
 
 /// 启动监听桥管理任务：每 `REFRESH_INTERVAL` 读取启用配置，与正在运行的 listener 集合 diff，
-/// 新增的起 listener、移除/停用的 abort。
-pub fn start(main_pool: PgPool, hub: SseHub, metrics: BridgeMetrics) -> JoinHandle<()> {
+/// 新增的起 listener、移除/停用的 abort。消费任务向 `ListenHub` 订阅，不再自建 LISTEN 连接。
+pub fn start(
+    main_pool: PgPool,
+    hub: SseHub,
+    metrics: BridgeMetrics,
+    listen: ListenHub,
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         tracing::info!(
             "SSE NOTIFY 监听桥管理任务已启动 (interval={:?})",
@@ -116,8 +121,16 @@ pub fn start(main_pool: PgPool, hub: SseHub, metrics: BridgeMetrics) -> JoinHand
         loop {
             match load_active_bridges(&main_pool).await {
                 Ok(configs) => {
-                    // 移除：正在跑但已不在配置里的。
+                    // 移除：正在跑但已不在配置里的。已结束的消费任务不 abort，下次扫描重新订阅。
                     running.retain(|cfg, handle| {
+                        if handle.is_finished() {
+                            tracing::warn!(
+                                database_id = cfg.database_id,
+                                channel = %cfg.channel,
+                                "SSE 监听桥订阅已结束，下次扫描将重新订阅"
+                            );
+                            return false;
+                        }
                         let keep = configs.contains(cfg);
                         if !keep {
                             tracing::info!(
@@ -138,12 +151,64 @@ pub fn start(main_pool: PgPool, hub: SseHub, metrics: BridgeMetrics) -> JoinHand
                                 cfg.channel,
                                 cfg.topic_template
                             );
-                            let handle = tokio::spawn(run_listener(
-                                main_pool.clone(),
-                                hub.clone(),
-                                metrics.clone(),
-                                cfg.clone(),
-                            ));
+                            let listen = listen.clone();
+                            let hub = hub.clone();
+                            let metrics = metrics.clone();
+                            let cfg_for_task = cfg.clone();
+                            let handle = tokio::spawn(async move {
+                                let cfg = cfg_for_task;
+                                let stat = metrics.stat(cfg.database_id, &cfg.channel);
+                                let mut sub = listen.subscribe(cfg.database_id, &cfg.channel);
+                                stat.connected.store(true, Ordering::Relaxed);
+                                tracing::info!(
+                                    "监听桥已就绪: LISTEN {} (database_id={})",
+                                    cfg.channel,
+                                    cfg.database_id
+                                );
+                                while let Some(notice) = sub.recv().await {
+                                    stat.received.fetch_add(1, Ordering::Relaxed);
+                                    match serde_json::from_str::<Value>(&notice.payload) {
+                                        Ok(payload) => {
+                                            match render_topic(&cfg.topic_template, &payload) {
+                                                Some(topic) => {
+                                                    hub.publish_local(SseEnvelope {
+                                                        topic,
+                                                        event: cfg.event_name.clone(),
+                                                        data: payload,
+                                                        id: None,
+                                                        ts: Utc::now(),
+                                                        replicate: false,
+                                                    });
+                                                    stat.published.fetch_add(1, Ordering::Relaxed);
+                                                }
+                                                None => {
+                                                    stat.parse_error
+                                                        .fetch_add(1, Ordering::Relaxed);
+                                                    tracing::warn!(
+                                                        "监听桥 payload 缺占位符字段，跳过 (channel={}, template={})",
+                                                        cfg.channel,
+                                                        cfg.topic_template
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            stat.parse_error.fetch_add(1, Ordering::Relaxed);
+                                            tracing::warn!(
+                                                "监听桥 payload 非 JSON，跳过 (channel={}): {}",
+                                                cfg.channel,
+                                                e
+                                            );
+                                        }
+                                    }
+                                }
+                                stat.connected.store(false, Ordering::Relaxed);
+                                tracing::warn!(
+                                    database_id = cfg.database_id,
+                                    channel = %cfg.channel,
+                                    "监听桥 recv 已结束"
+                                );
+                            });
                             running.insert(cfg, handle);
                         }
                     }
@@ -172,127 +237,6 @@ async fn load_active_bridges(pool: &PgPool) -> Result<Vec<BridgeConfig>, sqlx::E
             event_name: r.get("event_name"),
         })
         .collect())
-}
-
-// ───── 单个 listener ───────────────────────────────────────
-
-/// 对单个 `(database_id, channel)` 持续 `LISTEN`：断线 5s 重连，脏 payload 跳过不退出。
-/// 被管理任务 `abort()` 时整体取消（释放业务库连接）。
-async fn run_listener(main_pool: PgPool, hub: SseHub, metrics: BridgeMetrics, cfg: BridgeConfig) {
-    let stat = metrics.stat(cfg.database_id, &cfg.channel);
-
-    loop {
-        // 独立单连接池 + LISTEN，不占用业务 POOL_MANAGER 槽位。
-        let db_config =
-            match crate::auto_api_handlers::load_database_config(&main_pool, cfg.database_id).await
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    stat.connected.store(false, Ordering::Relaxed);
-                    tracing::warn!(
-                        "监听桥加载业务库配置失败 (database_id={}): {}，{:?} 后重试",
-                        cfg.database_id,
-                        e,
-                        RECONNECT_DELAY
-                    );
-                    tokio::time::sleep(RECONNECT_DELAY).await;
-                    continue;
-                }
-            };
-
-        let (_listen_pool, mut listener) =
-            match crate::pool_manager::connect_dedicated_listener(&db_config).await {
-                Ok(pair) => pair,
-                Err(e) => {
-                    stat.connected.store(false, Ordering::Relaxed);
-                    tracing::warn!(
-                        "监听桥建立 LISTEN 连接失败 (database_id={}): {}，{:?} 后重连",
-                        cfg.database_id,
-                        e,
-                        RECONNECT_DELAY
-                    );
-                    stat.reconnect.fetch_add(1, Ordering::Relaxed);
-                    tokio::time::sleep(RECONNECT_DELAY).await;
-                    continue;
-                }
-            };
-
-        if let Err(e) = listener.listen(&cfg.channel).await {
-            stat.connected.store(false, Ordering::Relaxed);
-            tracing::warn!(
-                "监听桥 LISTEN {} 失败 (database_id={}): {}，{:?} 后重连",
-                cfg.channel,
-                cfg.database_id,
-                e,
-                RECONNECT_DELAY
-            );
-            stat.reconnect.fetch_add(1, Ordering::Relaxed);
-            tokio::time::sleep(RECONNECT_DELAY).await;
-            continue;
-        }
-
-        stat.connected.store(true, Ordering::Relaxed);
-        tracing::info!(
-            "监听桥已就绪: LISTEN {} (database_id={})",
-            cfg.channel,
-            cfg.database_id
-        );
-
-        // 内层循环消费通知；断开则跳出到外层重连。
-        loop {
-            match listener.recv().await {
-                Ok(notification) => {
-                    stat.received.fetch_add(1, Ordering::Relaxed);
-                    let payload_str = notification.payload();
-                    match serde_json::from_str::<Value>(payload_str) {
-                        Ok(payload) => match render_topic(&cfg.topic_template, &payload) {
-                            Some(topic) => {
-                                hub.publish_local(SseEnvelope {
-                                    topic,
-                                    event: cfg.event_name.clone(),
-                                    data: payload,
-                                    id: None,
-                                    ts: Utc::now(),
-                                    replicate: false,
-                                });
-                                stat.published.fetch_add(1, Ordering::Relaxed);
-                            }
-                            None => {
-                                stat.parse_error.fetch_add(1, Ordering::Relaxed);
-                                tracing::warn!(
-                                    "监听桥 payload 缺占位符字段，跳过 (channel={}, template={})",
-                                    cfg.channel,
-                                    cfg.topic_template
-                                );
-                            }
-                        },
-                        Err(e) => {
-                            stat.parse_error.fetch_add(1, Ordering::Relaxed);
-                            tracing::warn!(
-                                "监听桥 payload 非 JSON，跳过 (channel={}): {}",
-                                cfg.channel,
-                                e
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
-                    stat.connected.store(false, Ordering::Relaxed);
-                    stat.reconnect.fetch_add(1, Ordering::Relaxed);
-                    tracing::warn!(
-                        "监听桥连接中断 (database_id={}, channel={}): {}，{:?} 后重连",
-                        cfg.database_id,
-                        cfg.channel,
-                        e,
-                        RECONNECT_DELAY
-                    );
-                    break;
-                }
-            }
-        }
-
-        tokio::time::sleep(RECONNECT_DELAY).await;
-    }
 }
 
 // ───── topic 模板渲染 ──────────────────────────────────────

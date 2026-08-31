@@ -1396,7 +1396,7 @@ export interface ScheduledTask {
   description: string | null
   cron_expr: string
   timezone: string
-  kind: 'rpc' | 'http' | 'shell'
+  kind: 'rpc' | 'http' | 'shell' | 'workflow'
   database_id: number | null
   rpc_schema: string | null
   rpc_fn_name: string | null
@@ -1416,6 +1416,9 @@ export interface ScheduledTask {
   shell_env: Record<string, unknown> | null
   /** 子进程工作目录；null → 沙盒内的 /tmp */
   shell_cwd: string | null
+  workflow_id?: number | null
+  workflow_slug?: string | null
+  workflow_input?: Record<string, unknown> | null
   is_active: boolean
   timeout_secs: number
   max_retries: number
@@ -1456,7 +1459,7 @@ export interface CreateScheduledTaskInput {
   description?: string
   cron_expr: string
   timezone?: string
-  kind: 'rpc' | 'http' | 'shell'
+  kind: 'rpc' | 'http' | 'shell' | 'workflow'
   database_id?: number
   rpc_schema?: string
   rpc_fn_name?: string
@@ -1475,6 +1478,8 @@ export interface CreateScheduledTaskInput {
   shell_env?: Record<string, unknown>
   /** kind='shell' 专属：子进程 cwd；留空 → 沙盒内的 /tmp */
   shell_cwd?: string
+  workflow_id?: number | null
+  workflow_input?: Record<string, unknown> | null
   timeout_secs?: number
   max_retries?: number
   overlap_policy?: 'skip' | 'allow'
@@ -1501,6 +1506,8 @@ export interface UpdateScheduledTaskInput {
   shell_script?: string
   shell_env?: Record<string, unknown>
   shell_cwd?: string
+  workflow_id?: number | null
+  workflow_input?: Record<string, unknown> | null
   timeout_secs?: number
   max_retries?: number
   overlap_policy?: 'skip' | 'allow'

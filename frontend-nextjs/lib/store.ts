@@ -29,6 +29,8 @@ interface UserConnection {
   db_name: string
   is_primary: boolean
   user_role: string
+  max_connections?: number | null
+  connection_timeout?: number | null
 }
 
 interface Database {

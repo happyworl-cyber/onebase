@@ -9,6 +9,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import api from '@/lib/api'
+import { TenantPoolSettingsForm } from '@/components/TenantPoolSettings'
 
 interface DbStats {
   database_size: string
@@ -337,8 +338,14 @@ export default function MonitorPage() {
           <WaterCard
             label="LISTEN 独立连接"
             value={String(health.listeners.dedicated_connections)}
-            sub={`SSE ${health.listeners.sse_bridges} · notify ${health.listeners.notify_workflows}`}
-            tone={health.listeners.dedicated_connections >= 20 ? 'yellow' : 'blue'}
+            sub={`连接 · 兴趣 SSE ${health.listeners.sse_bridges} · notify ${health.listeners.notify_workflows}`}
+            tone={
+              health.listeners.dedicated_connections > 1
+                ? 'yellow'
+                : health.listeners.dedicated_connections >= 20
+                  ? 'yellow'
+                  : 'blue'
+            }
           />
           <WaterCard
             label="Acquire 超时（近似）"
@@ -430,23 +437,21 @@ export default function MonitorPage() {
               value={`${health.app_pool.in_use} in_use / ${health.app_pool.size} size / ${health.app_pool.max} max`}
             />
             <Kv label="min_connections" value={String(health.app_pool.min)} />
-            <Kv label="acquire_timeout" value={`${health.app_pool.acquire_timeout_secs}s`} />
-            <Kv
-              label="DB 配置 max"
-              value={
-                health.app_pool.db_configured_max != null
-                  ? String(health.app_pool.db_configured_max)
-                  : '-'
-              }
-            />
-            <Kv
-              label="TENANT_DB_MAX_CONNECTIONS"
-              value={
-                health.app_pool.env_override != null
-                  ? String(health.app_pool.env_override)
-                  : '未设置'
-              }
-            />
+            <div className="pt-2 border-t">
+              <h4 className="text-sm font-medium text-gray-800 mb-3">调整连接池</h4>
+              <TenantPoolSettingsForm
+                databaseId={health.app_pool.database_id}
+                databaseSlug={health.app_pool.database_id}
+                initialMax={health.app_pool.db_configured_max ?? health.app_pool.max ?? 20}
+                initialTimeout={health.app_pool.acquire_timeout_secs || 8}
+                envOverride={health.app_pool.env_override}
+                liveMax={health.app_pool.loaded ? health.app_pool.max : null}
+                liveTimeout={health.app_pool.loaded ? health.app_pool.acquire_timeout_secs : null}
+                onSaved={() => {
+                  loadAll()
+                }}
+              />
+            </div>
           </div>
           <div className="card p-6 space-y-4">
             <h3 className="text-sm font-semibold text-gray-700">PG 会话摘要</h3>
@@ -548,6 +553,21 @@ export default function MonitorPage() {
               <MiniStat label="max" value={String(health.app_pool.max)} />
             </div>
           </div>
+          <div className="card p-6">
+            <h3 className="text-sm font-semibold text-gray-700 mb-3">调整连接池</h3>
+            <TenantPoolSettingsForm
+              databaseId={health.app_pool.database_id}
+              databaseSlug={health.app_pool.database_id}
+              initialMax={health.app_pool.db_configured_max ?? health.app_pool.max ?? 20}
+              initialTimeout={health.app_pool.acquire_timeout_secs || 8}
+              envOverride={health.app_pool.env_override}
+              liveMax={health.app_pool.loaded ? health.app_pool.max : null}
+              liveTimeout={health.app_pool.loaded ? health.app_pool.acquire_timeout_secs : null}
+              onSaved={() => {
+                loadAll()
+              }}
+            />
+          </div>
           {health.app_pool.replicas.length > 0 && (
             <div className="card overflow-hidden">
               <table className="w-full text-sm">
@@ -579,12 +599,12 @@ export default function MonitorPage() {
           <div className="card p-6">
             <h3 className="text-sm font-semibold text-gray-700 mb-3">LISTEN 独立连接（不占业务池）</h3>
             <div className="grid grid-cols-3 gap-3">
-              <MiniStat label="合计" value={String(health.listeners.dedicated_connections)} />
-              <MiniStat label="SSE bridges" value={String(health.listeners.sse_bridges)} />
-              <MiniStat label="notify workflows" value={String(health.listeners.notify_workflows)} />
+              <MiniStat label="连接" value={String(health.listeners.dedicated_connections)} />
+              <MiniStat label="SSE 兴趣" value={String(health.listeners.sse_bridges)} />
+              <MiniStat label="notify 兴趣" value={String(health.listeners.notify_workflows)} />
             </div>
             <p className="text-xs text-gray-400 mt-3">
-              数值来自管理库配置去重计数；LISTEN 隔离改造后这些连接不再占用上方业务池槽位。
+              连接数是本库实际 LISTEN 连接（同库多 channel 共用一条）。SSE / notify 是登记的兴趣数。
             </p>
           </div>
         </div>

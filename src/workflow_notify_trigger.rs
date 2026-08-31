@@ -11,16 +11,16 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use tokio::task::JoinHandle;
 
+use crate::pg_listen_hub::ListenHub;
 use crate::workflow_handlers;
 use crate::workflow_handlers::Workflow;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(10);
-const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct NotifyTriggerConfig {
-    database_id: i32,
-    channel: String,
+pub(crate) struct NotifyTriggerConfig {
+    pub(crate) database_id: i32,
+    pub(crate) channel: String,
 }
 
 fn notify_config_for_workflow(_workflow: &Workflow) -> Option<NotifyTriggerConfig> {
@@ -71,9 +71,9 @@ fn workflow_matches_notify(_workflow: &Workflow, _database_id: i32, _channel: &s
 
 /// 启动工作流 NOTIFY 触发器管理任务。
 ///
-/// 每 10s 扫描启用的 `trigger_type='notify'` 工作流，按 `(database_id, channel)` 去重启动
-/// listener。收到 NOTIFY 后再实时查询匹配工作流并触发，保证工作流节点/配置更新无需重启。
-pub fn start_notify_trigger(main_pool: PgPool) -> JoinHandle<()> {
+/// 每 10s 扫描启用的 `trigger_type='notify'` 工作流，按 `(database_id, channel)` 去重
+/// 向 `ListenHub` 订阅。收到 NOTIFY 后再实时查询匹配工作流并触发，保证工作流节点/配置更新无需重启。
+pub fn start_notify_trigger(main_pool: PgPool, hub: ListenHub) -> JoinHandle<()> {
     tokio::spawn(async move {
         tracing::info!(
             "工作流 NOTIFY 触发器管理任务已启动 (interval={:?})",
@@ -85,6 +85,14 @@ pub fn start_notify_trigger(main_pool: PgPool) -> JoinHandle<()> {
             match load_active_notify_configs(&main_pool).await {
                 Ok(configs) => {
                     running.retain(|cfg, handle| {
+                        if handle.is_finished() {
+                            tracing::warn!(
+                                database_id = cfg.database_id,
+                                channel = %cfg.channel,
+                                "工作流 NOTIFY 订阅已结束，下次扫描将重新订阅"
+                            );
+                            return false;
+                        }
                         let keep = configs.contains(cfg);
                         if !keep {
                             tracing::info!(
@@ -104,8 +112,40 @@ pub fn start_notify_trigger(main_pool: PgPool) -> JoinHandle<()> {
                                 channel = %cfg.channel,
                                 "启动工作流 NOTIFY listener"
                             );
-                            let handle = tokio::spawn(run_listener(main_pool.clone(), cfg.clone()));
-                            running.insert(cfg, handle);
+                            let mut sub = hub.subscribe(cfg.database_id, &cfg.channel);
+                            let pool = main_pool.clone();
+                            let database_id = cfg.database_id;
+                            let channel = cfg.channel.clone();
+                            let task = tokio::spawn(async move {
+                                while let Some(notice) = sub.recv().await {
+                                    match build_trigger_data(
+                                        notice.database_id,
+                                        &notice.channel,
+                                        &notice.payload,
+                                    ) {
+                                        Some(trigger_data) => {
+                                            trigger_matching_workflows(
+                                                &pool,
+                                                notice.database_id,
+                                                &notice.channel,
+                                                trigger_data,
+                                            )
+                                            .await;
+                                        }
+                                        None => tracing::warn!(
+                                            database_id = notice.database_id,
+                                            channel = %notice.channel,
+                                            "工作流 NOTIFY payload 非 JSON，跳过"
+                                        ),
+                                    }
+                                }
+                                tracing::warn!(
+                                    database_id,
+                                    channel = %channel,
+                                    "工作流 NOTIFY recv 已结束"
+                                );
+                            });
+                            running.insert(cfg, task);
                         }
                     }
                 }
@@ -117,7 +157,7 @@ pub fn start_notify_trigger(main_pool: PgPool) -> JoinHandle<()> {
     })
 }
 
-async fn load_active_notify_configs(
+pub(crate) async fn load_active_notify_configs(
     pool: &PgPool,
 ) -> Result<Vec<NotifyTriggerConfig>, sqlx::Error> {
     let workflows = sqlx::query_as::<_, Workflow>(
@@ -135,110 +175,6 @@ async fn load_active_notify_configs(
         }
     }
     Ok(configs)
-}
-
-/// 某业务库上启用的 notify listener 数量（按 channel 去重）。
-///
-/// 监控页要展示「LISTEN 独立连接占了几条」，必须和管理任务实际起的 listener 数量一致。
-/// 所以复用 `load_active_notify_configs` 的去重规则，而不是在 handler 里另写一条
-/// `COUNT(DISTINCT trigger_config->>'channel')` —— 后者会漏掉
-/// `trigger_config.database_id` 回退 `workflows.database_id` 的逻辑，日后必然漂移。
-pub(crate) async fn active_listener_count(
-    main_pool: &PgPool,
-    database_id: i32,
-) -> Result<usize, sqlx::Error> {
-    let configs = load_active_notify_configs(main_pool).await?;
-    Ok(configs
-        .iter()
-        .filter(|c| c.database_id == database_id)
-        .count())
-}
-
-async fn run_listener(main_pool: PgPool, cfg: NotifyTriggerConfig) {
-    loop {
-        // 独立单连接池 + LISTEN，不占用业务 POOL_MANAGER 槽位。
-        let db_config =
-            match crate::auto_api_handlers::load_database_config(&main_pool, cfg.database_id).await
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!(
-                        database_id = cfg.database_id,
-                        error = %e,
-                        "工作流 NOTIFY listener 加载业务库配置失败，稍后重试"
-                    );
-                    tokio::time::sleep(RECONNECT_DELAY).await;
-                    continue;
-                }
-            };
-
-        let (_listen_pool, mut listener) =
-            match crate::pool_manager::connect_dedicated_listener(&db_config).await {
-                Ok(pair) => pair,
-                Err(e) => {
-                    tracing::warn!(
-                        database_id = cfg.database_id,
-                        channel = %cfg.channel,
-                        error = %e,
-                        "工作流 NOTIFY listener 建立连接失败，稍后重连"
-                    );
-                    tokio::time::sleep(RECONNECT_DELAY).await;
-                    continue;
-                }
-            };
-
-        if let Err(e) = listener.listen(&cfg.channel).await {
-            tracing::warn!(
-                database_id = cfg.database_id,
-                channel = %cfg.channel,
-                error = %e,
-                "工作流 NOTIFY LISTEN 失败，稍后重连"
-            );
-            tokio::time::sleep(RECONNECT_DELAY).await;
-            continue;
-        }
-
-        tracing::info!(
-            database_id = cfg.database_id,
-            channel = %cfg.channel,
-            "工作流 NOTIFY listener 已就绪"
-        );
-
-        loop {
-            match listener.recv().await {
-                Ok(notification) => {
-                    let payload_raw = notification.payload();
-                    match build_trigger_data(cfg.database_id, &cfg.channel, payload_raw) {
-                        Some(trigger_data) => {
-                            trigger_matching_workflows(
-                                &main_pool,
-                                cfg.database_id,
-                                &cfg.channel,
-                                trigger_data,
-                            )
-                            .await;
-                        }
-                        None => tracing::warn!(
-                            database_id = cfg.database_id,
-                            channel = %cfg.channel,
-                            "工作流 NOTIFY payload 非 JSON，跳过"
-                        ),
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        database_id = cfg.database_id,
-                        channel = %cfg.channel,
-                        error = %e,
-                        "工作流 NOTIFY listener 连接中断，稍后重连"
-                    );
-                    break;
-                }
-            }
-        }
-
-        tokio::time::sleep(RECONNECT_DELAY).await;
-    }
 }
 
 async fn trigger_matching_workflows(

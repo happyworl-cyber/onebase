@@ -92,33 +92,11 @@ const SQL_KEYWORDS = [
   'BEGIN', 'COMMIT', 'ROLLBACK', 'TRANSACTION', 'GRANT', 'REVOKE', 'TRUNCATE'
 ]
 
-// 剥掉 SQL 开头的 -- 行注释 和 /* */ 块注释，让 getSqlType 能识别
-// "脚本第一行是注释" 的常见写法。逻辑必须和后端
-// `raw_sql_guard::strip_leading_sql_comments` 保持一致——任何一边漏剥都会
-// 让首关键字误判，进而触发 acknowledge_destructive 不一致的 400。
-function stripLeadingSqlComments(sql: string): string {
-  let rest = sql
-  while (true) {
-    const trimmed = rest.replace(/^\s+/, '')
-    if (trimmed.startsWith('--')) {
-      const nl = trimmed.indexOf('\n', 2)
-      if (nl < 0) return ''
-      rest = trimmed.slice(nl + 1)
-    } else if (trimmed.startsWith('/*')) {
-      const end = trimmed.indexOf('*/', 2)
-      if (end < 0) return ''
-      rest = trimmed.slice(end + 2)
-    } else {
-      return trimmed
-    }
-  }
-}
-
 // 判断 SQL 类型——返回的是"裸首关键字"（如 'GRANT' / 'BEGIN'），
 // 不是后端那种归类标签（'PERMISSION' / 'TRANSACTION'）；后端审计日志
 // 用的是分类标签，但前端 UI 直接给用户看关键字更直白。
 function getSqlType(sql: string): string {
-  const body = stripLeadingSqlComments(sql)
+  const body = stripSqlComments(sql)
   const firstWord = body.toUpperCase().split(/\s+/)[0]
   return firstWord || 'UNKNOWN'
 }
@@ -150,7 +128,7 @@ function stripSqlComments(sql: string): string {
   let inSingle = false
   let inDouble = false
   let inLineComment = false
-  let inBlockComment = false
+  let blockDepth = 0
   let dollarTag: string | null = null
 
   while (i < n) {
@@ -165,10 +143,13 @@ function stripSqlComments(sql: string): string {
       i++
       continue
     }
-    if (inBlockComment) {
-      if (ch === '*' && next === '/') {
+    if (blockDepth > 0) {
+      if (ch === '/' && next === '*') {
+        blockDepth++
         i += 2
-        inBlockComment = false
+      } else if (ch === '*' && next === '/') {
+        blockDepth--
+        i += 2
       } else if (ch === '\n') {
         out += ch
         i++
@@ -220,7 +201,7 @@ function stripSqlComments(sql: string): string {
       continue
     }
     if (ch === '/' && next === '*') {
-      inBlockComment = true
+      blockDepth = 1
       i += 2
       continue
     }
@@ -253,7 +234,7 @@ function stripSqlComments(sql: string): string {
 
 // 判断是否是危险操作
 function isDangerousOperation(sql: string): boolean {
-  const upper = sql.toUpperCase()
+  const upper = stripSqlComments(sql).toUpperCase()
   return upper.includes('DROP') || upper.includes('TRUNCATE') || upper.includes('DELETE FROM') && !upper.includes('WHERE')
 }
 
@@ -269,7 +250,7 @@ function splitSqlStatements(sql: string): string[] {
   let inSingle = false
   let inDouble = false
   let inLineComment = false
-  let inBlockComment = false
+  let blockDepth = 0
   let dollarTag: string | null = null
 
   while (i < n) {
@@ -284,10 +265,15 @@ function splitSqlStatements(sql: string): string[] {
       i++
       continue
     }
-    if (inBlockComment) {
-      if (ch === '*' && next === '/') {
+    if (blockDepth > 0) {
+      if (ch === '/' && next === '*') {
+        blockDepth++
         i += 2
-        inBlockComment = false
+        continue
+      }
+      if (ch === '*' && next === '/') {
+        blockDepth--
+        i += 2
         continue
       }
       if (ch === '\n') cur += ch
@@ -338,7 +324,7 @@ function splitSqlStatements(sql: string): string[] {
       continue
     }
     if (ch === '/' && next === '*') {
-      inBlockComment = true
+      blockDepth = 1
       i += 2
       continue
     }
@@ -374,7 +360,7 @@ function splitSqlStatements(sql: string): string[] {
   }
   if (cur.trim()) stmts.push(cur.trim())
   // 丢掉纯注释 / 空白的“语句”
-  return stmts.filter((s) => stripLeadingSqlComments(s).trim() !== '')
+  return stmts.filter((s) => stripSqlComments(s) !== '')
 }
 
 export default function QueryPage() {
@@ -716,7 +702,7 @@ export default function QueryPage() {
         <div>
           <h1 className="text-2xl font-semibold text-gray-800">SQL 编辑器</h1>
           <p className="text-sm text-gray-500 mt-1">
-            支持所有 SQL 操作 · 可用 ; 分隔一次执行多条语句 · 快捷键: Ctrl+Enter 执行
+            支持所有 SQL 操作 · -- 与 /* */ 注释执行时自动忽略 · 可用 ; 分隔一次执行多条语句 · 快捷键: Ctrl+Enter 执行
           </p>
         </div>
         
@@ -788,7 +774,7 @@ export default function QueryPage() {
                 onChange={(e) => setSql(e.target.value)}
                 onKeyDown={handleKeyDown}
                 className="w-full h-full p-4 font-mono text-sm resize-none focus:outline-none border-0"
-                placeholder="输入 SQL 查询语句... (支持 SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP 等)"
+                placeholder="输入 SQL… 支持 -- 行注释和 /* */ 块注释（执行时忽略）。可用 ; 分隔多条语句。"
                 spellCheck={false}
               />
             </div>

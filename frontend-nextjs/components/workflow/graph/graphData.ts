@@ -3,22 +3,32 @@ import { SHARED_DEPARTMENT_NAME, UNCATEGORIZED_FOLDER_NAME } from '@/components/
 import type { DependencyGraphEdge, DependencyGraphNode } from './graphApi'
 
 /**
- * 关注的特殊节点类型 —— 与后端 DEPENDENCY_GRAPH_SPECIAL_TYPES 完全对齐（不是 spec 里的松散别名）。
+ * 关注的特殊节点类型 —— 节点级四类（sse_publish/http_call/kafka/redis）与后端
+ * DEPENDENCY_GRAPH_SPECIAL_TYPES 完全对齐；trigger_cron/trigger_notify 两类是后端按
+ * 工作流 trigger_type（node_spec 触发类型清单）派生出的合成标记，同样塞进 specialFlags
+ * 数组（不是 spec 里的松散别名）。
  * 图标语言与控制台侧栏对齐（同用 Font Awesome 6 Free solid），不再用 emoji：
  * - faClass 供右侧图例 DOM 渲染（`<i className="fas {faClass}">`，与侧栏图标同一套字体）；
  * - glyph 是同一枚图标的 FA unicode 码点，供 G6 canvas 角标绘制文字用（canvas 画不出 <i> 标签，
  *   只能把 fontFamily 设成 "Font Awesome 6 Free"、fontWeight 900 后画对应码点字符）。
- * color 供画布角标底色 + 图例圆点取色，与部门配色板同源于既有触发器徽标色系 indigo/sky/emerald/rose。
+ * color 供画布角标底色 + 图例圆点取色，与部门配色板同源于既有触发器徽标色系
+ * indigo/sky/emerald/rose/violet/teal。
  */
 export const SPECIAL_FLAG_META: Record<
   string,
-  { label: string; faClass: string; glyph: string; color: string; dotClass: string }
+  { label: string; shortLabel: string; faClass: string; glyph: string; color: string; dotClass: string }
 > = {
-  sse_publish: { label: 'SSE 推送', faClass: 'fa-satellite-dish', glyph: '', color: '#6366f1', dotClass: 'bg-indigo-500' },
-  http_call: { label: 'HTTP 调用', faClass: 'fa-globe', glyph: '', color: '#0ea5e9', dotClass: 'bg-sky-500' },
-  kafka: { label: 'Kafka 消息', faClass: 'fa-layer-group', glyph: '', color: '#10b981', dotClass: 'bg-emerald-500' },
-  redis: { label: 'Redis 操作', faClass: 'fa-bolt', glyph: '', color: '#f43f5e', dotClass: 'bg-rose-500' },
+  sse_publish: { label: 'SSE 推送', shortLabel: 'SSE', faClass: 'fa-satellite-dish', glyph: '', color: '#6366f1', dotClass: 'bg-indigo-500' },
+  http_call: { label: 'HTTP 调用', shortLabel: 'HTTP', faClass: 'fa-globe', glyph: '', color: '#0ea5e9', dotClass: 'bg-sky-500' },
+  kafka: { label: 'Kafka 消息', shortLabel: 'Kafka', faClass: 'fa-layer-group', glyph: '', color: '#10b981', dotClass: 'bg-emerald-500' },
+  redis: { label: 'Redis 操作', shortLabel: 'Redis', faClass: 'fa-bolt', glyph: '', color: '#f43f5e', dotClass: 'bg-rose-500' },
+  trigger_cron: { label: '定时执行', shortLabel: '定时', faClass: 'fa-clock', glyph: '', color: '#7c3aed', dotClass: 'bg-violet-500' },
+  trigger_notify: { label: '等待 Notify', shortLabel: 'Notify', faClass: 'fa-bell', glyph: '', color: '#0d9488', dotClass: 'bg-teal-500' },
 }
+
+/** 特殊节点筛选器（左上角 chip 组）展示顺序：boss 点名的四类在前（定时/redis/kafka/notify），
+ *  其余数据里实际存在的特殊类型追加在后。与 SPECIAL_FLAG_META 的 key 集合保持一致。 */
+export const SPECIAL_FLAG_FILTER_ORDER = ['trigger_cron', 'redis', 'kafka', 'trigger_notify', 'sse_publish', 'http_call']
 
 export const DEPT_COMBO_PREFIX = 'graph-dept::'
 export const CAT_COMBO_PREFIX = 'graph-cat::'
@@ -180,7 +190,14 @@ const INSIDE_BADGE_OFFSETS: Record<number, [number, number][]> = {
  * 否则字体没加载完/映射不到就会退化成方块或不相关字符。
  */
 function specialFlagBadges(flags: string[], nodeCount: number): NodeBadgeStyleProps[] {
-  const active = flags.filter((f) => SPECIAL_FLAG_META[f]).slice(0, 4)
+  // 返工建议④：后端 specialFlags 数组按 BTreeSet 字典序排列（http_call < kafka < redis <
+  // sse_publish < trigger_cron < trigger_notify）——若直接按数组原序取前 4，trigger_cron/
+  // trigger_notify（boss 点名的定时/notify）会被字典序更靠前的四个挤出去、角标静默丢失。
+  // 截断前先按 SPECIAL_FLAG_FILTER_ORDER（筛选器展示顺序，boss 点名的四类在前）重排。
+  const active = flags
+    .filter((f) => SPECIAL_FLAG_META[f])
+    .sort((a, b) => SPECIAL_FLAG_FILTER_ORDER.indexOf(a) - SPECIAL_FLAG_FILTER_ORDER.indexOf(b))
+    .slice(0, 4)
   if (active.length === 0) return []
   const offsets = INSIDE_BADGE_OFFSETS[active.length]
   const size = nodeVisualSize(nodeCount)
@@ -470,7 +487,6 @@ export function buildGraphData(
     combos[idx] = {
       ...combos[idx],
       style: {
-        radius: 16,
         fill: color.fill,
         fillOpacity: 0.55,
         stroke: color.stroke,
@@ -479,7 +495,11 @@ export function buildGraphData(
         labelText: `${dept} · ${count}`,
         labelFill: color.label,
         labelFontWeight: 600,
-        labelFontSize: 13,
+        // boss 反馈：全景缩到很小时服务名糊成一个灰点——静态字号在这里先给一个更大的基准
+        // （原 13→17），配合下方 applyDegradedVisibility 里按 zoom 反向补偿的动态字号
+        // （见 comboLabelBaseFontSize/effectiveComboLabelFontSize），两者共同保证任意缩放
+        // 级别下服务名都读得清。
+        labelFontSize: 17,
         labelPlacement: 'top',
         labelBackground: true,
         labelBackgroundFill: 'rgba(255,255,255,0.85)',
@@ -495,7 +515,6 @@ export function buildGraphData(
     combos[idx] = {
       ...combos[idx],
       style: {
-        radius: 10,
         // 分类子卡片比服务卡片更浅更淡：叠一层近白的填充在服务底色之上（视觉上就是"更浅一档"），
         // 描边沿用同一部门色但更细，天然读作嵌套在服务卡片内的子卡片，不需要额外配色表。
         fill: '#ffffff',
@@ -508,7 +527,9 @@ export function buildGraphData(
         // 数量不额外增加视觉噪音（本就有分类名标签，多加数量是同一行的自然延伸）。
         labelText: `${cat} · ${members.length}`,
         labelFill: '#475569',
-        labelFontSize: 11,
+        // 分类层字号维持比服务层小一档（层级感），基准同样上调（原 11→13），动态补偿见
+        // WorkflowGraphCanvas 的 applyDegradedVisibility。
+        labelFontSize: 13,
         labelPlacement: 'top',
         labelBackground: true,
         labelBackgroundFill: 'rgba(255,255,255,0.75)',
@@ -835,30 +856,38 @@ export function buildAggregatedGraphData(
     else edgeCount.set(key, { source: s, target: t, count: 1 })
   }
   const maxCount = Math.max(1, ...Array.from(edgeCount.values()).map((e) => e.count))
-  const g6Edges: EdgeData[] = Array.from(edgeCount.entries()).map(([key, e], i) => {
+  // 聚合视图降噪返工（boss 复测：22 分类 ×111 边时旧样式是"毛线球"，边墨水量压倒节点）：
+  // ① 边宽上限 12px→6px、默认态透明度压到 0.25~0.5——边是背景信息，结构主体是簇节点；
+  // ② count=1 的边不打数字标签（一屏"1"是纯噪音），count 细节靠 hover 聚焦时读；
+  // ③ 弧线只留给"双向对"（A→B 与 B→A 同时存在时对拉分开避免重叠），单向边一律直线——
+  //    旧版按 index 奇偶随机给弧度，直线更贴合分层布局的"上游→下游"阅读方向。
+  const g6Edges: EdgeData[] = Array.from(edgeCount.entries()).map(([key, e]) => {
     const t = Math.min(1, e.count / maxCount)
+    const hasReverse = edgeCount.has(`${e.target}=>${e.source}`)
     return {
       id: `agg-edge:${key}`,
       source: e.source,
       target: e.target,
       style: {
-        type: 'quadratic',
-        curveOffset: (i % 2 === 0 ? 1 : -1) * (28 + (i % 3) * 14),
-        stroke: '#64748b',
-        opacity: 0.5 + t * 0.4,
-        // 边粗细=调用条数（诉求核心）：1.5px 起步，随调用数线性放大到 ~12px。
-        lineWidth: 1.5 + t * 10.5,
+        ...(hasReverse ? { type: 'quadratic', curveOffset: 24 } : { type: 'line' }),
+        stroke: '#94a3b8',
+        opacity: 0.25 + t * 0.25,
+        lineWidth: 1.2 + t * 4.8,
         endArrow: true,
         endArrowType: 'triangle',
-        endArrowSize: 10 + t * 8,
-        labelText: String(e.count),
-        labelFontSize: 11,
-        labelFontWeight: 600,
-        labelFill: '#334155',
-        labelBackground: true,
-        labelBackgroundFill: 'rgba(255,255,255,0.9)',
-        labelBackgroundRadius: 4,
-        labelPadding: [1, 4] as [number, number],
+        endArrowSize: 7 + t * 3,
+        ...(e.count > 1
+          ? {
+              labelText: String(e.count),
+              labelFontSize: 10,
+              labelFontWeight: 600,
+              labelFill: '#64748b',
+              labelBackground: true,
+              labelBackgroundFill: 'rgba(255,255,255,0.9)',
+              labelBackgroundRadius: 4,
+              labelPadding: [1, 4] as [number, number],
+            }
+          : {}),
       },
     }
   })
@@ -922,5 +951,7 @@ export function topRankings(nodes: DependencyGraphNode[], adjacency: Adjacency, 
   }
 }
 
-/** 方案三④性能兜底：缩放层级低于该阈值时只画圆点、隐藏节点文字标签（大图密集时减少绘制开销）。 */
-export const LABEL_HIDE_ZOOM_THRESHOLD = 0.45
+// 方案三④原有的"缩放层级低于阈值全局隐藏标签"规则已废弃（拖拽帧率预研③）：静止时名字应当
+// 常显，密集靠 labelMaxWidth/labelMaxLines/省略号降级，不该靠整体消失解决可读性问题；交互中的
+// 标签降级改用 WorkflowGraphCanvas.tsx 里"视口内 + 高入度枢纽节点保留、其余临时隐藏"的精细化
+// 策略，不再是全局按缩放级别一刀切。
