@@ -60,6 +60,16 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
   useEffect(() => {
     if (typeof window === 'undefined') return
 
+    const controller = new AbortController()
+    let activeRequest = true
+
+    // URL 已切换但新项目尚未返回时，不允许任何组件继续使用上一项目上下文。
+    setCurrentProject(null)
+    setCurrentTenant(null)
+    setCurrentConnection(null)
+    setErrorState(null)
+    setAuthorized(false)
+
     const token = localStorage.getItem('token')
     if (!token) {
       router.replace('/login')
@@ -72,18 +82,13 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
       return
     }
 
-    setCurrentTenant(null)
-    // 切项目立刻清掉，避免异步拉取期间拦截器仍带上一项目的 X-Database-Id。
-    setCurrentConnection(null)
-
-    setErrorState(null)
-    setAuthorized(false)
-
     api
       .get<Project>(`/api/projects/${projectId}`, {
         suppressErrorToast: true,
+        signal: controller.signal,
       } as ApiRequestConfig)
       .then((resp) => {
+        if (!activeRequest) return
         setCurrentProject(resp.data)
 
         // 从项目响应回填组织上下文（直链进 workspace 时 store 可能为空）
@@ -129,11 +134,17 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
         setAuthorized(true)
       })
       .catch((err) => {
+        if (!activeRequest || controller.signal.aborted || err?.code === 'ERR_CANCELED') return
         const status = err?.response?.status ?? null
         const message =
           err?.response?.data?.error || err?.message || '加载项目失败'
         setErrorState({ status, message })
       })
+
+    return () => {
+      activeRequest = false
+      controller.abort()
+    }
   }, [params.projectId, router, setCurrentProject, setCurrentTenant, setCurrentConnection])
 
   // 多 Tab：绑定项目（切项目时从 sessionStorage 恢复该项目 Tab），并在授权且

@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import AiAssistantPanel from '@/components/AiAssistantPanel'
-import { AI_ASSISTANT_ENABLED } from '@/lib/embedBridge'
+import { AI_ASSISTANT_ENABLED } from '@/lib/aiAssistant'
 
 export const metadata: Metadata = {
   title: 'OneBase - PostgreSQL 管理平台',

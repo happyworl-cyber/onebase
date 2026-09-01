@@ -1,4 +1,5 @@
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
+import { AI_ASSISTANT_ENABLED } from '@/lib/aiAssistant'
 
 /**
  * 工作区导航元数据（单一信源）。
@@ -179,6 +180,12 @@ export const NAV_GROUPS: NavGroup[] = [
         href: '/settings/env-vars',
         icon: 'fas fa-sliders-h',
         visibleIf: (caps) => caps.canManageMembers,
+      },
+      {
+        label: 'AI 模型',
+        href: '/settings/ai-providers',
+        icon: 'fas fa-robot',
+        visibleIf: (caps) => AI_ASSISTANT_ENABLED && caps.canManageMembers,
       },
       {
         label: '数据库连接',

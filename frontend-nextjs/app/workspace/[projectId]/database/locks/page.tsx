@@ -18,8 +18,7 @@ import { useParams } from 'next/navigation'
 import { monitorAPI, queryPerfAPI, LockWait } from '@/lib/api'
 import { useNotification } from '@/hooks/useNotification'
 import Drawer from '@/components/Drawer'
-import { askAi } from '@/lib/aiAssistant'
-import { genRequestId } from '@/lib/embedBridge'
+import { askAi, genRequestId } from '@/lib/aiAssistant'
 import { useAppStore } from '@/lib/store'
 
 function fmtSeconds(s: number | null | undefined): string {

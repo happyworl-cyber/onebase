@@ -1,4 +1,5 @@
 mod admin_handlers;
+mod ai;
 mod alert_webhook;
 mod audit_handlers;
 mod audit_middleware;
@@ -1534,6 +1535,40 @@ async fn main() -> anyhow::Result<()> {
             onebase::license::require_module(req, next, "ai")
         }));
 
+    // 项目级通用 AI 助手：Provider 配置 admin+，聊天 member+。
+    // 配置和聊天均挂 AI License 模块闸门；聊天是长连接 SSE，不进入全局 TimeoutLayer。
+    let ai_config_routes = Router::new()
+        .route(
+            "/api/projects/:id/ai/providers",
+            get(ai::list_providers).post(ai::create_provider),
+        )
+        .route(
+            "/api/projects/:id/ai/providers/:provider_id",
+            axum::routing::put(ai::update_provider).delete(ai::delete_provider),
+        )
+        .route(
+            "/api/projects/:id/ai/providers/:provider_id/test",
+            post(ai::test_provider),
+        )
+        .layer(axum_middleware::from_fn(|req, next| {
+            onebase::license::require_module(req, next, "ai")
+        }))
+        .layer(axum_middleware::from_fn(ai::interactive_jwt_guard))
+        .layer(axum_middleware::from_fn_with_state(
+            pool.clone(),
+            middleware::auth_middleware,
+        ));
+    let ai_chat_routes = Router::new()
+        .route("/api/projects/:id/ai/chat", post(ai::chat))
+        .layer(axum_middleware::from_fn(|req, next| {
+            onebase::license::require_module(req, next, "ai")
+        }))
+        .layer(axum_middleware::from_fn(ai::interactive_jwt_guard))
+        .layer(axum_middleware::from_fn_with_state(
+            pool.clone(),
+            middleware::auth_middleware,
+        ));
+
     // 工作流 Endpoint 触发器路由：GET/POST /workflow/:database_slug/*workflow_slug
     // 走 auth_middleware 认证（JWT 或 API Key），允许外部调用。
     // workflow_slug 用通配 `*` 捕获，支持 slug 含 `/`（如 `public/kop-callback`）。
@@ -1986,7 +2021,8 @@ async fn main() -> anyhow::Result<()> {
     // SSE / WebSocket 长连接：不挂全局 TimeoutLayer（默认 30s 会切断流）。
     let streaming_routes = Router::new()
         .merge(realtime_routes)
-        .merge(sse_stream_routes);
+        .merge(sse_stream_routes)
+        .merge(ai_chat_routes);
 
     // 工作流触发端点（GET/POST /workflow/... 与 POST /pub/workflow/...）：单次执行可能长达
     // workflow.timeout_ms（如 180s）。execute_workflow_internal 内部已有 per-workflow 的
@@ -2048,6 +2084,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(workflow_folder_routes)
         .merge(pat_routes)
         .merge(mcp_routes)
+        .merge(ai_config_routes)
         .layer(TimeoutLayer::new(Duration::from_secs(
             config.request_timeout_secs,
         )));

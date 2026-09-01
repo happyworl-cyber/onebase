@@ -4,8 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { queryAPI } from '@/lib/api'
 import { formatDateTime, downloadFile } from '@/lib/utils'
 import Pagination, { sliceForPage } from '@/components/Pagination'
-import { askAi } from '@/lib/aiAssistant'
-import { genRequestId } from '@/lib/embedBridge'
+import { askAi, genRequestId } from '@/lib/aiAssistant'
 
 interface QueryResult {
   type: string

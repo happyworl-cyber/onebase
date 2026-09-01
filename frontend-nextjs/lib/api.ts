@@ -2773,6 +2773,62 @@ export const projectEnvVarsAPI = {
     api.delete(`/api/projects/${projectId}/env-vars/${varId}`),
 }
 
+// ─── 项目级 AI Provider（设置 › AI 模型）──────────────────────────────
+
+export type AiProviderKind = 'openai' | 'anthropic' | 'qwen'
+
+export interface AiProvider {
+  id: number
+  tenant_id: number
+  provider: AiProviderKind
+  name: string
+  base_url: string
+  model: string
+  is_active: boolean
+  is_default: boolean
+  api_key_configured: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateAiProviderBody {
+  provider: AiProviderKind
+  name: string
+  base_url?: string
+  model: string
+  api_key: string
+  is_active?: boolean
+  is_default?: boolean
+}
+
+export interface UpdateAiProviderBody {
+  provider?: AiProviderKind
+  name?: string
+  base_url?: string
+  model?: string
+  /** 留空或省略表示保留原密钥。 */
+  api_key?: string
+  is_active?: boolean
+  is_default?: boolean
+}
+
+export const aiProviderAPI = {
+  list: (projectId: number) =>
+    api.get<{ providers: AiProvider[] }>(`/api/projects/${projectId}/ai/providers`),
+  create: (projectId: number, body: CreateAiProviderBody) =>
+    api.post<AiProvider>(`/api/projects/${projectId}/ai/providers`, body),
+  update: (projectId: number, providerId: number, body: UpdateAiProviderBody) =>
+    api.put<AiProvider>(`/api/projects/${projectId}/ai/providers/${providerId}`, body),
+  remove: (projectId: number, providerId: number) =>
+    api.delete<{ deleted: boolean }>(`/api/projects/${projectId}/ai/providers/${providerId}`),
+  test: (projectId: number, providerId: number) =>
+    api.post<{ ok: boolean; latency_ms: number; provider: AiProviderKind; model: string }>(
+      `/api/projects/${projectId}/ai/providers/${providerId}/test`,
+      {},
+      { suppressErrorToast: true } as ApiRequestConfig,
+    ),
+}
+
 // ─── 工作流「数据源 / 凭证」集成模块（集成 › 数据源）────────────────────
 //
 // 后端对应 src/datasource_handlers.rs：
