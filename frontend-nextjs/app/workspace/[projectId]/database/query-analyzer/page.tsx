@@ -19,8 +19,7 @@ import {
 } from '@/lib/api'
 import { useNotification } from '@/hooks/useNotification'
 import Drawer from '@/components/Drawer'
-import { askAi } from '@/lib/aiAssistant'
-import { genRequestId } from '@/lib/embedBridge'
+import { askAi, genRequestId } from '@/lib/aiAssistant'
 
 type OrderBy =
   | 'mean_exec_time'

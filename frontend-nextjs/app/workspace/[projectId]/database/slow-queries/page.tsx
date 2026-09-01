@@ -23,8 +23,7 @@ import api, {
 import { useNotification } from '@/hooks/useNotification'
 import Drawer from '@/components/Drawer'
 import Pagination, { sliceForPage } from '@/components/Pagination'
-import { askAi } from '@/lib/aiAssistant'
-import { genRequestId } from '@/lib/embedBridge'
+import { askAi, genRequestId } from '@/lib/aiAssistant'
 import { useAppStore } from '@/lib/store'
 
 type Tab = 'pg_stats' | 'live' | 'app'

@@ -7,8 +7,7 @@ import { downloadFile } from '@/lib/utils'
 import { useAppStore } from '@/lib/store'
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import TableEditor from '@/components/TableEditor'
-import { askAi } from '@/lib/aiAssistant'
-import { genRequestId } from '@/lib/embedBridge'
+import { askAi, genRequestId } from '@/lib/aiAssistant'
 
 interface TableInfo {
   table_name: string
