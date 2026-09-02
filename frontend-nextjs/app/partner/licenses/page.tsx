@@ -39,6 +39,11 @@ export default function LicensesPage() {
     license_type: 'subscription',
     price: 100000,
     currency: 'CNY',
+    include_maintenance: true,
+    maintenance_years: 1,
+    maintenance_price_override: undefined,
+    maintenance_commission_rate: 1000,
+    auto_renew_maintenance: false,
   })
 
   // License 文件预览抽屉
@@ -108,6 +113,11 @@ export default function LicensesPage() {
         license_type: 'subscription',
         price: 100000,
         currency: 'CNY',
+        include_maintenance: true,
+        maintenance_years: 1,
+        maintenance_price_override: undefined,
+        maintenance_commission_rate: 1000,
+        auto_renew_maintenance: false,
       })
     } catch (error: any) {
       notify.error(error.response?.data?.error || 'License 签发失败')
@@ -168,50 +178,89 @@ export default function LicensesPage() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">客户信息</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">版本/模块</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">类型</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">到期时间</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">License 到期</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">维护服务</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">状态</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">价格</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
-              {licenses.map((license) => (
-                <tr key={license.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4">
-                    <div className="font-medium text-gray-900">{license.customer_name}</div>
-                    {license.customer_email && (
-                      <div className="text-sm text-gray-500">{license.customer_email}</div>
-                    )}
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="text-sm text-gray-900">{license.edition}</div>
-                    <div className="text-xs text-gray-500">{(license.modules as any[]).join(', ')}</div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className={`px-2 py-1 text-xs rounded-full ${
-                      license.license_type === 'subscription'
-                        ? 'bg-blue-100 text-blue-700'
-                        : 'bg-purple-100 text-purple-700'
-                    }`}>
-                      {license.license_type === 'subscription' ? '订阅制' : '永久'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-900">{formatDate(license.expires_at)}</td>
-                  <td className="px-6 py-4">
-                    <span className={`px-2 py-1 text-xs rounded-full ${
-                      license.status === 'active'
-                        ? 'bg-green-100 text-green-700'
-                        : license.status === 'grace'
-                        ? 'bg-yellow-100 text-yellow-700'
-                        : license.status === 'expired'
-                        ? 'bg-red-100 text-red-700'
-                        : 'bg-gray-100 text-gray-700'
-                    }`}>
-                      {license.status}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-900">¥{parseFloat(license.price).toLocaleString()}</td>
-                </tr>
-              ))}
+              {licenses.map((license) => {
+                const hasActiveMaintenance = license.has_maintenance &&
+                  license.maintenance_expires_at &&
+                  new Date(license.maintenance_expires_at) > new Date()
+
+                return (
+                  <tr key={license.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4">
+                      <div className="font-medium text-gray-900">{license.customer_name}</div>
+                      {license.customer_email && (
+                        <div className="text-sm text-gray-500">{license.customer_email}</div>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="text-sm text-gray-900">{license.edition}</div>
+                      <div className="text-xs text-gray-500">{(license.modules as any[]).join(', ')}</div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className={`px-2 py-1 text-xs rounded-full ${
+                        license.license_type === 'subscription'
+                          ? 'bg-blue-100 text-blue-700'
+                          : 'bg-purple-100 text-purple-700'
+                      }`}>
+                        {license.license_type === 'subscription' ? '订阅制' : '永久'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-900">{formatDate(license.expires_at)}</td>
+                    <td className="px-6 py-4">
+                      {license.has_maintenance ? (
+                        <div className="text-sm">
+                          <div className={`font-medium ${hasActiveMaintenance ? 'text-green-600' : 'text-red-600'}`}>
+                            {hasActiveMaintenance ? (
+                              <>
+                                <i className="fas fa-shield-alt mr-1"></i>
+                                有效
+                              </>
+                            ) : (
+                              <>
+                                <i className="fas fa-exclamation-circle mr-1"></i>
+                                已过期
+                              </>
+                            )}
+                          </div>
+                          {license.maintenance_expires_at && (
+                            <div className="text-xs text-gray-500">
+                              至 {formatDate(license.maintenance_expires_at)}
+                            </div>
+                          )}
+                          {license.auto_renew_maintenance && (
+                            <div className="text-xs text-blue-600 mt-1">
+                              <i className="fas fa-sync-alt mr-1"></i>
+                              自动续费
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-gray-400">-</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className={`px-2 py-1 text-xs rounded-full ${
+                        license.status === 'active'
+                          ? 'bg-green-100 text-green-700'
+                          : license.status === 'grace'
+                          ? 'bg-yellow-100 text-yellow-700'
+                          : license.status === 'expired'
+                          ? 'bg-red-100 text-red-700'
+                          : 'bg-gray-100 text-gray-700'
+                      }`}>
+                        {license.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-900">¥{(parseFloat(license.price) / 100).toLocaleString()}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -342,7 +391,7 @@ export default function LicensesPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">价格（CNY）</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">License 价格（分）</label>
             <input
               type="number"
               min="0"
@@ -352,9 +401,128 @@ export default function LicensesPage() {
             />
             {profile && (
               <p className="text-xs text-gray-500 mt-1">
-                预估佣金：¥{(issueData.price * parseFloat(profile.partner.commission_rate) / 100).toLocaleString()}
+                License 佣金（{profile.partner.commission_rate}%）：¥{(issueData.price * parseFloat(profile.partner.commission_rate) / 100 / 100).toLocaleString()}
               </p>
             )}
+          </div>
+
+          {/* 维护费配置 */}
+          <div className="border-t pt-4">
+            <div className="flex items-center mb-4">
+              <input
+                type="checkbox"
+                id="include_maintenance"
+                checked={issueData.include_maintenance}
+                onChange={(e) => setIssueData({ ...issueData, include_maintenance: e.target.checked })}
+                className="mr-2"
+              />
+              <label htmlFor="include_maintenance" className="text-sm font-medium text-gray-700">
+                包含年度维护服务（AMA）
+              </label>
+            </div>
+
+            {issueData.include_maintenance && (
+              <div className="space-y-4 bg-gray-50 p-4 rounded-lg">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">维护年限</label>
+                    <select
+                      value={issueData.maintenance_years}
+                      onChange={(e) => setIssueData({ ...issueData, maintenance_years: parseInt(e.target.value) })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      {[1, 2, 3, 4, 5].map((year) => (
+                        <option key={year} value={year}>{year} 年</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      维护费/年（分，默认 License 价格的 20%）
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={issueData.maintenance_price_override || Math.round(issueData.price * 0.2)}
+                      onChange={(e) => setIssueData({
+                        ...issueData,
+                        maintenance_price_override: parseFloat(e.target.value) || undefined
+                      })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    id="auto_renew"
+                    checked={issueData.auto_renew_maintenance}
+                    onChange={(e) => setIssueData({ ...issueData, auto_renew_maintenance: e.target.checked })}
+                    className="mr-2"
+                  />
+                  <label htmlFor="auto_renew" className="text-sm text-gray-700">
+                    启用自动续费（到期前 7 天自动续费）
+                  </label>
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 rounded p-3 text-sm">
+                  <div className="flex justify-between mb-1">
+                    <span className="text-gray-600">维护费单价：</span>
+                    <span className="font-medium">
+                      ¥{((issueData.maintenance_price_override || Math.round(issueData.price * 0.2)) / 100).toLocaleString()}/年
+                    </span>
+                  </div>
+                  <div className="flex justify-between mb-1">
+                    <span className="text-gray-600">维护费总计（{issueData.maintenance_years}年）：</span>
+                    <span className="font-medium">
+                      ¥{((issueData.maintenance_price_override || Math.round(issueData.price * 0.2)) * issueData.maintenance_years / 100).toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="flex justify-between border-t border-blue-300 pt-1 mt-1">
+                    <span className="text-gray-600">维护费佣金（10%）：</span>
+                    <span className="font-bold text-green-600">
+                      ¥{((issueData.maintenance_price_override || Math.round(issueData.price * 0.2)) * issueData.maintenance_years * 0.1 / 100).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* 总计预览 */}
+          <div className="border-t pt-4 bg-indigo-50 rounded-lg p-4">
+            <h4 className="font-semibold text-gray-900 mb-3">费用总览</h4>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-600">License 费用：</span>
+                <span className="font-medium">¥{(issueData.price / 100).toLocaleString()}</span>
+              </div>
+              {issueData.include_maintenance && (
+                <div className="flex justify-between">
+                  <span className="text-gray-600">维护费（{issueData.maintenance_years}年）：</span>
+                  <span className="font-medium">
+                    ¥{((issueData.maintenance_price_override || Math.round(issueData.price * 0.2)) * issueData.maintenance_years / 100).toLocaleString()}
+                  </span>
+                </div>
+              )}
+              <div className="flex justify-between border-t border-indigo-200 pt-2 mt-2">
+                <span className="font-semibold text-gray-900">客户总计：</span>
+                <span className="font-bold text-lg">
+                  ¥{((issueData.price + (issueData.include_maintenance ? (issueData.maintenance_price_override || Math.round(issueData.price * 0.2)) * issueData.maintenance_years : 0)) / 100).toLocaleString()}
+                </span>
+              </div>
+              <div className="flex justify-between border-t border-indigo-200 pt-2">
+                <span className="font-semibold text-gray-900">您的佣金：</span>
+                <span className="font-bold text-xl text-green-600">
+                  ¥{(
+                    (issueData.price * parseFloat(profile?.partner.commission_rate || '0') / 100 / 100) +
+                    (issueData.include_maintenance ? (issueData.maintenance_price_override || Math.round(issueData.price * 0.2)) * issueData.maintenance_years * 0.1 / 100 : 0)
+                  ).toLocaleString()}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
       </Drawer>
