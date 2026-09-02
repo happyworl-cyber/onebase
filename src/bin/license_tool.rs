@@ -148,6 +148,10 @@ fn cmd_issue(opts: &HashMap<String, String>) -> Result<(), String> {
         .cloned()
         .unwrap_or_else(|| format!("LIC-{now}"));
 
+    let max_accounts_per_tenant = opts
+        .get("max-accounts-per-tenant")
+        .and_then(|s| s.parse::<u32>().ok());
+
     let claims = LicenseClaims {
         license_id,
         customer,
@@ -155,6 +159,7 @@ fn cmd_issue(opts: &HashMap<String, String>) -> Result<(), String> {
         modules,
         max_nodes,
         max_tenants,
+        max_accounts_per_tenant,
         issued_at: now,
         expires_at: now + days * 86_400,
         grace_days: grace,
