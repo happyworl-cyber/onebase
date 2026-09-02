@@ -3204,3 +3204,111 @@ export const orgOperationLogAPI = {
     }),
 }
 
+// ============================================================
+// 代理商分销系统 API
+// ============================================================
+
+import type {
+  Partner,
+  PartnerStats,
+  CustomerLicense,
+  PartnerCommission,
+  PartnerStatement,
+  PartnerProfile,
+  CreatePartnerRequest,
+  UpdatePartnerRequest,
+  IssueLicenseRequest,
+  RenewLicenseRequest,
+  GenerateStatementRequest,
+  MarkStatementPaidRequest,
+  IssueLicenseResponse,
+  PartnerStatsResponse,
+  PaginatedResponse,
+} from './types/partner'
+
+/** 超管 - 代理商管理 API */
+export const adminPartnerAPI = {
+  /** 创建代理商 */
+  create: (data: CreatePartnerRequest) =>
+    api.post<{ partner: Partner; message: string }>('/api/admin/partners', data),
+
+  /** 查询代理商列表 */
+  list: (params?: { status?: string; page?: number; page_size?: number }) =>
+    api.get<PaginatedResponse<PartnerStats>>(
+      '/api/admin/partners',
+      { params }
+    ),
+
+  /** 更新代理商 */
+  update: (id: number, data: UpdatePartnerRequest) =>
+    api.patch<{ partner: Partner; message: string }>(
+      `/api/admin/partners/${id}`,
+      data
+    ),
+
+  /** 挂起代理商 */
+  suspend: (id: number) =>
+    api.delete<{ partner: Partner; message: string }>(
+      `/api/admin/partners/${id}`
+    ),
+
+  /** 获取代理商统计 */
+  statistics: (id: number) =>
+    api.get<PartnerStatsResponse>(`/api/admin/partners/${id}/statistics`),
+
+  /** 生成对账单 */
+  generateStatement: (data: GenerateStatementRequest) =>
+    api.post<{ statement: PartnerStatement; message: string }>(
+      '/api/admin/statements/generate',
+      data
+    ),
+
+  /** 标记对账单已支付 */
+  markStatementPaid: (id: number, data: MarkStatementPaidRequest) =>
+    api.post<{ statement: PartnerStatement; message: string }>(
+      `/api/admin/statements/${id}/paid`,
+      data
+    ),
+}
+
+/** 代理商 - 自助服务 API */
+export const partnerAPI = {
+  /** 获取代理商配置 */
+  getProfile: () =>
+    api.get<PartnerProfile>('/api/partner/profile'),
+
+  /** 查询客户 License 列表 */
+  listCustomers: (params?: {
+    status?: string
+    customer_name?: string
+    page?: number
+    page_size?: number
+  }) =>
+    api.get<PaginatedResponse<CustomerLicense>>(
+      '/api/partner/customers',
+      { params }
+    ),
+
+  /** 签发 License */
+  issueLicense: (data: IssueLicenseRequest) =>
+    api.post<IssueLicenseResponse>('/api/partner/licenses', data),
+
+  /** 续费 License */
+  renewLicense: (id: number, data: RenewLicenseRequest) =>
+    api.post<IssueLicenseResponse>(`/api/partner/licenses/${id}/renew`, data),
+
+  /** 查询佣金记录 */
+  listCommissions: (params?: { page?: number; page_size?: number }) =>
+    api.get<PaginatedResponse<PartnerCommission>>(
+      '/api/partner/commissions',
+      { params }
+    ),
+
+  /** 查询对账单 */
+  listStatements: (params?: { page?: number; page_size?: number }) =>
+    api.get<PaginatedResponse<PartnerStatement>>(
+      '/api/partner/statements',
+      { params }
+    ),
+}
+

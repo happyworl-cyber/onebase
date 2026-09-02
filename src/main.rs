@@ -110,6 +110,11 @@ mod workflow_kafka_trigger;
 mod workflow_notify_trigger;
 mod workflow_taxonomy;
 mod workflow_trigger;
+mod partner_handlers;
+mod partner_models;
+mod partner_scheduler;
+mod license_enforcement;
+mod license_features;
 
 // binary 侧 `mod workflow_engine` 与 lib 共用源文件，需在此 re-export 批量配置模块。
 pub(crate) use onebase::sse_batch_config;
@@ -951,6 +956,79 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/admin/stats", get(admin_handlers::get_system_stats))
         .layer(axum_middleware::from_fn(
             middleware::require_superadmin_middleware,
+        ))
+        .layer(axum_middleware::from_fn_with_state(
+            pool.clone(),
+            middleware::auth_middleware,
+        ));
+
+    // 代理商管理路由（超管）
+    let admin_partner_routes = Router::new()
+        .route(
+            "/api/admin/partners",
+            post(partner_handlers::admin_create_partner).get(partner_handlers::admin_list_partners),
+        )
+        .route(
+            "/api/admin/partners/:id",
+            patch(partner_handlers::admin_update_partner)
+                .delete(partner_handlers::admin_suspend_partner),
+        )
+        .route(
+            "/api/admin/partners/:id/statistics",
+            get(partner_handlers::admin_partner_statistics),
+        )
+        .route(
+            "/api/admin/statements/generate",
+            post(partner_handlers::admin_generate_statement),
+        )
+        .route(
+            "/api/admin/statements/:id/paid",
+            post(partner_handlers::admin_mark_statement_paid),
+        )
+        .layer(axum_middleware::from_fn_with_state(
+            pool.clone(),
+            middleware::auth_middleware,
+        ));
+
+    // 代理商自助路由（代理商成员）
+    let partner_routes = Router::new()
+        .route("/api/partner/profile", get(partner_handlers::partner_get_profile))
+        .route(
+            "/api/partner/customers",
+            get(partner_handlers::partner_list_customers),
+        )
+        .route(
+            "/api/partner/licenses",
+            post(partner_handlers::partner_issue_license),
+        )
+        .route(
+            "/api/partner/licenses/:id/renew",
+            post(partner_handlers::partner_renew_license),
+        )
+        .route(
+            "/api/partner/commissions",
+            get(partner_handlers::partner_list_commissions),
+        )
+        .route(
+            "/api/partner/statements",
+            get(partner_handlers::partner_list_statements),
+        )
+        // 维护费管理路由
+        .route(
+            "/api/partner/maintenance/renewals",
+            get(partner_handlers::partner_list_maintenance_renewals),
+        )
+        .route(
+            "/api/partner/maintenance/:id/mark-paid",
+            post(partner_handlers::partner_mark_maintenance_paid),
+        )
+        .route(
+            "/api/partner/maintenance/expiring",
+            get(partner_handlers::partner_expiring_maintenance),
+        )
+        .layer(axum_middleware::from_fn_with_state(
+            pool.clone(),
+            middleware::partner_middleware,
         ))
         .layer(axum_middleware::from_fn_with_state(
             pool.clone(),
@@ -2016,6 +2094,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(platform_token_routes)
         .merge(superadmin_tenant_routes)
         .merge(admin_routes)
+        .merge(admin_partner_routes)
+        .merge(partner_routes)
         .merge(rbac_routes)
         .merge(sso_public_routes)
         .merge(sso_admin_routes)
@@ -2255,6 +2335,9 @@ async fn main() -> anyhow::Result<()> {
     let scheduler_shutdown = scheduler_runner.shutdown_handle();
     app = app.layer(axum::Extension(scheduler_runner.clone()));
     scheduler_runner.clone().start();
+
+    // 启动代理商后台任务（月度对账单生成、License 状态更新）
+    partner_scheduler::spawn_partner_tasks(pool.clone());
 
     // 后台守护 Watchdog
     let wd = watchdog::Watchdog::new(pool.clone(), redis.clone());
