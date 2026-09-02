@@ -4,14 +4,24 @@ import { useState, useEffect } from 'react'
 import { partnerAPI } from '@/lib/api'
 import { useNotification } from '@/hooks/useNotification'
 import type { PartnerProfile } from '@/lib/types/partner'
+import { ExpiringMaintenancePanel } from '@/components/partner/ExpiringMaintenancePanel'
+
+interface MaintenanceStats {
+  total_maintenance_customers: number
+  active_maintenance: number
+  expiring_soon: number
+  total_maintenance_revenue: number
+}
 
 export default function PartnerDashboard() {
   const notify = useNotification()
   const [profile, setProfile] = useState<PartnerProfile | null>(null)
+  const [maintenanceStats, setMaintenanceStats] = useState<MaintenanceStats | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     loadProfile()
+    loadMaintenanceStats()
   }, [])
 
   const loadProfile = async () => {
@@ -23,6 +33,24 @@ export default function PartnerDashboard() {
       notify.error(error.response?.data?.error || '加载配置失败')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadMaintenanceStats = async () => {
+    try {
+      // TODO: 实现维护费统计 API
+      // const res = await partnerAPI.getMaintenanceStats()
+      // setMaintenanceStats(res.data)
+
+      // 临时模拟数据
+      setMaintenanceStats({
+        total_maintenance_customers: 0,
+        active_maintenance: 0,
+        expiring_soon: 0,
+        total_maintenance_revenue: 0,
+      })
+    } catch (error: any) {
+      console.error('加载维护费统计失败:', error)
     }
   }
 
@@ -55,7 +83,7 @@ export default function PartnerDashboard() {
         <p className="text-sm text-gray-500 mt-1">欢迎使用 OneBase 代理商控制台</p>
       </div>
 
-      {/* 统计卡片 */}
+      {/* License 统计卡片 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
         {/* 配额使用率 */}
         <div className="bg-white rounded-lg shadow p-6">
@@ -98,8 +126,66 @@ export default function PartnerDashboard() {
             <i className="fas fa-percent text-purple-500 text-xl"></i>
           </div>
           <div className="text-3xl font-bold text-gray-900">{partner.commission_rate}%</div>
-          <p className="text-xs text-gray-500 mt-2">每笔销售的佣金比例</p>
+          <p className="text-xs text-gray-500 mt-2">License 销售佣金比例</p>
         </div>
+      </div>
+
+      {/* 维护费统计卡片 */}
+      {maintenanceStats && (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
+          {/* 维护服务客户数 */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-medium text-gray-500">维护服务客户</h3>
+              <i className="fas fa-users text-indigo-500 text-xl"></i>
+            </div>
+            <div className="text-3xl font-bold text-gray-900">
+              {maintenanceStats.total_maintenance_customers}
+            </div>
+            <p className="text-xs text-gray-500 mt-2">购买维护服务的客户数</p>
+          </div>
+
+          {/* 活跃维护服务 */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-medium text-gray-500">活跃维护服务</h3>
+              <i className="fas fa-shield-alt text-green-500 text-xl"></i>
+            </div>
+            <div className="text-3xl font-bold text-gray-900">
+              {maintenanceStats.active_maintenance}
+            </div>
+            <p className="text-xs text-gray-500 mt-2">当前有效的维护服务</p>
+          </div>
+
+          {/* 即将到期 */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-medium text-gray-500">即将到期</h3>
+              <i className="fas fa-exclamation-triangle text-orange-500 text-xl"></i>
+            </div>
+            <div className="text-3xl font-bold text-gray-900">
+              {maintenanceStats.expiring_soon}
+            </div>
+            <p className="text-xs text-gray-500 mt-2">30 天内到期的维护服务</p>
+          </div>
+
+          {/* 维护费总收入 */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-medium text-gray-500">维护费收入</h3>
+              <i className="fas fa-dollar-sign text-purple-500 text-xl"></i>
+            </div>
+            <div className="text-3xl font-bold text-gray-900">
+              ¥{(maintenanceStats.total_maintenance_revenue / 100).toLocaleString()}
+            </div>
+            <p className="text-xs text-gray-500 mt-2">维护费总收入（佣金 10%）</p>
+          </div>
+        </div>
+      )}
+
+      {/* 即将到期的维护服务警告 */}
+      <div className="mb-6">
+        <ExpiringMaintenancePanel />
       </div>
 
       {/* 代理商信息 */}
@@ -185,7 +271,7 @@ export default function PartnerDashboard() {
       </div>
 
       {/* 快捷操作 */}
-      <div className="mt-6 flex gap-4">
+      <div className="mt-6 flex flex-wrap gap-4">
         <a
           href="/partner/licenses"
           className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
@@ -194,11 +280,25 @@ export default function PartnerDashboard() {
           签发 License
         </a>
         <a
+          href="/partner/maintenance"
+          className="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium"
+        >
+          <i className="fas fa-tools mr-2"></i>
+          维护费管理
+        </a>
+        <a
           href="/partner/commissions"
           className="px-6 py-3 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors font-medium"
         >
           <i className="fas fa-coins mr-2"></i>
           查看佣金
+        </a>
+        <a
+          href="/partner/statements"
+          className="px-6 py-3 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors font-medium"
+        >
+          <i className="fas fa-file-invoice mr-2"></i>
+          对账单
         </a>
       </div>
     </div>
