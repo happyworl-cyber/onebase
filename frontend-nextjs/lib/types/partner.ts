@@ -74,6 +74,13 @@ export interface CustomerLicense {
   price: string // Decimal
   currency: string
 
+  // 维护费配置（Maintenance Fee）
+  has_maintenance: boolean
+  maintenance_expires_at: string | null
+  maintenance_price: string | null // Decimal
+  maintenance_commission_rate: string | null // Decimal (默认 10.00%)
+  auto_renew_maintenance: boolean
+
   // License 文件内容
   license_file_content: any // JSONB
 
@@ -89,12 +96,17 @@ export interface CustomerLicense {
 export interface PartnerCommission {
   id: number
   partner_id: number
-  license_id: number
+  license_id: string // UUID
 
   base_price: string // Decimal
   commission_rate: string // Decimal
   commission_amount: string // Decimal
   currency: string
+
+  // 佣金类型（License 或维护费）
+  commission_type: 'license' | 'maintenance'
+  renewal_year: number | null // 维护费续费年份（1, 2, 3...）
+  related_license_id: string | null // UUID - 关联的 License ID
 
   status: 'pending' | 'approved' | 'paid' | 'settled'
   settlement_date: string | null
@@ -111,9 +123,16 @@ export interface PartnerStatement {
   period_start: string
   period_end: string
 
+  // License 统计
   total_licenses: number
   total_revenue: string // Decimal
   total_commission: string // Decimal
+
+  // 维护费统计
+  maintenance_count: number | null
+  total_maintenance_revenue: string | null // Decimal
+  total_maintenance_commission: string | null // Decimal
+
   currency: string
 
   status: 'draft' | 'pending' | 'paid' | 'settled'
@@ -185,6 +204,13 @@ export interface IssueLicenseRequest {
   license_type: 'subscription' | 'perpetual'
   price: number
   currency?: string
+
+  // 维护费配置
+  include_maintenance?: boolean
+  maintenance_years?: number
+  maintenance_price_override?: number
+  maintenance_commission_rate?: number // 基点（例：1000 = 10%）
+  auto_renew_maintenance?: boolean
 }
 
 export interface RenewLicenseRequest {
@@ -211,6 +237,12 @@ export interface IssueLicenseResponse {
   license_file: any // LicenseFile JSON
   expires_at: string
   commission_amount: string
+
+  // 维护费信息
+  has_maintenance: boolean
+  maintenance_expires_at: string | null
+  maintenance_price: string | null // Decimal
+  maintenance_commission: string | null // Decimal - 维护费总佣金
 }
 
 export interface PartnerStatsResponse {
