@@ -152,6 +152,29 @@ fn cmd_issue(opts: &HashMap<String, String>) -> Result<(), String> {
         .get("max-accounts-per-tenant")
         .and_then(|s| s.parse::<u32>().ok());
 
+    // ========== 新增配额参数（基于新定价方案）==========
+    let max_projects = opts
+        .get("max-projects")
+        .and_then(|s| s.parse::<u32>().ok());
+    let max_workflows = opts
+        .get("max-workflows")
+        .and_then(|s| s.parse::<u32>().ok());
+    let max_executions_per_month = opts
+        .get("max-executions-per-month")
+        .and_then(|s| s.parse::<u64>().ok());
+    let max_api_endpoints = opts
+        .get("max-api-endpoints")
+        .and_then(|s| s.parse::<u32>().ok());
+    let max_scheduled_jobs = opts
+        .get("max-scheduled-jobs")
+        .and_then(|s| s.parse::<u32>().ok());
+    let max_database_connections = opts
+        .get("max-database-connections")
+        .and_then(|s| s.parse::<u32>().ok());
+    let max_team_members = opts
+        .get("max-team-members")
+        .and_then(|s| s.parse::<u32>().ok());
+
     let claims = LicenseClaims {
         license_id,
         customer,
@@ -160,6 +183,13 @@ fn cmd_issue(opts: &HashMap<String, String>) -> Result<(), String> {
         max_nodes,
         max_tenants,
         max_accounts_per_tenant,
+        max_projects,
+        max_workflows,
+        max_executions_per_month,
+        max_api_endpoints,
+        max_scheduled_jobs,
+        max_database_connections,
+        max_team_members,
         issued_at: now,
         expires_at: now + days * 86_400,
         grace_days: grace,
@@ -189,6 +219,37 @@ fn cmd_issue(opts: &HashMap<String, String>) -> Result<(), String> {
     if let Some(fp) = &claims.fingerprint {
         println!("  绑定指纹: {fp}");
     }
+
+    // 输出配额信息
+    println!("\n配额限制:");
+    if let Some(v) = max_nodes {
+        println!("  节点数量: {}", v);
+    }
+    if let Some(v) = max_tenants.or(max_projects) {
+        println!("  项目/租户数量: {}", v);
+    }
+    if let Some(v) = max_workflows {
+        println!("  工作流数量: {}", v);
+    }
+    if let Some(v) = max_api_endpoints {
+        println!("  API 端点数量: {}", v);
+    }
+    if let Some(v) = max_executions_per_month {
+        println!("  月度执行次数: {}", v);
+    }
+    if let Some(v) = max_scheduled_jobs {
+        println!("  定时任务数量: {}", v);
+    }
+    if let Some(v) = max_database_connections {
+        println!("  数据库连接数量: {}", v);
+    }
+    if let Some(v) = max_team_members {
+        println!("  团队成员数量: {}", v);
+    }
+    if let Some(v) = max_accounts_per_tenant {
+        println!("  租户账号数量: {}", v);
+    }
+
     Ok(())
 }
 
@@ -216,7 +277,35 @@ fn cmd_verify(opts: &HashMap<String, String>) -> Result<(), String> {
         claims.fingerprint.as_deref().unwrap_or("（未绑定）")
     );
     println!("  当前指纹: {}", current_fingerprint());
-    println!("  状态    : {} — {}", status.as_str(), message);
+
+    // 显示配额信息
+    println!("\n配额限制:");
+    fn print_quota(label: &str, value: Option<u32>) {
+        if let Some(v) = value {
+            println!("  {}: {}", label, v);
+        } else {
+            println!("  {}: 不限", label);
+        }
+    }
+    fn print_quota_u64(label: &str, value: Option<u64>) {
+        if let Some(v) = value {
+            println!("  {}: {}", label, v);
+        } else {
+            println!("  {}: 不限", label);
+        }
+    }
+
+    print_quota("节点数量", claims.max_nodes);
+    print_quota("项目/租户数量", claims.max_tenants.or(claims.max_projects));
+    print_quota("工作流数量", claims.max_workflows);
+    print_quota("API 端点数量", claims.max_api_endpoints);
+    print_quota_u64("月度执行次数", claims.max_executions_per_month);
+    print_quota("定时任务数量", claims.max_scheduled_jobs);
+    print_quota("数据库连接数量", claims.max_database_connections);
+    print_quota("团队成员数量", claims.max_team_members);
+    print_quota("租户账号数量", claims.max_accounts_per_tenant);
+
+    println!("\n  状态    : {} — {}", status.as_str(), message);
     Ok(())
 }
 
@@ -233,8 +322,20 @@ fn print_usage() {
          license_tool keygen [--out-dir .] [--name license]\n  \
          license_tool fingerprint\n  \
          license_tool issue --priv <私钥.pem> --customer <名称> [--edition enterprise]\n              \
-         [--modules ai,ha] [--days 365] [--grace 30] [--nodes N] [--tenants N]\n              \
+         [--modules ai,ha] [--days 365] [--grace 30]\n              \
+         [--nodes N] [--tenants N] [--max-accounts-per-tenant N]\n              \
+         [--max-projects N] [--max-workflows N] [--max-executions-per-month N]\n              \
+         [--max-api-endpoints N] [--max-scheduled-jobs N]\n              \
+         [--max-database-connections N] [--max-team-members N]\n              \
          [--fingerprint <fp>] [--id <编号>] [--notes <备注>] [--out license.lic]\n  \
-         license_tool verify --pub <公钥.pem> --file license.lic\n"
+         license_tool verify --pub <公钥.pem> --file license.lic\n\n\
+         配额参数说明:\n  \
+         --max-projects              项目/租户数量上限\n  \
+         --max-workflows             工作流数量上限\n  \
+         --max-executions-per-month  月度工作流执行次数上限\n  \
+         --max-api-endpoints         API 端点数量上限\n  \
+         --max-scheduled-jobs        定时任务数量上限\n  \
+         --max-database-connections  数据库连接数量上限\n  \
+         --max-team-members          团队成员数量上限\n"
     );
 }
