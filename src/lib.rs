@@ -27,6 +27,8 @@ pub mod error;
 /// 统一执行日志（执行索引层 + 保留清理）。被 lib crate 的 `scheduler` 与 bin crate 的
 /// handler 共用，故放在 lib；刻意不依赖 bin-only 的 `request_id` / `logging`。
 pub mod execution_log;
+/// 工作流执行次数跟踪（月度配额限制）。基于 Redis 实现，用于 License 配额检查。
+pub mod execution_tracker;
 pub mod http_async_poll;
 pub mod js_deps;
 pub mod js_host_bridge;

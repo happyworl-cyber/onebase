@@ -89,6 +89,98 @@ impl LicenseContext {
             Ok(true) // 无限制
         }
     }
+
+    // ========== 新增配额检查方法（基于新定价方案）==========
+
+    /// 检查是否可以创建新项目
+    pub async fn can_create_project(&self, pool: &PgPool) -> Result<bool> {
+        if let Some(max_projects) = self.claims.max_projects {
+            let current_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM management.projects WHERE status != 'deleted'",
+            )
+            .fetch_one(pool)
+            .await?;
+
+            Ok(current_count < max_projects as i64)
+        } else {
+            Ok(true) // 无限制
+        }
+    }
+
+    /// 检查是否可以创建新工作流
+    pub async fn can_create_workflow(&self, pool: &PgPool) -> Result<bool> {
+        if let Some(max_workflows) = self.claims.max_workflows {
+            let current_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM management.workflows WHERE status != 'deleted'",
+            )
+            .fetch_one(pool)
+            .await?;
+
+            Ok(current_count < max_workflows as i64)
+        } else {
+            Ok(true) // 无限制
+        }
+    }
+
+    /// 检查是否可以创建新 API 端点
+    pub async fn can_create_api_endpoint(&self, pool: &PgPool) -> Result<bool> {
+        if let Some(max_endpoints) = self.claims.max_api_endpoints {
+            let current_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM management.api_endpoints WHERE status != 'deleted'",
+            )
+            .fetch_one(pool)
+            .await?;
+
+            Ok(current_count < max_endpoints as i64)
+        } else {
+            Ok(true) // 无限制
+        }
+    }
+
+    /// 检查是否可以创建新定时任务
+    pub async fn can_create_scheduled_job(&self, pool: &PgPool) -> Result<bool> {
+        if let Some(max_jobs) = self.claims.max_scheduled_jobs {
+            let current_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM management.scheduled_jobs WHERE status = 'active'",
+            )
+            .fetch_one(pool)
+            .await?;
+
+            Ok(current_count < max_jobs as i64)
+        } else {
+            Ok(true) // 无限制
+        }
+    }
+
+    /// 检查是否可以添加新数据库连接
+    pub async fn can_add_database_connection(&self, pool: &PgPool) -> Result<bool> {
+        if let Some(max_conns) = self.claims.max_database_connections {
+            let current_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM management.database_connections WHERE status = 'active'",
+            )
+            .fetch_one(pool)
+            .await?;
+
+            Ok(current_count < max_conns as i64)
+        } else {
+            Ok(true) // 无限制
+        }
+    }
+
+    /// 检查是否可以添加新团队成员
+    pub async fn can_add_team_member(&self, pool: &PgPool) -> Result<bool> {
+        if let Some(max_members) = self.claims.max_team_members {
+            let current_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(DISTINCT user_id) FROM management.user_tenants WHERE is_active = true",
+            )
+            .fetch_one(pool)
+            .await?;
+
+            Ok(current_count < max_members as i64)
+        } else {
+            Ok(true) // 无限制
+        }
+    }
 }
 
 /// License 中间件：加载并验证 License，注入到请求上下文
@@ -193,6 +285,80 @@ pub async fn check_account_limit(ctx: &LicenseContext, pool: &PgPool, tenant_id:
         Err(AppError::Forbidden(format!(
             "租户已达到账号数量上限（{}），请升级 License",
             ctx.claims.max_accounts_per_tenant.unwrap_or(0)
+        )))
+    }
+}
+
+// ========== 新增配额检查函数（基于新定价方案）==========
+
+/// 检查项目数量限制
+pub async fn check_project_limit(ctx: &LicenseContext, pool: &PgPool) -> Result<()> {
+    if ctx.can_create_project(pool).await? {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(format!(
+            "已达到项目数量上限（{}），请升级 License 或删除未使用的项目",
+            ctx.claims.max_projects.unwrap_or(0)
+        )))
+    }
+}
+
+/// 检查工作流数量限制
+pub async fn check_workflow_limit(ctx: &LicenseContext, pool: &PgPool) -> Result<()> {
+    if ctx.can_create_workflow(pool).await? {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(format!(
+            "已达到工作流数量上限（{}），请升级 License 或删除未使用的工作流",
+            ctx.claims.max_workflows.unwrap_or(0)
+        )))
+    }
+}
+
+/// 检查 API 端点数量限制
+pub async fn check_api_endpoint_limit(ctx: &LicenseContext, pool: &PgPool) -> Result<()> {
+    if ctx.can_create_api_endpoint(pool).await? {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(format!(
+            "已达到 API 端点数量上限（{}），请升级 License",
+            ctx.claims.max_api_endpoints.unwrap_or(0)
+        )))
+    }
+}
+
+/// 检查定时任务数量限制
+pub async fn check_scheduled_job_limit(ctx: &LicenseContext, pool: &PgPool) -> Result<()> {
+    if ctx.can_create_scheduled_job(pool).await? {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(format!(
+            "已达到定时任务数量上限（{}），请升级 License",
+            ctx.claims.max_scheduled_jobs.unwrap_or(0)
+        )))
+    }
+}
+
+/// 检查数据库连接数量限制
+pub async fn check_database_connection_limit(ctx: &LicenseContext, pool: &PgPool) -> Result<()> {
+    if ctx.can_add_database_connection(pool).await? {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(format!(
+            "已达到数据库连接数量上限（{}），请升级 License",
+            ctx.claims.max_database_connections.unwrap_or(0)
+        )))
+    }
+}
+
+/// 检查团队成员数量限制
+pub async fn check_team_member_limit(ctx: &LicenseContext, pool: &PgPool) -> Result<()> {
+    if ctx.can_add_team_member(pool).await? {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(format!(
+            "已达到团队成员数量上限（{}），请升级 License 或移除未使用的成员",
+            ctx.claims.max_team_members.unwrap_or(0)
         )))
     }
 }
