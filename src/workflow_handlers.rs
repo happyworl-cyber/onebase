@@ -1508,6 +1508,7 @@ fn spawn_python_deps_install(workflow: &Workflow) {
 pub async fn create_workflow(
     State(pool): State<PgPool>,
     axum::Extension(claims): axum::Extension<Claims>,
+    license_state: Option<axum::Extension<crate::license::LicenseState>>,
     audit_sink: Option<axum::Extension<AuditDetailSink>>,
     op_source: Option<axum::Extension<OpSourceHint>>,
     Json(req): Json<CreateWorkflowRequest>,
@@ -1538,6 +1539,15 @@ pub async fn create_workflow(
     validate_alert_webhook_template(req.alert_webhook_template.as_ref())?;
     validate_alert_throttle_hours(req.alert_throttle_hours)?;
     let alert_webhook_url = normalize_alert_webhook_url(req.alert_webhook_url.as_deref())?;
+
+    // License 配额检查：工作流数量限制
+    if let Some(axum::Extension(state)) = license_state.as_ref() {
+        crate::license_enforcement::check_workflow_limit_with_state(state, &pool).await?;
+        // 如果是 endpoint 类型，还需检查 API 端点数量限制
+        if trigger_type == "endpoint" {
+            crate::license_enforcement::check_api_endpoint_limit_with_state(state, &pool).await?;
+        }
+    }
 
     // 验证 DAG 结构
     let def = parse_definition(&req.nodes, &req.edges)?;
@@ -3470,6 +3480,8 @@ pub async fn endpoint_trigger(
     headers: HeaderMap,
     claims: Option<axum::Extension<Claims>>,
     api_key_ctx: Option<axum::Extension<ApiKeyContext>>,
+    license_state: Option<axum::Extension<crate::license::LicenseState>>,
+    redis: Option<axum::Extension<crate::redis_manager::RedisManager>>,
     body_bytes: Bytes,
 ) -> Result<Json<Value>> {
     let caller = resolve_endpoint_caller(&pool, &headers, claims.as_ref()).await?;
@@ -3511,6 +3523,19 @@ pub async fn endpoint_trigger(
     trigger_map.insert("headers".to_string(), Value::Object(headers_json));
     let trigger_data = Value::Object(trigger_map);
 
+    // License 配额检查：月度执行次数限制
+    if let (Some(axum::Extension(state)), Some(axum::Extension(redis_mgr))) = (license_state.as_ref(), redis.as_ref()) {
+        let snapshot = state.snapshot();
+        if let Some(ref claims) = snapshot.claims {
+            if matches!(snapshot.status, crate::license::LicenseStatus::Active | crate::license::LicenseStatus::Grace) {
+                if let Some(max_executions) = claims.max_executions_per_month {
+                    let tracker = crate::execution_tracker::ExecutionTracker::new(redis_mgr.clone());
+                    tracker.track_and_check(Some(max_executions)).await?;
+                }
+            }
+        }
+    }
+
     let user_id = match &caller {
         EndpointCaller::User(c) => Some(c.sub),
         EndpointCaller::ApiKey { .. } | EndpointCaller::Anonymous => None,
@@ -3535,6 +3560,8 @@ pub async fn endpoint_trigger_get(
     Query(params): Query<HashMap<String, String>>,
     claims: Option<axum::Extension<Claims>>,
     api_key_ctx: Option<axum::Extension<ApiKeyContext>>,
+    license_state: Option<axum::Extension<crate::license::LicenseState>>,
+    redis: Option<axum::Extension<crate::redis_manager::RedisManager>>,
 ) -> Result<Json<Value>> {
     let body = serde_json::to_value(&params).unwrap_or(json!({}));
     let caller = resolve_endpoint_caller(&pool, &headers, claims.as_ref()).await?;
@@ -3557,6 +3584,19 @@ pub async fn endpoint_trigger_get(
         ))
     })?;
 
+    // License 配额检查：月度执行次数限制
+    if let (Some(axum::Extension(state)), Some(axum::Extension(redis_mgr))) = (license_state.as_ref(), redis.as_ref()) {
+        let snapshot = state.snapshot();
+        if let Some(ref claims) = snapshot.claims {
+            if matches!(snapshot.status, crate::license::LicenseStatus::Active | crate::license::LicenseStatus::Grace) {
+                if let Some(max_executions) = claims.max_executions_per_month {
+                    let tracker = crate::execution_tracker::ExecutionTracker::new(redis_mgr.clone());
+                    tracker.track_and_check(Some(max_executions)).await?;
+                }
+            }
+        }
+    }
+
     let user_id = match &caller {
         EndpointCaller::User(c) => Some(c.sub),
         EndpointCaller::ApiKey { .. } | EndpointCaller::Anonymous => None,
@@ -3578,6 +3618,8 @@ pub async fn endpoint_trigger_public(
     State(pool): State<PgPool>,
     Path((database_slug, workflow_slug)): Path<(String, String)>,
     headers: HeaderMap,
+    license_state: Option<axum::Extension<crate::license::LicenseState>>,
+    redis: Option<axum::Extension<crate::redis_manager::RedisManager>>,
     body_bytes: Bytes,
 ) -> Result<Json<Value>> {
     let caller = EndpointCaller::Anonymous;
@@ -3612,6 +3654,19 @@ pub async fn endpoint_trigger_public(
     );
     trigger_map.insert("headers".to_string(), Value::Object(headers_json));
     let trigger_data = Value::Object(trigger_map);
+
+    // License 配额检查：月度执行次数限制
+    if let (Some(axum::Extension(state)), Some(axum::Extension(redis_mgr))) = (license_state.as_ref(), redis.as_ref()) {
+        let snapshot = state.snapshot();
+        if let Some(ref claims) = snapshot.claims {
+            if matches!(snapshot.status, crate::license::LicenseStatus::Active | crate::license::LicenseStatus::Grace) {
+                if let Some(max_executions) = claims.max_executions_per_month {
+                    let tracker = crate::execution_tracker::ExecutionTracker::new(redis_mgr.clone());
+                    tracker.track_and_check(Some(max_executions)).await?;
+                }
+            }
+        }
+    }
 
     // 公开端点无 auth_middleware / ApiKeyContext，不接网关 key 读写护栏（维持现状）。
     let result = run_workflow_detached(

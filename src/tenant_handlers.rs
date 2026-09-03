@@ -385,9 +385,15 @@ pub async fn test_connection(
 pub async fn create_database_connection(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
+    license_state: Option<Extension<crate::license::LicenseState>>,
     Json(req): Json<CreateDatabaseConnectionRequest>,
 ) -> Result<Json<TenantDatabase>> {
     let user_id = claims.sub; // claims.sub 现在是 i32 类型
+
+    // License 配额检查：数据库连接数量限制
+    if let Some(Extension(state)) = license_state.as_ref() {
+        crate::license_enforcement::check_database_connection_limit_with_state(state, &pool).await?;
+    }
 
     // 平台超管直接放行；否则必须是该租户的 owner / admin
     if !claims.is_superadmin {
@@ -876,6 +882,7 @@ pub async fn list_all_tenants(
 pub async fn create_tenant(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
+    license_state: Option<Extension<crate::license::LicenseState>>,
     audit_sink: Option<Extension<crate::audit_middleware::AuditDetailSink>>,
     Json(req): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>> {
@@ -895,6 +902,11 @@ pub async fn create_tenant(
         .ok_or_else(|| crate::error::AppError::InvalidQuery("缺少租户标识".to_string()))?;
 
     let contact_email = req["contact_email"].as_str();
+
+    // License 配额检查：项目/租户数量限制
+    if let Some(Extension(state)) = license_state.as_ref() {
+        crate::license_enforcement::check_tenant_limit_with_state(state, &pool).await?;
+    }
 
     // 数据库连接信息
     let db_host = req["db_host"].as_str().unwrap_or("localhost");
@@ -2623,12 +2635,18 @@ pub struct CreateProjectMemberRequest {
 pub async fn create_project_member(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
+    license_state: Option<Extension<crate::license::LicenseState>>,
     redis: Option<Extension<RedisManager>>,
     Path(project_id): Path<i32>,
     Json(req): Json<CreateProjectMemberRequest>,
 ) -> Result<Json<serde_json::Value>> {
     permissions::require_tenant_admin(&pool, &claims, project_id).await?;
     validate_tenant_role(&req.role)?;
+
+    // License 配额检查：团队成员数量限制
+    if let Some(Extension(state)) = license_state.as_ref() {
+        crate::license_enforcement::check_team_member_limit_with_state(state, &pool).await?;
+    }
 
     // 基础字段校验（与注册接口口径保持一致的最小集）。
     let username = req.username.trim();
