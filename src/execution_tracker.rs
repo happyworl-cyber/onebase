@@ -3,7 +3,7 @@
 //! 用于跟踪和限制月度工作流执行次数（max_executions_per_month）。
 //! 基于 Redis 实现，自动按月重置计数（使用 TTL）。
 
-use chrono::{Datelike, Duration, Utc};
+use chrono::{Datelike, Timelike, Utc};
 use redis::AsyncCommands;
 
 use crate::error::{AppError, Result};
@@ -67,7 +67,7 @@ impl ExecutionTracker {
         if count == 1 {
             let ttl = Self::seconds_until_month_end();
             let _: () = conn
-                .expire(&key, ttl as usize)
+                .expire(&key, ttl)
                 .await
                 .map_err(|e| AppError::Internal(format!("Redis expire 失败: {}", e)))?;
 

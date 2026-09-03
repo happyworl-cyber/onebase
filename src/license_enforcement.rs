@@ -13,7 +13,7 @@ use sqlx::PgPool;
 
 use crate::auth::Claims;
 use crate::error::{AppError, Result};
-use onebase::license::{self, LicenseClaims, LicenseStatus};
+use crate::license::{self, LicenseClaims, LicenseState, LicenseStatus};
 
 /// License 上下文（由 license_middleware 注入）
 #[derive(Debug, Clone)]
@@ -226,6 +226,21 @@ async fn load_and_verify_license(_pool: &PgPool) -> Result<LicenseContext> {
 }
 
 // ═══════════════════════════════════════════════════════════
+// LicenseState 辅助函数（从全局状态获取 claims）
+// ═══════════════════════════════════════════════════════════
+
+/// 从 LicenseState 获取有效的 LicenseClaims
+///
+/// 如果 License 无效、已过期或缺失，返回 None
+pub fn get_claims_from_state(state: &LicenseState) -> Option<LicenseClaims> {
+    let snap = state.snapshot();
+    match snap.status {
+        LicenseStatus::Active | LicenseStatus::Grace => snap.claims.as_ref().cloned(),
+        _ => None,
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
 // 功能限制检查函数（业务代码调用）
 // ═══════════════════════════════════════════════════════════
 
@@ -361,6 +376,155 @@ pub async fn check_team_member_limit(ctx: &LicenseContext, pool: &PgPool) -> Res
             ctx.claims.max_team_members.unwrap_or(0)
         )))
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+// LicenseState 版本的配额检查函数（直接使用全局状态）
+// ═══════════════════════════════════════════════════════════
+
+/// 检查项目/租户创建限制（使用 LicenseState）
+pub async fn check_tenant_limit_with_state(state: &LicenseState, pool: &PgPool) -> Result<()> {
+    let Some(claims) = get_claims_from_state(state) else {
+        return Ok(()); // 无有效 License，放行（由 enforce 模式控制）
+    };
+
+    if let Some(max_tenants) = claims.max_tenants.or(claims.max_projects) {
+        let current_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM management.tenants WHERE status = 'active'",
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if current_count >= max_tenants as i64 {
+            return Err(AppError::Forbidden(format!(
+                "已达到项目数量上限（{}），请升级 License 或删除未使用的项目",
+                max_tenants
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// 检查工作流创建限制（使用 LicenseState）
+pub async fn check_workflow_limit_with_state(state: &LicenseState, pool: &PgPool) -> Result<()> {
+    let Some(claims) = get_claims_from_state(state) else {
+        return Ok(());
+    };
+
+    if let Some(max_workflows) = claims.max_workflows {
+        let current_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM management.workflows WHERE status != 'deleted'",
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if current_count >= max_workflows as i64 {
+            return Err(AppError::Forbidden(format!(
+                "已达到工作流数量上限（{}），请升级 License 或删除未使用的工作流",
+                max_workflows
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// 检查定时任务创建限制（使用 LicenseState）
+pub async fn check_scheduled_job_limit_with_state(state: &LicenseState, pool: &PgPool) -> Result<()> {
+    let Some(claims) = get_claims_from_state(state) else {
+        return Ok(());
+    };
+
+    if let Some(max_jobs) = claims.max_scheduled_jobs {
+        let current_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM management.scheduled_tasks WHERE is_active = true AND deleted_at IS NULL",
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if current_count >= max_jobs as i64 {
+            return Err(AppError::Forbidden(format!(
+                "已达到定时任务数量上限（{}），请升级 License",
+                max_jobs
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// 检查数据库连接创建限制（使用 LicenseState）
+pub async fn check_database_connection_limit_with_state(state: &LicenseState, pool: &PgPool) -> Result<()> {
+    let Some(claims) = get_claims_from_state(state) else {
+        return Ok(());
+    };
+
+    if let Some(max_conns) = claims.max_database_connections {
+        let current_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM management.tenant_databases WHERE deleted_at IS NULL",
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if current_count >= max_conns as i64 {
+            return Err(AppError::Forbidden(format!(
+                "已达到数据库连接数量上限（{}），请升级 License",
+                max_conns
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// 检查团队成员添加限制（使用 LicenseState）
+pub async fn check_team_member_limit_with_state(state: &LicenseState, pool: &PgPool) -> Result<()> {
+    let Some(claims) = get_claims_from_state(state) else {
+        return Ok(());
+    };
+
+    if let Some(max_members) = claims.max_team_members {
+        let current_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(DISTINCT user_id) FROM management.user_tenants WHERE is_active = true",
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if current_count >= max_members as i64 {
+            return Err(AppError::Forbidden(format!(
+                "已达到团队成员数量上限（{}），请升级 License 或移除未使用的成员",
+                max_members
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// 检查 API 端点创建限制（使用 LicenseState）
+pub async fn check_api_endpoint_limit_with_state(state: &LicenseState, pool: &PgPool) -> Result<()> {
+    let Some(claims) = get_claims_from_state(state) else {
+        return Ok(());
+    };
+
+    if let Some(max_endpoints) = claims.max_api_endpoints {
+        // API 端点就是 trigger_type='endpoint' 的工作流
+        let current_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM management.workflows WHERE trigger_type = 'endpoint' AND status != 'deleted'",
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if current_count >= max_endpoints as i64 {
+            return Err(AppError::Forbidden(format!(
+                "已达到 API 端点数量上限（{}），请升级 License",
+                max_endpoints
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 // ═══════════════════════════════════════════════════════════
