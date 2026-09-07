@@ -61,6 +61,33 @@ pub struct LicenseClaims {
     /// 租户上限（None = 不限）。
     #[serde(default)]
     pub max_tenants: Option<u32>,
+    /// 每个租户的账号上限（None = 不限）。
+    #[serde(default)]
+    pub max_accounts_per_tenant: Option<u32>,
+
+    // ========== 新增配额类型（基于新定价方案）==========
+    /// 项目数量上限（None = 不限）。
+    #[serde(default)]
+    pub max_projects: Option<u32>,
+    /// 工作流数量上限（None = 不限）。
+    #[serde(default)]
+    pub max_workflows: Option<u32>,
+    /// 每月工作流执行次数上限（None = 不限）。
+    #[serde(default)]
+    pub max_executions_per_month: Option<u64>,
+    /// API 端点数量上限（None = 不限）。
+    #[serde(default)]
+    pub max_api_endpoints: Option<u32>,
+    /// 定时任务数量上限（None = 不限）。
+    #[serde(default)]
+    pub max_scheduled_jobs: Option<u32>,
+    /// 数据库连接数上限（None = 不限）。
+    #[serde(default)]
+    pub max_database_connections: Option<u32>,
+    /// 团队成员数上限（None = 不限）。
+    #[serde(default)]
+    pub max_team_members: Option<u32>,
+
     /// 签发时间（Unix 秒）。
     pub issued_at: i64,
     /// 到期时间（Unix 秒）。
@@ -472,6 +499,7 @@ impl LicenseState {
             out["modules"] = json!(c.modules);
             out["max_nodes"] = json!(c.max_nodes);
             out["max_tenants"] = json!(c.max_tenants);
+            out["max_accounts_per_tenant"] = json!(c.max_accounts_per_tenant);
             out["issued_at"] = json!(to_rfc3339(c.issued_at));
             out["expires_at"] = json!(to_rfc3339(c.expires_at));
             out["grace_days"] = json!(c.grace_days);
@@ -660,12 +688,14 @@ mod tests {
     #[test]
     fn sign_and_verify_roundtrip() {
         let (priv_pem, pub_pem) = generate_keypair().unwrap();
-        let claims = sample_claims(2_000_000_000);
+        let mut claims = sample_claims(2_000_000_000);
+        claims.max_accounts_per_tenant = Some(10);
         let file = sign_license(&priv_pem, &claims).unwrap();
         let parsed = verify_license_file(&pub_pem, &file).unwrap();
         assert_eq!(parsed.license_id, claims.license_id);
         assert_eq!(parsed.customer, claims.customer);
         assert!(parsed.has_module("AI"));
+        assert_eq!(parsed.max_accounts_per_tenant, Some(10));
     }
 
     #[test]
