@@ -1365,3 +1365,47 @@ mod tests {
         );
     }
 }
+
+// ───── 7. 代理商权限 ─────────────────────────────────────────
+
+/// 从 Claims 中提取代理商 ID（要求当前用户是代理商成员）
+pub async fn require_partner(pool: &PgPool, claims: &Claims) -> Result<i32> {
+    let partner_id: Option<i32> = sqlx::query_scalar(
+        r#"
+        SELECT pu.partner_id
+        FROM management.partner_users pu
+        JOIN management.partners p ON p.id = pu.partner_id
+        WHERE pu.user_id = $1
+          AND pu.is_active = true
+          AND p.status = 'active'
+        LIMIT 1
+        "#,
+    )
+    .bind(claims.sub)
+    .fetch_optional(pool)
+    .await?;
+
+    partner_id.ok_or_else(|| AppError::Forbidden("当前用户不是任何活跃代理商的成员".to_string()))
+}
+
+/// 检查用户是否是指定代理商的管理员
+pub async fn is_partner_admin(pool: &PgPool, user_id: i32, partner_id: i32) -> Result<bool> {
+    let is_admin: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM management.partner_users
+            WHERE partner_id = $1
+              AND user_id = $2
+              AND role = 'admin'
+              AND is_active = true
+        )
+        "#,
+    )
+    .bind(partner_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(is_admin)
+}

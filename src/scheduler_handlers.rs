@@ -329,6 +329,7 @@ pub async fn create_task(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
     api_key_ctx: Option<Extension<ApiKeyContext>>,
+    license_state: Option<Extension<crate::license::LicenseState>>,
     Json(mut req): Json<CreateTaskReq>,
 ) -> Result<Json<ScheduledTask>, AppError> {
     fill_from_api_key_context(
@@ -338,6 +339,11 @@ pub async fn create_task(
     );
 
     validate_can_manage(&claims, req.tenant_id, &pool).await?;
+
+    // License 配额检查：定时任务数量限制
+    if let Some(Extension(state)) = license_state.as_ref() {
+        crate::license_enforcement::check_scheduled_job_limit_with_state(state, &pool).await?;
+    }
 
     let kind = req.kind.as_str();
     if kind != "rpc" && kind != "http" && kind != "shell" && kind != "workflow" {

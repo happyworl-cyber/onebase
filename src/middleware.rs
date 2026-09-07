@@ -3,6 +3,7 @@ use axum::{
     http::{header, HeaderName, HeaderValue, Method, Uri},
     middleware::Next,
     response::Response,
+    Extension,
 };
 use sqlx::{PgPool, Row};
 
@@ -1234,4 +1235,29 @@ mod tests {
             "OPTIONS preflight should not be tagged deprecated"
         );
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 代理商中间件
+// ═══════════════════════════════════════════════════════════
+
+/// 代理商上下文（由 partner_middleware 注入）
+#[derive(Debug, Clone)]
+pub struct PartnerContext {
+    pub partner_id: i32,
+}
+
+/// 代理商权限中间件
+///
+/// 要求当前用户是某个活跃代理商的成员，并将 partner_id 注入请求扩展。
+/// 必须在 auth_middleware 之后使用。
+pub async fn partner_middleware(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<crate::auth::Claims>,
+    mut req: Request,
+    next: Next,
+) -> std::result::Result<Response, AppError> {
+    let partner_id = crate::permissions::require_partner(&pool, &claims).await?;
+    req.extensions_mut().insert(PartnerContext { partner_id });
+    Ok(next.run(req).await)
 }
