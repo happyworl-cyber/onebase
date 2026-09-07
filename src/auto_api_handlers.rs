@@ -350,23 +350,32 @@ fn check_circuit_breaker(
     Ok(())
 }
 
-/// 进程内业务池已打满时立刻 503，避免 AutoAPI 在 sqlx 内部 acquire 上干等满超时。
-fn reject_if_pool_saturated(database_id: i32, source: &str) -> Result<()> {
-    if let Some(wm) = POOL_MANAGER.primary_watermark(database_id) {
-        crate::pool_metrics::fail_fast_if_saturated(&wm, Some(database_id), source)
-            .map_err(AppError::Database)?;
+/// 进程内业务池已打满时短等再拒，避免微突发 0ms 失败；仍满才 503。
+async fn reject_if_pool_saturated(database_id: i32, source: &str) -> Result<()> {
+    if POOL_MANAGER.primary_watermark(database_id).is_none() {
+        return Ok(());
     }
-    Ok(())
+    crate::pool_metrics::admit_or_wait_then_fail_fast(
+        || {
+            POOL_MANAGER
+                .primary_watermark(database_id)
+                .expect("pool still loaded")
+        },
+        Some(database_id),
+        source,
+    )
+    .await
+    .map_err(AppError::Database)
 }
 
 /// 熔断 + 池饱和准入（AutoAPI 入口统一调用）。
-fn check_admission(
+async fn check_admission(
     cb_mgr: &Option<axum::extract::Extension<CircuitBreakerManager>>,
     database_id: i32,
     source: &str,
 ) -> Result<()> {
     check_circuit_breaker(cb_mgr, database_id)?;
-    reject_if_pool_saturated(database_id, source)
+    reject_if_pool_saturated(database_id, source).await
 }
 
 /// 记录熔断器成功
@@ -994,7 +1003,7 @@ pub async fn list_records(
         api_key_ctx.as_ref().map(|e| &e.0),
     )
     .await?;
-    check_admission(&cb_mgr, database_id, "auto_api")?;
+    check_admission(&cb_mgr, database_id, "auto_api").await?;
 
     let perm = rbac.map(|e| e.0);
     let row_conditions = perm
@@ -1447,7 +1456,7 @@ pub async fn get_record(
         api_key_ctx.as_ref().map(|e| &e.0),
     )
     .await?;
-    check_admission(&cb_mgr, database_id, "auto_api")?;
+    check_admission(&cb_mgr, database_id, "auto_api").await?;
 
     let perm = rbac.map(|e| e.0);
     let allowed_columns = perm.as_ref().and_then(|p| p.allowed_columns.clone());
@@ -1841,7 +1850,7 @@ pub async fn create_record(
         api_key_ctx.as_ref().map(|e| &e.0),
     )
     .await?;
-    check_admission(&cb_mgr, database_id, "auto_api")?;
+    check_admission(&cb_mgr, database_id, "auto_api").await?;
 
     let perm = rbac.map(|e| e.0);
 
@@ -2032,7 +2041,7 @@ pub async fn update_record(
         api_key_ctx.as_ref().map(|e| &e.0),
     )
     .await?;
-    check_admission(&cb_mgr, database_id, "auto_api")?;
+    check_admission(&cb_mgr, database_id, "auto_api").await?;
 
     let perm = rbac.map(|e| e.0);
     let pool = match get_write_pool(&main_pool, database_id).await {
@@ -2188,7 +2197,7 @@ pub async fn delete_record(
         api_key_ctx.as_ref().map(|e| &e.0),
     )
     .await?;
-    check_admission(&cb_mgr, database_id, "auto_api")?;
+    check_admission(&cb_mgr, database_id, "auto_api").await?;
 
     let perm = rbac.map(|e| e.0);
     let pool = match get_write_pool(&main_pool, database_id).await {
@@ -2317,7 +2326,7 @@ pub async fn update_records(
         api_key_ctx.as_ref().map(|e| &e.0),
     )
     .await?;
-    check_admission(&cb_mgr, database_id, "auto_api")?;
+    check_admission(&cb_mgr, database_id, "auto_api").await?;
 
     let perm = rbac.map(|e| e.0);
 
@@ -2555,7 +2564,7 @@ pub async fn delete_records(
         api_key_ctx.as_ref().map(|e| &e.0),
     )
     .await?;
-    check_admission(&cb_mgr, database_id, "auto_api")?;
+    check_admission(&cb_mgr, database_id, "auto_api").await?;
 
     let perm = rbac.map(|e| e.0);
 

@@ -196,6 +196,7 @@ export interface IssueLicenseRequest {
   modules: string[]
   max_nodes?: number
   max_tenants?: number
+  max_accounts_per_tenant?: number
   fingerprint?: string
 
   days: number

@@ -5,7 +5,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use sqlx::{types::{Decimal, Uuid}, FromRow};
+use sqlx::{
+    types::{Decimal, Uuid},
+    FromRow,
+};
 
 // ═══════════════════════════════════════════════════════════
 // 数据库模型
@@ -280,7 +283,7 @@ pub struct IssueLicenseRequest {
     #[serde(default = "default_max_tenants")]
     pub max_tenants: i32,
     pub max_accounts_per_tenant: Option<i32>, // 每个租户的账号上限
-    pub fingerprint: Option<String>, // 客户部署指纹（可选绑定）
+    pub fingerprint: Option<String>,          // 客户部署指纹（可选绑定）
 
     pub days: i32, // License 有效天数
     #[serde(default = "default_grace_days")]
@@ -416,10 +419,7 @@ impl Partner {
     /// 检查模块是否都允许
     pub fn are_modules_allowed(&self, modules: &[String]) -> bool {
         if let Some(allowed) = self.allowed_modules.as_array() {
-            let allowed_set: Vec<&str> = allowed
-                .iter()
-                .filter_map(|m| m.as_str())
-                .collect();
+            let allowed_set: Vec<&str> = allowed.iter().filter_map(|m| m.as_str()).collect();
 
             modules.iter().all(|m| allowed_set.contains(&m.as_str()))
         } else {

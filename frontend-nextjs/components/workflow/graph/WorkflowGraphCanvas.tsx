@@ -20,6 +20,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { Graph, type NodeBadgeStyleProps } from '@antv/g6'
+import { SHARED_DEPARTMENT_NAME } from '@/components/workflow/list/types'
 import {
   fetchDependencyGraph,
   type DependencyGraphNode,
@@ -31,6 +32,7 @@ import {
   buildGraphData,
   buildAggregatedGraphData,
   sliceClusterForDrilldown,
+  sliceFilterSubgraph,
   topRankings,
   bfsLevels,
   nodeLayoutSize,
@@ -45,7 +47,9 @@ import {
   COLOR_MODE_ORDER,
   COMBO_NEUTRALIZED_OVERLAY,
   nodeSwatchForMode,
-  errorRateLegendStops,
+  FILTER_SELF_SWATCH,
+  FILTER_DEP_SWATCH,
+  ERROR_RATE_TIERS,
   errorRateColor,
   governanceMatches,
   findNodeIdByFocus,
@@ -111,12 +115,11 @@ const RANKING_ORDER: RankingKey[] = ['mostDependedOn', 'mostDependencies', 'bulk
 
 // 侧栏选中详情·运行状态指标（方案 B）：与配色图例同一套色值/文案，保证"图上配色刻度"和
 // "详情面板文字"读起来是同一件事；这四项与当前 colorMode 无关，选中节点后恒定显示。
-const DETAIL_STATUS_LABEL: Record<DependencyGraphNode['lastRunStatus'], string> = { success: '成功', failed: '失败', none: '无记录' }
-const DETAIL_STATUS_DOT: Record<DependencyGraphNode['lastRunStatus'], string> = { success: '#10b981', failed: '#f43f5e', none: '#94a3b8' }
-const DETAIL_ACTIVITY_LABEL: Record<DependencyGraphNode['activity'], string> = {
-  active: '活跃（24 小时内跑过）',
-  idle: '一般（7 天内跑过）',
-  dormant: '沉寂（7 天以上无运行）',
+/** 活跃度文案：中档/低档的天数跟随后端返回的统计窗口（= 运行记录保留期），不写死 7。 */
+function activityLabel(activity: DependencyGraphNode['activity'], windowDays: number): string {
+  if (activity === 'active') return '活跃（24 小时内跑过）'
+  if (activity === 'idle') return `一般（${windowDays} 天内跑过）`
+  return `沉寂（${windowDays} 天以上无运行）`
 }
 const DETAIL_ACTIVITY_DOT: Record<DependencyGraphNode['activity'], string> = { active: '#22c55e', idle: '#f59e0b', dormant: '#94a3b8' }
 
@@ -168,23 +171,182 @@ function seedGridPositions(nodeIds: string[], groupKeyOf: (id: string) => string
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key)!.push(id)
   }
-  const groupKeys = Array.from(groups.keys())
-  const groupCols = Math.max(1, Math.ceil(Math.sqrt(groupKeys.length)))
-  const CELL = 340
   const MEMBER_STEP = 38
+  const GROUP_GAP = 90
+  // 分组占地按成员数现算 —— 原实现用 CELL=340 定格，只有 1、2 个工作流的小部门也照样独占
+  // 整格，它那一两个点就钉在自己空格子的左上角，跟大部门隔着几百像素；而冷启动力导只跑
+  // 几十 tick（见下方 loosenForColdStart），根本吃不掉这个初始偏移，最终就表现为"零星几个
+  // 工作流孤零零飘在外围"。改成按 ceil(sqrt(n)) 方阵算出每块的真实宽高，小组只占一小块。
+  const blocks = Array.from(groups.entries()).map(([key, members]) => {
+    const cols = Math.max(1, Math.ceil(Math.sqrt(members.length)))
+    const rows = Math.ceil(members.length / cols)
+    return { key, members, cols, w: cols * MEMBER_STEP + GROUP_GAP, h: rows * MEMBER_STEP + GROUP_GAP }
+  })
+  // 货架式（shelf）打包：目标行宽取总面积开方，块按高度降序摆放，让整体接近正方形且不留
+  // 大片空洞。纯几何贴放，不追求最优装箱——初值只要"紧凑且分组可辨"就够了。
+  blocks.sort((a, b) => b.h - a.h)
+  const totalArea = blocks.reduce((s, b) => s + b.w * b.h, 0)
+  const rowWidth = Math.max(Math.sqrt(totalArea), ...blocks.map((b) => b.w))
   const positions = new Map<string, { x: number; y: number }>()
-  groupKeys.forEach((key, gi) => {
-    const gx = (gi % groupCols) * CELL
-    const gy = Math.floor(gi / groupCols) * CELL
-    const members = groups.get(key)!
-    const memberCols = Math.max(1, Math.ceil(Math.sqrt(members.length)))
-    members.forEach((id, mi) => {
+  let cursorX = 0
+  let cursorY = 0
+  let rowHeight = 0
+  for (const b of blocks) {
+    if (cursorX > 0 && cursorX + b.w > rowWidth) {
+      cursorX = 0
+      cursorY += rowHeight
+      rowHeight = 0
+    }
+    b.members.forEach((id, mi) => {
       positions.set(id, {
-        x: gx + (mi % memberCols) * MEMBER_STEP,
-        y: gy + Math.floor(mi / memberCols) * MEMBER_STEP,
+        x: cursorX + (mi % b.cols) * MEMBER_STEP,
+        y: cursorY + Math.floor(mi / b.cols) * MEMBER_STEP,
       })
     })
+    cursorX += b.w
+    rowHeight = Math.max(rowHeight, b.h)
+  }
+  return positions
+}
+
+/**
+ * 入度 → 影响力档位（0 = 没人依赖，档越高越核心）。入度是长尾分布（绝大多数 0~2，少数枢纽
+ * 十几），若让每个不同的入度值各占一圈，真数据下会撑出二十几圈、外径失控且圈与圈的差别读
+ * 不出来。压成 5 个固定档：圈数少才数得清，"第几圈"本身就成了可读的影响力刻度。
+ */
+function influenceTier(deg: number): number {
+  if (deg === 0) return 0
+  if (deg <= 1) return 1
+  if (deg <= 3) return 2
+  if (deg <= 7) return 3
+  return 4
+}
+
+/**
+ * 不分簇模式的语义化位置规则（方案三·极坐标双编码）—— 给每个工作流算一个"它该待的地方"：
+ *
+ *   角度 θ  →  所属服务（department）：同服务的工作流占同一个扇区，聚成一"瓣"；
+ *   半径 r  →  影响力（入度）：被依赖越多越靠圆心，入度 0 的落在最外环。
+ *
+ * 这套坐标同时充当两个角色，二者必须一致才收敛得快、观感才稳：
+ * ① 冷启动的力导初值（种子）；② forceX/forceY 的引力目标点。
+ *
+ * 为什么值得做：不分簇模式为了性能砍掉了 combo 层，服务归属就只剩颜色一个通道，颜色一多
+ * 必然糊；把服务编码进方位角，等于不花任何布局成本把分组信息拿回来，而且"跨瓣的边 = 跨
+ * 服务依赖"这个最值钱的信号会自己浮出来。半径编码影响力则顺带治好了孤点乱飘——入度 0 的
+ * 节点不再是"没人管所以飘走了"，而是"按规则就该在最外环"。
+ *
+ * 几个刻意的取舍（每条都是实测踩出来的，改之前先看下面对应的行内注释）：
+ * - 扇区角宽 = 保底均分的 45% + 剩余按体量分，纯体量加权会让小服务窄到失去横向铺开能力；
+ * - 半径不是入度的连续映射，而是"影响力档定圈号、圈号定半径、层间严格 PITCH"——连续映射
+ *   会让窄扇区的溢出层扎进相邻入度环；
+ * - 一圈在本扇区排不下时按弧长容量分层向外扩，不硬挤成一条线；
+ * - 原点取画布中心、且锚点质心再归一到画布中心：centerStrength 对应的 d3 forceCenter 每
+ *   tick 会把整图质心平移到画布中心，锚点若偏在一边就会和 forceX/Y 一个推一个拉白白对抗；
+ * - 只有一个服务时扇区退化成整圆，自动降级成"纯同心环按影响力分层"，无需额外分支。
+ */
+function polarTargetPositions(
+  nodes: { id: string | number; data?: Record<string, unknown> }[],
+  inDegree: Map<string, number>,
+  centerX: number,
+  centerY: number,
+): Map<string, { x: number; y: number }> {
+  const total = nodes.length
+  if (total === 0) return new Map()
+
+  // 服务分组 + 排序：与配色分配同序（按名称 zh 排序），瓣的方位和颜色顺序对得上。
+  const groups = new Map<string, string[]>()
+  for (const n of nodes) {
+    const dept = String((n.data?.department as string | undefined) ?? '').trim() || SHARED_DEPARTMENT_NAME
+    if (!groups.has(dept)) groups.set(dept, [])
+    groups.get(dept)!.push(String(n.id))
+  }
+  const deptKeys = Array.from(groups.keys()).sort((a, b) => a.localeCompare(b, 'zh'))
+
+  // PITCH 取 collide 的典型直径量级（节点碰撞半径 85~120px，见 nodeLayoutSize）——锚点之间
+  // 至少留这么多，力导开局才不至于一上来就压在 collide 的排斥区里空转。
+  const PITCH = 210
+
+  // ① 扇区角宽：保底角宽 + 体量加权分剩余。纯按体量比例分（最早的写法）会让小服务拿到
+  //    窄得放不下东西的扇区——实测 7 个工作流的服务只分到 20°，一圈只排得下 1 个节点，
+  //    剩下的只能径向往外排队，硬生生把整图直径撑大 60%。每个服务先保底拿到均分角宽的
+  //    45%（系数 <1，保证 n 个服务的保底总和 0.9×2π 恒有剩余可分），剩下的 10% 再按体量
+  //    比例分给大服务——大服务仍然明显更宽，但小服务不至于窄到失去横向铺开的能力。
+  //    瓣与瓣之间再留一道缝，否则边界节点糊在一起看不出分瓣。
+  const minSpan = ((Math.PI * 2) / deptKeys.length) * 0.45
+  const remainSpan = Math.PI * 2 - minSpan * deptKeys.length
+  const sectors = deptKeys.map((dept) => {
+    const members = groups.get(dept)!
+    const span = minSpan + (members.length / total) * remainSpan
+    const gap = Math.min(span * 0.18, 0.14)
+    const rings = new Map<number, string[]>()
+    for (const id of members) {
+      const tier = influenceTier(inDegree.get(id) ?? 0)
+      if (!rings.has(tier)) rings.set(tier, [])
+      rings.get(tier)!.push(id)
+    }
+    return { span, gap, rings, startAngle: 0, usable: Math.max(span - gap, 0.02) }
   })
+  let angleCursor = -Math.PI / 2 // 从正上方开始铺第一个服务，读图习惯是 12 点方向起
+  for (const s of sectors) {
+    s.startAngle = angleCursor + s.gap / 2
+    angleCursor += s.span
+  }
+
+  // ② 圈半径：影响力档从高到低、由内向外逐圈排，层间严格 PITCH。
+  //    这里刻意不用"半径 = 入度的连续映射"——那样每个不同的入度值各占一个半径，而一个窄扇区
+  //    里一圈往往只放得下 1 个节点，放不下的往外扩就会一头扎进相邻入度环（实测最近邻掉到
+  //    45px）。改成"档位定圈号、圈号定半径"：同一档在所有服务里共用同一组半径（半径全局
+  //    可比，一眼看出谁更核心），每档占几层取各扇区里最挤的那个，下一档从它之后接着排，
+  //    环与环因此永不碰撞。
+  const tierRadius = new Map<number, number>()
+  const tiers = Array.from(new Set(sectors.flatMap((s) => Array.from(s.rings.keys())))).sort((a, b) => b - a)
+  let cursorRadius = PITCH * 1.15 // 最内圈留出圆心空隙，免得核心节点全叠在一个点上
+  for (const tier of tiers) {
+    let maxLayers = 1
+    for (const s of sectors) {
+      const count = s.rings.get(tier)?.length ?? 0
+      if (count === 0) continue
+      const capacity = Math.max(1, Math.floor((s.usable * cursorRadius) / PITCH))
+      maxLayers = Math.max(maxLayers, Math.ceil(count / capacity))
+    }
+    tierRadius.set(tier, cursorRadius)
+    cursorRadius += maxLayers * PITCH
+  }
+
+  // ③ 落位：每一圈在本扇区角宽里均匀铺开，排不下的顺次外扩一层（层间距同样是 PITCH）。
+  const positions = new Map<string, { x: number; y: number }>()
+  for (const s of sectors) {
+    for (const [tier, ids] of Array.from(s.rings.entries())) {
+      const baseRadius = tierRadius.get(tier)!
+      const capacity = Math.max(1, Math.floor((s.usable * baseRadius) / PITCH))
+      ids.forEach((id, j) => {
+        const layer = Math.floor(j / capacity)
+        const slot = j % capacity
+        const slotCount = Math.min(capacity, ids.length - layer * capacity)
+        const t = slotCount === 1 ? 0.5 : (slot + 0.5) / slotCount
+        const theta = s.startAngle + s.usable * t
+        const r = baseRadius + layer * PITCH
+        positions.set(id, { x: centerX + Math.cos(theta) * r, y: centerY + Math.sin(theta) * r })
+      })
+    }
+  }
+
+  // ④ 质心归一：扇区角宽和节点数正相关，大服务那一侧天然更重，锚点集合的质心并不落在画布
+  //    中心。而 centerStrength 对应的 d3 forceCenter 每 tick 都会把整图质心平移回画布中心，
+  //    于是它和 forceX/Y 一个推一个拉，白白对抗一整轮仿真（结构不会散，但收敛更慢、整图还
+  //    会持续漂移）。把锚点整体平移到"质心即中心"，两个力从此同向。
+  let sumX = 0
+  let sumY = 0
+  for (const p of Array.from(positions.values())) {
+    sumX += p.x
+    sumY += p.y
+  }
+  const offsetX = centerX - sumX / positions.size
+  const offsetY = centerY - sumY / positions.size
+  for (const [id, p] of Array.from(positions.entries())) {
+    positions.set(id, { x: p.x + offsetX, y: p.y + offsetY })
+  }
   return positions
 }
 
@@ -265,6 +427,11 @@ export default function WorkflowGraphCanvas({
   // 复用 closureInfo 同一套"选中 > hover > 筛选 > 治理过滤"优先级链路，天然吃到已有的
   // highlight/faded 状态机 + 增量 diff/generation 基建，不另起一套 setElementState 通道。
   const [specialFlagFilter, setSpecialFlagFilter] = useState<Set<string>>(new Set())
+  // 编号多选筛选（右上角搜索框旁的筛选按钮）：粘贴/输入一批 workflow id，与 chip 筛选取并集
+  // 作为"本体"集合，非空时画布只渲染 本体 + 下游全链路（见 filterIds / built）。
+  const [idFilter, setIdFilter] = useState<Set<string>>(new Set())
+  const [idFilterOpen, setIdFilterOpen] = useState(false)
+  const [idFilterDraft, setIdFilterDraft] = useState('')
   // 配色切换器（P1 诉求⑥）：默认服务色=现状，不改变默认视觉。仅明细视图生效。
   const [colorMode, setColorMode] = useState<ColorMode>('department')
   // 方案一：顶层视图 tab。方案二：仅明细视图下生效的分簇方式。
@@ -346,11 +513,28 @@ export default function WorkflowGraphCanvas({
     return buildAdjacency(resp.edges)
   }, [resp])
 
+  // 运行状态统计窗口天数：后端按运行记录保留期给出，图例/详情/活跃度文案全读它。
+  const windowDays = resp?.windowDays ?? 3
+
   const nodeById = useMemo(() => {
     const map = new Map<string, DependencyGraphNode>()
     resp?.nodes.forEach((n) => map.set(String(n.id), n))
     return map
   }, [resp])
+
+  // 筛选本体集合：chip 筛选命中的节点 ∪ 编号多选里真实存在的 id。基于全量 resp 算，
+  // 不能基于 built——built 本身就是按它切出来的。空集 = 不筛选，全量渲染。
+  const filterIds = useMemo(() => {
+    const ids = new Set<string>()
+    if (!resp) return ids
+    for (const n of resp.nodes) {
+      const id = String(n.id)
+      if (idFilter.has(id)) ids.add(id)
+      else if (specialFlagFilter.size > 0 && (n.specialFlags ?? []).some((f) => specialFlagFilter.has(f))) ids.add(id)
+    }
+    return ids
+  }, [resp, idFilter, specialFlagFilter])
+  const filterActive = filterIds.size > 0
 
   // 方案三③排行榜：基于全量 resp 算，跟当前视图/下钻态无关——不管在哪个视图，榜单反映的
   // 都是整个依赖图的真实枢纽/臃肿工作流，不是"当前看到的这一小块"。
@@ -367,11 +551,13 @@ export default function WorkflowGraphCanvas({
       const level: AggregationLevel = viewMode === 'aggregate-service' ? 'service' : 'category'
       return { mode: 'aggregate', level, data: buildAggregatedGraphData(resp.nodes, resp.edges, level) }
     }
-    const source = drilldown
+    const base = drilldown
       ? sliceClusterForDrilldown(resp.nodes, resp.edges, new Set(drilldown.members))
       : { nodes: resp.nodes, edges: resp.edges }
+    // 筛选生效：只渲染 本体 + 下游全链路 子图（依赖节点标 external），不再是全图淡出。
+    const source = filterIds.size > 0 ? sliceFilterSubgraph(base.nodes, base.edges, filterIds) : base
     return { mode: 'detail', data: buildGraphData(source.nodes, source.edges, clusterMode) }
-  }, [resp, viewMode, clusterMode, drilldown])
+  }, [resp, viewMode, clusterMode, drilldown, filterIds])
 
   const isDetail = built?.mode === 'detail'
 
@@ -387,8 +573,9 @@ export default function WorkflowGraphCanvas({
   const modeKey = useMemo(() => {
     if (!built) return ''
     if (built.mode === 'aggregate') return `agg:${built.level}`
-    return `detail:${clusterMode}:${drilldown ? `drill:${drilldown.members.slice().sort().join(',')}` : 'full'}`
-  }, [built, clusterMode, drilldown])
+    const filterKey = filterActive ? `:filter:${Array.from(filterIds).sort().join(',')}` : ''
+    return `detail:${clusterMode}:${drilldown ? `drill:${drilldown.members.slice().sort().join(',')}` : 'full'}${filterKey}`
+  }, [built, clusterMode, drilldown, filterActive, filterIds])
 
   // 每次换选中节点，逐跳进度归零——重新从"只亮选中节点自己"开始，不沿用上一个节点的跳数。
   useEffect(() => {
@@ -500,6 +687,44 @@ export default function WorkflowGraphCanvas({
     const alphaDecayFor = (base: number) => Math.min(0.12, base + (1 - scale) * 0.05)
     const sizeForLayoutItem = (d: any): [number, number] => nodeLayoutSize(d.data?.nodeCount ?? 0)
 
+    // 不分簇模式的语义化目标位（方案三·极坐标：角=服务、径=影响力，见 polarTargetPositions）。
+    // 原点取容器中心，与 d3 forceCenter 的落点一致，避免两个力对拉压扁结构。
+    const canvasCenterX = containerRef.current.clientWidth / 2
+    const canvasCenterY = containerRef.current.clientHeight / 2
+    const polarTargets =
+      built.mode === 'detail' && clusterMode === 'none'
+        ? polarTargetPositions(
+            (built.data.graphData.nodes ?? []) as { id: string | number; data?: Record<string, unknown> }[],
+            built.data.inDegree,
+            canvasCenterX,
+            canvasCenterY,
+          )
+        : null
+    // 筛选子图下，依赖节点（external）不该按自己的服务扇区落位——那样会离本体很远；
+    // 改成把它的锚点挪到"指向它的那些节点"锚点的均值旁，多迭代几轮让多级链路逐级贴近。
+    if (polarTargets && filterActive) {
+      const upstreamOf = new Map<string, string[]>()
+      for (const e of built.data.graphData.edges ?? []) {
+        const to = String(e.target)
+        if (!upstreamOf.has(to)) upstreamOf.set(to, [])
+        upstreamOf.get(to)!.push(String(e.source))
+      }
+      const deps = (built.data.graphData.nodes ?? []).filter((n) => (n.data as any)?.external).map((n) => String(n.id))
+      for (let round = 0; round < 3; round += 1) {
+        for (const id of deps) {
+          const ups = (upstreamOf.get(id) ?? []).map((u) => polarTargets.get(u)).filter(Boolean) as { x: number; y: number }[]
+          if (ups.length === 0) continue
+          const cx = ups.reduce((a, p) => a + p.x, 0) / ups.length
+          const cy = ups.reduce((a, p) => a + p.y, 0) / ups.length
+          // 沿"画布中心→上游质心"方向再向外推一段，让链路呈放射状展开而不是压在上游身上。
+          const dx = cx - canvasCenterX
+          const dy = cy - canvasCenterY
+          const len = Math.hypot(dx, dy) || 1
+          polarTargets.set(id, { x: cx + (dx / len) * 160, y: cy + (dy / len) * 160 })
+        }
+      }
+    }
+
     let layout: any
     let comboKind: Map<string, 'dept' | 'cat'> | null = null
 
@@ -558,6 +783,19 @@ export default function WorkflowGraphCanvas({
         distanceMax: 320 * scale,
         link: { distance: 44 * scale, strength: 0.25 },
         centerStrength: clampStrength(0.16 * centerBoost),
+        // 位置语义（方案三）：centerStrength 映射到 d3 forceCenter，它只是把整图质心平移到
+        // 画布中心，对单个节点不产生任何内向拉力；能把节点拽向主团的只有 link 力，而无依赖边
+        // 的孤儿 / 2~3 个点的小连通岛压根不受 link 力——这才是它们独自飘在外围的根因。这里用
+        // forceX/forceY 给每个节点一份指向"它按规则该待的位置"的真实弹簧力：目标点不是笼统的
+        // 画布中心，而是 polarTargetPositions 算出的极坐标锚点（角=服务、径=影响力）。
+        // 位置函数只认 d.id 查表——d3-force / @antv/layout 传给 accessor 的节点对象形状不透明
+        // （读 d.data 会拿到 undefined，聚合视图那边已经踩过一次），id 是唯一可信字段。
+        // 强度 0.3 是刻意留有余地的：跨服务依赖的 link 力会把节点稍微拽出自己的扇区，
+        // 这正是我们想看见的耦合信号，锚点太硬（→1）会把它压掉，太软（默认 0.1）又拉不动。
+        forceXPosition: (d: any) => polarTargets?.get(String(d?.id))?.x ?? canvasCenterX,
+        forceYPosition: (d: any) => polarTargets?.get(String(d?.id))?.y ?? canvasCenterY,
+        forceXStrength: clampStrength(0.3 * centerBoost),
+        forceYStrength: clampStrength(0.3 * centerBoost),
         alphaDecay: alphaDecayFor(0.05),
         alphaMin: 0.012,
       }
@@ -696,6 +934,9 @@ export default function WorkflowGraphCanvas({
     // 收敛结果），两者不会同时生效。
     const seedPositions =
       cachedPositions ??
+      // 不分簇模式直接拿极坐标锚点当种子——种子和引力目标同源，力导开局就在平衡态附近，
+      // 只需要做防重叠精修，比"网格骨架起步再被引力搬到扇区"少跑一大段收敛路径。
+      polarTargets ??
       (() => {
         const deptById = new Map<string, string>()
         for (const n of built.data.graphData.nodes ?? []) {
@@ -1621,24 +1862,14 @@ export default function WorkflowGraphCanvas({
       })
       return { mode: 'selection' as const, closure, maxDepth: levels.maxDepth }
     }
-    // 特殊节点筛选器：多选并集（OR）——命中筛选集合里任一 flag 的节点算命中。优先级排在
-    // 选中/hover 之后、既有的盘点治理过滤（govFilter，孤儿/无出边单选）之前，两者互斥
-    // （同一时刻只有一套 faded/highlight 语义生效，不叠加计算）。
-    if (specialFlagFilter.size > 0) {
-      const closure = new Set<string>()
-      for (const n of built.data.graphData.nodes ?? []) {
-        const flags = (n.data?.specialFlags as string[]) ?? []
-        if (flags.some((f) => specialFlagFilter.has(f))) closure.add(String(n.id))
-      }
-      return { mode: 'special-filter' as const, closure, maxDepth: 0 }
-    }
+    // 特殊节点 chip 筛选不再走这里的淡出逻辑——它现在直接改写 built（只渲染子图），见 filterIds。
     if (govFilter !== 'none' && adjacency) {
       const ids = (built.data.graphData.nodes ?? []).map((n) => String(n.id))
       const matches = governanceMatches(ids, adjacency, govFilter)
       return { mode: 'governance' as const, closure: matches, maxDepth: 0 }
     }
     return null
-  }, [built, selectedId, hoveredId, adjacency, stepHopMode, hopDepth, govFilter, specialFlagFilter])
+  }, [built, selectedId, hoveredId, adjacency, stepHopMode, hopDepth, govFilter])
 
   // 应用高亮/淡出 + 图例筛显隐。必须是"当前这轮建图已完成 render"（readyToken===当前 token）
   // 才能调 setElementState，否则对着还没画完的元素操作会读 undefined.draw 崩溃。仅明细视图
@@ -1708,7 +1939,7 @@ export default function WorkflowGraphCanvas({
 
   // 配色切换器（P1⑥）：按当前 colorMode 重算每个节点的 fill/stroke + combo 底色淡化，
   // 用 updateNodeData/updateComboData 局部 patch + draw() 重绘，不触发 layout 重跑。
-  // 仅明细视图生效——聚合视图的簇节点没有 enabled/lastRunStatus 等单条工作流字段。
+  // 仅明细视图生效——聚合视图的簇节点没有 enabled/errorRate 等单条工作流字段。
   useEffect(() => {
     const graph = graphRef.current
     if (!graph || built?.mode !== 'detail' || readyToken !== renderTokenRef.current) return
@@ -1716,7 +1947,16 @@ export default function WorkflowGraphCanvas({
     const nodeUpdates = built.data.graphData.nodes!.map((n) => {
       const raw = nodeById.get(String(n.id))
       const deptSwatch = { fill: (n.style as any)?.fill, stroke: (n.style as any)?.stroke, dot: (n.style as any)?.stroke }
-      const swatch = raw ? nodeSwatchForMode(colorMode, raw, deptSwatch) : deptSwatch
+      // 筛选生效 + 服务色：不再按部门分色，改成"本体靛蓝 / 依赖链路琥珀橙"两种圈；
+      // 不筛选或其它配色模式（错误率等）仍走各自原有逻辑。
+      const swatch =
+        filterActive && colorMode === 'department'
+          ? n.data?.external
+            ? FILTER_DEP_SWATCH
+            : FILTER_SELF_SWATCH
+          : raw
+            ? nodeSwatchForMode(colorMode, raw, deptSwatch)
+            : deptSwatch
       return { id: n.id, style: { fill: swatch.fill, stroke: swatch.stroke } }
     })
     graph.updateNodeData(nodeUpdates)
@@ -1739,7 +1979,7 @@ export default function WorkflowGraphCanvas({
     // 队列，与 applyDegradedVisibility 的 draw() 共享同一把锁，避免两处并发 draw() 竞争同一个
     // "读取并清空"的共享变更队列（根因见诊断文档卡点⑤）。
     drawRequestRef.current?.()
-  }, [colorMode, built, readyToken, nodeById])
+  }, [colorMode, built, readyToken, nodeById, filterActive])
 
   // 多入口 focus（P1.3⑤）：数据就绪后按 focusId（slug 或 id）定位目标节点——自动选中
   // （复用既有 BFS 高亮）+ focusElement 把视口居中过去。只应用一次（focusAppliedRef），
@@ -1782,17 +2022,32 @@ export default function WorkflowGraphCanvas({
     })
   }, [])
 
+  // 编号多选筛选：把 textarea 里的文本按逗号/空格/换行拆成一批数字 id 应用；面板内也可逐个移除。
+  const applyIdFilterDraft = useCallback(() => {
+    const ids = idFilterDraft.split(/[\s,，;；]+/).filter((t) => /^\d+$/.test(t))
+    setIdFilter(new Set(ids))
+    setIdFilterDraft('')
+  }, [idFilterDraft])
+  const removeIdFilter = useCallback((id: string) => {
+    setIdFilter((prev) => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }, [])
+
   // 特殊节点筛选器 chip 组用的逐类计数——只渲染当前这份数据里真实存在的类别（数据没有的类别
   // 不出 chip，避免摆一堆点了也没反应的死 chip）。仅明细视图有意义。
+  // 计数基于全量 resp（而不是 built）：筛选生效后 built 只剩子图，若按它算，chip 上的数字会
+  // 跟着缩、勾掉一个 chip 后其它 chip 也会跳，语义不稳。
   const specialFlagCounts = useMemo(() => {
     const counts = new Map<string, number>()
-    if (built?.mode !== 'detail') return counts
-    for (const n of built.data.graphData.nodes ?? []) {
-      const flags = (n.data?.specialFlags as string[]) ?? []
-      for (const f of flags) counts.set(f, (counts.get(f) ?? 0) + 1)
+    if (built?.mode !== 'detail' || !resp) return counts
+    for (const n of resp.nodes) {
+      for (const f of n.specialFlags ?? []) counts.set(f, (counts.get(f) ?? 0) + 1)
     }
     return counts
-  }, [built])
+  }, [built, resp])
 
   // 返工建议③：切视图/scope/下钻会换一批数据，之前选中的筛选类别可能在新数据里根本不存在——
   // 不清理的话 chip 组会整块消失（specialFlagCounts.size===0 时不渲染），但 specialFlagFilter
@@ -1971,7 +2226,89 @@ export default function WorkflowGraphCanvas({
                   <i className="fas fa-xmark text-[11px]" />
                 </button>
               )}
+              {/* 编号多选筛选入口：粘贴一批 id 只渲染这些工作流 + 它们的下游链路。 */}
+              <button
+                data-alt="graph-id-filter-toggle"
+                title="按编号多选筛选"
+                onClick={() => setIdFilterOpen((v) => !v)}
+                className={`relative shrink-0 rounded px-1 transition ${
+                  idFilter.size > 0 || idFilterOpen ? 'text-indigo-600' : 'text-slate-400 hover:text-slate-600'
+                }`}
+              >
+                <i className="fas fa-filter text-[11px]" />
+                {idFilter.size > 0 && (
+                  <span className="absolute -right-1.5 -top-1.5 rounded-full bg-indigo-600 px-1 text-[9px] leading-3 text-white">
+                    {idFilter.size}
+                  </span>
+                )}
+              </button>
             </div>
+            {idFilterOpen && (
+              <div
+                data-alt="graph-id-filter-panel"
+                className="mt-1 rounded-lg border border-slate-200 bg-white p-2.5 shadow-soft"
+              >
+                <textarea
+                  data-alt="graph-id-filter-input"
+                  value={idFilterDraft}
+                  onChange={(e) => setIdFilterDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault()
+                      applyIdFilterDraft()
+                    }
+                  }}
+                  rows={3}
+                  placeholder="粘贴多个 workflow id，逗号 / 空格 / 换行分隔，Enter 应用"
+                  className="w-full resize-none rounded-md border border-slate-200 px-2 py-1.5 text-xs text-slate-700 placeholder:text-slate-400 outline-none focus:border-indigo-300"
+                />
+                <div className="mt-1.5 flex items-center justify-between">
+                  <span className="text-[10px] text-slate-400">
+                    {idFilter.size > 0 ? `已筛 ${filterIds.size} 个本体（含 chip 命中）` : '未筛选'}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    {idFilter.size > 0 && (
+                      <button
+                        data-alt="graph-id-filter-clear"
+                        onClick={() => setIdFilter(new Set())}
+                        className="rounded-md px-2 py-1 text-xs text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                      >
+                        清空
+                      </button>
+                    )}
+                    <button
+                      data-alt="graph-id-filter-apply"
+                      onClick={applyIdFilterDraft}
+                      disabled={!idFilterDraft.trim()}
+                      className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-40"
+                    >
+                      应用
+                    </button>
+                  </div>
+                </div>
+                {idFilter.size > 0 && (
+                  <div data-alt="graph-id-filter-chips" className="mt-1.5 flex max-h-28 flex-wrap gap-1 overflow-y-auto">
+                    {Array.from(idFilter).map((id) => {
+                      const node = nodeById.get(id)
+                      return (
+                        <button
+                          key={id}
+                          data-alt={`graph-id-filter-chip-${id}`}
+                          title={node ? `${node.name || node.slug}` : '当前数据里不存在'}
+                          onClick={() => removeIdFilter(id)}
+                          className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] ${
+                            node ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-100 text-slate-400 line-through'
+                          }`}
+                        >
+                          #{id}
+                          <i className="fas fa-xmark text-[9px] opacity-60" />
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
             {searchQuery && searchMatches.length > 1 && (
               <div
                 data-alt="graph-search-dropdown"
@@ -2053,6 +2390,21 @@ export default function WorkflowGraphCanvas({
       </div>
 
       <aside data-alt="graph-side-panel" className="w-72 shrink-0 border-l border-slate-200 bg-white p-4 overflow-y-auto">
+        {isDetail && colorMode === 'department' && filterActive && (
+          <div data-alt="graph-filter-legend" className="mb-6">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">筛选子图</div>
+            <div className="space-y-1 text-sm text-slate-700">
+              <div className="flex items-center gap-2 px-2 py-1">
+                <span className="h-3 w-3 shrink-0 rounded-full border-2" style={{ background: FILTER_SELF_SWATCH.fill, borderColor: FILTER_SELF_SWATCH.stroke }} />
+                本体（筛选命中）
+              </div>
+              <div className="flex items-center gap-2 px-2 py-1">
+                <span className="h-3 w-3 shrink-0 rounded-full border-2 border-dashed" style={{ background: FILTER_DEP_SWATCH.fill, borderColor: FILTER_DEP_SWATCH.stroke }} />
+                下游依赖链路
+              </div>
+            </div>
+          </div>
+        )}
         {isDetail && colorMode === 'department' && (
           <div data-alt="graph-legend" className="mb-6">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">
@@ -2084,21 +2436,14 @@ export default function WorkflowGraphCanvas({
               {COLOR_MODE_META[colorMode].label} 色标
             </div>
             {colorMode === 'errorRate' ? (
-              <div data-alt="legend-error-rate-gradient" className="space-y-1.5">
-                <div
-                  className="h-2.5 w-full rounded-full"
-                  style={{
-                    background: `linear-gradient(90deg, ${errorRateLegendStops()
-                      .map((s) => s.color)
-                      .join(', ')})`,
-                  }}
-                />
-                <div className="flex justify-between text-[10px] text-slate-400">
-                  {errorRateLegendStops().map((s) => (
-                    <span key={s.pct}>{Math.round(s.pct * 100)}%</span>
-                  ))}
-                </div>
-                <div className="text-[11px] text-slate-400">近 7 天失败率（含超时）</div>
+              <div data-alt="legend-error-rate-tiers" className="space-y-1">
+                {ERROR_RATE_TIERS.map((t) => (
+                  <div key={t.tier} data-alt={`legend-error-rate-${t.tier}`} className="flex items-center gap-2 px-2 py-1 text-sm">
+                    <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: t.swatch.stroke }} />
+                    <span className="text-slate-700">{t.tier === 'none' ? `${windowDays} 天内无运行` : t.label}</span>
+                  </div>
+                ))}
+                <div className="px-2 text-[11px] text-slate-400">近 {windowDays} 天失败率（含超时）</div>
               </div>
             ) : (
               <div className="space-y-1">
@@ -2107,17 +2452,11 @@ export default function WorkflowGraphCanvas({
                       { key: 'on', label: '启用', color: '#10b981' },
                       { key: 'off', label: '禁用', color: '#94a3b8' },
                     ]
-                  : colorMode === 'status'
-                    ? [
-                        { key: 'success', label: '成功', color: '#10b981' },
-                        { key: 'failed', label: '失败', color: '#f43f5e' },
-                        { key: 'none', label: '无记录', color: '#94a3b8' },
-                      ]
-                    : [
-                        { key: 'active', label: '活跃（24 小时内跑过）', color: '#22c55e' },
-                        { key: 'idle', label: '一般（7 天内跑过）', color: '#f59e0b' },
-                        { key: 'dormant', label: '沉寂（7 天以上无运行）', color: '#94a3b8' },
-                      ]
+                  : [
+                      { key: 'active', label: '活跃（24 小时内跑过）', color: '#22c55e' },
+                      { key: 'idle', label: activityLabel('idle', windowDays), color: '#f59e0b' },
+                      { key: 'dormant', label: activityLabel('dormant', windowDays), color: '#94a3b8' },
+                    ]
                 ).map((item) => (
                   <div key={item.key} data-alt={`legend-color-${item.key}`} className="flex items-center gap-2 px-2 py-1 text-sm">
                     <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: item.color }} />
@@ -2166,8 +2505,8 @@ export default function WorkflowGraphCanvas({
             </div>
             <div className="text-xs text-slate-500 mb-3">节点数：{selectedNode.nodeCount}</div>
 
-            {/* 方案 B：运行状态指标恒定显示（与当前配色切换器选的是哪一档无关）——启停/
-                最近成败/活跃度/错误率，色值与配色切换器的图例刻度同源，两处读起来一致。 */}
+            {/* 运行状态指标恒定显示（与当前配色切换器选的是哪一档无关）——启停/活跃度/
+                窗口内错误率（带运行与失败次数，追踪时先看量级），色值与配色图例刻度同源。 */}
             <div data-alt="selected-node-status" className="mb-3 grid grid-cols-2 gap-1.5">
               <div className="flex items-center gap-1.5 rounded-md bg-slate-50 px-2 py-1 text-[11px]">
                 <span
@@ -2180,26 +2519,21 @@ export default function WorkflowGraphCanvas({
               <div className="flex items-center gap-1.5 rounded-md bg-slate-50 px-2 py-1 text-[11px]">
                 <span
                   className="h-2 w-2 shrink-0 rounded-full"
-                  style={{ backgroundColor: DETAIL_STATUS_DOT[selectedNode.lastRunStatus] }}
-                />
-                <span className="text-slate-500">最近成败</span>
-                <span className="ml-auto font-medium text-slate-700">{DETAIL_STATUS_LABEL[selectedNode.lastRunStatus]}</span>
-              </div>
-              <div className="col-span-2 flex items-center gap-1.5 rounded-md bg-slate-50 px-2 py-1 text-[11px]">
-                <span
-                  className="h-2 w-2 shrink-0 rounded-full"
                   style={{ backgroundColor: DETAIL_ACTIVITY_DOT[selectedNode.activity] }}
                 />
                 <span className="text-slate-500">活跃度</span>
-                <span className="ml-auto font-medium text-slate-700">{DETAIL_ACTIVITY_LABEL[selectedNode.activity]}</span>
+                <span className="ml-auto font-medium text-slate-700">{activityLabel(selectedNode.activity, windowDays)}</span>
               </div>
               <div className="col-span-2 flex items-center gap-1.5 rounded-md bg-slate-50 px-2 py-1 text-[11px]">
                 <span
                   className="h-2 w-2 shrink-0 rounded-full"
-                  style={{ backgroundColor: errorRateColor(selectedNode.errorRate).stroke }}
+                  style={{ backgroundColor: errorRateColor(selectedNode.errorRate, selectedNode.windowRuns).stroke }}
                 />
-                <span className="text-slate-500">近 7 天错误率</span>
-                <span className="ml-auto font-medium text-slate-700">{Math.round(selectedNode.errorRate * 100)}%</span>
+                <span className="text-slate-500">近 {windowDays} 天</span>
+                <span className="ml-auto font-medium text-slate-700">
+                  {selectedNode.windowRuns.toLocaleString()} 次 · 失败 {selectedNode.windowFailed.toLocaleString()} 次 ·{' '}
+                  {selectedNode.windowRuns > 0 ? `${(selectedNode.errorRate * 100).toFixed(selectedNode.errorRate < 0.01 && selectedNode.errorRate > 0 ? 2 : 0)}%` : '无运行'}
+                </span>
               </div>
             </div>
 

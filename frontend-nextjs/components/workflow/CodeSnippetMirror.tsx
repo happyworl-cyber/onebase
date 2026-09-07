@@ -46,6 +46,7 @@ export function CodeSnippetMirror({
     <CodeMirror
       value={value}
       height={height}
+      maxHeight={height}
       theme={isDarkSnippetLanguage(language) ? oneDark : undefined}
       placeholder={placeholder}
       editable={!locked}
@@ -61,7 +62,7 @@ export function CodeSnippetMirror({
         languageExtension(language),
         EditorView.lineWrapping,
         EditorView.theme({
-          '&': { height: '100%' },
+          '&': { height: '100%', maxHeight: '100%' },
           '.cm-scroller': { overflow: 'auto' },
         }),
         EditorView.domEventHandlers({

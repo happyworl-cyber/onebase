@@ -124,10 +124,9 @@ pub async fn execute_transaction(
     // 整个事务结束后 RESET 把连接还干净。与 /query 同套策略——所有 raw_sql 通道
     // 都被 PG 服务端的 statement_timeout 兜底，跑飞了 PG 会主动 abort。
     // 走 acquire_traced：池饱和时 fail-fast，避免干等满 connection_timeout。
-    let mut conn = crate::pool_metrics::acquire_traced(pool, Some(target_db_id), "transaction")
-        .await
-        .map_err(AppError::Database)?;
-    crate::raw_sql_guard::apply_session_guards(&mut conn, policy).await?;
+    let mut conn =
+        crate::raw_sql_guard::acquire_with_guards(pool, Some(target_db_id), "transaction", policy)
+            .await?;
 
     use sqlx::Connection;
     let mut tx = conn.begin().await?;

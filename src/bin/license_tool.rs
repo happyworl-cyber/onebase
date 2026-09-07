@@ -153,9 +153,7 @@ fn cmd_issue(opts: &HashMap<String, String>) -> Result<(), String> {
         .and_then(|s| s.parse::<u32>().ok());
 
     // ========== 新增配额参数（基于新定价方案）==========
-    let max_projects = opts
-        .get("max-projects")
-        .and_then(|s| s.parse::<u32>().ok());
+    let max_projects = opts.get("max-projects").and_then(|s| s.parse::<u32>().ok());
     let max_workflows = opts
         .get("max-workflows")
         .and_then(|s| s.parse::<u32>().ok());

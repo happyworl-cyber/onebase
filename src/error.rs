@@ -365,6 +365,73 @@ fn truncate_for_client(msg: &str) -> String {
 
 pub type Result<T> = std::result::Result<T, AppError>;
 
+/// 租户池关掉 `test_before_acquire` 后，空闲连接被 NAT 静默掐掉时的典型签名。
+///
+/// 只认 IO / 协议层「对端已关」；`PoolTimedOut` 和 SQLSTATE 业务错误不在此列。
+pub fn is_stale_sqlx_error(e: &sqlx::Error) -> bool {
+    match e {
+        sqlx::Error::Io(io) => {
+            matches!(
+                io.kind(),
+                std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::NotConnected
+            ) || is_stale_error_message(&io.to_string())
+        }
+        sqlx::Error::Protocol(msg) => is_stale_error_message(msg),
+        sqlx::Error::Tls(inner) => is_stale_error_message(&inner.to_string()),
+        sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed | sqlx::Error::RowNotFound => false,
+        sqlx::Error::Database(_) => false,
+        other => is_stale_error_message(&other.to_string()),
+    }
+}
+
+fn is_stale_error_message(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    (m.contains("expected to read") && m.contains("got 0 bytes"))
+        || m.contains("connection reset")
+        || m.contains("broken pipe")
+        || m.contains("unexpected eof")
+        || m.contains("connection closed")
+}
+
+impl AppError {
+    /// 死连接复用：可在「尚未成功执行业务 SQL」时换连接重试一次。
+    pub fn is_stale_connection(&self) -> bool {
+        match self {
+            AppError::Database(e) => is_stale_sqlx_error(e),
+            AppError::Internal(msg) => is_stale_error_message(msg),
+            _ => false,
+        }
+    }
+}
+
+/// 第一次失败且是死连接签名时再跑一遍 `op`；其它错误原样返回。
+pub async fn retry_once_if_stale<T, F, Fut>(
+    source: &str,
+    database_id: Option<i32>,
+    mut op: F,
+) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    match op().await {
+        Err(e) if e.is_stale_connection() => {
+            tracing::warn!(
+                error.kind = "stale_connection",
+                source,
+                database_id,
+                "租户库死连接已丢弃，重试一次: {e}"
+            );
+            op().await
+        }
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,5 +513,94 @@ mod tests {
         // 客户端只看到固定文案，敏感细节只在日志里
         assert_eq!(body["error"], "服务器内部错误");
         assert_eq!(body["code"], CODE_INTERNAL);
+    }
+
+    fn eof_fingerprint() -> sqlx::Error {
+        sqlx::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "expected to read 5 bytes, got 0 bytes at EOF",
+        ))
+    }
+
+    #[test]
+    fn stale_classifier_hits_wire_eof_fingerprint() {
+        assert!(is_stale_sqlx_error(&eof_fingerprint()));
+        assert!(AppError::Database(eof_fingerprint()).is_stale_connection());
+        assert!(AppError::Internal(
+            "数据库错误: error communicating with database: expected to read 5 bytes, got 0 bytes at EOF"
+                .into()
+        )
+        .is_stale_connection());
+    }
+
+    #[test]
+    fn stale_classifier_hits_reset_and_broken_pipe() {
+        assert!(is_stale_sqlx_error(&sqlx::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "connection reset by peer",
+        ))));
+        assert!(is_stale_sqlx_error(&sqlx::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "broken pipe",
+        ))));
+        assert!(is_stale_sqlx_error(&sqlx::Error::Protocol(
+            "expected to read 5 bytes, got 0 bytes at EOF".into()
+        )));
+    }
+
+    #[test]
+    fn stale_classifier_skips_pool_timeout_and_business_errors() {
+        assert!(!is_stale_sqlx_error(&sqlx::Error::PoolTimedOut));
+        assert!(!is_stale_sqlx_error(&sqlx::Error::RowNotFound));
+        assert!(!AppError::InvalidQuery("bad sql".into()).is_stale_connection());
+        assert!(!AppError::Internal("password=hunter2".into()).is_stale_connection());
+    }
+
+    #[tokio::test]
+    async fn retry_once_if_stale_retries_eof_then_succeeds() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let n = AtomicU32::new(0);
+        let out = retry_once_if_stale("unit_stale", Some(-4101), || {
+            let attempt = n.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if attempt == 0 {
+                    Err(AppError::Database(eof_fingerprint()))
+                } else {
+                    Ok(7)
+                }
+            }
+        })
+        .await
+        .expect("stale EOF should retry");
+        assert_eq!(out, 7);
+        assert_eq!(n.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn retry_once_if_stale_does_not_retry_pool_timeout() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let n = AtomicU32::new(0);
+        let err = retry_once_if_stale("unit_timeout", Some(-4102), || {
+            n.fetch_add(1, Ordering::SeqCst);
+            async { Err::<(), _>(AppError::Database(sqlx::Error::PoolTimedOut)) }
+        })
+        .await
+        .expect_err("pool timeout is not stale");
+        assert!(matches!(err, AppError::Database(sqlx::Error::PoolTimedOut)));
+        assert_eq!(n.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn retry_once_if_stale_stops_after_second_failure() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let n = AtomicU32::new(0);
+        let err = retry_once_if_stale("unit_twice", None, || {
+            n.fetch_add(1, Ordering::SeqCst);
+            async { Err::<(), _>(AppError::Database(eof_fingerprint())) }
+        })
+        .await
+        .expect_err("two stale failures still fail");
+        assert!(err.is_stale_connection());
+        assert_eq!(n.load(Ordering::SeqCst), 2);
     }
 }

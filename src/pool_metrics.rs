@@ -20,6 +20,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
@@ -106,7 +107,7 @@ pub fn snapshot() -> PoolTimeoutSnapshot {
 
 /// 池已打满时立刻拒绝，避免排队到满 `acquire_timeout`（雪崩指纹：精确 30s 倍数）。
 ///
-/// 纯函数便于单测；`acquire_traced` 在真正 `pool.acquire()` 前调用。
+/// 纯函数便于单测；最终拒绝前由 `admit_or_wait_then_fail_fast` 决定要不要先短等。
 pub fn fail_fast_if_saturated(
     wm: &PoolWaterMark,
     database_id: Option<i32>,
@@ -119,7 +120,75 @@ pub fn fail_fast_if_saturated(
     Ok(())
 }
 
-/// `pool.acquire()` 的薄包装：饱和 fail-fast + `PoolTimedOut` 计数。
+/// 饱和短等（毫秒）。`None` → 300；`0`/`off`/`false` → 立刻拒绝；非法或 >2000 → 300。
+pub fn saturated_wait_ms_from(env: Option<String>) -> u64 {
+    match env.as_deref().map(str::trim) {
+        None => 300,
+        Some(s) if s.eq_ignore_ascii_case("off") || s.eq_ignore_ascii_case("false") || s == "0" => {
+            0
+        }
+        Some(s) => s
+            .parse::<u64>()
+            .ok()
+            .filter(|&v| v > 0 && v <= 2000)
+            .unwrap_or(300),
+    }
+}
+
+fn saturated_wait_ms() -> u64 {
+    saturated_wait_ms_from(std::env::var("TENANT_DB_SATURATED_WAIT_MS").ok())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaturationAdmit {
+    Proceed,
+    WaitMs(u64),
+    Reject,
+}
+
+/// 第一次看到饱和时：有短等预算就 Wait，否则立刻 Reject。未饱和直接放行。
+pub fn saturation_admit(wm: &PoolWaterMark, wait_ms: u64) -> SaturationAdmit {
+    if !wm.is_saturated() {
+        SaturationAdmit::Proceed
+    } else if wait_ms == 0 {
+        SaturationAdmit::Reject
+    } else {
+        SaturationAdmit::WaitMs(wait_ms)
+    }
+}
+
+/// 饱和则短等再读水位；仍满才记超时。`wait_ms` 可注入，便于单测。
+pub async fn admit_or_wait_then_fail_fast_with<F>(
+    wait_ms: u64,
+    mut watermark: F,
+    database_id: Option<i32>,
+    source: &str,
+) -> Result<(), sqlx::Error>
+where
+    F: FnMut() -> PoolWaterMark,
+{
+    match saturation_admit(&watermark(), wait_ms) {
+        SaturationAdmit::Proceed => Ok(()),
+        SaturationAdmit::Reject => fail_fast_if_saturated(&watermark(), database_id, source),
+        SaturationAdmit::WaitMs(ms) => {
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+            fail_fast_if_saturated(&watermark(), database_id, source)
+        }
+    }
+}
+
+pub async fn admit_or_wait_then_fail_fast<F>(
+    watermark: F,
+    database_id: Option<i32>,
+    source: &str,
+) -> Result<(), sqlx::Error>
+where
+    F: FnMut() -> PoolWaterMark,
+{
+    admit_or_wait_then_fail_fast_with(saturated_wait_ms(), watermark, database_id, source).await
+}
+
+/// `pool.acquire()` 的薄包装：饱和时短等再判 + `PoolTimedOut` 计数。
 ///
 /// 用在工作流 Postgres 节点、SQL 编辑器、事务等租户路径上——acquire 失败会被记进
 /// 节点错误或 HTTP 层，光靠 `error.rs` 的兜底埋点会漏掉。
@@ -128,7 +197,7 @@ pub async fn acquire_traced(
     database_id: Option<i32>,
     source: &str,
 ) -> Result<PoolConnection<Postgres>, sqlx::Error> {
-    fail_fast_if_saturated(&pool_manager::watermark(pool), database_id, source)?;
+    admit_or_wait_then_fail_fast(|| pool_manager::watermark(pool), database_id, source).await?;
     match pool.acquire().await {
         Ok(conn) => Ok(conn),
         Err(e) => {
@@ -218,5 +287,82 @@ mod tests {
             .expect("idle slots must allow acquire");
         // 未饱和不得记超时；用独占 database_id，避免并行测试干扰 TOTAL
         assert_eq!(snapshot().for_database(-3002), 0);
+    }
+
+    #[test]
+    fn saturated_wait_ms_defaults_to_300() {
+        assert_eq!(saturated_wait_ms_from(None), 300);
+    }
+
+    #[test]
+    fn saturated_wait_ms_zero_disables() {
+        assert_eq!(saturated_wait_ms_from(Some("0".into())), 0);
+        assert_eq!(saturated_wait_ms_from(Some("off".into())), 0);
+        assert_eq!(saturated_wait_ms_from(Some("false".into())), 0);
+    }
+
+    #[test]
+    fn saturated_wait_ms_custom_and_invalid() {
+        assert_eq!(saturated_wait_ms_from(Some("500".into())), 500);
+        assert_eq!(saturated_wait_ms_from(Some("abc".into())), 300);
+        assert_eq!(saturated_wait_ms_from(Some("2001".into())), 300);
+    }
+
+    #[test]
+    fn saturation_admit_proceeds_when_not_full() {
+        assert_eq!(
+            saturation_admit(&wm(10, 5, 2), 300),
+            SaturationAdmit::Proceed
+        );
+    }
+
+    #[test]
+    fn saturation_admit_rejects_immediately_when_wait_disabled() {
+        assert_eq!(saturation_admit(&wm(10, 10, 0), 0), SaturationAdmit::Reject);
+    }
+
+    #[test]
+    fn saturation_admit_waits_when_full_and_wait_enabled() {
+        assert_eq!(
+            saturation_admit(&wm(10, 10, 0), 300),
+            SaturationAdmit::WaitMs(300)
+        );
+    }
+
+    #[tokio::test]
+    async fn admit_after_wait_allows_when_slot_frees() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let n = AtomicU32::new(0);
+        admit_or_wait_then_fail_fast_with(
+            1,
+            || {
+                let i = n.fetch_add(1, Ordering::SeqCst);
+                if i == 0 {
+                    wm(10, 10, 0)
+                } else {
+                    wm(10, 9, 1)
+                }
+            },
+            Some(-3101),
+            "unit_wait_ok",
+        )
+        .await
+        .expect("freed slot after wait must admit");
+        assert_eq!(snapshot().for_database(-3101), 0);
+    }
+
+    #[tokio::test]
+    async fn admit_after_wait_rejects_when_still_full() {
+        let before = snapshot().for_database(-3102);
+        let err = admit_or_wait_then_fail_fast_with(
+            1,
+            || wm(10, 10, 0),
+            Some(-3102),
+            "unit_wait_still_full",
+        )
+        .await
+        .expect_err("still saturated after wait must reject");
+        assert!(matches!(err, sqlx::Error::PoolTimedOut));
+        assert_eq!(snapshot().for_database(-3102), before + 1);
     }
 }

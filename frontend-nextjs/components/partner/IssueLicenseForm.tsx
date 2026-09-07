@@ -2,15 +2,28 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Loader2, AlertCircle, Check } from 'lucide-react';
-import { api } from '@/lib/api';
+import {
+  Alert,
+  AlertCircle,
+  AlertDescription,
+  Button,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Check,
+  Checkbox,
+  Input,
+  Label,
+  Loader2,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/compat';
+import api from '@/lib/api';
 import { IssueLicenseRequest, IssueLicenseResponse } from '@/lib/types/partner';
 
 interface PriceBreakdown {
@@ -163,7 +176,10 @@ export function IssueLicenseForm() {
         auto_renew_maintenance: autoRenewMaintenance,
       };
 
-      const response: IssueLicenseResponse = await api.post('/api/partner/licenses', request);
+      const { data: response } = await api.post<IssueLicenseResponse>(
+        '/api/partner/licenses',
+        request
+      );
 
       setSuccess(true);
       setTimeout(() => {

@@ -271,6 +271,23 @@ pub async fn apply_session_guards(
     Ok(())
 }
 
+/// `acquire` + `apply_session_guards`。该连接第一条 IO 撞上死连接时换连接重试一次。
+pub async fn acquire_with_guards(
+    pool: &PgPool,
+    database_id: Option<i32>,
+    source: &str,
+    policy: RawSqlPolicy,
+) -> Result<PoolConnection<Postgres>> {
+    crate::error::retry_once_if_stale(source, database_id, || async {
+        let mut conn = crate::pool_metrics::acquire_traced(pool, database_id, source)
+            .await
+            .map_err(AppError::Database)?;
+        apply_session_guards(&mut conn, policy).await?;
+        Ok(conn)
+    })
+    .await
+}
+
 /// 把连接上由 `apply_session_guards` 设置的会话状态清理回服务器默认。
 /// 故意 swallow 错误并降级到 warn——连接即将归还池子，下一次 acquire 再
 /// `SET` 会覆盖；保守做法是哪怕没 reset 成功也不能让这次请求整个失败。
@@ -513,17 +530,12 @@ pub async fn run_raw_script_autocommit(
     policy: RawSqlPolicy,
     database_id: Option<i32>,
 ) -> std::result::Result<(), sqlx::Error> {
-    let mut conn = crate::pool_metrics::acquire_traced(pool, database_id, "raw_sql").await?;
-    let timeout = policy.statement_timeout_ms.to_string();
-    sqlx::query(&format!("SET statement_timeout = {}", timeout))
-        .execute(&mut *conn)
-        .await?;
-    sqlx::query(&format!(
-        "SET idle_in_transaction_session_timeout = {}",
-        timeout
-    ))
-    .execute(&mut *conn)
-    .await?;
+    let mut conn = acquire_with_guards(pool, database_id, "raw_sql", policy)
+        .await
+        .map_err(|e| match e {
+            AppError::Database(sqlx_err) => sqlx_err,
+            other => sqlx::Error::Protocol(other.to_string()),
+        })?;
     let result = execute_raw_on_conn(&mut conn, user_sql).await;
     let _ = sqlx::query("RESET statement_timeout")
         .execute(&mut *conn)

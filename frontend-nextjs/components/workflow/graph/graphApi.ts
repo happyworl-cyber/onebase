@@ -13,11 +13,12 @@ export interface DependencyGraphNode {
   external: boolean
   /** 工作流启停开关（对齐 workflows.is_enabled）。 */
   enabled: boolean
-  /** 最近一条运行的终结状态；进行中/无记录一律 "none"（配色切换器·最近成败用）。 */
-  lastRunStatus: 'success' | 'failed' | 'none'
-  /** 近 7 天窗口失败率 0~1，窗口内无运行记 0（配色切换器·错误率用）。 */
+  /** 统计窗口内失败率 0~1，窗口内无运行记 0（配色切换器·错误率用）。窗口天数见响应 windowDays。 */
   errorRate: number
-  /** 按最近一条运行距今时长分档（配色切换器·活跃度用）。 */
+  /** 窗口内运行次数 / 失败次数——追踪错误时要看量级，不只是百分比。 */
+  windowRuns: number
+  windowFailed: number
+  /** 窗口内无运行 dormant；有则按最晚一次距今分档：24h 内 active、否则 idle（判断是否该废弃用）。 */
   activity: 'active' | 'idle' | 'dormant'
 }
 
@@ -31,6 +32,8 @@ export interface DependencyGraphResponse {
   nodes: DependencyGraphNode[]
   edges: DependencyGraphEdge[]
   unresolved: number
+  /** 运行状态统计窗口天数（后端取 min(3, 运行记录保留期)）；所有"近 N 天"文案读这个值。 */
+  windowDays: number
 }
 
 export interface DependencyGraphScope {
@@ -59,5 +62,6 @@ export async function fetchDependencyGraph(
     nodes: res.data.nodes ?? [],
     edges: res.data.edges ?? [],
     unresolved: res.data.unresolved ?? 0,
+    windowDays: res.data.windowDays ?? 3,
   }
 }

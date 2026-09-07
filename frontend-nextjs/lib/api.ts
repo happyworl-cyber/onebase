@@ -1327,6 +1327,13 @@ export interface QueryPerfExtensionStatus {
   version: string | null
   install_hint: string | null
   shared_preload: string | null
+  loaded?: boolean
+  readable?: boolean
+  track?: string | null
+  row_count?: number | null
+  current_user?: string | null
+  is_superuser?: boolean
+  has_pg_read_all_stats?: boolean
 }
 
 export interface StatementStat {
@@ -1367,6 +1374,7 @@ export const queryPerfAPI = {
     offset?: number
     min_calls?: number
     min_mean_ms?: number
+    min_max_ms?: number
     search?: string
   } = {}) =>
     api.get<StatementStat[]>('/api/query-perf/statements', { params }),

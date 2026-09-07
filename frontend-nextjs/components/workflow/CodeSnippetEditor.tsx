@@ -121,6 +121,65 @@ function SnippetFallback({
   )
 }
 
+function FillParentMirror({
+  value,
+  onChange,
+  language,
+  readOnly,
+  placeholder,
+  invalid,
+}: {
+  value: string
+  onChange?: (value: string) => void
+  language: SnippetLanguage
+  readOnly?: boolean
+  placeholder?: string
+  invalid?: boolean
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [heightPx, setHeightPx] = useState(0)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const sync = () => setHeightPx(el.clientHeight)
+    sync()
+    const ro = new ResizeObserver(sync)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  return (
+    <div ref={ref} className="h-full min-h-0">
+      <MirrorBoundary
+        fallback={
+          <SnippetFallback
+            value={value}
+            onChange={onChange}
+            language={language}
+            readOnly={readOnly}
+            onBlur={undefined}
+            placeholder={placeholder}
+            rows={24}
+            invalid={invalid}
+          />
+        }
+      >
+        {heightPx > 0 ? (
+          <CodeSnippetMirror
+            value={value}
+            onChange={onChange}
+            language={language}
+            readOnly={readOnly}
+            placeholder={placeholder}
+            height={`${heightPx}px`}
+          />
+        ) : null}
+      </MirrorBoundary>
+    </div>
+  )
+}
+
 function ExpandControl({
   onClick,
   label,
@@ -212,17 +271,15 @@ export default function CodeSnippetEditor({
 
   const pane = (
     <MirrorBoundary fallback={fallback}>
-      <div className="h-full min-h-0 overflow-hidden">
-        <CodeSnippetMirror
-          value={value}
-          onChange={onChange}
-          language={language}
-          readOnly={readOnly}
-          onBlur={expanded ? undefined : onBlur}
-          placeholder={placeholder}
-          height="100%"
-        />
-      </div>
+      <CodeSnippetMirror
+        value={value}
+        onChange={onChange}
+        language={language}
+        readOnly={readOnly}
+        onBlur={expanded ? undefined : onBlur}
+        placeholder={placeholder}
+        height={paneHeight}
+      />
     </MirrorBoundary>
   )
 
@@ -265,29 +322,14 @@ export default function CodeSnippetEditor({
                 </div>
               </div>
               <div className={`flex-1 min-h-0 ${chrome}`}>
-                <MirrorBoundary
-                  fallback={
-                    <SnippetFallback
-                      value={value}
-                      onChange={onChange}
-                      language={language}
-                      readOnly={readOnly}
-                      onBlur={undefined}
-                      placeholder={placeholder}
-                      rows={24}
-                      invalid={invalid}
-                    />
-                  }
-                >
-                  <CodeSnippetMirror
-                    value={value}
-                    onChange={onChange}
-                    language={language}
-                    readOnly={readOnly}
-                    placeholder={placeholder}
-                    height="100%"
-                  />
-                </MirrorBoundary>
+                <FillParentMirror
+                  value={value}
+                  onChange={onChange}
+                  language={language}
+                  readOnly={readOnly}
+                  placeholder={placeholder}
+                  invalid={invalid}
+                />
               </div>
             </div>
           </div>,
@@ -303,7 +345,7 @@ export default function CodeSnippetEditor({
         </span>
         <ExpandControl onClick={openExpanded} label={label} />
       </div>
-      <div style={{ height: paneHeight }} className="min-h-0">
+      <div style={{ height: paneHeight }} className="nowheel min-h-0 overflow-hidden">
         {pane}
       </div>
       {overlay}

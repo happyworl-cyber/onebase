@@ -1,4 +1,4 @@
--- 项目级 AI Provider 配置。
+-- 065: 项目级 AI Provider 配置。
 -- api_key_enc 使用 crypto::encrypt_secret(AES-256-GCM) 加密，任何 API 响应均不得返回该列。
 CREATE TABLE IF NOT EXISTS management.ai_providers (
     id              SERIAL PRIMARY KEY,
@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS management.ai_providers (
     CONSTRAINT ai_providers_tenant_name_unique UNIQUE (tenant_id, name)
 );
 
--- 幂等升级早期 062：首版其余列已存在，状态列是在后续复核中补入。
+-- 幂等升级早期版本：首版其余列已存在，状态列是在后续复核中补入。
 ALTER TABLE management.ai_providers
     ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
 
@@ -76,7 +76,7 @@ END
 $$;
 
 -- 每个项目至多一个“已启用的默认 Provider”；停用项不参与唯一约束。
--- DROP + CREATE 确保已运行早期 062 的数据库也能替换旧 predicate。
+-- DROP + CREATE 确保已运行早期版本的数据库也能替换旧 predicate。
 DROP INDEX IF EXISTS management.uq_ai_providers_one_default;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_providers_one_default
     ON management.ai_providers(tenant_id) WHERE is_active = true AND is_default = true;

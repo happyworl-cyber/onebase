@@ -229,18 +229,17 @@ function specialFlagBadges(flags: string[], nodeCount: number): NodeBadgeStylePr
 
 /**
  * 配色切换器（P1 诉求⑥）五档色源。department 是现状默认；其余四档读后端 P1 补的
- * enabled/lastRunStatus/errorRate/activity 字段，跟部门/结构色完全解耦。
+ * enabled/errorRate/activity 字段，跟部门/结构色完全解耦。
  */
-export type ColorMode = 'department' | 'enabled' | 'status' | 'errorRate' | 'activity'
+export type ColorMode = 'department' | 'enabled' | 'errorRate' | 'activity'
 
 export const COLOR_MODE_META: Record<ColorMode, { label: string; icon: string }> = {
   department: { label: '服务色', icon: 'fa-diagram-project' },
   enabled: { label: '启停', icon: 'fa-power-off' },
-  status: { label: '最近成败', icon: 'fa-circle-check' },
   errorRate: { label: '错误率', icon: 'fa-triangle-exclamation' },
   activity: { label: '活跃度', icon: 'fa-signal' },
 }
-export const COLOR_MODE_ORDER: ColorMode[] = ['department', 'enabled', 'status', 'errorRate', 'activity']
+export const COLOR_MODE_ORDER: ColorMode[] = ['department', 'enabled', 'errorRate', 'activity']
 
 export interface NodeSwatch {
   fill: string
@@ -254,44 +253,42 @@ export interface NodeSwatch {
 const ENABLED_ON: NodeSwatch = { fill: '#a7f3d0', stroke: '#059669', dot: '#059669' }
 const ENABLED_OFF: NodeSwatch = { fill: '#cbd5e1', stroke: '#475569', dot: '#475569' }
 
-const STATUS_SUCCESS: NodeSwatch = { fill: '#a7f3d0', stroke: '#059669', dot: '#059669' }
-const STATUS_FAILED: NodeSwatch = { fill: '#fecdd3', stroke: '#e11d48', dot: '#e11d48' }
-const STATUS_NONE: NodeSwatch = { fill: '#cbd5e1', stroke: '#475569', dot: '#475569' }
-
 const ACTIVITY_ACTIVE: NodeSwatch = { fill: '#bbf7d0', stroke: '#16a34a', dot: '#16a34a' }
 const ACTIVITY_IDLE: NodeSwatch = { fill: '#fde68a', stroke: '#d97706', dot: '#d97706' }
 const ACTIVITY_DORMANT: NodeSwatch = { fill: '#cbd5e1', stroke: '#475569', dot: '#475569' }
 
-/** 错误率连续渐变的三个锚点（emerald→amber→red），专业刻度，避免撞色刺眼。 */
-const ERROR_RATE_STOPS: [number, number, number][] = [
-  [16, 185, 129], // 0.0 emerald-500
-  [245, 158, 11], // 0.5 amber-500
-  [239, 68, 68], // 1.0 red-500
+/**
+ * 错误率分档（追踪错误用）：颜色按"事故等级"跳变而不是 0~100% 线性渐变——真实错误率
+ * 绝大多数落在 0~5%，线性刻度下 5% 只比 0% 深十分之一，肉眼全绿、毫无信号。
+ * 阈值上界为"含"：1% 归轻微、5% 归注意、20% 归严重。窗口内没跑过的单独一档灰色，
+ * 与"0% 因为根本没跑"区分开，免得沉寂的工作流冒充健康。
+ */
+export type ErrorRateTier = 'none' | 'healthy' | 'minor' | 'warning' | 'severe' | 'critical'
+
+export const ERROR_RATE_TIERS: { tier: ErrorRateTier; label: string; swatch: NodeSwatch }[] = [
+  { tier: 'healthy', label: '健康 · 0%', swatch: { fill: '#a7f3d0', stroke: '#059669', dot: '#059669' } },
+  { tier: 'minor', label: '轻微 · ≤ 1%', swatch: { fill: '#d9f99d', stroke: '#65a30d', dot: '#65a30d' } },
+  { tier: 'warning', label: '注意 · ≤ 5%', swatch: { fill: '#fde68a', stroke: '#d97706', dot: '#d97706' } },
+  { tier: 'severe', label: '严重 · ≤ 20%', swatch: { fill: '#fed7aa', stroke: '#ea580c', dot: '#ea580c' } },
+  { tier: 'critical', label: '着火 · > 20%', swatch: { fill: '#fecaca', stroke: '#dc2626', dot: '#dc2626' } },
+  { tier: 'none', label: '窗口内无运行', swatch: { fill: '#cbd5e1', stroke: '#475569', dot: '#475569' } },
 ]
 
-function mixRgb(c1: [number, number, number], c2: [number, number, number], t: number): [number, number, number] {
-  return [c1[0] + (c2[0] - c1[0]) * t, c1[1] + (c2[1] - c1[1]) * t, c1[2] + (c2[2] - c1[2]) * t]
-}
-function rgbToHex(rgb: [number, number, number]): string {
-  const h = (n: number) => Math.round(Math.max(0, Math.min(255, n))).toString(16).padStart(2, '0')
-  return `#${h(rgb[0])}${h(rgb[1])}${h(rgb[2])}`
-}
-
-/** 按 0~1 的错误率取渐变色：<0.5 段 emerald→amber，≥0.5 段 amber→red，均线性插值。 */
-export function errorRateColor(rate: number): NodeSwatch {
-  const t = Math.max(0, Math.min(1, Number.isFinite(rate) ? rate : 0))
-  const [lo, hi, localT] = t <= 0.5 ? [ERROR_RATE_STOPS[0], ERROR_RATE_STOPS[1], t / 0.5] : [ERROR_RATE_STOPS[1], ERROR_RATE_STOPS[2], (t - 0.5) / 0.5]
-  const strokeRgb = mixRgb(lo, hi, localT)
-  const stroke = rgbToHex(strokeRgb)
-  // 混白比例从 78% 降到 60%（fill 更深一档），大规模缩小截图里仍分辨得出色相；
-  // 描边仍是饱和色，两者同色相不会像纯色块那样刺眼。
-  const fill = rgbToHex(mixRgb([255, 255, 255], strokeRgb, 0.4))
-  return { fill, stroke, dot: stroke }
+/** 错误率 + 窗口内运行次数 → 档位。runs 为 0 时错误率无意义，直接归"无运行"。 */
+export function errorRateTier(rate: number, runs: number): ErrorRateTier {
+  if (runs <= 0) return 'none'
+  const r = Number.isFinite(rate) ? rate : 0
+  if (r <= 0) return 'healthy'
+  if (r <= 0.01) return 'minor'
+  if (r <= 0.05) return 'warning'
+  if (r <= 0.2) return 'severe'
+  return 'critical'
 }
 
-/** 错误率图例用：0/25/50/75/100% 五档刻度色，与 errorRateColor 同一套插值，保证图例=画布同色。 */
-export function errorRateLegendStops(): { pct: number; color: string }[] {
-  return [0, 0.25, 0.5, 0.75, 1].map((pct) => ({ pct, color: errorRateColor(pct).stroke }))
+/** 档位对应色板，画布节点/图例/侧栏详情三处同源。 */
+export function errorRateColor(rate: number, runs: number): NodeSwatch {
+  const tier = errorRateTier(rate, runs)
+  return ERROR_RATE_TIERS.find((t) => t.tier === tier)!.swatch
 }
 
 /**
@@ -300,7 +297,7 @@ export function errorRateLegendStops(): { pct: number; color: string }[] {
  */
 export function nodeSwatchForMode(
   mode: ColorMode,
-  node: Pick<DependencyGraphNode, 'enabled' | 'lastRunStatus' | 'errorRate' | 'activity'>,
+  node: Pick<DependencyGraphNode, 'enabled' | 'errorRate' | 'windowRuns' | 'activity'>,
   deptSwatch: NodeSwatch,
 ): NodeSwatch {
   switch (mode) {
@@ -308,10 +305,8 @@ export function nodeSwatchForMode(
       return deptSwatch
     case 'enabled':
       return node.enabled ? ENABLED_ON : ENABLED_OFF
-    case 'status':
-      return node.lastRunStatus === 'success' ? STATUS_SUCCESS : node.lastRunStatus === 'failed' ? STATUS_FAILED : STATUS_NONE
     case 'errorRate':
-      return errorRateColor(node.errorRate)
+      return errorRateColor(node.errorRate, node.windowRuns)
     case 'activity':
       return node.activity === 'active' ? ACTIVITY_ACTIVE : node.activity === 'idle' ? ACTIVITY_IDLE : ACTIVITY_DORMANT
   }
@@ -322,6 +317,13 @@ export const COMBO_NEUTRALIZED_OVERLAY: Record<'dept' | 'cat', { fillOpacity: nu
   dept: { fillOpacity: 0.12, strokeOpacity: 0.25 },
   cat: { fillOpacity: 0.18, strokeOpacity: 0.2 },
 }
+
+/**
+ * 筛选子图模式（chip 筛选 / 编号多选生效时）在服务色下的两种"圈"：本体=靛蓝、依赖链路=琥珀橙。
+ * 只在"服务色 + 筛选生效"时替换部门色；不筛选仍是原部门色，其它配色模式（错误率等）照旧。
+ */
+export const FILTER_SELF_SWATCH: NodeSwatch = { fill: '#c7d2fe', stroke: '#4f46e5', dot: '#4f46e5' }
+export const FILTER_DEP_SWATCH: NodeSwatch = { fill: '#fde68a', stroke: '#d97706', dot: '#d97706' }
 
 /** 方案二·分簇方式：不分簇（纯力导自然聚团）/ 按分类（服务▸分类两级 combo，现状默认）/ 按服务（只保留服务一级 combo）。 */
 export type ClusterMode = 'none' | 'category' | 'service'
@@ -913,6 +915,40 @@ export function sliceClusterForDrilldown(
     if (memberIds.has(to) && !memberIds.has(from)) neighborIds.add(from)
   }
   const keepIds = new Set<string>([...Array.from(memberIds), ...Array.from(neighborIds)])
+  const slicedNodes = nodes
+    .filter((n) => keepIds.has(String(n.id)))
+    .map((n) => (memberIds.has(String(n.id)) ? n : { ...n, external: true }))
+  const slicedEdges = edges.filter((e) => keepIds.has(String(e.from)) && keepIds.has(String(e.to)))
+  return { nodes: slicedNodes, edges: slicedEdges }
+}
+
+/**
+ * 筛选子图：本体 memberIds + 它们沿 call 边一路递归到底的全部下游依赖。下游节点标 external:true
+ * 复用"外围元素"视觉（虚线描边 + 外部角标），本体保持常态；两者的着色由画布层按 colorMode 决定。
+ * 与 sliceClusterForDrilldown 的区别：那边是上下游各 1 跳，这边是只看"它依赖了谁"、但看到底。
+ */
+export function sliceFilterSubgraph(
+  nodes: DependencyGraphNode[],
+  edges: DependencyGraphEdge[],
+  memberIds: Set<string>,
+): { nodes: DependencyGraphNode[]; edges: DependencyGraphEdge[] } {
+  const out = new Map<string, string[]>()
+  for (const e of edges) {
+    const from = String(e.from)
+    if (!out.has(from)) out.set(from, [])
+    out.get(from)!.push(String(e.to))
+  }
+  const keepIds = new Set<string>(memberIds)
+  const stack = Array.from(memberIds)
+  while (stack.length) {
+    const cur = stack.pop()!
+    for (const to of out.get(cur) ?? []) {
+      if (!keepIds.has(to)) {
+        keepIds.add(to)
+        stack.push(to)
+      }
+    }
+  }
   const slicedNodes = nodes
     .filter((n) => keepIds.has(String(n.id)))
     .map((n) => (memberIds.has(String(n.id)) ? n : { ...n, external: true }))

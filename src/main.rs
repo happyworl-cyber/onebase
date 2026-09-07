@@ -33,6 +33,8 @@ mod js_runner;
 mod kafka_app_handlers;
 mod kafka_ds;
 mod kafka_handlers;
+mod license_enforcement;
+mod license_features;
 mod logging;
 mod lua_builtins;
 mod lua_engine;
@@ -47,6 +49,9 @@ mod object_storage_handlers;
 mod operation_log;
 mod operation_log_handlers;
 mod organization_handlers;
+mod partner_handlers;
+mod partner_models;
+mod partner_scheduler;
 mod pat_handlers;
 mod permission_cache;
 mod permissions;
@@ -54,6 +59,7 @@ mod pg_listen_hub;
 mod pg_pool_handlers;
 mod pg_pool_helpers;
 mod pg_row_json;
+mod pg_stat;
 mod platform_monitor_handlers;
 mod platform_token;
 mod platform_token_handlers;
@@ -111,11 +117,6 @@ mod workflow_kafka_trigger;
 mod workflow_notify_trigger;
 mod workflow_taxonomy;
 mod workflow_trigger;
-mod partner_handlers;
-mod partner_models;
-mod partner_scheduler;
-mod license_enforcement;
-mod license_features;
 
 // binary 侧 `mod workflow_engine` 与 lib 共用源文件，需在此 re-export 批量配置模块。
 pub(crate) use onebase::sse_batch_config;
@@ -993,7 +994,10 @@ async fn main() -> anyhow::Result<()> {
 
     // 代理商自助路由（代理商成员）
     let partner_routes = Router::new()
-        .route("/api/partner/profile", get(partner_handlers::partner_get_profile))
+        .route(
+            "/api/partner/profile",
+            get(partner_handlers::partner_get_profile),
+        )
         .route(
             "/api/partner/customers",
             get(partner_handlers::partner_list_customers),
@@ -2383,6 +2387,7 @@ async fn main() -> anyhow::Result<()> {
     // 租户池预热 / 保活：把「创建连接池」移出首个用户请求（见
     // docs/superpowers/specs/2026-07-27-tenant-pool-keepalive-design.md）。
     auto_api_handlers::spawn_tenant_pool_prewarm(pool.clone());
+    crate::pool_manager::spawn_tenant_idle_ping();
 
     // 副本健康看护任务（运行时自动旁路 + 自动恢复）
     {
@@ -2680,10 +2685,8 @@ async fn execute_sql_query(
 
     // ─── E2：单独 acquire 一条连接，设 statement_timeout，结束 RESET ───
     let policy = raw_sql_guard::policy();
-    let mut conn = pool_metrics::acquire_traced(pool, Some(target_db_id), "query")
-        .await
-        .map_err(AppError::Database)?;
-    raw_sql_guard::apply_session_guards(&mut conn, policy).await?;
+    let mut conn =
+        raw_sql_guard::acquire_with_guards(pool, Some(target_db_id), "query", policy).await?;
     let max_rows = policy.max_returned_rows;
 
     let exec_result: Result<Value, AppError> = match sql_type {
