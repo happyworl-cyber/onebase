@@ -88,6 +88,17 @@ pub struct ExtensionStatus {
     pub install_hint: Option<String>,
     /// 是否需要 shared_preload_libraries（pg_stat_statements 必须先在配置里加上才能 CREATE EXTENSION）
     pub shared_preload: Option<String>,
+    /// `shared_preload_libraries` 是否已加载该库。已 CREATE 但未 preload 时视图在、统计为空/报错。
+    pub loaded: bool,
+    /// 当前连接能否真正 `SELECT` 该视图（search_path / 权限 / preload）。
+    pub readable: bool,
+    /// `pg_stat_statements.track`：none / top / all。none 时视图在但不采集。
+    pub track: Option<String>,
+    /// 当前连接能看到的统计行数；读失败时为 null。
+    pub row_count: Option<i64>,
+    pub current_user: Option<String>,
+    pub is_superuser: bool,
+    pub has_pg_read_all_stats: bool,
 }
 
 /// GET /api/query-perf/extension
@@ -118,24 +129,22 @@ pub async fn get_extension_status(
     let available: bool = row.get("available");
     let version: Option<String> = row.try_get("version").ok();
     let shared_preload: Option<String> = row.try_get("shared_preload").ok();
-
-    let install_hint = if installed {
-        None
-    } else if available {
-        Some(
-            "扩展已可用但尚未启用：先确保 `shared_preload_libraries` 包含 \
-             `pg_stat_statements`（修改 postgresql.conf 后需重启），再用超管账号在本数据库执行 \
-             `CREATE EXTENSION pg_stat_statements;`。"
-                .to_string(),
-        )
-    } else {
-        Some(
-            "当前 PostgreSQL 服务端未提供 pg_stat_statements。请安装 \
-             `postgresql-contrib` 包（或对应版本的 contrib 模块），加到 \
-             `shared_preload_libraries`，重启后再启用扩展。"
-                .to_string(),
-        )
+    let loaded = crate::pg_stat::library_preloaded(shared_preload.as_deref());
+    let view = crate::pg_stat::resolve_view(pool).await?;
+    let readable = match &view {
+        Some(v) => crate::pg_stat::probe_readable(pool, v).await,
+        None => false,
     };
+    let runtime = crate::pg_stat::probe_runtime(pool, view.as_ref()).await;
+    let install_hint = crate::pg_stat::extension_hint(
+        installed,
+        available,
+        loaded,
+        readable,
+        shared_preload.as_deref(),
+        runtime.track.as_deref(),
+        runtime.row_count,
+    );
 
     Ok(Json(ExtensionStatus {
         installed,
@@ -143,6 +152,13 @@ pub async fn get_extension_status(
         version,
         install_hint,
         shared_preload,
+        loaded,
+        readable,
+        track: runtime.track,
+        row_count: runtime.row_count,
+        current_user: runtime.current_user,
+        is_superuser: runtime.is_superuser,
+        has_pg_read_all_stats: runtime.has_pg_read_all_stats,
     }))
 }
 
@@ -174,31 +190,10 @@ pub struct StatementsQuery {
     pub offset: Option<i64>,
     pub min_calls: Option<i64>,
     pub min_mean_ms: Option<f64>,
+    /// 按单次最长耗时过滤；慢查询页用这个，避免「偶尔很慢、平均值被冲低」的语句被挡掉。
+    pub min_max_ms: Option<f64>,
     /// SQL 文本模糊搜索（ILIKE）
     pub search: Option<String>,
-}
-
-fn whitelist_order(order: &Option<String>) -> &'static str {
-    match order.as_deref() {
-        Some("total_exec_time") => "total_exec_time",
-        Some("calls") => "calls",
-        Some("rows") => "rows",
-        Some("max_exec_time") => "max_exec_time",
-        _ => "mean_exec_time",
-    }
-}
-
-fn translate_pg_stat_error(e: sqlx::Error) -> AppError {
-    let msg = e.to_string();
-    if msg.contains("does not exist") || msg.contains("undefined_table") {
-        AppError::InvalidQuery(
-            "pg_stat_statements 扩展未启用，无法读取查询统计。请先在该数据库 \
-             CREATE EXTENSION pg_stat_statements；详见扩展状态接口。"
-                .to_string(),
-        )
-    } else {
-        AppError::Database(e)
-    }
 }
 
 /// GET /api/query-perf/statements
@@ -213,52 +208,69 @@ pub async fn list_statements(
     require_db_read(&main_pool, claims.sub, database_id).await?;
 
     let pool = pick_pool(&main_pool, &dynamic_pool);
+    let view = crate::pg_stat::resolve_view(pool).await?.ok_or_else(|| {
+        AppError::InvalidQuery(
+            "pg_stat_statements 扩展未启用，无法读取查询统计。请先在该数据库 \
+                 CREATE EXTENSION pg_stat_statements；详见扩展状态接口。"
+                .to_string(),
+        )
+    })?;
 
-    let order = whitelist_order(&q.order_by);
+    let cols = view.columns;
+    let order = crate::pg_stat::order_column(q.order_by.as_deref(), &cols);
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
     let offset = q.offset.unwrap_or(0).max(0);
     let min_calls = q.min_calls.unwrap_or(1).max(0);
     let min_mean = q.min_mean_ms.unwrap_or(0.0).max(0.0);
+    let min_max = q.min_max_ms.unwrap_or(0.0).max(0.0);
     let search = q.search.unwrap_or_default();
 
-    // ORDER BY 列名是白名单常量字符串，可以放心 format!；其它输入都走 bind。
+    // 关系名 / 列名来自 catalog 白名单，可以 format!；阈值与搜索走 bind。
     let sql = format!(
         r#"
         SELECT
             queryid,
             query,
             calls,
-            total_exec_time,
-            mean_exec_time,
-            min_exec_time,
-            max_exec_time,
-            stddev_exec_time,
+            {total}  AS total_exec_time,
+            {mean}   AS mean_exec_time,
+            {min}    AS min_exec_time,
+            {max}    AS max_exec_time,
+            {stddev} AS stddev_exec_time,
             rows,
             shared_blks_hit,
             shared_blks_read,
             CASE WHEN (shared_blks_hit + shared_blks_read) = 0 THEN 0
                  ELSE shared_blks_hit::float8 / (shared_blks_hit + shared_blks_read)
             END AS hit_ratio
-        FROM pg_stat_statements
+        FROM {view}
         WHERE calls >= $1
-          AND mean_exec_time >= $2
-          AND ($3 = '' OR query ILIKE '%' || $3 || '%')
+          AND {mean} >= $2
+          AND {max} >= $3
+          AND ($4 = '' OR query ILIKE '%' || $4 || '%')
           AND query NOT LIKE '%pg_stat_statements%'
-        ORDER BY {} DESC NULLS LAST
-        LIMIT $4 OFFSET $5
+        ORDER BY {order} DESC NULLS LAST
+        LIMIT $5 OFFSET $6
         "#,
-        order
+        total = cols.total,
+        mean = cols.mean,
+        min = cols.min,
+        max = cols.max,
+        stddev = cols.stddev,
+        view = view.qualified,
+        order = order,
     );
 
     let rows = sqlx::query(&sql)
         .bind(min_calls)
         .bind(min_mean)
+        .bind(min_max)
         .bind(&search)
         .bind(limit)
         .bind(offset)
         .fetch_all(pool)
         .await
-        .map_err(translate_pg_stat_error)?;
+        .map_err(crate::pg_stat::translate_pg_stat_error)?;
 
     let result = rows
         .into_iter()
@@ -301,7 +313,7 @@ pub async fn reset_statements(
     sqlx::query("SELECT pg_stat_statements_reset()")
         .execute(pool)
         .await
-        .map_err(translate_pg_stat_error)?;
+        .map_err(crate::pg_stat::translate_pg_stat_error)?;
 
     Ok(Json(json!({ "ok": true })))
 }

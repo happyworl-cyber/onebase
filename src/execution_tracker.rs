@@ -71,10 +71,7 @@ impl ExecutionTracker {
                 .await
                 .map_err(|e| AppError::Internal(format!("Redis expire 失败: {}", e)))?;
 
-            tracing::debug!(
-                "初始化月度执行计数器，TTL = {} 秒（到月底）",
-                ttl
-            );
+            tracing::debug!("初始化月度执行计数器，TTL = {} 秒（到月底）", ttl);
         }
 
         Ok(count)

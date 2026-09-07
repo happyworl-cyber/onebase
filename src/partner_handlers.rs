@@ -10,7 +10,10 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::json;
-use sqlx::{types::{Decimal, Uuid}, PgPool};
+use sqlx::{
+    types::{Decimal, Uuid},
+    PgPool,
+};
 
 use crate::auth::Claims;
 use crate::crypto;
@@ -33,12 +36,11 @@ pub async fn admin_create_partner(
     require_platform_superadmin(&claims)?;
 
     // 验证 slug 唯一性
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM management.partners WHERE slug = $1)"
-    )
-    .bind(&req.slug)
-    .fetch_one(&pool)
-    .await?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM management.partners WHERE slug = $1)")
+            .bind(&req.slug)
+            .fetch_one(&pool)
+            .await?;
 
     if exists {
         return Err(AppError::InvalidQuery(format!(
@@ -222,8 +224,14 @@ pub async fn admin_update_partner(
     .bind(req.payment_terms)
     .bind(req.license_quota)
     .bind(req.quota_expires_at)
-    .bind(req.allowed_editions.map(|v| serde_json::to_value(v).unwrap()))
-    .bind(req.allowed_modules.map(|v| serde_json::to_value(v).unwrap()))
+    .bind(
+        req.allowed_editions
+            .map(|v| serde_json::to_value(v).unwrap()),
+    )
+    .bind(
+        req.allowed_modules
+            .map(|v| serde_json::to_value(v).unwrap()),
+    )
     .bind(req.max_license_days)
     .fetch_one(&pool)
     .await?;
@@ -242,12 +250,13 @@ pub async fn admin_suspend_partner(
 ) -> Result<impl IntoResponse> {
     require_platform_superadmin(&claims)?;
 
-    let partner: Partner =
-        sqlx::query_as("UPDATE management.partners SET status = 'suspended' WHERE id = $1 RETURNING *")
-            .bind(id)
-            .fetch_optional(&pool)
-            .await?
-            .ok_or_else(|| AppError::NotFound("代理商不存在".to_string()))?;
+    let partner: Partner = sqlx::query_as(
+        "UPDATE management.partners SET status = 'suspended' WHERE id = $1 RETURNING *",
+    )
+    .bind(id)
+    .fetch_optional(&pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("代理商不存在".to_string()))?;
 
     Ok(Json(json!({
         "partner": partner,
@@ -445,7 +454,8 @@ pub async fn partner_get_profile(
 
     let available_quota = partner.license_quota - partner.used_quota;
     let quota_usage_percent = if partner.license_quota > 0 {
-        Decimal::new(partner.used_quota as i64 * 10000, 2) / Decimal::new(partner.license_quota as i64, 0)
+        Decimal::new(partner.used_quota as i64 * 10000, 2)
+            / Decimal::new(partner.license_quota as i64, 0)
     } else {
         Decimal::ZERO
     };
@@ -488,7 +498,11 @@ pub async fn partner_list_customers(
     }
 
     sql.push_str(" ORDER BY created_at DESC");
-    sql.push_str(&format!(" LIMIT ${} OFFSET ${}", param_count, param_count + 1));
+    sql.push_str(&format!(
+        " LIMIT ${} OFFSET ${}",
+        param_count,
+        param_count + 1
+    ));
 
     let mut query_builder = sqlx::query_as::<_, CustomerLicense>(&sql).bind(ctx.partner_id);
 
@@ -630,7 +644,10 @@ pub async fn partner_issue_license(
     };
 
     let maintenance_commission_total = if let Some(price) = maintenance_price {
-        Some(price * Decimal::new(req.maintenance_years as i64, 0) * req.maintenance_commission_rate / Decimal::new(10000, 2))
+        Some(
+            price * Decimal::new(req.maintenance_years as i64, 0) * req.maintenance_commission_rate
+                / Decimal::new(10000, 2),
+        )
     } else {
         None
     };
@@ -713,7 +730,8 @@ pub async fn partner_issue_license(
         for year in 1..=req.maintenance_years {
             let period_start = expires_at + chrono::Duration::days(365 * (year - 1) as i64);
             let period_end = expires_at + chrono::Duration::days(365 * year as i64);
-            let year_commission = maint_price * req.maintenance_commission_rate / Decimal::new(10000, 2);
+            let year_commission =
+                maint_price * req.maintenance_commission_rate / Decimal::new(10000, 2);
 
             sqlx::query(
                 r#"
@@ -808,8 +826,8 @@ pub async fn partner_renew_license(
     let now = Utc::now();
     let new_expires_at = now + chrono::Duration::days(req.days as i64);
 
-    let modules: Vec<String> = serde_json::from_value(old_license.modules.clone())
-        .unwrap_or_default();
+    let modules: Vec<String> =
+        serde_json::from_value(old_license.modules.clone()).unwrap_or_default();
 
     let claims = LicenseClaims {
         license_id: new_license_id.to_string(),
@@ -822,9 +840,10 @@ pub async fn partner_renew_license(
         issued_at: now.timestamp(),
         expires_at: new_expires_at.timestamp(),
         grace_days: old_license.grace_days as i64,
-        fingerprint: old_license.fingerprint_encrypted.as_ref().and_then(|enc| {
-            crypto::decrypt_secret(enc).ok()
-        }),
+        fingerprint: old_license
+            .fingerprint_encrypted
+            .as_ref()
+            .and_then(|enc| crypto::decrypt_secret(enc).ok()),
         notes: None,
     };
 
@@ -843,7 +862,9 @@ pub async fn partner_renew_license(
     let (has_maintenance, maintenance_expires_at, maintenance_price, maintenance_commission_rate) =
         if old_license.has_maintenance {
             let new_maint_expires = new_expires_at
-                + (old_license.maintenance_expires_at.unwrap_or(old_license.expires_at)
+                + (old_license
+                    .maintenance_expires_at
+                    .unwrap_or(old_license.expires_at)
                     - old_license.expires_at);
             (
                 true,
@@ -900,13 +921,11 @@ pub async fn partner_renew_license(
     .fetch_one(&mut *tx)
     .await?;
 
-    sqlx::query(
-        "UPDATE management.customer_licenses SET renewed_to_license_id = $1 WHERE id = $2",
-    )
-    .bind(new_license.id)
-    .bind(license_id)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("UPDATE management.customer_licenses SET renewed_to_license_id = $1 WHERE id = $2")
+        .bind(new_license.id)
+        .bind(license_id)
+        .execute(&mut *tx)
+        .await?;
 
     sqlx::query("UPDATE management.partners SET used_quota = used_quota + 1 WHERE id = $1")
         .bind(ctx.partner_id)
@@ -1073,7 +1092,11 @@ pub async fn partner_list_maintenance_renewals(
     }
 
     sql.push_str(" ORDER BY mr.period_end ASC");
-    sql.push_str(&format!(" LIMIT ${} OFFSET ${}", param_count, param_count + 1));
+    sql.push_str(&format!(
+        " LIMIT ${} OFFSET ${}",
+        param_count,
+        param_count + 1
+    ));
 
     #[derive(sqlx::FromRow, serde::Serialize)]
     struct MaintenanceRenewalWithCustomer {
@@ -1097,8 +1120,8 @@ pub async fn partner_list_maintenance_renewals(
         edition: String,
     }
 
-    let mut query_builder = sqlx::query_as::<_, MaintenanceRenewalWithCustomer>(&sql)
-        .bind(ctx.partner_id);
+    let mut query_builder =
+        sqlx::query_as::<_, MaintenanceRenewalWithCustomer>(&sql).bind(ctx.partner_id);
 
     if let Some(status) = &query.payment_status {
         query_builder = query_builder.bind(status);

@@ -213,15 +213,16 @@ fn row_to_json(row: &sqlx::postgres::PgRow) -> serde_json::Value {
     })
 }
 
-/// GET /api/projects/:id/env-vars —— 列表，返回解密后明文。
-///
-/// 响应带 `Cache-Control: no-store`；每次读取记一行审计日志（不含变量值）。
-pub async fn list_env_vars(
-    State(pool): State<PgPool>,
-    Extension(claims): Extension<Claims>,
-    Path(project_id): Path<i32>,
-) -> Result<Response> {
-    permissions::require_tenant_admin(&pool, &claims, project_id).await?;
+/// 读取某项目全部环境变量（解密后明文）：鉴权（tenant admin）+ 查询 + 解密 + 审计。
+/// 页面接口与 MCP 工具（mcp_tools.rs `list_env_vars`）共用这一份，两条路的权限与审计
+/// 口径完全一致；`source` 只用于审计日志区分来路，绝不打印变量值。
+pub async fn read_env_vars_plain(
+    pool: &PgPool,
+    claims: &Claims,
+    project_id: i32,
+    source: &str,
+) -> Result<Vec<serde_json::Value>> {
+    permissions::require_tenant_admin(pool, claims, project_id).await?;
 
     let rows = sqlx::query(
         r#"
@@ -232,18 +233,30 @@ pub async fn list_env_vars(
         "#,
     )
     .bind(project_id)
-    .fetch_all(&pool)
+    .fetch_all(pool)
     .await?;
 
-    // 审计：仅记元信息（谁、哪个项目、读了几条），绝不打印变量值
+    // 审计：仅记元信息（谁、哪个项目、从哪条路、读了几条），绝不打印变量值
     tracing::info!(
         user_id = claims.sub,
         tenant_id = project_id,
         count = rows.len(),
+        source,
         "env vars read"
     );
 
-    let body: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
+    Ok(rows.iter().map(row_to_json).collect())
+}
+
+/// GET /api/projects/:id/env-vars —— 列表，返回解密后明文。
+///
+/// 响应带 `Cache-Control: no-store`；每次读取记一行审计日志（不含变量值）。
+pub async fn list_env_vars(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Path(project_id): Path<i32>,
+) -> Result<Response> {
+    let body = read_env_vars_plain(&pool, &claims, project_id, "api").await?;
 
     // 明文密钥严禁缓存
     let mut headers = HeaderMap::new();

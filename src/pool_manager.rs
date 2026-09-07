@@ -561,6 +561,14 @@ impl PoolManager {
         self.pools.len()
     }
 
+    /// 快照已加载的 primary 池（id, pool）。空闲探活用；`PgPool` 是 Arc，不持 DashMap guard。
+    pub fn snapshot_primary_pools(&self) -> Vec<(i32, PgPool)> {
+        self.pools
+            .iter()
+            .map(|entry| (*entry.key(), entry.value().clone()))
+            .collect()
+    }
+
     #[allow(dead_code)]
     pub async fn clear_all(&self) {
         let ids: Vec<i32> = self.pools.iter().map(|entry| *entry.key()).collect();
@@ -678,6 +686,66 @@ impl Default for PoolManager {
     }
 }
 
+/// 空闲探活间隔（秒）。`None` = 关闭。
+///
+/// - 未设置 → 60
+/// - `0` / `off` / `false` → 关闭
+/// - 非法值 → 回退 60
+pub fn idle_ping_interval_secs_from(env: Option<String>) -> Option<u64> {
+    match env.as_deref().map(str::trim) {
+        None => Some(60),
+        Some(s) if s.eq_ignore_ascii_case("off") || s.eq_ignore_ascii_case("false") || s == "0" => {
+            None
+        }
+        Some(s) => s.parse::<u64>().ok().filter(|&v| v > 0).or(Some(60)),
+    }
+}
+
+fn idle_ping_interval() -> Option<Duration> {
+    idle_ping_interval_secs_from(std::env::var("TENANT_DB_IDLE_PING_SECS").ok())
+        .map(Duration::from_secs)
+}
+
+/// 对一条空闲连接 `SELECT 1`。没有空闲连接就让路（连接在用，NAT 本身是热的）。
+async fn ping_idle_connection(pool: &PgPool, database_id: i32) {
+    let Some(mut conn) = pool.try_acquire() else {
+        return;
+    };
+    match sqlx::query("SELECT 1").execute(&mut *conn).await {
+        Ok(_) => tracing::debug!(database_id, "租户池空闲探活成功"),
+        Err(e) => tracing::warn!(
+            error.kind = "stale_connection",
+            database_id,
+            "租户池空闲探活丢弃死连接: {e}"
+        ),
+    }
+}
+
+/// 后台每隔 `TENANT_DB_IDLE_PING_SECS`（默认 60s）对已加载租户池的空闲连接探活，
+/// 刷新跨境 NAT 映射；死连接由 sqlx 丢弃。`0` 关闭。
+pub fn spawn_tenant_idle_ping() -> Option<tokio::task::JoinHandle<()>> {
+    let Some(interval) = idle_ping_interval() else {
+        tracing::info!("租户池空闲探活已关闭（TENANT_DB_IDLE_PING_SECS）");
+        return None;
+    };
+
+    Some(tokio::spawn(async move {
+        tracing::info!(interval_secs = interval.as_secs(), "租户池空闲探活已启动");
+        let mut ticker = tokio::time::interval(interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            ticker.tick().await;
+            let mut targets = POOL_MANAGER.snapshot_primary_pools();
+            for (_primary, replica_id, pool) in POOL_MANAGER.snapshot_replica_targets() {
+                targets.push((replica_id, pool));
+            }
+            for (id, pool) in targets {
+                ping_idle_connection(&pool, id).await;
+            }
+        }
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -756,6 +824,7 @@ mod tests {
         // 未加载的库不应凭空造出水位，否则监控页会把「池还没建」误报成「池空闲」
         assert!(pm.primary_watermark(1).is_none());
         assert!(pm.replica_watermarks(1).is_empty());
+        assert!(pm.snapshot_primary_pools().is_empty());
     }
 
     fn wm(max: u32, size: u32, idle: u32) -> PoolWaterMark {
@@ -793,6 +862,29 @@ mod tests {
         let w = wm(50, 3, 5);
         assert_eq!(w.in_use, 0);
         assert_eq!(w.usage_percent(), 0);
+    }
+
+    #[test]
+    fn idle_ping_interval_defaults_to_60s() {
+        assert_eq!(idle_ping_interval_secs_from(None), Some(60));
+    }
+
+    #[test]
+    fn idle_ping_interval_zero_disables() {
+        assert_eq!(idle_ping_interval_secs_from(Some("0".into())), None);
+        assert_eq!(idle_ping_interval_secs_from(Some("off".into())), None);
+        assert_eq!(idle_ping_interval_secs_from(Some("false".into())), None);
+    }
+
+    #[test]
+    fn idle_ping_interval_invalid_falls_back_to_60() {
+        assert_eq!(idle_ping_interval_secs_from(Some("abc".into())), Some(60));
+        assert_eq!(idle_ping_interval_secs_from(Some("-1".into())), Some(60));
+    }
+
+    #[test]
+    fn idle_ping_interval_custom_secs() {
+        assert_eq!(idle_ping_interval_secs_from(Some("45".into())), Some(45));
     }
 
     #[test]

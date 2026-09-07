@@ -301,7 +301,7 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
     let successCount = 0
     let failCount = 0
     
-    for (const rowIndex of selectedRows) {
+    for (const rowIndex of Array.from(selectedRows)) {
       const row = records[rowIndex]
       try {
         const conditions: Record<string, any> = {}

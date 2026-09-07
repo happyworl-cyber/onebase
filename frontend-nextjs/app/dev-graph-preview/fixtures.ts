@@ -14,25 +14,26 @@ import type {
 /** "全量" fixture：不带 scope 时的全景视图，5 个 department、8 个 category、18 个工作流节点。 */
 export const FULL_FIXTURE: DependencyGraphResponse = {
   unresolved: 1,
+  windowDays: 3,
   nodes: [
-    { id: 1, slug: 'order-create', name: '创建订单', department: '订单服务', category: '支付', nodeCount: 8, specialFlags: [], external: false, enabled: true, lastRunStatus: 'success', errorRate: 0.02, activity: 'active' },
-    { id: 2, slug: 'order-pay', name: '订单支付', department: '订单服务', category: '支付', nodeCount: 14, specialFlags: ['http_call'], external: false, enabled: true, lastRunStatus: 'success', errorRate: 0.08, activity: 'active' },
-    { id: 3, slug: 'order-pay-callback', name: '支付回调', department: '订单服务', category: '支付', nodeCount: 6, specialFlags: ['http_call'], external: false, enabled: true, lastRunStatus: 'failed', errorRate: 0.35, activity: 'active' },
-    { id: 4, slug: 'order-refund', name: '发起退款', department: '订单服务', category: '退款', nodeCount: 5, specialFlags: [], external: false, enabled: true, lastRunStatus: 'success', errorRate: 0.0, activity: 'idle' },
-    { id: 5, slug: 'order-refund-audit', name: '退款审核', department: '订单服务', category: '退款', nodeCount: 3, specialFlags: [], external: false, enabled: false, lastRunStatus: 'none', errorRate: 0.0, activity: 'dormant' },
-    { id: 6, slug: 'user-login', name: '用户登录', department: '用户服务', category: '账户', nodeCount: 10, specialFlags: ['redis'], external: false, enabled: true, lastRunStatus: 'success', errorRate: 0.01, activity: 'active' },
-    { id: 7, slug: 'user-profile', name: '用户资料', department: '用户服务', category: '账户', nodeCount: 4, specialFlags: [], external: false, enabled: true, lastRunStatus: 'none', errorRate: 0.0, activity: 'dormant' },
-    { id: 8, slug: 'user-bind-phone', name: '绑定手机号', department: '用户服务', category: '账户', nodeCount: 7, specialFlags: [], external: false, enabled: true, lastRunStatus: 'failed', errorRate: 0.6, activity: 'idle' },
-    { id: 9, slug: 'notify-order', name: '订单通知', department: '用户服务', category: '通知', nodeCount: 12, specialFlags: ['sse_publish', 'kafka'], external: false, enabled: true, lastRunStatus: 'success', errorRate: 0.12, activity: 'active' },
-    { id: 10, slug: 'notify-refund', name: '退款通知', department: '用户服务', category: '通知', nodeCount: 6, specialFlags: ['sse_publish'], external: false, enabled: false, lastRunStatus: 'none', errorRate: 0.0, activity: 'dormant' },
-    { id: 11, slug: 'notify-digest', name: '通知摘要', department: '用户服务', category: '通知', nodeCount: 40, specialFlags: ['kafka'], external: false, enabled: true, lastRunStatus: 'failed', errorRate: 0.9, activity: 'idle' },
-    { id: 12, slug: 'shared-log', name: '共享审计日志', department: '', category: '', nodeCount: 2, specialFlags: [], external: false, enabled: true, lastRunStatus: 'success', errorRate: 0.0, activity: 'active' },
-    { id: 13, slug: 'shared-cleanup', name: '共享清理任务', department: '', category: '', nodeCount: 3, specialFlags: ['redis'], external: false, enabled: true, lastRunStatus: 'none', errorRate: 0.0, activity: 'idle' },
-    { id: 14, slug: 'gw-route', name: '网关路由分发', department: '网关', category: '路由', nodeCount: 9, specialFlags: ['http_call'], external: false, enabled: true, lastRunStatus: 'success', errorRate: 0.05, activity: 'active' },
-    { id: 15, slug: 'gw-ratelimit', name: '限流校验', department: '网关', category: '路由', nodeCount: 5, specialFlags: ['redis', 'http_call'], external: false, enabled: true, lastRunStatus: 'failed', errorRate: 0.45, activity: 'active' },
-    { id: 16, slug: 'risk-check', name: '风控检查', department: '风控服务', category: '规则', nodeCount: 5, specialFlags: ['redis'], external: false, enabled: true, lastRunStatus: 'success', errorRate: 0.0, activity: 'idle' },
-    { id: 17, slug: 'risk-blacklist-sync', name: '黑名单同步', department: '风控服务', category: '规则', nodeCount: 11, specialFlags: ['kafka'], external: false, enabled: false, lastRunStatus: 'failed', errorRate: 0.7, activity: 'dormant' },
-    { id: 18, slug: 'risk-report', name: '风控报表', department: '风控服务', category: '报表', nodeCount: 16, specialFlags: ['sse_publish', 'http_call'], external: false, enabled: true, lastRunStatus: 'none', errorRate: 0.0, activity: 'dormant' },
+    { id: 1, slug: 'order-create', name: '创建订单', department: '订单服务', category: '支付', nodeCount: 8, specialFlags: [], external: false, enabled: true, windowRuns: 1200, windowFailed: 24, errorRate: 0.02, activity: 'active' },
+    { id: 2, slug: 'order-pay', name: '订单支付', department: '订单服务', category: '支付', nodeCount: 14, specialFlags: ['http_call'], external: false, enabled: true, windowRuns: 1200, windowFailed: 96, errorRate: 0.08, activity: 'active' },
+    { id: 3, slug: 'order-pay-callback', name: '支付回调', department: '订单服务', category: '支付', nodeCount: 6, specialFlags: ['http_call'], external: false, enabled: true, windowRuns: 1200, windowFailed: 420, errorRate: 0.35, activity: 'active' },
+    { id: 4, slug: 'order-refund', name: '发起退款', department: '订单服务', category: '退款', nodeCount: 5, specialFlags: [], external: false, enabled: true, windowRuns: 40, windowFailed: 0, errorRate: 0.0, activity: 'idle' },
+    { id: 5, slug: 'order-refund-audit', name: '退款审核', department: '订单服务', category: '退款', nodeCount: 3, specialFlags: [], external: false, enabled: false, windowRuns: 0, windowFailed: 0, errorRate: 0.0, activity: 'dormant' },
+    { id: 6, slug: 'user-login', name: '用户登录', department: '用户服务', category: '账户', nodeCount: 10, specialFlags: ['redis'], external: false, enabled: true, windowRuns: 1200, windowFailed: 12, errorRate: 0.01, activity: 'active' },
+    { id: 7, slug: 'user-profile', name: '用户资料', department: '用户服务', category: '账户', nodeCount: 4, specialFlags: [], external: false, enabled: true, windowRuns: 0, windowFailed: 0, errorRate: 0.0, activity: 'dormant' },
+    { id: 8, slug: 'user-bind-phone', name: '绑定手机号', department: '用户服务', category: '账户', nodeCount: 7, specialFlags: [], external: false, enabled: true, windowRuns: 40, windowFailed: 24, errorRate: 0.6, activity: 'idle' },
+    { id: 9, slug: 'notify-order', name: '订单通知', department: '用户服务', category: '通知', nodeCount: 12, specialFlags: ['sse_publish', 'kafka'], external: false, enabled: true, windowRuns: 1200, windowFailed: 144, errorRate: 0.12, activity: 'active' },
+    { id: 10, slug: 'notify-refund', name: '退款通知', department: '用户服务', category: '通知', nodeCount: 6, specialFlags: ['sse_publish'], external: false, enabled: false, windowRuns: 0, windowFailed: 0, errorRate: 0.0, activity: 'dormant' },
+    { id: 11, slug: 'notify-digest', name: '通知摘要', department: '用户服务', category: '通知', nodeCount: 40, specialFlags: ['kafka'], external: false, enabled: true, windowRuns: 40, windowFailed: 36, errorRate: 0.9, activity: 'idle' },
+    { id: 12, slug: 'shared-log', name: '共享审计日志', department: '', category: '', nodeCount: 2, specialFlags: [], external: false, enabled: true, windowRuns: 1200, windowFailed: 0, errorRate: 0.0, activity: 'active' },
+    { id: 13, slug: 'shared-cleanup', name: '共享清理任务', department: '', category: '', nodeCount: 3, specialFlags: ['redis'], external: false, enabled: true, windowRuns: 40, windowFailed: 0, errorRate: 0.0, activity: 'idle' },
+    { id: 14, slug: 'gw-route', name: '网关路由分发', department: '网关', category: '路由', nodeCount: 9, specialFlags: ['http_call'], external: false, enabled: true, windowRuns: 1200, windowFailed: 60, errorRate: 0.05, activity: 'active' },
+    { id: 15, slug: 'gw-ratelimit', name: '限流校验', department: '网关', category: '路由', nodeCount: 5, specialFlags: ['redis', 'http_call'], external: false, enabled: true, windowRuns: 1200, windowFailed: 540, errorRate: 0.45, activity: 'active' },
+    { id: 16, slug: 'risk-check', name: '风控检查', department: '风控服务', category: '规则', nodeCount: 5, specialFlags: ['redis'], external: false, enabled: true, windowRuns: 40, windowFailed: 0, errorRate: 0.0, activity: 'idle' },
+    { id: 17, slug: 'risk-blacklist-sync', name: '黑名单同步', department: '风控服务', category: '规则', nodeCount: 11, specialFlags: ['kafka'], external: false, enabled: false, windowRuns: 0, windowFailed: 0, errorRate: 0.7, activity: 'dormant' },
+    { id: 18, slug: 'risk-report', name: '风控报表', department: '风控服务', category: '报表', nodeCount: 16, specialFlags: ['sse_publish', 'http_call'], external: false, enabled: true, windowRuns: 0, windowFailed: 0, errorRate: 0.0, activity: 'dormant' },
   ],
   edges: [
     { from: 15, to: 14 },
@@ -63,13 +64,14 @@ export const FULL_FIXTURE: DependencyGraphResponse = {
  */
 export const SCOPE_FIXTURE: DependencyGraphResponse = {
   unresolved: 0,
+  windowDays: 3,
   nodes: [
-    { id: 1, slug: 'order-create', name: '创建订单', department: '订单服务', category: '支付', nodeCount: 8, specialFlags: [], external: false, enabled: true, lastRunStatus: 'success', errorRate: 0.02, activity: 'active' },
-    { id: 2, slug: 'order-pay', name: '订单支付', department: '订单服务', category: '支付', nodeCount: 14, specialFlags: ['http_call'], external: false, enabled: true, lastRunStatus: 'success', errorRate: 0.08, activity: 'active' },
-    { id: 3, slug: 'order-pay-callback', name: '支付回调', department: '订单服务', category: '支付', nodeCount: 6, specialFlags: ['http_call'], external: false, enabled: true, lastRunStatus: 'failed', errorRate: 0.35, activity: 'active' },
-    { id: 9, slug: 'notify-order', name: '订单通知', department: '用户服务', category: '通知', nodeCount: 12, specialFlags: ['sse_publish', 'kafka'], external: true, enabled: true, lastRunStatus: 'success', errorRate: 0.12, activity: 'active' },
-    { id: 16, slug: 'risk-check', name: '风控检查', department: '风控服务', category: '规则', nodeCount: 5, specialFlags: ['redis'], external: true, enabled: true, lastRunStatus: 'success', errorRate: 0.0, activity: 'idle' },
-    { id: 14, slug: 'gw-route', name: '网关路由分发', department: '网关', category: '路由', nodeCount: 9, specialFlags: ['http_call'], external: true, enabled: false, lastRunStatus: 'none', errorRate: 0.0, activity: 'dormant' },
+    { id: 1, slug: 'order-create', name: '创建订单', department: '订单服务', category: '支付', nodeCount: 8, specialFlags: [], external: false, enabled: true, windowRuns: 1200, windowFailed: 24, errorRate: 0.02, activity: 'active' },
+    { id: 2, slug: 'order-pay', name: '订单支付', department: '订单服务', category: '支付', nodeCount: 14, specialFlags: ['http_call'], external: false, enabled: true, windowRuns: 1200, windowFailed: 96, errorRate: 0.08, activity: 'active' },
+    { id: 3, slug: 'order-pay-callback', name: '支付回调', department: '订单服务', category: '支付', nodeCount: 6, specialFlags: ['http_call'], external: false, enabled: true, windowRuns: 1200, windowFailed: 420, errorRate: 0.35, activity: 'active' },
+    { id: 9, slug: 'notify-order', name: '订单通知', department: '用户服务', category: '通知', nodeCount: 12, specialFlags: ['sse_publish', 'kafka'], external: true, enabled: true, windowRuns: 1200, windowFailed: 144, errorRate: 0.12, activity: 'active' },
+    { id: 16, slug: 'risk-check', name: '风控检查', department: '风控服务', category: '规则', nodeCount: 5, specialFlags: ['redis'], external: true, enabled: true, windowRuns: 40, windowFailed: 0, errorRate: 0.0, activity: 'idle' },
+    { id: 14, slug: 'gw-route', name: '网关路由分发', department: '网关', category: '路由', nodeCount: 9, specialFlags: ['http_call'], external: true, enabled: false, windowRuns: 0, windowFailed: 0, errorRate: 0.0, activity: 'dormant' },
   ],
   edges: [
     { from: 14, to: 1 },
@@ -117,7 +119,6 @@ function generateLargeFixture(): DependencyGraphResponse {
     ['kafka', 'sse_publish'],
     [],
   ]
-  const STATUS_CYCLE: DependencyGraphNode['lastRunStatus'][] = ['success', 'success', 'failed', 'none', 'success']
   const ACTIVITY_CYCLE: DependencyGraphNode['activity'][] = ['active', 'active', 'idle', 'dormant', 'idle']
 
   const nodes: DependencyGraphNode[] = []
@@ -143,8 +144,9 @@ function generateLargeFixture(): DependencyGraphResponse {
           specialFlags: FLAG_CYCLE[seq % FLAG_CYCLE.length],
           external: isExternal,
           enabled: seq % 9 !== 0,
-          lastRunStatus: STATUS_CYCLE[seq % STATUS_CYCLE.length],
           errorRate: [0, 0.02, 0.08, 0.15, 0.35, 0.6, 0.9][seq % 7],
+          windowRuns: [1200, 300, 40, 0][seq % 4],
+          windowFailed: Math.round([1200, 300, 40, 0][seq % 4] * [0, 0.02, 0.08, 0.15, 0.35, 0.6, 0.9][seq % 7]),
           activity: ACTIVITY_CYCLE[seq % ACTIVITY_CYCLE.length],
         })
         ids.push(String(id))
@@ -172,7 +174,7 @@ function generateLargeFixture(): DependencyGraphResponse {
   // 重复边用例（沿用 FULL_FIXTURE 的去重回归覆盖）：复制第一条边。
   if (edges.length > 0) edges.push({ ...edges[0] })
 
-  return { nodes, edges, unresolved: 2 }
+  return { nodes, edges, unresolved: 2, windowDays: 3 }
 }
 
 export const LARGE_FIXTURE: DependencyGraphResponse = generateLargeFixture()
@@ -226,7 +228,6 @@ function generateXLFixture(): DependencyGraphResponse {
     ['kafka', 'sse_publish'],
     [],
   ]
-  const STATUS_CYCLE: DependencyGraphNode['lastRunStatus'][] = ['success', 'success', 'failed', 'none', 'success']
   const ACTIVITY_CYCLE: DependencyGraphNode['activity'][] = ['active', 'active', 'idle', 'dormant', 'idle']
 
   const nodes: DependencyGraphNode[] = []
@@ -258,8 +259,9 @@ function generateXLFixture(): DependencyGraphResponse {
           specialFlags: FLAG_CYCLE[seq % FLAG_CYCLE.length],
           external: isExternal,
           enabled: seq % 9 !== 0,
-          lastRunStatus: STATUS_CYCLE[seq % STATUS_CYCLE.length],
           errorRate: [0, 0.02, 0.08, 0.15, 0.35, 0.6, 0.9][seq % 7],
+          windowRuns: [1200, 300, 40, 0][seq % 4],
+          windowFailed: Math.round([1200, 300, 40, 0][seq % 4] * [0, 0.02, 0.08, 0.15, 0.35, 0.6, 0.9][seq % 7]),
           activity: ACTIVITY_CYCLE[seq % ACTIVITY_CYCLE.length],
         })
         ids.push(String(id))
@@ -283,7 +285,7 @@ function generateXLFixture(): DependencyGraphResponse {
   }
   if (edges.length > 0) edges.push({ ...edges[0] })
 
-  return { nodes, edges, unresolved: 3 }
+  return { nodes, edges, unresolved: 3, windowDays: 3 }
 }
 
 export const XL_FIXTURE: DependencyGraphResponse = generateXLFixture()
@@ -349,8 +351,9 @@ function generateAggStressFixture(): DependencyGraphResponse {
         specialFlags: FLAG_CYCLE[seq % FLAG_CYCLE.length],
         external: false,
         enabled: seq % 7 !== 0,
-        lastRunStatus: (['success', 'success', 'failed', 'none'] as const)[seq % 4],
         errorRate: [0, 0.05, 0.2, 0.5][seq % 4],
+        windowRuns: [800, 120, 0][seq % 3],
+        windowFailed: Math.round([800, 120, 0][seq % 3] * [0, 0.05, 0.2, 0.5][seq % 4]),
         activity: (['active', 'idle', 'dormant'] as const)[seq % 3],
       })
       ids.push(String(id))
@@ -379,7 +382,7 @@ function generateAggStressFixture(): DependencyGraphResponse {
     })
   })
 
-  return { nodes, edges, unresolved: 0 }
+  return { nodes, edges, unresolved: 0, windowDays: 3 }
 }
 
 export const AGG_STRESS_FIXTURE: DependencyGraphResponse = generateAggStressFixture()
@@ -447,7 +450,6 @@ function generateHugeFixture(): DependencyGraphResponse {
     ['kafka', 'trigger_notify'],
     [],
   ]
-  const STATUS_CYCLE: DependencyGraphNode['lastRunStatus'][] = ['success', 'success', 'failed', 'none', 'success']
   const ACTIVITY_CYCLE: DependencyGraphNode['activity'][] = ['active', 'active', 'idle', 'dormant', 'idle']
 
   const nodes: DependencyGraphNode[] = []
@@ -474,8 +476,9 @@ function generateHugeFixture(): DependencyGraphResponse {
           specialFlags: FLAG_CYCLE[seq % FLAG_CYCLE.length],
           external: isExternal,
           enabled: seq % 9 !== 0,
-          lastRunStatus: STATUS_CYCLE[seq % STATUS_CYCLE.length],
           errorRate: [0, 0.02, 0.08, 0.15, 0.35, 0.6, 0.9][seq % 7],
+          windowRuns: [1200, 300, 40, 0][seq % 4],
+          windowFailed: Math.round([1200, 300, 40, 0][seq % 4] * [0, 0.02, 0.08, 0.15, 0.35, 0.6, 0.9][seq % 7]),
           activity: ACTIVITY_CYCLE[seq % ACTIVITY_CYCLE.length],
         })
         ids.push(String(id))
@@ -515,7 +518,7 @@ function generateHugeFixture(): DependencyGraphResponse {
   }
   if (edges.length > 0) edges.push({ ...edges[0] })
 
-  return { nodes, edges, unresolved: 4 }
+  return { nodes, edges, unresolved: 4, windowDays: 3 }
 }
 
 export const HUGE_FIXTURE: DependencyGraphResponse = generateHugeFixture()

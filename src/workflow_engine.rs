@@ -2708,7 +2708,7 @@ impl DagEngine {
 
         match node.node_type {
             NodeType::Code => self.exec_code_node(config, ctx).await,
-            NodeType::DbQuery => self.exec_db_query_node(config, ctx).await,
+            NodeType::DbQuery => self.exec_db_query_node_with_stale_retry(config, ctx).await,
             NodeType::DbExecute => self.exec_db_execute_node(config, ctx).await,
             NodeType::HttpCall => self.exec_http_call_node(config).await,
             NodeType::EmailSend => self.exec_email_send_node(config).await,
@@ -3604,6 +3604,29 @@ end
 
     // ─── DB Query 节点（只读） ─────────────────────────────────────────
 
+    /// 代理层整实例重置时，业务 SELECT 飞行中会被掐成 reset/EOF。
+    /// 只对纯读 `db_query` 整节点再跑一遍；写 CTE 不重试。
+    async fn exec_db_query_node_with_stale_retry(
+        &self,
+        config: &JsonValue,
+        ctx: &ExecutionContext,
+    ) -> Result<(JsonValue, Option<String>)> {
+        match self.exec_db_query_node(config, ctx).await {
+            Err(e) if db_query_stale_retry_allowed(config, &e) => {
+                tracing::warn!(
+                    error.kind = "stale_connection",
+                    workflow_id = ctx.workflow_id,
+                    run_id = ctx.run_id,
+                    "db_query 节点遇死连接，{}ms 后重试一次: {e}",
+                    DB_QUERY_STALE_RETRY_BACKOFF.as_millis()
+                );
+                tokio::time::sleep(DB_QUERY_STALE_RETRY_BACKOFF).await;
+                self.exec_db_query_node(config, ctx).await
+            }
+            other => other,
+        }
+    }
+
     async fn exec_db_query_node(
         &self,
         config: &JsonValue,
@@ -3670,15 +3693,14 @@ end
                 }
 
                 // statement_timeout 护栏：慢 SQL 不能无限占池连接。
-                let mut conn = crate::pool_metrics::acquire_traced(
+                let policy = workflow_db_raw_sql_policy();
+                let mut conn = crate::raw_sql_guard::acquire_with_guards(
                     &pool,
                     node_pool_key(config, ctx),
                     "db_query",
+                    policy,
                 )
-                .await
-                .map_err(AppError::Database)?;
-                let policy = workflow_db_raw_sql_policy();
-                crate::raw_sql_guard::apply_session_guards(&mut conn, policy).await?;
+                .await?;
                 let rows_result = async {
                     // 只读护栏：READ ONLY 事务由 PostgreSQL 拒绝任何写入，防止数据修改型 CTE
                     // （WITH x AS (INSERT ... RETURNING *) SELECT）绕过首词检查。
@@ -3780,15 +3802,14 @@ end
                 for p in &auto_binds {
                     query = bind_json_param(query, p);
                 }
-                let mut conn = crate::pool_metrics::acquire_traced(
+                let policy = workflow_db_raw_sql_policy();
+                let mut conn = crate::raw_sql_guard::acquire_with_guards(
                     &pool,
                     node_pool_key(config, ctx),
                     "db_execute",
+                    policy,
                 )
-                .await
-                .map_err(AppError::Database)?;
-                let policy = workflow_db_raw_sql_policy();
-                crate::raw_sql_guard::apply_session_guards(&mut conn, policy).await?;
+                .await?;
                 let result = query.execute(&mut *conn).await;
                 crate::raw_sql_guard::reset_session_guards(&mut conn).await;
                 let result = result?;
@@ -3825,15 +3846,14 @@ end
         let pool = self
             .workflow_database_pool(config, ctx, "db_transaction")
             .await?;
-        let mut conn = crate::pool_metrics::acquire_traced(
+        let policy = workflow_db_raw_sql_policy();
+        let mut conn = crate::raw_sql_guard::acquire_with_guards(
             &pool,
             node_pool_key(config, ctx),
             "db_transaction",
+            policy,
         )
-        .await
-        .map_err(AppError::Database)?;
-        let policy = workflow_db_raw_sql_policy();
-        crate::raw_sql_guard::apply_session_guards(&mut conn, policy).await?;
+        .await?;
 
         let tx_result = async {
             use sqlx::Connection;
@@ -3927,12 +3947,14 @@ end
         let pool = self.workflow_database_pool(config, ctx, "foreach").await?;
         let item_count = items.len();
 
-        let mut conn =
-            crate::pool_metrics::acquire_traced(&pool, node_pool_key(config, ctx), "foreach")
-                .await
-                .map_err(AppError::Database)?;
         let policy = workflow_db_raw_sql_policy();
-        crate::raw_sql_guard::apply_session_guards(&mut conn, policy).await?;
+        let mut conn = crate::raw_sql_guard::acquire_with_guards(
+            &pool,
+            node_pool_key(config, ctx),
+            "foreach",
+            policy,
+        )
+        .await?;
 
         let foreach_result = async {
             use sqlx::Connection;
@@ -4600,23 +4622,26 @@ end
             .and_then(|v| v.as_u64())
             .unwrap_or(200) as u16;
 
-        let body = match config.get("body") {
-            Some(v) => parse_json_field("response.body", v)?.unwrap_or(JsonValue::Null),
-            None => JsonValue::Null,
-        };
         let headers = match config.get("headers") {
             Some(v) => parse_json_object_field("response.headers", v)?,
             None => json!({}),
         };
+        // 非 JSON Content-Type（如 image/png）时，body 可以是 base64 / 纯文本，
+        // 不能再强制按 JSON 解析，否则验证码图片这类工作流会在节点里直接失败。
+        let body = match config.get("body") {
+            Some(v) => parse_response_body(v, &headers)?,
+            None => JsonValue::Null,
+        };
+        let mut output = json!({
+            "status_code": status_code,
+            "body": body,
+            "headers": headers,
+        });
+        if let Some(b64) = config.get("body_base64") {
+            output["body_base64"] = b64.clone();
+        }
 
-        Ok((
-            json!({
-                "status_code": status_code,
-                "body": body,
-                "headers": headers,
-            }),
-            None,
-        ))
+        Ok((output, None))
     }
 }
 
@@ -4705,6 +4730,13 @@ fn strip_sql_literals_and_comments(sql: &str) -> String {
 /// 动态 SQL 场景下对**未渲染的模板**做检测：写关键字通常是模板里的字面量，
 /// 检测意图足够；万一被 `{{}}` 完全动态拼出而漏判，`exec_db_query_node` 的
 /// READ ONLY 事务在 enforce 下仍会兜底由 PostgreSQL 拒绝。
+const DB_QUERY_STALE_RETRY_BACKOFF: Duration = Duration::from_millis(50);
+
+/// 纯读 `db_query` 撞上死连接签名才允许整节点重试一次。
+fn db_query_stale_retry_allowed(config: &JsonValue, err: &AppError) -> bool {
+    err.is_stale_connection() && !db_query_has_data_modifying_cte(config)
+}
+
 fn db_query_has_data_modifying_cte(config: &JsonValue) -> bool {
     let Some(sql) = config.get("sql").and_then(|v| v.as_str()) else {
         return false;
@@ -5444,6 +5476,47 @@ fn parse_json_field(field: &str, value: &JsonValue) -> Result<Option<JsonValue>>
     }
 }
 
+/// 从 response 节点 headers 读取 Content-Type（大小写不敏感）。缺省按 JSON。
+pub(crate) fn response_content_type(headers: &JsonValue) -> &str {
+    headers
+        .as_object()
+        .and_then(|obj| {
+            obj.iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+                .and_then(|(_, v)| v.as_str())
+        })
+        .unwrap_or("application/json")
+}
+
+/// `application/json`、`text/json`、`application/problem+json` 以及带 charset 的变体。
+pub(crate) fn is_json_media_type(content_type: &str) -> bool {
+    let main = content_type
+        .split(';')
+        .next()
+        .unwrap_or(content_type)
+        .trim()
+        .to_ascii_lowercase();
+    main == "application/json" || main == "text/json" || main.ends_with("+json")
+}
+
+/// JSON Content-Type：保持原语义，非法 JSON 仍报错。
+/// 其它类型：JSON 解析失败时把字符串原样留下（base64 图片、HTML、SVG）。
+fn parse_response_body(value: &JsonValue, headers: &JsonValue) -> Result<JsonValue> {
+    match parse_json_field("response.body", value) {
+        Ok(Some(v)) => Ok(v),
+        Ok(None) => Ok(JsonValue::Null),
+        Err(e) => {
+            if is_json_media_type(response_content_type(headers)) {
+                Err(e)
+            } else if let JsonValue::String(s) = value {
+                Ok(JsonValue::String(s.clone()))
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
 fn parse_json_object_field(field: &str, value: &JsonValue) -> Result<JsonValue> {
     let parsed = parse_json_field(field, value)?.unwrap_or_else(|| json!({}));
     if parsed.is_object() {
@@ -5762,6 +5835,47 @@ mod tests {
 
         // 缺 sql 字段：安全默认为否。
         assert!(!db_query_has_data_modifying_cte(&json!({})));
+    }
+
+    fn stale_eof() -> AppError {
+        AppError::Database(sqlx::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "expected to read 5 bytes, got 0 bytes at EOF",
+        )))
+    }
+
+    #[test]
+    fn db_query_retries_stale_io_on_plain_select() {
+        let config = json!({ "sql": "SELECT * FROM posts WHERE id = 1" });
+        assert!(db_query_stale_retry_allowed(&config, &stale_eof()));
+        assert!(db_query_stale_retry_allowed(
+            &config,
+            &AppError::Database(sqlx::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "connection reset by peer",
+            )))
+        ));
+    }
+
+    #[test]
+    fn db_query_does_not_retry_modifying_cte_even_if_stale() {
+        let config = json!({
+            "sql": "WITH x AS (INSERT INTO t(a) VALUES (1) RETURNING id) SELECT * FROM x"
+        });
+        assert!(!db_query_stale_retry_allowed(&config, &stale_eof()));
+    }
+
+    #[test]
+    fn db_query_does_not_retry_pool_timeout_or_validation() {
+        let config = json!({ "sql": "SELECT 1" });
+        assert!(!db_query_stale_retry_allowed(
+            &config,
+            &AppError::Database(sqlx::Error::PoolTimedOut)
+        ));
+        assert!(!db_query_stale_retry_allowed(
+            &config,
+            &AppError::InvalidQuery("db_query 节点只允许 SELECT/WITH 语句".into())
+        ));
     }
 
     #[tokio::test]
@@ -6764,6 +6878,43 @@ mod tests {
         assert_eq!(summary.status, "completed");
         assert_eq!(summary.index_status, "success");
         assert!(summary.error_message.is_none());
+    }
+
+    #[test]
+    fn parse_response_body_keeps_raw_string_for_image_content_type() {
+        let headers = json!({ "Content-Type": "image/png" });
+        let raw = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+        let parsed = parse_response_body(&JsonValue::String(raw.to_string()), &headers)
+            .expect("image body should accept raw base64");
+        assert_eq!(parsed, JsonValue::String(raw.to_string()));
+    }
+
+    #[test]
+    fn parse_response_body_still_rejects_invalid_json_when_content_type_is_json() {
+        let headers = json!({ "Content-Type": "application/json" });
+        let err = parse_response_body(&json!("{ok:true}"), &headers)
+            .expect_err("invalid JSON body must still fail for JSON responses");
+        assert!(
+            err.to_string().contains("不是合法 JSON"),
+            "error should stay the original JSON parse message, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_response_body_parses_json_object_string() {
+        let headers = json!({});
+        let parsed = parse_response_body(&json!("{\"ok\":true}"), &headers).unwrap();
+        assert_eq!(parsed, json!({"ok": true}));
+    }
+
+    #[test]
+    fn is_json_media_type_handles_charset_and_suffix() {
+        assert!(is_json_media_type("application/json"));
+        assert!(is_json_media_type("application/json; charset=utf-8"));
+        assert!(is_json_media_type("application/problem+json"));
+        assert!(!is_json_media_type("image/png"));
+        assert!(!is_json_media_type("text/html"));
+        assert!(!is_json_media_type("image/svg+xml"));
     }
 
     #[test]

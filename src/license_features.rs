@@ -229,9 +229,10 @@ impl FeatureRegistry {
 
     /// 检查功能是否可用
     pub fn check_feature(&self, feature: &str, license: &LicenseContext) -> Result<()> {
-        let requirement = self.features.get(feature).ok_or_else(|| {
-            AppError::Internal(format!("未知功能: {}", feature))
-        })?;
+        let requirement = self
+            .features
+            .get(feature)
+            .ok_or_else(|| AppError::Internal(format!("未知功能: {}", feature)))?;
 
         requirement.check(license)
     }
@@ -300,7 +301,9 @@ mod tests {
     #[test]
     fn test_basic_crud_always_available() {
         let license = mock_license("trial", vec![]);
-        assert!(FEATURE_REGISTRY.check_feature("basic_crud", &license).is_ok());
+        assert!(FEATURE_REGISTRY
+            .check_feature("basic_crud", &license)
+            .is_ok());
     }
 
     #[test]
@@ -308,8 +311,12 @@ mod tests {
         let trial_license = mock_license("trial", vec![]);
         let standard_license = mock_license("standard", vec![]);
 
-        assert!(FEATURE_REGISTRY.check_feature("workflow", &trial_license).is_err());
-        assert!(FEATURE_REGISTRY.check_feature("workflow", &standard_license).is_ok());
+        assert!(FEATURE_REGISTRY
+            .check_feature("workflow", &trial_license)
+            .is_err());
+        assert!(FEATURE_REGISTRY
+            .check_feature("workflow", &standard_license)
+            .is_ok());
     }
 
     #[test]
@@ -317,8 +324,12 @@ mod tests {
         let license_no_ai = mock_license("standard", vec![]);
         let license_with_ai = mock_license("standard", vec!["ai"]);
 
-        assert!(FEATURE_REGISTRY.check_feature("ai_generation", &license_no_ai).is_err());
-        assert!(FEATURE_REGISTRY.check_feature("ai_generation", &license_with_ai).is_ok());
+        assert!(FEATURE_REGISTRY
+            .check_feature("ai_generation", &license_no_ai)
+            .is_err());
+        assert!(FEATURE_REGISTRY
+            .check_feature("ai_generation", &license_with_ai)
+            .is_ok());
     }
 
     #[test]
@@ -326,8 +337,12 @@ mod tests {
         let standard_license = mock_license("standard", vec![]);
         let enterprise_license = mock_license("enterprise", vec![]);
 
-        assert!(FEATURE_REGISTRY.check_feature("sso_saml", &standard_license).is_err());
-        assert!(FEATURE_REGISTRY.check_feature("sso_saml", &enterprise_license).is_ok());
+        assert!(FEATURE_REGISTRY
+            .check_feature("sso_saml", &standard_license)
+            .is_err());
+        assert!(FEATURE_REGISTRY
+            .check_feature("sso_saml", &enterprise_license)
+            .is_ok());
     }
 
     #[test]

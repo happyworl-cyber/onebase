@@ -25,7 +25,10 @@ pub struct LicenseContext {
 impl LicenseContext {
     /// 检查是否启用了指定模块
     pub fn has_module(&self, module: &str) -> bool {
-        self.claims.modules.iter().any(|m| m.eq_ignore_ascii_case(module))
+        self.claims
+            .modules
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case(module))
     }
 
     /// 检查版本是否满足最低要求
@@ -293,7 +296,11 @@ pub async fn check_node_limit(ctx: &LicenseContext, pool: &PgPool) -> Result<()>
 }
 
 /// 检查租户账号数量限制
-pub async fn check_account_limit(ctx: &LicenseContext, pool: &PgPool, tenant_id: i32) -> Result<()> {
+pub async fn check_account_limit(
+    ctx: &LicenseContext,
+    pool: &PgPool,
+    tenant_id: i32,
+) -> Result<()> {
     if ctx.can_add_account(pool, tenant_id).await? {
         Ok(())
     } else {
@@ -389,11 +396,10 @@ pub async fn check_tenant_limit_with_state(state: &LicenseState, pool: &PgPool) 
     };
 
     if let Some(max_tenants) = claims.max_tenants.or(claims.max_projects) {
-        let current_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM management.tenants WHERE status = 'active'",
-        )
-        .fetch_one(pool)
-        .await?;
+        let current_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM management.tenants WHERE status = 'active'")
+                .fetch_one(pool)
+                .await?;
 
         if current_count >= max_tenants as i64 {
             return Err(AppError::Forbidden(format!(
@@ -431,7 +437,10 @@ pub async fn check_workflow_limit_with_state(state: &LicenseState, pool: &PgPool
 }
 
 /// 检查定时任务创建限制（使用 LicenseState）
-pub async fn check_scheduled_job_limit_with_state(state: &LicenseState, pool: &PgPool) -> Result<()> {
+pub async fn check_scheduled_job_limit_with_state(
+    state: &LicenseState,
+    pool: &PgPool,
+) -> Result<()> {
     let Some(claims) = get_claims_from_state(state) else {
         return Ok(());
     };
@@ -455,7 +464,10 @@ pub async fn check_scheduled_job_limit_with_state(state: &LicenseState, pool: &P
 }
 
 /// 检查数据库连接创建限制（使用 LicenseState）
-pub async fn check_database_connection_limit_with_state(state: &LicenseState, pool: &PgPool) -> Result<()> {
+pub async fn check_database_connection_limit_with_state(
+    state: &LicenseState,
+    pool: &PgPool,
+) -> Result<()> {
     let Some(claims) = get_claims_from_state(state) else {
         return Ok(());
     };
@@ -503,7 +515,10 @@ pub async fn check_team_member_limit_with_state(state: &LicenseState, pool: &PgP
 }
 
 /// 检查 API 端点创建限制（使用 LicenseState）
-pub async fn check_api_endpoint_limit_with_state(state: &LicenseState, pool: &PgPool) -> Result<()> {
+pub async fn check_api_endpoint_limit_with_state(
+    state: &LicenseState,
+    pool: &PgPool,
+) -> Result<()> {
     let Some(claims) = get_claims_from_state(state) else {
         return Ok(());
     };
@@ -531,11 +546,7 @@ pub async fn check_api_endpoint_limit_with_state(state: &LicenseState, pool: &Pg
 // Axum Extractor（在 handler 签名中直接获取 License）
 // ═══════════════════════════════════════════════════════════
 
-use axum::{
-    async_trait,
-    extract::FromRequestParts,
-    http::request::Parts,
-};
+use axum::{async_trait, extract::FromRequestParts, http::request::Parts};
 
 #[async_trait]
 impl<S> FromRequestParts<S> for LicenseContext
@@ -553,7 +564,9 @@ where
             .get::<LicenseContext>()
             .cloned()
             .ok_or_else(|| {
-                AppError::Internal("License 上下文未注入（请确保挂载了 license_middleware）".to_string())
+                AppError::Internal(
+                    "License 上下文未注入（请确保挂载了 license_middleware）".to_string(),
+                )
             })
     }
 }

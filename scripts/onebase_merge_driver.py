@@ -16,7 +16,7 @@ import tempfile
 from pathlib import Path
 
 
-UPSTREAM_BASE = "29b3b1060fb540db64b34296503d14550b10cc09"
+UPSTREAM_BASE = "0425d28d2dbba2f64a242f39c38874a1a734bc4f"
 UPSTREAM_HEAD = "crestrail/develop"
 
 RENAMED_PATHS = {

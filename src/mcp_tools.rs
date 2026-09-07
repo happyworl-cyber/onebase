@@ -41,7 +41,7 @@ const NODE_SPEC: &str = r#"# OneBase 工作流节点规范
 ## 模板变量（所有 config 字符串中可用）
 - `{{trigger.字段}}`：本次触发的入参（endpoint 触发 = 请求 body / query）
 - `{{节点ID.字段}}`：上游节点输出，支持嵌套与下标：`{{q.rows[0].id}}`
-- `{{env.变量名}}`：项目级环境变量（在「设置 → 环境变量」页面管理），可用于任意节点 config，如 http_call 的 header、email 地址等；未定义的变量解析为空串。执行历史与 debug 输出中变量值会自动脱敏为 `***`
+- `{{env.变量名}}`：项目级环境变量（在「设置 → 环境变量」页面管理），可用于任意节点 config，如 http_call 的 header、email 地址等；未定义的变量解析为空串。执行历史与 debug 输出中变量值会自动脱敏为 `***`。**引用前先调 `list_env_vars` 查当前项目实际有哪些变量**，不要凭猜测写变量名
 
 ## 节点类型（15 种）
 
@@ -133,8 +133,14 @@ config: `{ "output": 任意 JSON 模板 }`（缺省时整个 config 即输出模
 - 模板变量替换后原样输出，用于拼装/重命名字段
 
 ### response（HTTP 响应，endpoint 工作流必备出口）
-config: `{ "status_code": 200, "body": JSON 模板, "headers": {可选} }`
-- endpoint 触发的调用方收到 body 作为响应
+config: `{ "status_code": 200, "body": JSON 模板或原始字符串, "headers": {可选}, "body_base64": "可选，显式 base64 字节" }`
+- endpoint 触发的调用方收到该节点构造的 HTTP 响应
+- **JSON（默认）**：`headers` 未设或 `Content-Type` 含 `json` 时，返回 `body` 作为 JSON；`status_code` 与自定义 headers 会写到 HTTP 响应上
+- **非 JSON（图片/HTML/文本）**：`headers` 设 `Content-Type: image/png`（或 `text/html`、`image/svg+xml` 等）时按原始字节返回
+  - 图片 / `application/octet-stream`：`body` 为 base64 字符串（Python：`base64.b64encode(png).decode()`），引擎解码后返回原始字节；也支持 `data:image/png;base64,...`
+  - 文本类型（`text/*`、`image/svg+xml`）：`body` 字符串原样作为 UTF-8 返回，不解码
+  - 或把 base64 放进 `body_base64`，强制走原始字节路径
+- 示例（验证码 PNG）：code 节点输出 `captcha_png_b64`，response 配 `headers: {"Content-Type":"image/png"}`、`body: "{{code.captcha_png_b64}}"`
 
 ### sse_publish（SSE 推送）
 config: `{ "topic": "主题（可含模板）", "event": "事件名，默认 message", "data": "JSON 字符串或留空=触发数据" }`
@@ -236,9 +242,16 @@ def execute(ctx):
 - MCP 创建的工作流创建即启用（is_enabled=true）；如需下线由人在页面禁用
 "#;
 
-/// 11 个工具的 MCP 定义（tools/list 响应体）
+/// 12 个工具的 MCP 定义（tools/list 响应体）
 pub fn tool_definitions() -> Value {
     json!([
+        {
+            "name": "list_env_vars",
+            "description": "列出项目（租户）在「设置 → 环境变量」里配置的环境变量：name / value（明文）/ description。写 {{env.X}} 或 env.get('X') 前先用它确认变量存在。需要该项目的管理员权限。",
+            "inputSchema": { "type": "object", "properties": {
+                "tenant_id": { "type": "integer", "description": "项目/租户 ID（与 list_workflows 的 tenant_id 同义）" }
+            }, "required": ["tenant_id"] }
+        },
         {
             "name": "node_spec",
             "description": "获取工作流节点规范：15 种节点的 config 格式、模板变量语法、条件表达式、循环、触发类型与约束。编写任何工作流定义前必读。",
@@ -364,6 +377,7 @@ pub async fn call_tool(pool: &PgPool, claims: &Claims, name: &str, args: &Value)
     match name {
         "node_spec" => Ok(json!({ "spec": NODE_SPEC })),
         "list_workflows" => tool_list_workflows(pool, claims, args).await,
+        "list_env_vars" => tool_list_env_vars(pool, claims, args).await,
         "get_workflow" => {
             let id = require_id(args)?;
             let resp = workflow_handlers::get_workflow(
@@ -439,6 +453,23 @@ fn require_id(args: &Value) -> Result<i32> {
         .and_then(|v| v.as_i64())
         .and_then(|v| i32::try_from(v).ok())
         .ok_or_else(|| AppError::InvalidQuery("缺少必填参数 id 或 id 超出范围".to_string()))
+}
+
+/// 环境变量列表：复用页面接口同一份"鉴权 + 解密 + 审计"实现（env_var_handlers::read_env_vars_plain），
+/// 权限口径与页面一致（tenant admin），审计日志标记 source=mcp。
+async fn tool_list_env_vars(pool: &PgPool, claims: &Claims, args: &Value) -> Result<Value> {
+    let tenant_id = args
+        .get("tenant_id")
+        .and_then(|v| v.as_i64())
+        .and_then(|v| i32::try_from(v).ok())
+        .ok_or_else(|| AppError::InvalidQuery("缺少必填参数 tenant_id 或超出范围".to_string()))?;
+    let vars = crate::env_var_handlers::read_env_vars_plain(pool, claims, tenant_id, "mcp").await?;
+    Ok(json!({
+        "tenant_id": tenant_id,
+        "total": vars.len(),
+        "env_vars": vars,
+        "usage": "模板里写 {{env.NAME}}，Lua/JS 里写 env.get('NAME')；值只在此处明文可见，执行历史与 debug 输出会脱敏为 ***",
+    }))
 }
 
 async fn tool_list_workflows(pool: &PgPool, claims: &Claims, args: &Value) -> Result<Value> {

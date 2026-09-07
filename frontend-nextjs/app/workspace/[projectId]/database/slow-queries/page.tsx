@@ -134,9 +134,9 @@ export default function SlowQueriesPage() {
     setPgLoading(true)
     try {
       const res = await queryPerfAPI.listStatements({
-        order_by: 'mean_exec_time',
+        order_by: 'max_exec_time',
         limit: 100,
-        min_mean_ms: thresholdMs,
+        min_max_ms: thresholdMs,
       })
       setPgStats(res.data || [])
       setPgPage(1)
@@ -385,10 +385,10 @@ export default function SlowQueriesPage() {
       {/* pg_stat_statements 慢查询 */}
       {tab === 'pg_stats' && (
         <div className="space-y-3">
-          {extStatus && !extStatus.installed && (
+          {extStatus && extStatus.install_hint && (
             <div className="card p-3 border-l-4 border-yellow-400 bg-yellow-50 text-sm text-yellow-800">
               <i className="fas fa-exclamation-triangle mr-2"></i>
-              {extStatus.install_hint || 'pg_stat_statements 未启用，无法读取该 Tab。'}
+              {extStatus.install_hint}
               {' 你仍然可以使用 “实时活跃查询” 与 “应用层日志”。'}
             </div>
           )}
@@ -415,7 +415,9 @@ export default function SlowQueriesPage() {
                   {!pgLoading && pgStats.length === 0 && (
                     <tr>
                       <td colSpan={5} className="px-4 py-12 text-center text-gray-400">
-                        阈值 {thresholdMs} ms 之上没有查询命中
+                        {extStatus?.install_hint
+                          ? extStatus.install_hint
+                          : `没有单次耗时超过 ${thresholdMs} ms 的语句（按 max_exec_time）`}
                       </td>
                     </tr>
                   )}

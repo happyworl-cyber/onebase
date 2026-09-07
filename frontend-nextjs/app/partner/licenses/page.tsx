@@ -477,13 +477,13 @@ export default function LicensesPage() {
                   <div className="flex justify-between mb-1">
                     <span className="text-gray-600">维护费总计（{issueData.maintenance_years}年）：</span>
                     <span className="font-medium">
-                      ¥{((issueData.maintenance_price_override || Math.round(issueData.price * 0.2)) * issueData.maintenance_years / 100).toLocaleString()}
+                      ¥{((issueData.maintenance_price_override || Math.round(issueData.price * 0.2)) * (issueData.maintenance_years ?? 1) / 100).toLocaleString()}
                     </span>
                   </div>
                   <div className="flex justify-between border-t border-blue-300 pt-1 mt-1">
                     <span className="text-gray-600">维护费佣金（10%）：</span>
                     <span className="font-bold text-green-600">
-                      ¥{((issueData.maintenance_price_override || Math.round(issueData.price * 0.2)) * issueData.maintenance_years * 0.1 / 100).toLocaleString()}
+                      ¥{((issueData.maintenance_price_override || Math.round(issueData.price * 0.2)) * (issueData.maintenance_years ?? 1) * 0.1 / 100).toLocaleString()}
                     </span>
                   </div>
                 </div>
@@ -503,14 +503,14 @@ export default function LicensesPage() {
                 <div className="flex justify-between">
                   <span className="text-gray-600">维护费（{issueData.maintenance_years}年）：</span>
                   <span className="font-medium">
-                    ¥{((issueData.maintenance_price_override || Math.round(issueData.price * 0.2)) * issueData.maintenance_years / 100).toLocaleString()}
+                    ¥{((issueData.maintenance_price_override || Math.round(issueData.price * 0.2)) * (issueData.maintenance_years ?? 1) / 100).toLocaleString()}
                   </span>
                 </div>
               )}
               <div className="flex justify-between border-t border-indigo-200 pt-2 mt-2">
                 <span className="font-semibold text-gray-900">客户总计：</span>
                 <span className="font-bold text-lg">
-                  ¥{((issueData.price + (issueData.include_maintenance ? (issueData.maintenance_price_override || Math.round(issueData.price * 0.2)) * issueData.maintenance_years : 0)) / 100).toLocaleString()}
+                  ¥{((issueData.price + (issueData.include_maintenance ? (issueData.maintenance_price_override || Math.round(issueData.price * 0.2)) * (issueData.maintenance_years ?? 1) : 0)) / 100).toLocaleString()}
                 </span>
               </div>
               <div className="flex justify-between border-t border-indigo-200 pt-2">
@@ -518,7 +518,7 @@ export default function LicensesPage() {
                 <span className="font-bold text-xl text-green-600">
                   ¥{(
                     (issueData.price * parseFloat(profile?.partner.commission_rate || '0') / 100 / 100) +
-                    (issueData.include_maintenance ? (issueData.maintenance_price_override || Math.round(issueData.price * 0.2)) * issueData.maintenance_years * 0.1 / 100 : 0)
+                    (issueData.include_maintenance ? (issueData.maintenance_price_override || Math.round(issueData.price * 0.2)) * (issueData.maintenance_years ?? 1) * 0.1 / 100 : 0)
                   ).toLocaleString()}
                 </span>
               </div>

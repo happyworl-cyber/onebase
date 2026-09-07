@@ -1,7 +1,8 @@
 use axum::{
-    body::Bytes,
+    body::{Body, Bytes},
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{header::HeaderName, HeaderMap, HeaderValue, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
 use serde::{Deserialize, Serialize};
@@ -17,8 +18,8 @@ use crate::error::{AppError, Result};
 use crate::middleware::ApiKeyContext;
 use crate::operation_log::{self, Actor, OpSourceHint, OperationLogInput, Source, Status};
 use crate::workflow_engine::{
-    self, ApiKeyWriteGuard, DagEngine, ExecutionContext, NodeExecutionResult, NodeStatus,
-    WorkflowDefinition,
+    self, is_json_media_type, response_content_type, ApiKeyWriteGuard, DagEngine, ExecutionContext,
+    NodeExecutionResult, NodeStatus, WorkflowDefinition,
 };
 use crate::workflow_taxonomy::{self, WorkflowTaxonomy};
 use std::collections::BTreeMap;
@@ -1059,39 +1060,27 @@ struct WorkflowDepTargetRow {
 }
 
 /// 单条工作流的运行状态聚合结果（来自 `management.workflow_runs`，见
-/// [`fetch_dependency_graph_run_stats`]）。窗口口径：`errorRate` 统计**最近 7 天**内
-/// 的运行；`lastRunStatus`/`activity` 看**全部历史里最近一条**运行（不受 7 天窗口限制，
-/// 避免"7天前跑过一次成功"的工作流被误判成 none）。
+/// [`fetch_dependency_graph_run_stats`]）。口径统一为**最近 N 天窗口**（N 跟随保留期，见 dependency_graph_window_days）：依赖图上的健康
+/// 视图只回答两个问题——"错得多不多，要不要去追"（错误率 + 绝对次数）和"还有没有人在用，
+/// 能不能废"（活跃度）。窗口外的历史对这两个问题都没有信息量，所以不再看"全历史最近一条"，
+/// 也去掉了"最近一次成败"这种单点噪音字段。
+#[derive(Clone)]
 struct DependencyGraphRunStats {
-    /// 最近一条运行的原始 status（'running'/'pending'/'completed'/'failed'/'timeout'）。
-    last_status: Option<String>,
-    last_started_at: Option<chrono::NaiveDateTime>,
-    /// 近 7 天窗口内的运行总数 / 失败数（failed + timeout 都算失败）。
+    /// 窗口内的运行总数 / 失败数（failed + timeout 都算失败）。
     window_total: i64,
     window_failed: i64,
+    /// 窗口内最晚一次运行的开始时间；窗口内无运行则为 None（→ dormant）。
+    last_started_at: Option<chrono::NaiveDateTime>,
 }
 
-/// 配色切换器用的三个派生状态字段：最近成败 / 错误率 / 活跃度。
-/// 口径：
-/// - `lastRunStatus`：仅当最近一条运行已终结（completed/failed/timeout）才判成败；
-///   'running'/'pending'（进行中）与从无运行记录一样记 "none"（尚无可展示的成败结果）。
-/// - `errorRate`：近 7 天窗口 failed+timeout / total；窗口内无运行记为 0.0（而非 null，
+/// 配色切换器 / 侧栏详情用的派生字段：错误率 + 活跃度。
+/// - `errorRate`：窗口内 failed+timeout / total；窗口内无运行记为 0.0（而非 null，
 ///   便于前端直接映射颜色梯度，不必额外判空）。
-/// - `activity`：按最近一条运行（不分终结与否）距今时长分档——24h 内 active，
-///   7 天内 idle，7 天外或从无运行 dormant。
-fn dependency_graph_status_fields(
-    stats: Option<&DependencyGraphRunStats>,
-) -> (String, f64, String) {
+/// - `activity`：窗口内无运行 → dormant；有则按最晚一次距今分档，24h 内 active、否则 idle。
+fn dependency_graph_status_fields(stats: Option<&DependencyGraphRunStats>) -> (f64, String) {
     let Some(stats) = stats else {
-        return ("none".to_string(), 0.0, "dormant".to_string());
+        return (0.0, "dormant".to_string());
     };
-
-    let last_run_status = match stats.last_status.as_deref() {
-        Some("completed") => "success",
-        Some("failed") | Some("timeout") => "failed",
-        _ => "none", // running/pending（进行中）或无记录
-    }
-    .to_string();
 
     let error_rate = if stats.window_total > 0 {
         stats.window_failed as f64 / stats.window_total as f64
@@ -1100,21 +1089,13 @@ fn dependency_graph_status_fields(
     };
 
     let activity = match stats.last_started_at {
-        Some(ts) => {
-            let age = chrono::Utc::now().naive_utc() - ts;
-            if age <= chrono::Duration::hours(24) {
-                "active"
-            } else if age <= chrono::Duration::days(7) {
-                "idle"
-            } else {
-                "dormant"
-            }
-        }
+        Some(ts) if chrono::Utc::now().naive_utc() - ts <= chrono::Duration::hours(24) => "active",
+        Some(_) => "idle",
         None => "dormant",
     }
     .to_string();
 
-    (last_run_status, error_rate, activity)
+    (error_rate, activity)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1141,7 +1122,7 @@ fn dependency_graph_node_json(
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
-    let (last_run_status, error_rate, activity) = dependency_graph_status_fields(run_stats);
+    let (error_rate, activity) = dependency_graph_status_fields(run_stats);
     json!({
         "id": id,
         "slug": slug.clone().unwrap_or_default(),
@@ -1152,20 +1133,91 @@ fn dependency_graph_node_json(
         "specialFlags": special_flags,
         "external": external,
         "enabled": enabled,
-        "lastRunStatus": last_run_status,
         "errorRate": error_rate,
         "activity": activity,
+        // 追踪错误时需要量级而不只是百分比：窗口内运行次数 / 失败次数（窗口天数见响应 windowDays）。
+        "windowRuns": run_stats.map(|s| s.window_total).unwrap_or(0),
+        "windowFailed": run_stats.map(|s| s.window_failed).unwrap_or(0),
     })
 }
 
-/// 批量拉取依赖图节点集合（含外部依赖节点）的运行状态聚合。单趟 SQL：对每个
-/// workflow_id 用 `LEFT JOIN LATERAL ... ORDER BY started_at DESC LIMIT 1` 取最近一条运行
-/// （命中 `idx_workflow_runs_wid (workflow_id, started_at DESC)` 索引），配合另一个
-/// LATERAL 做近 7 天窗口的 COUNT/FILTER 聚合；不逐条工作流单查。
+/// 批量拉取依赖图节点集合（含外部依赖节点）的运行状态聚合。单趟 SQL，两个 LATERAL
+/// 全部 index-only、不回堆（性能红线：这是"打开依赖图页"的主要开销，测试库 67 万条
+/// 运行记录下曾达 5.3s、每次读 2.8GB 堆）：
+/// - 窗口内总数 + 最晚一次时间：同一次扫描里 COUNT(*) 与 MAX(started_at)，只需
+///   workflow_id + started_at，`idx_workflow_runs_wid` 已覆盖；
+/// - 窗口内失败数：走 partial index `idx_workflow_runs_failed`（迁移 066）。
+/// 不要把 total/failed 合回一个带 `FILTER (WHERE status ...)` 的聚合——status 不在主索引里，
+/// 计划器会退回 Bitmap Heap Scan 把整张表的堆扫一遍。
+/// 谓词耦合（红线）：failed 那半的 `status IN ('failed', 'timeout')` 必须与迁移 066 里
+/// partial index 的谓词相同或为其子集，否则计划器静默弃用索引、退回堆扫；两边同步改。
 ///
 /// 正确关联键：`workflow_runs.workflow_id` 直接是 `workflows.id`（外键，全局唯一主键），
 /// 天然按工作流精确关联，无需再叠 tenant_id 过滤（不存在串表风险）。
+/// 运行状态统计窗口天数：上限 3（boss 拍板：健康视图看 3 天足够，窗口越短窗口 COUNT
+/// 越便宜），再取与运行记录保留期（`EXEC_RUNS_RETENTION_DAYS`，见 execution_log.rs）的
+/// 较小值——窗口比保留期长没有意义，超出的行早被清理任务删掉了，SQL 数出来的数字没错，
+/// 但图例文案就是在撒谎，活跃度的"N 天内跑过"一档也永远不会出现。
+/// 随响应返回 `windowDays`，前端所有文案读它，不写死天数。
+const DEP_GRAPH_WINDOW_DAYS_MAX: i64 = 3;
+fn dependency_graph_window_days() -> i64 {
+    std::env::var("EXEC_RUNS_RETENTION_DAYS")
+        .ok()
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .unwrap_or(DEP_GRAPH_WINDOW_DAYS_MAX)
+        .clamp(1, DEP_GRAPH_WINDOW_DAYS_MAX)
+}
+
+/// 运行状态聚合的进程内缓存：workflow_id → (写入时刻, 聚合结果)，TTL 2 分钟。
+/// 目的不是提速，而是给数据库负载封顶——运行状态是"近似实时"语义，多人同时开页、
+/// 反复切配色/刷新，都不该让 workflow_runs 的窗口 COUNT 每次重跑；有了它，任何访问
+/// 频率下每个工作流每 2 分钟最多聚合一次。单实例内存缓存，多副本部署各自独立即可。
+/// 窗口 COUNT 的成本与窗口内行数成正比：3 天窗口下生产估 50 万行、单次约 0.3~0.5s，
+/// 每 2 分钟一次约占一个核的 0.5%，流量翻倍也在 1% 内；再往上的升级路径是小时桶预聚合
+/// （成本与流量脱钩），见决策日志。
+static DEP_GRAPH_RUN_STATS_CACHE: once_cell::sync::Lazy<
+    std::sync::Mutex<HashMap<i32, (std::time::Instant, DependencyGraphRunStats)>>,
+> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+const DEP_GRAPH_RUN_STATS_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// 带缓存的运行状态聚合：命中且未过期的直接用，只对缺失/过期的 id 打一趟 SQL
+/// （[`query_dependency_graph_run_stats`]），回填后返回全集。
 async fn fetch_dependency_graph_run_stats(
+    pool: &PgPool,
+    workflow_ids: &[i32],
+) -> Result<HashMap<i32, DependencyGraphRunStats>> {
+    let now = std::time::Instant::now();
+    let mut result: HashMap<i32, DependencyGraphRunStats> = HashMap::new();
+    let mut missing: Vec<i32> = Vec::new();
+    {
+        let cache = DEP_GRAPH_RUN_STATS_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        for &id in workflow_ids {
+            match cache.get(&id) {
+                Some((at, stats)) if now.duration_since(*at) < DEP_GRAPH_RUN_STATS_TTL => {
+                    result.insert(id, stats.clone());
+                }
+                _ => missing.push(id),
+            }
+        }
+    }
+    if !missing.is_empty() {
+        let fresh = query_dependency_graph_run_stats(pool, &missing).await?;
+        let mut cache = DEP_GRAPH_RUN_STATS_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // 过期条目顺手清掉，缓存体积上限 = 工作流总数，不会无界增长。
+        cache.retain(|_, (at, _)| now.duration_since(*at) < DEP_GRAPH_RUN_STATS_TTL);
+        for (id, stats) in fresh {
+            cache.insert(id, (now, stats.clone()));
+            result.insert(id, stats);
+        }
+    }
+    Ok(result)
+}
+
+async fn query_dependency_graph_run_stats(
     pool: &PgPool,
     workflow_ids: &[i32],
 ) -> Result<HashMap<i32, DependencyGraphRunStats>> {
@@ -1176,35 +1228,34 @@ async fn fetch_dependency_graph_run_stats(
     #[derive(sqlx::FromRow)]
     struct Row {
         workflow_id: i32,
-        last_status: Option<String>,
-        last_started_at: Option<chrono::NaiveDateTime>,
         window_total: i64,
         window_failed: i64,
+        last_started_at: Option<chrono::NaiveDateTime>,
     }
 
+    let window = format!("{} days", dependency_graph_window_days());
     let rows = sqlx::query_as::<_, Row>(
         r#"SELECT t.workflow_id,
-                  last.status AS last_status,
-                  last.started_at AS last_started_at,
-                  COALESCE(win.total, 0) AS window_total,
-                  COALESCE(win.failed, 0) AS window_failed
+                  COALESCE(tot.total, 0) AS window_total,
+                  COALESCE(win.failed, 0) AS window_failed,
+                  tot.last_started_at
            FROM unnest($1::int[]) AS t(workflow_id)
            LEFT JOIN LATERAL (
-               SELECT r.status, r.started_at
+               SELECT COUNT(*) AS total, MAX(r.started_at) AS last_started_at
                FROM management.workflow_runs r
                WHERE r.workflow_id = t.workflow_id
-               ORDER BY r.started_at DESC
-               LIMIT 1
-           ) last ON true
+                 AND r.started_at >= NOW() - $2::interval
+           ) tot ON true
            LEFT JOIN LATERAL (
-               SELECT COUNT(*) AS total,
-                      COUNT(*) FILTER (WHERE r.status IN ('failed', 'timeout')) AS failed
+               SELECT COUNT(*) AS failed
                FROM management.workflow_runs r
                WHERE r.workflow_id = t.workflow_id
-                 AND r.started_at >= NOW() - INTERVAL '7 days'
+                 AND r.started_at >= NOW() - $2::interval
+                 AND r.status IN ('failed', 'timeout') -- 与 062 partial index 谓词保持一致
            ) win ON true"#,
     )
     .bind(workflow_ids)
+    .bind(window)
     .fetch_all(pool)
     .await?;
 
@@ -1214,10 +1265,9 @@ async fn fetch_dependency_graph_run_stats(
             (
                 r.workflow_id,
                 DependencyGraphRunStats {
-                    last_status: r.last_status,
-                    last_started_at: r.last_started_at,
                     window_total: r.window_total,
                     window_failed: r.window_failed,
+                    last_started_at: r.last_started_at,
                 },
             )
         })
@@ -1246,7 +1296,9 @@ pub async fn workflow_dependency_graph(
     let p = parse_list_params(&params);
     let scope = resolve_list_scope(&pool, &claims, p.tenant_id, p.database_id).await?;
     if matches!(scope, ListScope::Empty) {
-        return Ok(Json(json!({ "nodes": [], "edges": [], "unresolved": 0 })));
+        return Ok(Json(
+            json!({ "nodes": [], "edges": [], "unresolved": 0, "windowDays": dependency_graph_window_days() }),
+        ));
     }
 
     // 窄列查询：建图不需要 edges/dependencies/trigger_config 等大字段。主集 = 视图 scope
@@ -1420,9 +1472,12 @@ pub async fn workflow_dependency_graph(
         }
     }
 
-    Ok(Json(
-        json!({ "nodes": nodes, "edges": edges, "unresolved": unresolved }),
-    ))
+    Ok(Json(json!({
+        "nodes": nodes,
+        "edges": edges,
+        "unresolved": unresolved,
+        "windowDays": dependency_graph_window_days(),
+    })))
 }
 
 /// GET /api/admin/workflows/:id
@@ -3255,7 +3310,9 @@ fn is_api_key_readonly_block(error: &str) -> bool {
 /// 把一次 endpoint 工作流执行结果收敛为对外 HTTP 响应。
 ///
 /// 三个 endpoint 入口（POST 鉴权 / GET / 公开 POST）共用此收口，保证行为一致：
-/// - 命中 response 节点：返回其 body。
+/// - 命中 response 节点：按其 `body` / `headers` / `status_code` 构造 HTTP 响应。
+///   `Content-Type` 为 JSON（或缺省）时保持原 `Json(body)` 语义；非 JSON（如
+///   `image/png`、`text/html`）则返回原始字节，字符串 body 按约定做 base64 解码。
 /// - 全部成功但无 response 节点：返回末节点输出（或 `{"ok": true}`）。
 /// - 出现硬失败（`NodeStatus::Failed`）或整体超时/取消（`result` 为 `Err`）：
 ///   - 默认维持原语义，向上抛 `AppError`（对外 HTTP 5xx）；只读 API Key 护栏拦截是
@@ -3269,7 +3326,7 @@ fn is_api_key_readonly_block(error: &str) -> bool {
 fn finalize_endpoint_response(
     workflow: &Workflow,
     result: Result<Vec<NodeExecutionResult>>,
-) -> Result<Json<Value>> {
+) -> Result<Response> {
     let graceful = workflow
         .trigger_config
         .get("graceful_error_response")
@@ -3286,12 +3343,7 @@ fn finalize_endpoint_response(
                 .rev()
                 .find(|r| r.status == NodeStatus::Success && r.output.get("status_code").is_some())
             {
-                let body = resp
-                    .output
-                    .get("body")
-                    .cloned()
-                    .unwrap_or(json!({"ok": true}));
-                return Ok(Json(body));
+                return Ok(build_endpoint_http_response(&resp.output));
             }
 
             if let Some(failed) = node_results.iter().find(|r| r.status == NodeStatus::Failed) {
@@ -3304,7 +3356,8 @@ fn finalize_endpoint_response(
                         "ok": false,
                         "error": err,
                         "failed_node": failed.node_id,
-                    })));
+                    }))
+                    .into_response());
                 }
                 // 只读 API Key 护栏拦截是权限问题而非服务端故障，映射成 403 让调用方
                 // 一眼看出是「这把 key 不许写」，而不是以为后端挂了去重试。
@@ -3320,7 +3373,7 @@ fn finalize_endpoint_response(
                 .filter(|r| r.status == NodeStatus::Success)
                 .map(|r| r.output.clone())
                 .unwrap_or(json!({"ok": true}));
-            Ok(Json(final_output))
+            Ok(Json(final_output).into_response())
         }
         // 整体超时 / 任务取消：execute_workflow_internal 已把 run 收口为 failed。
         Err(e) => {
@@ -3328,12 +3381,155 @@ fn finalize_endpoint_response(
                 Ok(Json(json!({
                     "ok": false,
                     "error": e.to_string(),
-                })))
+                }))
+                .into_response())
             } else {
                 Err(e)
             }
         }
     }
+}
+
+/// 把 response 节点输出收成对外 HTTP 响应。
+///
+/// - 显式 `body_base64`：始终按原始字节返回（解码失败则按原文 UTF-8）。
+/// - `Content-Type` 非 JSON：字符串 body 在二进制类型下按 base64 解码，文本类型原样返回。
+/// - 默认 / JSON：保持 `Json(body)`，同时应用 `status_code` 与自定义 headers。
+fn build_endpoint_http_response(output: &Value) -> Response {
+    let status_code = output
+        .get("status_code")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(200) as u16;
+    let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
+    let headers_val = output.get("headers").cloned().unwrap_or(json!({}));
+    let body = output.get("body").cloned().unwrap_or(json!({"ok": true}));
+
+    if let Some(b64) = output
+        .get("body_base64")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        return raw_bytes_response(status, &headers_val, decode_base64_or_raw(b64));
+    }
+
+    let content_type = response_content_type(&headers_val);
+    if !is_json_media_type(content_type) {
+        return raw_bytes_response(
+            status,
+            &headers_val,
+            encode_endpoint_body(&body, content_type),
+        );
+    }
+
+    let mut response = Json(body).into_response();
+    *response.status_mut() = status;
+    apply_response_headers(response.headers_mut(), &headers_val);
+    response
+}
+
+fn raw_bytes_response(status: StatusCode, headers_val: &Value, body: Vec<u8>) -> Response {
+    let mut builder = axum::http::Response::builder().status(status);
+    if let Some(headers) = builder.headers_mut() {
+        apply_response_headers(headers, headers_val);
+    }
+    builder.body(Body::from(body)).unwrap_or_else(|_| {
+        axum::http::Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Body::from("failed to build response"))
+            .expect("static fallback response")
+    })
+}
+
+fn encode_endpoint_body(body: &Value, content_type: &str) -> Vec<u8> {
+    match body {
+        Value::String(s) => {
+            if let Some(payload) = strip_data_uri_base64(s) {
+                return decode_base64_or_raw(payload);
+            }
+            if is_binary_content_type(content_type) {
+                decode_base64_or_raw(s)
+            } else {
+                s.as_bytes().to_vec()
+            }
+        }
+        _ => serde_json::to_vec(body).unwrap_or_default(),
+    }
+}
+
+fn is_binary_content_type(content_type: &str) -> bool {
+    let main = content_type
+        .split(';')
+        .next()
+        .unwrap_or(content_type)
+        .trim()
+        .to_ascii_lowercase();
+    if main == "image/svg+xml" {
+        return false;
+    }
+    main.starts_with("image/")
+        || main.starts_with("audio/")
+        || main.starts_with("video/")
+        || main == "application/octet-stream"
+        || main == "application/pdf"
+        || main == "application/zip"
+        || main == "application/gzip"
+        || main == "application/wasm"
+        || main.starts_with("font/")
+}
+
+fn strip_data_uri_base64(s: &str) -> Option<&str> {
+    let s = s.trim();
+    let rest = s.strip_prefix("data:")?;
+    let (_, b64) = rest.split_once(";base64,")?;
+    Some(b64)
+}
+
+fn decode_base64_or_raw(s: &str) -> Vec<u8> {
+    use base64::Engine;
+    let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    base64::engine::general_purpose::STANDARD
+        .decode(cleaned.as_bytes())
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(cleaned.as_bytes()))
+        .unwrap_or_else(|_| s.as_bytes().to_vec())
+}
+
+fn apply_response_headers(target: &mut HeaderMap, headers_val: &Value) {
+    let Some(obj) = headers_val.as_object() else {
+        return;
+    };
+    for (k, v) in obj {
+        if !is_allowed_response_header(k) {
+            continue;
+        }
+        let val_str = match v {
+            Value::String(s) => s.clone(),
+            Value::Number(n) => n.to_string(),
+            Value::Bool(b) => b.to_string(),
+            _ => continue,
+        };
+        if let (Ok(name), Ok(value)) = (
+            HeaderName::from_bytes(k.as_bytes()),
+            HeaderValue::try_from(val_str),
+        ) {
+            target.insert(name, value);
+        }
+    }
+}
+
+fn is_allowed_response_header(name: &str) -> bool {
+    !matches!(
+        name.to_ascii_lowercase().as_str(),
+        "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailers"
+            | "transfer-encoding"
+            | "upgrade"
+            | "host"
+            | "content-length"
+    )
 }
 
 /// 在**脱离当前 HTTP 请求生命周期**的独立任务里执行工作流，并等待其结果。
@@ -3483,7 +3679,7 @@ pub async fn endpoint_trigger(
     license_state: Option<axum::Extension<crate::license::LicenseState>>,
     redis: Option<axum::Extension<crate::redis_manager::RedisManager>>,
     body_bytes: Bytes,
-) -> Result<Json<Value>> {
+) -> Result<Response> {
     let caller = resolve_endpoint_caller(&pool, &headers, claims.as_ref()).await?;
     let apikey_write_guard = resolve_apikey_write_guard(api_key_ctx.as_ref(), &caller);
     let (resolved_database_id, _tenant_id) =
@@ -3524,12 +3720,18 @@ pub async fn endpoint_trigger(
     let trigger_data = Value::Object(trigger_map);
 
     // License 配额检查：月度执行次数限制
-    if let (Some(axum::Extension(state)), Some(axum::Extension(redis_mgr))) = (license_state.as_ref(), redis.as_ref()) {
+    if let (Some(axum::Extension(state)), Some(axum::Extension(redis_mgr))) =
+        (license_state.as_ref(), redis.as_ref())
+    {
         let snapshot = state.snapshot();
         if let Some(ref claims) = snapshot.claims {
-            if matches!(snapshot.status, crate::license::LicenseStatus::Active | crate::license::LicenseStatus::Grace) {
+            if matches!(
+                snapshot.status,
+                crate::license::LicenseStatus::Active | crate::license::LicenseStatus::Grace
+            ) {
                 if let Some(max_executions) = claims.max_executions_per_month {
-                    let tracker = crate::execution_tracker::ExecutionTracker::new(redis_mgr.clone());
+                    let tracker =
+                        crate::execution_tracker::ExecutionTracker::new(redis_mgr.clone());
                     tracker.track_and_check(Some(max_executions)).await?;
                 }
             }
@@ -3562,7 +3764,7 @@ pub async fn endpoint_trigger_get(
     api_key_ctx: Option<axum::Extension<ApiKeyContext>>,
     license_state: Option<axum::Extension<crate::license::LicenseState>>,
     redis: Option<axum::Extension<crate::redis_manager::RedisManager>>,
-) -> Result<Json<Value>> {
+) -> Result<Response> {
     let body = serde_json::to_value(&params).unwrap_or(json!({}));
     let caller = resolve_endpoint_caller(&pool, &headers, claims.as_ref()).await?;
     let apikey_write_guard = resolve_apikey_write_guard(api_key_ctx.as_ref(), &caller);
@@ -3585,12 +3787,18 @@ pub async fn endpoint_trigger_get(
     })?;
 
     // License 配额检查：月度执行次数限制
-    if let (Some(axum::Extension(state)), Some(axum::Extension(redis_mgr))) = (license_state.as_ref(), redis.as_ref()) {
+    if let (Some(axum::Extension(state)), Some(axum::Extension(redis_mgr))) =
+        (license_state.as_ref(), redis.as_ref())
+    {
         let snapshot = state.snapshot();
         if let Some(ref claims) = snapshot.claims {
-            if matches!(snapshot.status, crate::license::LicenseStatus::Active | crate::license::LicenseStatus::Grace) {
+            if matches!(
+                snapshot.status,
+                crate::license::LicenseStatus::Active | crate::license::LicenseStatus::Grace
+            ) {
                 if let Some(max_executions) = claims.max_executions_per_month {
-                    let tracker = crate::execution_tracker::ExecutionTracker::new(redis_mgr.clone());
+                    let tracker =
+                        crate::execution_tracker::ExecutionTracker::new(redis_mgr.clone());
                     tracker.track_and_check(Some(max_executions)).await?;
                 }
             }
@@ -3621,7 +3829,7 @@ pub async fn endpoint_trigger_public(
     license_state: Option<axum::Extension<crate::license::LicenseState>>,
     redis: Option<axum::Extension<crate::redis_manager::RedisManager>>,
     body_bytes: Bytes,
-) -> Result<Json<Value>> {
+) -> Result<Response> {
     let caller = EndpointCaller::Anonymous;
     let (resolved_database_id, _tenant_id) =
         resolve_database_for_caller(&pool, &caller, &database_slug).await?;
@@ -3656,12 +3864,18 @@ pub async fn endpoint_trigger_public(
     let trigger_data = Value::Object(trigger_map);
 
     // License 配额检查：月度执行次数限制
-    if let (Some(axum::Extension(state)), Some(axum::Extension(redis_mgr))) = (license_state.as_ref(), redis.as_ref()) {
+    if let (Some(axum::Extension(state)), Some(axum::Extension(redis_mgr))) =
+        (license_state.as_ref(), redis.as_ref())
+    {
         let snapshot = state.snapshot();
         if let Some(ref claims) = snapshot.claims {
-            if matches!(snapshot.status, crate::license::LicenseStatus::Active | crate::license::LicenseStatus::Grace) {
+            if matches!(
+                snapshot.status,
+                crate::license::LicenseStatus::Active | crate::license::LicenseStatus::Grace
+            ) {
                 if let Some(max_executions) = claims.max_executions_per_month {
-                    let tracker = crate::execution_tracker::ExecutionTracker::new(redis_mgr.clone());
+                    let tracker =
+                        crate::execution_tracker::ExecutionTracker::new(redis_mgr.clone());
                     tracker.track_and_check(Some(max_executions)).await?;
                 }
             }
@@ -4734,6 +4948,171 @@ mod tests {
             "db_execute 节点执行失败: 连接超时"
         ));
         assert!(!is_api_key_readonly_block(""));
+    }
+}
+
+#[cfg(test)]
+mod endpoint_response_tests {
+    use super::*;
+
+    const TINY_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+    fn dummy_workflow(graceful: bool) -> Workflow {
+        Workflow {
+            id: 1,
+            tenant_id: Some(1),
+            database_id: Some(1),
+            name: "t".into(),
+            slug: "t".into(),
+            description: None,
+            category: None,
+            department: None,
+            trigger_type: "endpoint".into(),
+            trigger_config: if graceful {
+                json!({ "graceful_error_response": true })
+            } else {
+                json!({})
+            },
+            nodes: json!([]),
+            edges: json!([]),
+            dependencies: json!({}),
+            is_enabled: true,
+            timeout_ms: 30_000,
+            max_retries: 0,
+            alert_webhook_url: None,
+            alert_webhook_template: None,
+            alert_throttle_hours: 24,
+            last_alert_sent_at: None,
+            created_by: Some(1),
+            created_by_name: None,
+            created_by_email: None,
+            created_at: chrono::NaiveDateTime::default(),
+            updated_at: chrono::NaiveDateTime::default(),
+        }
+    }
+
+    fn success_response(output: Value) -> NodeExecutionResult {
+        NodeExecutionResult {
+            node_id: "resp".into(),
+            node_type: Some("response".into()),
+            status: NodeStatus::Success,
+            input: Value::Null,
+            output,
+            elapsed_ms: 1,
+            error: None,
+            branch: None,
+        }
+    }
+
+    async fn response_bytes(response: Response) -> Bytes {
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read body")
+    }
+
+    #[test]
+    fn encode_image_body_decodes_standard_base64() {
+        let bytes = encode_endpoint_body(&Value::String(TINY_PNG_B64.to_string()), "image/png");
+        assert_eq!(bytes[0..8], [137, 80, 78, 71, 13, 10, 26, 10]);
+    }
+
+    #[test]
+    fn encode_html_body_stays_utf8_even_if_looks_like_base64() {
+        let bytes = encode_endpoint_body(&Value::String("aGk=".to_string()), "text/html");
+        assert_eq!(bytes, b"aGk=");
+    }
+
+    #[test]
+    fn encode_svg_body_stays_raw_xml() {
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>";
+        let bytes = encode_endpoint_body(&Value::String(svg.to_string()), "image/svg+xml");
+        assert_eq!(bytes, svg.as_bytes());
+    }
+
+    #[test]
+    fn encode_data_uri_strips_prefix() {
+        let uri = format!("data:image/png;base64,{TINY_PNG_B64}");
+        let bytes = encode_endpoint_body(&Value::String(uri), "image/png");
+        assert_eq!(bytes[0..8], [137, 80, 78, 71, 13, 10, 26, 10]);
+    }
+
+    #[test]
+    fn hop_by_hop_headers_are_rejected() {
+        assert!(!is_allowed_response_header("Content-Length"));
+        assert!(!is_allowed_response_header("transfer-encoding"));
+        assert!(is_allowed_response_header("Content-Type"));
+        assert!(is_allowed_response_header("X-Captcha-Id"));
+    }
+
+    #[tokio::test]
+    async fn json_response_keeps_body_and_applies_status_and_headers() {
+        let wf = dummy_workflow(false);
+        let result = Ok(vec![success_response(json!({
+            "status_code": 201,
+            "body": { "ok": true, "id": 7 },
+            "headers": { "X-Custom": "yes" }
+        }))]);
+        let response = finalize_endpoint_response(&wf, result).unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(response.headers().get("x-custom").unwrap(), "yes");
+        let bytes = response_bytes(response).await;
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body, json!({ "ok": true, "id": 7 }));
+    }
+
+    #[tokio::test]
+    async fn json_response_without_headers_matches_legacy_body() {
+        let wf = dummy_workflow(false);
+        let result = Ok(vec![success_response(json!({
+            "status_code": 200,
+            "body": { "game": "rocs" }
+        }))]);
+        let response = finalize_endpoint_response(&wf, result).unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response_bytes(response).await;
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body, json!({ "game": "rocs" }));
+    }
+
+    #[tokio::test]
+    async fn image_png_returns_decoded_bytes() {
+        let wf = dummy_workflow(false);
+        let result = Ok(vec![success_response(json!({
+            "status_code": 200,
+            "body": TINY_PNG_B64,
+            "headers": { "Content-Type": "image/png" }
+        }))]);
+        let response = finalize_endpoint_response(&wf, result).unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
+        let bytes = response_bytes(response).await;
+        assert_eq!(bytes[0..8], [137, 80, 78, 71, 13, 10, 26, 10]);
+    }
+
+    #[tokio::test]
+    async fn body_base64_field_wins_over_json_content_type() {
+        let wf = dummy_workflow(false);
+        let result = Ok(vec![success_response(json!({
+            "status_code": 200,
+            "body": { "ignored": true },
+            "body_base64": TINY_PNG_B64,
+            "headers": { "Content-Type": "image/png" }
+        }))]);
+        let response = finalize_endpoint_response(&wf, result).unwrap();
+        let bytes = response_bytes(response).await;
+        assert_eq!(bytes[0..8], [137, 80, 78, 71, 13, 10, 26, 10]);
+    }
+
+    #[tokio::test]
+    async fn graceful_error_still_returns_json() {
+        let wf = dummy_workflow(true);
+        let result = Err(AppError::Internal("boom".into()));
+        let response = finalize_endpoint_response(&wf, result).unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response_bytes(response).await;
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["error"], "内部错误: boom");
     }
 }
 

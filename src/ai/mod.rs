@@ -1958,7 +1958,7 @@ mod tests {
 
     #[test]
     fn migration_enforces_default_must_be_active() {
-        let sql = include_str!("../../migrations/062_ai_providers.sql");
+        let sql = include_str!("../../migrations/065_ai_providers.sql");
         assert!(sql.contains("ADD COLUMN IF NOT EXISTS is_active"));
         assert!(sql.contains("WHERE is_active = false AND is_default = true"));
         assert!(sql.contains("missing_defaults"));

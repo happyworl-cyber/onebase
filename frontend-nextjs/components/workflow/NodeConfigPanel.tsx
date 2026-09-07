@@ -1201,7 +1201,7 @@ export default function NodeConfigPanel({
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">响应 Body (JSON 模板)</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">响应 Body</label>
               <CodeSnippetEditor
                 value={node.config.body ? (typeof node.config.body === 'string' ? node.config.body : JSON.stringify(node.config.body, null, 2)) : ''}
                 onChange={readOnly ? undefined : (next) => updateConfig('body', next)}
@@ -1225,6 +1225,9 @@ export default function NodeConfigPanel({
               {jsonFieldErrors.body && (
                 <p className="text-xs text-red-600 mt-1">{jsonFieldErrors.body}</p>
               )}
+              <p className="text-xs text-gray-400 mt-1">
+                JSON 模板，或整段 {'{{node.field}}'}。返回图片时 Body 填 base64 字符串，并在 Headers 设 Content-Type（如 image/png）。
+              </p>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">响应 Headers (JSON)</label>
@@ -1246,7 +1249,7 @@ export default function NodeConfigPanel({
                 minRows={2}
                 readOnly={readOnly}
                 invalid={!!jsonFieldErrors.headers}
-                placeholder='{"X-Custom": "value"}'
+                placeholder='{"Content-Type": "application/json"}'
               />
               {jsonFieldErrors.headers && (
                 <p className="text-xs text-red-600 mt-1">{jsonFieldErrors.headers}</p>

@@ -180,7 +180,8 @@ export default function QueryAnalyzerPage() {
     )
   }, [statements])
 
-  const extInstalled = extStatus?.installed ?? true
+  const extInstalled =
+    (extStatus?.installed ?? true) && (extStatus?.readable ?? true)
 
   return (
     <div className="space-y-6">
@@ -218,23 +219,45 @@ export default function QueryAnalyzerPage() {
       </div>
 
       {/* 扩展未启用提示 */}
-      {extStatus && !extStatus.installed && (
+      {extStatus && extStatus.install_hint && (
         <div className="card p-4 border-l-4 border-yellow-400 bg-yellow-50">
           <div className="flex items-start space-x-3">
             <i className="fas fa-exclamation-triangle text-yellow-500 mt-0.5"></i>
             <div className="flex-1">
-              <h3 className="font-medium text-yellow-900">pg_stat_statements 未启用</h3>
+              <h3 className="font-medium text-yellow-900">
+                {extStatus.installed ? 'pg_stat_statements 无法读取统计' : 'pg_stat_statements 未启用'}
+              </h3>
               <p className="text-sm text-yellow-800 mt-1">{extStatus.install_hint}</p>
-              {extStatus.shared_preload != null && (
-                <p className="text-xs text-yellow-700 mt-2">
-                  当前 <code className="px-1 bg-white/50 rounded">shared_preload_libraries</code>：
-                  <code className="ml-1 break-all">{extStatus.shared_preload || '(空)'}</code>
-                </p>
-              )}
+              <div className="text-xs text-yellow-700 mt-2 space-y-1">
+                {extStatus.shared_preload != null && (
+                  <p>
+                    shared_preload_libraries：
+                    <code className="ml-1 px-1 bg-white/50 rounded break-all">
+                      {extStatus.shared_preload || '(空)'}
+                    </code>
+                  </p>
+                )}
+                {extStatus.track != null && (
+                  <p>
+                    pg_stat_statements.track：
+                    <code className="ml-1 px-1 bg-white/50 rounded">{extStatus.track}</code>
+                  </p>
+                )}
+                {extStatus.current_user && (
+                  <p>
+                    当前连接用户：
+                    <code className="ml-1 px-1 bg-white/50 rounded">{extStatus.current_user}</code>
+                    {extStatus.is_superuser ? '（superuser）' : ''}
+                    {extStatus.has_pg_read_all_stats ? ' · pg_read_all_stats' : ''}
+                  </p>
+                )}
+              </div>
               <div className="text-xs text-yellow-700 mt-2 font-mono bg-white/60 rounded p-2 select-all">
-                ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements';<br />
-                -- 重启 PostgreSQL，然后：<br />
-                CREATE EXTENSION pg_stat_statements;
+                {extStatus.track === 'none'
+                  ? 'ALTER SYSTEM SET pg_stat_statements.track = top;'
+                  : extStatus.installed
+                    ? "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements';\n-- 然后重启 PostgreSQL"
+                    : "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements';\n-- 重启 PostgreSQL，然后：\nCREATE EXTENSION pg_stat_statements;"}
               </div>
             </div>
           </div>

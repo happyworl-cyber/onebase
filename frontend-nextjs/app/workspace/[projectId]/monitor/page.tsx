@@ -8,7 +8,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import api from '@/lib/api'
+import api, { queryPerfAPI, QueryPerfExtensionStatus } from '@/lib/api'
 import { TenantPoolSettingsForm } from '@/components/TenantPoolSettings'
 
 interface DbStats {
@@ -132,6 +132,8 @@ export default function MonitorPage() {
   const [stats, setStats] = useState<DbStats | null>(null)
   const [tables, setTables] = useState<TableSize[]>([])
   const [pgSlowQueries, setPgSlowQueries] = useState<PgSlowQuery[]>([])
+  const [pgStatStatus, setPgStatStatus] = useState<QueryPerfExtensionStatus | null>(null)
+  const [pgSlowError, setPgSlowError] = useState<string | null>(null)
   const [connections, setConnections] = useState<ActiveConn[]>([])
   const [loading, setLoading] = useState(true)
   const [autoRefresh, setAutoRefresh] = useState(false)
@@ -154,12 +156,13 @@ export default function MonitorPage() {
 
   const loadAll = useCallback(async () => {
     try {
-      const [healthRes, statsRes, tablesRes, pgSlowRes, connRes] = await Promise.allSettled([
+      const [healthRes, statsRes, tablesRes, pgSlowRes, connRes, extRes] = await Promise.allSettled([
         api.get('/api/monitor/pool-health'),
         api.get('/api/monitor/stats'),
         api.get('/api/monitor/tables'),
         api.get('/api/monitor/slow-queries'),
         api.get('/api/monitor/connections', { params: { include_idle: true } }),
+        queryPerfAPI.getExtensionStatus(),
       ])
 
       if (healthRes.status === 'fulfilled') {
@@ -169,8 +172,16 @@ export default function MonitorPage() {
       }
       if (statsRes.status === 'fulfilled') setStats(statsRes.value.data)
       if (tablesRes.status === 'fulfilled') setTables(tablesRes.value.data || [])
-      if (pgSlowRes.status === 'fulfilled') setPgSlowQueries(pgSlowRes.value.data || [])
+      if (pgSlowRes.status === 'fulfilled') {
+        setPgSlowQueries(pgSlowRes.value.data || [])
+        setPgSlowError(null)
+      } else {
+        setPgSlowQueries([])
+        const reason = pgSlowRes.reason as { response?: { data?: { error?: string } }; message?: string }
+        setPgSlowError(reason?.response?.data?.error || reason?.message || '读取 pg_stat_statements 失败')
+      }
       if (connRes.status === 'fulfilled') setConnections(connRes.value.data || [])
+      if (extRes.status === 'fulfilled') setPgStatStatus(extRes.value.data)
     } catch (err) {
       console.error('加载监控数据失败:', err)
     } finally {
@@ -700,7 +711,7 @@ export default function MonitorPage() {
               {pgSlowQueries.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="text-center py-6 text-gray-400 text-xs">
-                    暂无数据（需启用 pg_stat_statements 扩展）
+                    {slowQueryEmptyMessage(pgSlowError, pgStatStatus)}
                   </td>
                 </tr>
               ) : (
@@ -782,6 +793,18 @@ export default function MonitorPage() {
       )}
     </div>
   )
+}
+
+function slowQueryEmptyMessage(
+  error: string | null,
+  status: QueryPerfExtensionStatus | null,
+): string {
+  if (error) return error
+  if (status?.install_hint) return status.install_hint
+  if (status?.installed) {
+    return '暂无查询统计（扩展已启用；若刚装上，需要有新的 SQL 执行后才会出现）'
+  }
+  return '暂无数据（需启用 pg_stat_statements 扩展）'
 }
 
 function WaterCard({

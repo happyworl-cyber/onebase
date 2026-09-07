@@ -1,38 +1,37 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { format } from 'date-fns';
-import { zhCN } from 'date-fns/locale';
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import {
+  Alert,
+  AlertDescription,
+  AlertTriangle,
+  Badge,
+  Button,
+  CheckCircle,
+  Clock,
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import {
+  Input,
+  Label,
+  Loader2,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Loader2, CheckCircle, XCircle, Clock, AlertTriangle } from 'lucide-react';
-import { api } from '@/lib/api';
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+  XCircle,
+} from '@/components/ui/compat';
+import api from '@/lib/api';
 
 interface MaintenanceRenewal {
   id: number;
@@ -98,12 +97,12 @@ export function MaintenanceRenewalsTable() {
         params.append('payment_status', statusFilter);
       }
 
-      const response: PaginatedResponse = await api.get(
+      const response = await api.get<PaginatedResponse>(
         `/api/partner/maintenance/renewals?${params.toString()}`
       );
 
-      setRenewals(response.renewals);
-      setTotalPages(response.pagination.total_pages);
+      setRenewals(response.data.renewals);
+      setTotalPages(response.data.pagination.total_pages);
     } catch (err: any) {
       setError(err.message || '加载失败');
     } finally {
@@ -266,15 +265,15 @@ export function MaintenanceRenewalsTable() {
                       <TableCell>
                         <div className="text-sm">
                           <div>
-                            {format(new Date(renewal.period_start), 'yyyy-MM-dd', {
-                              locale: zhCN,
-                            })}
+                            {new Intl.DateTimeFormat('zh-CN').format(
+                              new Date(renewal.period_start)
+                            )}
                           </div>
                           <div className="text-muted-foreground">
                             至{' '}
-                            {format(new Date(renewal.period_end), 'yyyy-MM-dd', {
-                              locale: zhCN,
-                            })}
+                            {new Intl.DateTimeFormat('zh-CN').format(
+                              new Date(renewal.period_end)
+                            )}
                           </div>
                           {isExpiringSoon && (
                             <div className="text-orange-600 font-medium">

@@ -8,7 +8,10 @@
 //! - 每周逾期维护费处理
 
 use chrono::{Datelike, Duration, Timelike, Utc};
-use sqlx::{types::{Decimal, Uuid}, PgPool};
+use sqlx::{
+    types::{Decimal, Uuid},
+    PgPool,
+};
 use tokio::time::interval;
 
 /// 启动代理商后台任务
@@ -63,11 +66,7 @@ async fn generate_monthly_statements_loop(pool: PgPool) {
 /// 生成上月的对账单
 async fn generate_monthly_statements(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
     let now = Utc::now();
-    let period_end = now
-        .date_naive()
-        .and_hms_opt(0, 0, 0)
-        .unwrap()
-        .and_utc();
+    let period_end = now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
     let period_start = (period_end - Duration::days(30))
         .date_naive()
         .with_day(1)
@@ -76,11 +75,7 @@ async fn generate_monthly_statements(pool: &PgPool) -> Result<(), Box<dyn std::e
         .unwrap()
         .and_utc();
 
-    tracing::info!(
-        "开始生成月度对账单：{} 至 {}",
-        period_start,
-        period_end
-    );
+    tracing::info!("开始生成月度对账单：{} 至 {}", period_start, period_end);
 
     // 获取所有活跃代理商
     let partner_ids: Vec<i32> = sqlx::query_scalar(
@@ -389,7 +384,10 @@ async fn process_auto_renewals(pool: &PgPool) -> Result<(), Box<dyn std::error::
     .fetch_all(pool)
     .await?;
 
-    tracing::info!("发现 {} 个需要自动续费的维护服务", auto_renew_licenses.len());
+    tracing::info!(
+        "发现 {} 个需要自动续费的维护服务",
+        auto_renew_licenses.len()
+    );
 
     for license in auto_renew_licenses {
         match create_maintenance_renewal(pool, &license).await {

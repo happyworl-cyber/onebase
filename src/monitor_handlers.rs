@@ -228,53 +228,46 @@ pub async fn get_slow_queries(
     require_monitor_access(&main_pool, &claims, db_id).await?;
     let pool = pick_pool(&main_pool, &dynamic_pool);
 
-    // 检查 pg_stat_statements 是否已启用
-    let extension_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements')",
-    )
-    .fetch_one(pool)
-    .await?;
-
-    if !extension_exists {
+    let Some(view) = crate::pg_stat::resolve_view(pool).await? else {
         return Ok(Json(vec![]));
-    }
+    };
 
-    let queries = sqlx::query(
+    let cols = view.columns;
+    let sql = format!(
         r#"
         SELECT
             query,
             calls,
-            total_exec_time as total_time,
-            mean_exec_time as mean_time,
-            max_exec_time as max_time
-        FROM pg_stat_statements
+            {total} AS total_time,
+            {mean}  AS mean_time,
+            {max}   AS max_time
+        FROM {view}
         WHERE query NOT LIKE '%pg_stat_statements%'
-        ORDER BY mean_exec_time DESC
+        ORDER BY {mean} DESC NULLS LAST
         LIMIT 10
         "#,
-    )
-    .fetch_all(pool)
-    .await;
+        total = cols.total,
+        mean = cols.mean,
+        max = cols.max,
+        view = view.qualified,
+    );
 
-    match queries {
-        Ok(rows) => {
-            let result: Vec<SlowQuery> = rows
-                .iter()
-                .map(|row| SlowQuery {
-                    query: row.get("query"),
-                    calls: row.get("calls"),
-                    total_time: row.get("total_time"),
-                    mean_time: row.get("mean_time"),
-                    max_time: row.get("max_time"),
-                })
-                .collect();
-            Ok(Json(result))
-        }
-        Err(_) => {
-            // 如果查询失败（可能是权限问题），返回空列表
-            Ok(Json(vec![]))
-        }
-    }
+    let rows = sqlx::query(&sql).fetch_all(pool).await.map_err(|e| {
+        tracing::warn!(error = %e, "pg_stat_statements 慢查询读取失败");
+        crate::pg_stat::translate_pg_stat_error(e)
+    })?;
+
+    let result: Vec<SlowQuery> = rows
+        .iter()
+        .map(|row| SlowQuery {
+            query: row.try_get("query").unwrap_or_default(),
+            calls: row.try_get("calls").unwrap_or_default(),
+            total_time: row.try_get("total_time").unwrap_or_default(),
+            mean_time: row.try_get("mean_time").unwrap_or_default(),
+            max_time: row.try_get("max_time").unwrap_or_default(),
+        })
+        .collect();
+    Ok(Json(result))
 }
 
 /// 活动连接信息

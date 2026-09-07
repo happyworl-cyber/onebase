@@ -1,14 +1,22 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { format } from 'date-fns';
-import { zhCN } from 'date-fns/locale';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Loader2, AlertTriangle, Clock, Mail } from 'lucide-react';
-import { api } from '@/lib/api';
+import {
+  Alert,
+  AlertDescription,
+  AlertTriangle,
+  Badge,
+  Button,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Clock,
+  Loader2,
+  Mail,
+} from '@/components/ui/compat';
+import api from '@/lib/api';
 
 interface ExpiringMaintenance {
   license_id: string;
@@ -40,7 +48,7 @@ export function ExpiringMaintenancePanel() {
         '/api/partner/maintenance/expiring'
       );
 
-      setExpiring(response.expiring_maintenance);
+      setExpiring(response.data.expiring_maintenance);
     } catch (err: any) {
       setError(err.message || '加载失败');
     } finally {
@@ -145,9 +153,9 @@ export function ExpiringMaintenancePanel() {
                       <div>
                         <span className="text-muted-foreground">到期时间：</span>
                         <span className="font-medium">
-                          {format(new Date(item.maintenance_expires_at), 'yyyy-MM-dd', {
-                            locale: zhCN,
-                          })}
+                          {new Intl.DateTimeFormat('zh-CN').format(
+                            new Date(item.maintenance_expires_at)
+                          )}
                         </span>
                       </div>
                       <div>

@@ -45,13 +45,30 @@ export default function TruncatedText({
     return () => observer.disconnect()
   }, [text, singleLine])
 
+  const content = highlight ? <HighlightText text={text} query={highlight} /> : text
+  const sharedProps = {
+    title: overflowed ? text : undefined,
+    className: cn(singleLine && 'truncate min-w-0', !singleLine && clampClass, className),
+  }
+
+  if (Tag === 'p') {
+    return (
+      <p
+        ref={ref as React.RefObject<HTMLParagraphElement>}
+        {...sharedProps}
+      >
+        {content}
+      </p>
+    )
+  }
+
   return (
-    <Tag
-      ref={ref}
+    <span
+      ref={ref as React.RefObject<HTMLSpanElement>}
       title={overflowed ? text : undefined}
-      className={cn(singleLine && 'truncate min-w-0', !singleLine && clampClass, className)}
+      className={sharedProps.className}
     >
-      {highlight ? <HighlightText text={text} query={highlight} /> : text}
-    </Tag>
+      {content}
+    </span>
   )
 }

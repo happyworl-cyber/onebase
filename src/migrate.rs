@@ -319,8 +319,24 @@ const MIGRATIONS: &[(&str, &str)] = &[
         include_str!("../migrations/061_scheduled_tasks_workflow.sql"),
     ),
     (
-        "062 AI providers",
-        include_str!("../migrations/062_ai_providers.sql"),
+        "062 partner system",
+        include_str!("../migrations/062_partner_system.sql"),
+    ),
+    (
+        "063 max accounts per tenant",
+        include_str!("../migrations/063_add_max_accounts_per_tenant.sql"),
+    ),
+    (
+        "064 maintenance fee support",
+        include_str!("../migrations/064_add_maintenance_fee_support.sql"),
+    ),
+    (
+        "065 AI providers",
+        include_str!("../migrations/065_ai_providers.sql"),
+    ),
+    (
+        "066 workflow runs failed index",
+        include_str!("../migrations/066_workflow_runs_failed_index.sql"),
     ),
 ];
 

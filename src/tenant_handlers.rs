@@ -392,7 +392,8 @@ pub async fn create_database_connection(
 
     // License 配额检查：数据库连接数量限制
     if let Some(Extension(state)) = license_state.as_ref() {
-        crate::license_enforcement::check_database_connection_limit_with_state(state, &pool).await?;
+        crate::license_enforcement::check_database_connection_limit_with_state(state, &pool)
+            .await?;
     }
 
     // 平台超管直接放行；否则必须是该租户的 owner / admin
