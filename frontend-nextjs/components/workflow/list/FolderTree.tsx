@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import TruncatedText from './TruncatedText'
 import {
   canMoveCategoryToDept,
+  canRenameFolder,
   countInFolderFromGroups,
   DEPT_PREFIX,
   getFolderChildren,
@@ -25,6 +26,7 @@ interface FolderTreeProps {
   onSelect: (folderId: string) => void
   onToggleExpand: (folderId: string) => void
   onNewFolder: (parentId: string | null) => void
+  onRenameFolder?: (folderId: string) => void
   onDeleteFolder?: (folderId: string) => void
   onMoveCategory?: (categoryFolderId: string, targetDeptFolderId: string) => void | Promise<void>
   movingCategory?: boolean
@@ -40,6 +42,7 @@ function TreeNode({
   onSelect,
   onToggleExpand,
   onNewFolder,
+  onRenameFolder,
   onDeleteFolder,
   onMoveCategory,
   movingCategory,
@@ -182,6 +185,19 @@ function TreeNode({
               <i className="fas fa-plus text-[8px]" />
             </button>
           )}
+          {!isRoot && onRenameFolder && canRenameFolder(folderId) && (
+            <button
+              type="button"
+              title="重命名"
+              onClick={(e) => {
+                e.stopPropagation()
+                onRenameFolder(folderId)
+              }}
+              className="w-4 h-4 flex items-center justify-center rounded hover:bg-slate-200 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity"
+            >
+              <i className="fas fa-pencil text-[8px]" />
+            </button>
+          )}
           {!isRoot && onDeleteFolder && (isDept || isCategory) && (
             <button
               type="button"
@@ -210,6 +226,7 @@ function TreeNode({
             onSelect={onSelect}
             onToggleExpand={onToggleExpand}
             onNewFolder={onNewFolder}
+            onRenameFolder={onRenameFolder}
             onDeleteFolder={onDeleteFolder}
             onMoveCategory={onMoveCategory}
             movingCategory={movingCategory}
@@ -232,6 +249,7 @@ export default function FolderTree({
   onSelect,
   onToggleExpand,
   onNewFolder,
+  onRenameFolder,
   onDeleteFolder,
   onMoveCategory,
   movingCategory,
@@ -271,6 +289,7 @@ export default function FolderTree({
           onSelect={onSelect}
           onToggleExpand={onToggleExpand}
           onNewFolder={onNewFolder}
+          onRenameFolder={onRenameFolder}
           onDeleteFolder={onDeleteFolder}
           onMoveCategory={onMoveCategory}
           movingCategory={movingCategory}

@@ -35,6 +35,7 @@ interface WorkflowRowProps {
   onShare: () => void
   onOpenVersionHistory?: () => void
   onExport: () => void
+  onMove: () => void
   onDelete: () => void
   /** 多入口 focus（P1.3⑤）：在依赖图中查看此工作流。缺省则行菜单不出现该项。 */
   onOpenGraph?: () => void
@@ -122,6 +123,7 @@ export default function WorkflowRow({
   onShare,
   onOpenVersionHistory,
   onExport,
+  onMove,
   onDelete,
   onOpenGraph,
   selected = false,
@@ -221,6 +223,7 @@ export default function WorkflowRow({
           onShare={onShare}
           onOpenVersionHistory={onOpenVersionHistory}
           onExport={onExport}
+          onMove={onMove}
           onDelete={onDelete}
           onOpenGraph={onOpenGraph}
           size="compact"
@@ -245,6 +248,7 @@ export function WorkflowCard({
   onShare,
   onOpenVersionHistory,
   onExport,
+  onMove,
   onDelete,
   onOpenGraph,
   selected = false,
@@ -318,6 +322,7 @@ export function WorkflowCard({
             onShare={onShare}
             onOpenVersionHistory={onOpenVersionHistory}
             onExport={onExport}
+            onMove={onMove}
             onDelete={onDelete}
             onOpenGraph={onOpenGraph}
             size="card"

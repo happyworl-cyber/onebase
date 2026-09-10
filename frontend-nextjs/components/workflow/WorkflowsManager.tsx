@@ -34,6 +34,7 @@ import WorkflowListView from '@/components/workflow/list/WorkflowListView'
 import ExecutionReplayView from '@/components/workflow/replay/ExecutionReplayView'
 import WorkflowConfirmDialog from '@/components/workflow/list/WorkflowConfirmDialog'
 import { showToast } from '@/components/Toast'
+import Modal from '@/components/Modal'
 import {
   catNamesFromId,
   deptNameFromId,
@@ -44,7 +45,7 @@ import {
   SHARED_DEPARTMENT_NAME,
   type WorkflowGroupCount,
 } from '@/components/workflow/list/utils'
-import { fetchWorkflowSummary, fetchWorkflowsByCategory } from '@/components/workflow/list/listApi'
+import { fetchWorkflowSummary, fetchWorkflowsByCategory, fetchWorkflowsByDepartment } from '@/components/workflow/list/listApi'
 import { downloadWorkflowJson, auditWorkflowExport } from '@/components/workflow/list/exportUtils'
 import { fetchApiFolders, type ApiWorkflowFolder } from '@/components/workflow/list/folderApi'
 import { UNCATEGORIZED_FOLDER_NAME } from '@/components/workflow/list/types'
@@ -75,6 +76,7 @@ interface Workflow {
   database_id: number | null
   trigger_type: string
   trigger_config: any
+  input_schema?: Record<string, unknown> | null
   nodes: WorkflowNodeDef[]
   edges: WorkflowEdgeDef[]
   dependencies?: WorkflowDependencies | null
@@ -91,6 +93,23 @@ interface Workflow {
   created_at: string
   updated_at: string
 }
+type QaFinding = {
+  severity: 'crit' | 'high' | 'med' | 'low'
+  code: string
+  title: string
+  detail: string
+  node_id?: string | null
+  node_label?: string | null
+  evidence?: string
+}
+
+const QA_DOT: Record<QaFinding['severity'], string> = {
+  crit: 'bg-red-500',
+  high: 'bg-orange-500',
+  med: 'bg-amber-400',
+  low: 'bg-gray-400',
+}
+
 interface WorkflowFormMeta {
   name: string
   slug: string
@@ -100,6 +119,7 @@ interface WorkflowFormMeta {
   database_id: string
   trigger_type: string
   trigger_config: string
+  input_schema: string
   timeout_ms: number
   max_retries: number
   alert_webhook_url: string
@@ -665,6 +685,7 @@ function WorkflowDocModal({
     trigger_type: string
     trigger_config: string
     timeout_ms: number
+    input_schema?: string | Record<string, unknown> | null
   }
   nodes: WorkflowNodeDef[]
   dbSlug: string
@@ -776,6 +797,9 @@ export default function WorkflowsManager({
   const [versionsLoading, setVersionsLoading] = useState(false)
   const [versionDetail, setVersionDetail] = useState<any>(null)
   const [saveNote, setSaveNote] = useState(initialDraft?.saveNote ?? '')
+  const [qaFindings, setQaFindings] = useState<QaFinding[] | null>(null)
+  const [qaFailed, setQaFailed] = useState(false)
+  const pendingPayloadRef = useRef<Record<string, unknown> | null>(null)
 
   // AI 助手面板布局（右侧抽屉），用于让接口文档 / 调试抽屉避让，避免重叠。
   const [aiPanel, setAiPanel] = useState<{ open: boolean; width: number; mobile: boolean }>(
@@ -811,17 +835,43 @@ export default function WorkflowsManager({
       .filter((c) => (seen.has(c.database_id) ? false : (seen.add(c.database_id), true)))
   }, [connections, activeTenantId])
 
-  const blankMeta = () => ({
+  const blankMeta = (): WorkflowFormMeta => ({
     name: '', slug: '', description: '',
     department: SHARED_DEPARTMENT_NAME, category: UNCATEGORIZED_FOLDER_NAME,
     database_id: defaultDatabaseId != null ? String(defaultDatabaseId) : '',
     trigger_type: 'endpoint', trigger_config: '{}',
+    input_schema: '',
     timeout_ms: 120000, max_retries: 0,
     alert_webhook_url: '',
     alert_webhook_template: DEFAULT_ALERT_WEBHOOK_TEMPLATE,
     alert_throttle_hours: 24,
     last_alert_sent_at: null,
   })
+
+  function inputSchemaToForm(value: unknown): string {
+    if (value == null || value === '') return ''
+    if (typeof value === 'string') return value
+    try {
+      return JSON.stringify(value, null, 2)
+    } catch {
+      return ''
+    }
+  }
+
+  function parseInputSchemaForSave(raw: string): { ok: true; value: Record<string, unknown> | null } | { ok: false; error: string } {
+    const trimmed = raw.trim()
+    if (!trimmed) return { ok: true, value: null }
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (parsed === null) return { ok: true, value: null }
+      if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { ok: false, error: '入参定义必须是 JSON 对象' }
+      }
+      return { ok: true, value: parsed }
+    } catch {
+      return { ok: false, error: '入参定义 JSON 格式错误' }
+    }
+  }
 
   const [formMeta, setFormMeta] = useState<WorkflowFormMeta>(() => {
     const base = blankMeta()
@@ -835,6 +885,7 @@ export default function WorkflowsManager({
       alert_webhook_template: draftMeta.alert_webhook_template ?? base.alert_webhook_template,
       alert_throttle_hours: draftMeta.alert_throttle_hours ?? 24,
       last_alert_sent_at: draftMeta.last_alert_sent_at ?? null,
+      input_schema: draftMeta.input_schema ?? '',
     }
   })
   const [editorNodes, setEditorNodes] = useState<WorkflowNodeDef[]>(() => initialDraft?.editorNodes ?? [])
@@ -1006,6 +1057,7 @@ export default function WorkflowsManager({
         database_id: latest.database_id?.toString() || '',
         trigger_type: latest.trigger_type,
         trigger_config: JSON.stringify(latest.trigger_config || {}, null, 2),
+        input_schema: inputSchemaToForm(latest.input_schema),
         timeout_ms: latest.timeout_ms, max_retries: latest.max_retries,
         alert_webhook_url: latest.alert_webhook_url ?? '',
         alert_webhook_template: JSON.stringify(
@@ -1151,9 +1203,69 @@ export default function WorkflowsManager({
     [defaultDatabaseId, refreshList],
   )
 
+  const handleRenameFolder = useCallback(
+    async (folderId: string, newName: string, opts: { workflowCount: number }) => {
+      if (opts.workflowCount <= 0) return
+
+      try {
+        const dept = deptNameFromId(folderId)
+        if (dept) {
+          const affected = await fetchWorkflowsByDepartment(dept, defaultDatabaseId)
+          await Promise.all(
+            affected.map((wf) =>
+              api.patch(`/api/admin/workflows/${wf.id}`, { department: newName }),
+            ),
+          )
+        } else {
+          const cat = catNamesFromId(folderId)
+          if (!cat) return
+          const affected = await fetchWorkflowsByCategory(cat.dept, cat.cat, defaultDatabaseId)
+          await Promise.all(
+            affected.map((wf) =>
+              api.patch(`/api/admin/workflows/${wf.id}`, { category: newName }),
+            ),
+          )
+        }
+        refreshList()
+      } catch (err) {
+        console.error('重命名后同步工作流失败:', err)
+        showToast('error', '部分工作流归属未更新，请重试')
+        throw err
+      }
+    },
+    [defaultDatabaseId, refreshList],
+  )
+
+  const persistWorkflow = async () => {
+    const payload = pendingPayloadRef.current
+    if (!payload) return
+    try {
+      if (editing) {
+        await api.patch(`/api/admin/workflows/${editing.id}`, payload)
+      } else {
+        await api.post('/api/admin/workflows', payload)
+      }
+      pendingPayloadRef.current = null
+      setSaveNote('')
+      setView('list')
+      consumedShareIdRef.current = null
+      syncWorkflowIdInUrl(null)
+      refreshList()
+    } catch (err: any) {
+      alert(err.response?.data?.error || '保存失败')
+    }
+  }
+
+  const dismissQaModal = () => {
+    setQaFindings(null)
+    setQaFailed(false)
+  }
+
   const handleSave = async () => {
     let triggerConfig: any
     try { triggerConfig = JSON.parse(formMeta.trigger_config) } catch { return alert('触发配置 JSON 格式错误') }
+    const parsedInputSchema = parseInputSchemaForSave(formMeta.input_schema ?? '')
+    if (!parsedInputSchema.ok) return alert(parsedInputSchema.error)
     let alertWebhookTemplate: Record<string, unknown> | null = null
     if ((formMeta.alert_webhook_url ?? '').trim()) {
       try {
@@ -1192,6 +1304,7 @@ export default function WorkflowsManager({
       database_id: formMeta.database_id ? parseInt(formMeta.database_id) : null,
       trigger_type: formMeta.trigger_type,
       trigger_config: triggerConfig,
+      input_schema: parsedInputSchema.value,
       nodes: cleanNodes,
       edges: editorEdges,
       timeout_ms: formMeta.timeout_ms,
@@ -1202,20 +1315,27 @@ export default function WorkflowsManager({
       dependencies: workflowDependencies,
       version_note: saveNote.trim() || null,
     }
+    pendingPayloadRef.current = payload
 
     try {
-      if (editing) {
-        await api.patch(`/api/admin/workflows/${editing.id}`, payload)
-      } else {
-        await api.post('/api/admin/workflows', payload)
+      const res = await api.post('/api/admin/workflows/qa', {
+        database_id: payload.database_id,
+        trigger_type: payload.trigger_type,
+        input_schema: payload.input_schema,
+        nodes: payload.nodes,
+        edges: payload.edges,
+      })
+      const findings = (res.data?.findings ?? []) as QaFinding[]
+      if (findings.length === 0) {
+        await persistWorkflow()
+        return
       }
-      setSaveNote('')
-      setView('list')
-      consumedShareIdRef.current = null
-      syncWorkflowIdInUrl(null)
-      refreshList()
-    } catch (err: any) {
-      alert(err.response?.data?.error || '保存失败')
+      setQaFailed(false)
+      setQaFindings(findings)
+    } catch {
+      showToast('error', '规范预检失败，仍可保存')
+      setQaFailed(true)
+      setQaFindings([])
     }
   }
 
@@ -1270,6 +1390,7 @@ export default function WorkflowsManager({
         database_id: wf.database_id?.toString() || '',
         trigger_type: wf.trigger_type,
         trigger_config: JSON.stringify(wf.trigger_config || {}, null, 2),
+        input_schema: inputSchemaToForm(wf.input_schema),
         timeout_ms: wf.timeout_ms, max_retries: wf.max_retries,
         alert_webhook_url: wf.alert_webhook_url ?? '',
         alert_webhook_template: JSON.stringify(
@@ -1426,6 +1547,8 @@ export default function WorkflowsManager({
     try { triggerConfig = formMeta.trigger_config ? JSON.parse(formMeta.trigger_config) : {} } catch {
       return showToast('error', '触发配置 JSON 格式错误，无法导出')
     }
+    const parsedInputSchema = parseInputSchemaForSave(formMeta.input_schema ?? '')
+    if (!parsedInputSchema.ok) return showToast('error', `${parsedInputSchema.error}，无法导出`)
     let alertWebhookTemplate: Record<string, unknown> | null = null
     if ((formMeta.alert_webhook_url ?? '').trim()) {
       try {
@@ -1446,6 +1569,7 @@ export default function WorkflowsManager({
       category: formMeta.category,
       trigger_type: formMeta.trigger_type,
       trigger_config: triggerConfig,
+      input_schema: parsedInputSchema.value,
       nodes: editorNodes,
       edges: editorEdges,
       dependencies: workflowDependencies,
@@ -1491,6 +1615,7 @@ export default function WorkflowsManager({
           onCleanupRuns={handleCleanupRuns}
           onShowMcpGuide={() => setShowMcpGuide(true)}
           onMoveCategory={handleMoveCategory}
+          onRenameFolder={handleRenameFolder}
         />
 
         {showMcpGuide && <McpGuideModal onClose={() => setShowMcpGuide(false)} />}
@@ -1859,6 +1984,56 @@ export default function WorkflowsManager({
           </div>
         </div>
       )}
+
+      <Modal
+        isOpen={qaFindings !== null}
+        onClose={dismissQaModal}
+        title={qaFailed ? '规范预检失败，仍可保存' : `保存前有 ${qaFindings?.length ?? 0} 条提醒`}
+        size="md"
+        closeOnOverlayClick={false}
+        footer={
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={dismissQaModal}
+              className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800"
+            >
+              返回修改
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                dismissQaModal()
+                void persistWorkflow()
+              }}
+              className="px-4 py-2 text-sm rounded-lg font-medium bg-indigo-600 text-white hover:bg-indigo-700"
+            >
+              仍然保存
+            </button>
+          </div>
+        }
+      >
+        {qaFailed && (qaFindings?.length ?? 0) === 0 ? (
+          <p className="text-sm text-slate-600">仍可保存。</p>
+        ) : (
+          <ul className="space-y-3 max-h-80 overflow-y-auto">
+            {(qaFindings ?? []).map((finding, idx) => (
+              <li key={`${finding.code}-${finding.node_id ?? ''}-${idx}`} className="flex gap-2.5">
+                <span
+                  className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${QA_DOT[finding.severity] ?? QA_DOT.low}`}
+                />
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-slate-800">{finding.title}</div>
+                  {finding.node_label ? (
+                    <div className="text-xs text-slate-400 mt-0.5">{finding.node_label}</div>
+                  ) : null}
+                  <div className="text-sm text-slate-600 mt-0.5">{finding.detail}</div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Modal>
     </>
   )
 }

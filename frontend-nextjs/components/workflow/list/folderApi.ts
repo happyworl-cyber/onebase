@@ -81,6 +81,14 @@ export async function moveApiCategoryFolder(
   return res.data.folder
 }
 
+export async function renameApiFolder(serverId: number, name: string): Promise<ApiWorkflowFolder> {
+  const res = await api.patch<{ folder: ApiWorkflowFolder }>(
+    `/api/admin/workflow-folders/${serverId}`,
+    { name },
+  )
+  return res.data.folder
+}
+
 /** 目标部门若尚无空文件夹记录，则创建一条（便于挂载空分类） */
 export async function ensureApiDeptFolder(
   databaseId: number,

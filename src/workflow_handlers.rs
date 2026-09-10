@@ -173,6 +173,13 @@ fn workflow_config_diff(old: &Workflow, new: &Workflow) -> Option<Value> {
             "new": new.description.clone().unwrap_or_default(),
         }));
     }
+    if old.input_schema != new.input_schema {
+        fields.push(json!({
+            "field": "入参定义",
+            "old": old.input_schema.as_ref().map(|v| v.to_string()).unwrap_or_default(),
+            "new": new.input_schema.as_ref().map(|v| v.to_string()).unwrap_or_default(),
+        }));
+    }
     if fields.is_empty() {
         return None;
     }
@@ -324,6 +331,9 @@ pub struct Workflow {
     pub department: Option<String>,
     pub trigger_type: String,
     pub trigger_config: Value,
+    #[serde(default)]
+    #[sqlx(default)]
+    pub input_schema: Option<Value>,
     pub nodes: Value,
     pub edges: Value,
     #[serde(default = "default_json_object")]
@@ -417,6 +427,9 @@ pub struct WorkflowVersion {
     pub department: Option<String>,
     pub trigger_type: String,
     pub trigger_config: Value,
+    #[serde(default)]
+    #[sqlx(default)]
+    pub input_schema: Option<Value>,
     pub nodes: Value,
     pub edges: Value,
     pub timeout_ms: i32,
@@ -441,6 +454,7 @@ pub struct CreateWorkflowRequest {
     pub database_id: Option<i32>,
     pub trigger_type: Option<String>,
     pub trigger_config: Option<Value>,
+    pub input_schema: Option<Value>,
     pub nodes: Value,
     pub edges: Value,
     pub dependencies: Option<Value>,
@@ -465,6 +479,8 @@ pub struct UpdateWorkflowRequest {
     pub database_id: Option<i32>,
     pub trigger_type: Option<String>,
     pub trigger_config: Option<Value>,
+    #[serde(default)]
+    pub input_schema: Option<Option<Value>>,
     pub nodes: Option<Value>,
     pub edges: Option<Value>,
     pub dependencies: Option<Value>,
@@ -481,7 +497,7 @@ pub struct UpdateWorkflowRequest {
     #[serde(default)]
     pub alert_webhook_template: Option<Option<Value>>,
     pub alert_throttle_hours: Option<i32>,
-    /// 版本备注（可选）：仅在本次保存改动了定义（带 nodes/edges）时记录到新版本快照。
+    /// 版本备注（可选）：仅在本次保存改动了定义（含 nodes/edges/input_schema）时记录到新版本快照。
     pub version_note: Option<String>,
 }
 
@@ -575,10 +591,10 @@ async fn snapshot_workflow_version(
     let row = sqlx::query(
         r#"INSERT INTO management.workflow_versions
            (workflow_id, version, name, slug, description, category, department,
-            trigger_type, trigger_config, nodes, edges, timeout_ms, max_retries, note, created_by)
+            trigger_type, trigger_config, input_schema, nodes, edges, timeout_ms, max_retries, note, created_by)
            VALUES ($1,
                    (SELECT COALESCE(MAX(version), 0) + 1 FROM management.workflow_versions WHERE workflow_id = $1),
-                   $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                   $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
            RETURNING version"#,
     )
     .bind(workflow.id)
@@ -589,6 +605,7 @@ async fn snapshot_workflow_version(
     .bind(&workflow.department)
     .bind(&workflow.trigger_type)
     .bind(&workflow.trigger_config)
+    .bind(&workflow.input_schema)
     .bind(&workflow.nodes)
     .bind(&workflow.edges)
     .bind(workflow.timeout_ms)
@@ -1594,6 +1611,8 @@ pub async fn create_workflow(
     validate_alert_webhook_template(req.alert_webhook_template.as_ref())?;
     validate_alert_throttle_hours(req.alert_throttle_hours)?;
     let alert_webhook_url = normalize_alert_webhook_url(req.alert_webhook_url.as_deref())?;
+    let input_schema =
+        crate::workflow_input_schema::validate_input_schema(req.input_schema.as_ref())?;
 
     // License 配额检查：工作流数量限制
     if let Some(axum::Extension(state)) = license_state.as_ref() {
@@ -1619,9 +1638,9 @@ pub async fn create_workflow(
     let workflow = sqlx::query_as::<_, Workflow>(
         r#"INSERT INTO management.workflows
            (tenant_id, database_id, name, slug, description, category, department,
-            trigger_type, trigger_config, nodes, edges, dependencies, is_enabled, timeout_ms, max_retries,
+            trigger_type, trigger_config, input_schema, nodes, edges, dependencies, is_enabled, timeout_ms, max_retries,
             alert_webhook_url, alert_webhook_template, alert_throttle_hours, created_by)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
            RETURNING *"#,
     )
     .bind(resolved_tenant_id)
@@ -1633,6 +1652,7 @@ pub async fn create_workflow(
     .bind(&taxonomy.department)
     .bind(&trigger_type)
     .bind(req.trigger_config.unwrap_or(json!({})))
+    .bind(&input_schema)
     .bind(&req.nodes)
     .bind(&req.edges)
     .bind(req.dependencies.unwrap_or_else(|| json!({})))
@@ -1792,6 +1812,13 @@ pub async fn update_workflow(
         .unwrap_or(existing.alert_throttle_hours);
     validate_alert_throttle_hours(Some(alert_throttle_hours))?;
 
+    let input_schema_provided = req.input_schema.is_some();
+    let input_schema_value = match req.input_schema.as_ref() {
+        None => existing.input_schema.clone(),
+        Some(None) => None,
+        Some(Some(v)) => crate::workflow_input_schema::validate_input_schema(Some(v))?,
+    };
+
     let workflow = sqlx::query_as::<_, Workflow>(
         r#"UPDATE management.workflows SET
             name = COALESCE($2, name),
@@ -1811,7 +1838,8 @@ pub async fn update_workflow(
             department = CASE WHEN $15 THEN $17 ELSE department END,
             alert_webhook_url = $18,
             alert_webhook_template = $19,
-            alert_throttle_hours = $20
+            alert_throttle_hours = $20,
+            input_schema = CASE WHEN $21 THEN $22 ELSE input_schema END
            WHERE id = $1
            RETURNING *"#,
     )
@@ -1835,6 +1863,8 @@ pub async fn update_workflow(
     .bind(alert_webhook_url)
     .bind(alert_webhook_template)
     .bind(alert_throttle_hours)
+    .bind(input_schema_provided)
+    .bind(&input_schema_value)
     .fetch_optional(&pool)
     .await
     .map_err(map_workflow_write_err)?
@@ -1848,7 +1878,11 @@ pub async fn update_workflow(
 
     // 仅在本次保存改动了定义（编辑器保存会带 nodes+edges）时打版本快照，
     // 避免列表里的启用/禁用、改名等局部更新也刷出一堆版本。
-    if req.nodes.is_some() || req.edges.is_some() || req.dependencies.is_some() {
+    if req.nodes.is_some()
+        || req.edges.is_some()
+        || req.dependencies.is_some()
+        || req.input_schema.is_some()
+    {
         if let Err(e) = snapshot_workflow_version(
             &pool,
             &workflow,
@@ -1868,7 +1902,10 @@ pub async fn update_workflow(
         &workflow.name,
         &workflow.slug,
         json!({
-            "definition_changed": req.nodes.is_some() || req.edges.is_some() || req.dependencies.is_some(),
+            "definition_changed": req.nodes.is_some()
+                || req.edges.is_some()
+                || req.dependencies.is_some()
+                || req.input_schema.is_some(),
         }),
     );
 
@@ -1954,14 +1991,28 @@ pub async fn delete_workflow(
 /// 单次批量操作允许的最大工作流数量，避免一次请求拖垮库或权限校验。
 const BATCH_MAX_IDS: usize = 500;
 
-#[derive(Debug, Deserialize)]
-pub struct BatchWorkflowRequest {
-    /// "enable" / "disable" / "delete"
-    pub action: String,
-    pub ids: Vec<i32>,
+fn parse_batch_action(action: &str) -> Result<&'static str> {
+    match action {
+        "enable" => Ok("enable"),
+        "disable" => Ok("disable"),
+        "delete" => Ok("delete"),
+        "move" => Ok("move"),
+        _ => Err(AppError::InvalidQuery(
+            "action 必须是 enable / disable / delete / move".to_string(),
+        )),
+    }
 }
 
-/// POST /api/admin/workflows/batch — 批量启用 / 禁用 / 删除。
+#[derive(Debug, Deserialize)]
+pub struct BatchWorkflowRequest {
+    /// "enable" / "disable" / "delete" / "move"
+    pub action: String,
+    pub ids: Vec<i32>,
+    pub department: Option<String>,
+    pub category: Option<String>,
+}
+
+/// POST /api/admin/workflows/batch — 批量启用 / 禁用 / 删除 / 移动分类。
 ///
 /// best-effort：逐条做管理员权限校验，能成功的成功，无权限 / 不存在的记进 `failed`，
 /// 一次请求返回成功与失败明细，前端无需再循环调用单条接口。
@@ -1970,12 +2021,7 @@ pub async fn batch_workflows(
     axum::Extension(claims): axum::Extension<Claims>,
     Json(req): Json<BatchWorkflowRequest>,
 ) -> Result<Json<Value>> {
-    let action = req.action.as_str();
-    if !matches!(action, "enable" | "disable" | "delete") {
-        return Err(AppError::InvalidQuery(
-            "action 必须是 enable / disable / delete".to_string(),
-        ));
-    }
+    let action = parse_batch_action(&req.action)?;
     if req.ids.is_empty() {
         return Err(AppError::InvalidQuery("ids 不能为空".to_string()));
     }
@@ -2016,7 +2062,20 @@ pub async fn batch_workflows(
         }
     }
 
+    let move_target = if action == "move" {
+        Some(
+            workflow_taxonomy::resolve_batch_move_target(
+                req.department.as_deref(),
+                req.category.as_deref(),
+            )
+            .map_err(AppError::InvalidQuery)?,
+        )
+    } else {
+        None
+    };
+
     // 对有权限的批量执行；单条单条 toggle 不写 updated_at，这里保持一致语义。
+    // move 会写 department / category / updated_at（元数据变更）。
     let mut succeeded: Vec<i32> = Vec::new();
     if !allowed.is_empty() {
         succeeded = match action {
@@ -2035,20 +2094,35 @@ pub async fn batch_workflows(
             .fetch_all(&pool)
             .await
             .map_err(map_workflow_write_err)?,
+            "move" => {
+                let target = move_target.as_ref().expect("move_target set for move");
+                sqlx::query_scalar::<_, i32>(
+                    "UPDATE management.workflows \
+                     SET department = $1, category = $2, updated_at = NOW() \
+                     WHERE id = ANY($3) RETURNING id",
+                )
+                .bind(target.department.as_deref())
+                .bind(target.category.as_deref())
+                .bind(&allowed)
+                .fetch_all(&pool)
+                .await
+                .map_err(map_workflow_write_err)?
+            }
             _ => unreachable!(),
         };
     }
 
-    // 操作日志打点：批量操作逐条记录（enable/disable=UPDATE，delete=DELETE 由规则标高危）。
+    // 操作日志打点：批量操作逐条记录（enable/disable/move=UPDATE，delete=DELETE 由规则标高危）。
     for id in &succeeded {
         if let Some(wf) = found.get(id) {
             let (act, verb) = match action {
                 "enable" => (operation_log::action::UPDATE, "启用"),
                 "disable" => (operation_log::action::UPDATE, "禁用"),
                 "delete" => (operation_log::action::DELETE, "删除"),
+                "move" => (operation_log::action::UPDATE, "移动"),
                 _ => unreachable!(),
             };
-            // 变更内容：删除记快照；启用/停用**仅在状态确有翻转时**记切换
+            // 变更内容：删除记快照；启用/停用/移动**仅在确有变化时**记切换
             // （wf 为更新前状态）。对"已是目标态"的批量操作不产生误导性的 X→X。
             let change = match action {
                 "delete" => Some(workflow_snapshot_fields(wf, "deleted")),
@@ -2067,6 +2141,35 @@ pub async fn batch_workflows(
                                     "new": if want { "启用" } else { "停用" },
                                 } ]
                             } ]
+                        }))
+                    }
+                }
+                "move" => {
+                    let target = move_target.as_ref().expect("move_target set for move");
+                    if workflow_taxonomy::same_taxonomy(
+                        wf.department.as_deref(),
+                        wf.category.as_deref(),
+                        target,
+                    ) {
+                        None
+                    } else {
+                        Some(json!({
+                            "v": 1, "kind": "modified",
+                            "modified": [{
+                                "node": wf.name,
+                                "fields": [
+                                    {
+                                        "field": "服务",
+                                        "old": wf.department.clone().unwrap_or_else(|| "共享".into()),
+                                        "new": target.department.clone().unwrap_or_else(|| "共享".into()),
+                                    },
+                                    {
+                                        "field": "分类",
+                                        "old": wf.category.clone().unwrap_or_else(|| "未分类".into()),
+                                        "new": target.category.clone().unwrap_or_else(|| "未分类".into()),
+                                    }
+                                ]
+                            }]
                         }))
                     }
                 }
@@ -2112,6 +2215,7 @@ pub struct ImportWorkflowDef {
     pub category: Option<String>,
     pub trigger_type: Option<String>,
     pub trigger_config: Option<Value>,
+    pub input_schema: Option<Value>,
     pub nodes: Value,
     pub edges: Value,
     pub dependencies: Option<Value>,
@@ -2554,6 +2658,8 @@ async fn import_one_workflow(
     let alert_webhook_url = normalize_alert_webhook_url(wf.alert_webhook_url.as_deref())?;
     let alert_throttle_hours = wf.alert_throttle_hours.unwrap_or(24);
     let dependencies = wf.dependencies.clone().unwrap_or_else(|| json!({}));
+    let input_schema =
+        crate::workflow_input_schema::validate_input_schema(wf.input_schema.as_ref())?;
 
     match item.action.as_str() {
         "overwrite" => {
@@ -2561,9 +2667,9 @@ async fn import_one_workflow(
             let workflow = sqlx::query_as::<_, Workflow>(
                 r#"UPDATE management.workflows SET
                     name = $3, description = $4, category = $5, department = $6,
-                    trigger_type = $7, trigger_config = $8, nodes = $9, edges = $10,
-                    dependencies = $11, timeout_ms = $12, max_retries = $13,
-                    alert_webhook_url = $14, alert_webhook_template = $15, alert_throttle_hours = $16
+                    trigger_type = $7, trigger_config = $8, input_schema = $9, nodes = $10, edges = $11,
+                    dependencies = $12, timeout_ms = $13, max_retries = $14,
+                    alert_webhook_url = $15, alert_webhook_template = $16, alert_throttle_hours = $17
                    WHERE database_id IS NOT DISTINCT FROM $1 AND slug = $2
                    RETURNING *"#,
             )
@@ -2575,6 +2681,7 @@ async fn import_one_workflow(
             .bind(&taxonomy.department)
             .bind(&trigger_type)
             .bind(&trigger_config)
+            .bind(&input_schema)
             .bind(&remapped_nodes)
             .bind(&wf.edges)
             .bind(&dependencies)
@@ -2610,9 +2717,9 @@ async fn import_one_workflow(
             let workflow = sqlx::query_as::<_, Workflow>(
                 r#"INSERT INTO management.workflows
                    (tenant_id, database_id, name, slug, description, category, department,
-                    trigger_type, trigger_config, nodes, edges, dependencies, is_enabled, timeout_ms, max_retries,
+                    trigger_type, trigger_config, input_schema, nodes, edges, dependencies, is_enabled, timeout_ms, max_retries,
                     alert_webhook_url, alert_webhook_template, alert_throttle_hours, created_by)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, true, $13, $14, $15, $16, $17, $18)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, true, $14, $15, $16, $17, $18, $19)
                    RETURNING *"#,
             )
             .bind(tenant_id)
@@ -2624,6 +2731,7 @@ async fn import_one_workflow(
             .bind(&taxonomy.department)
             .bind(&trigger_type)
             .bind(&trigger_config)
+            .bind(&input_schema)
             .bind(&remapped_nodes)
             .bind(&wf.edges)
             .bind(&dependencies)
@@ -2678,9 +2786,9 @@ pub async fn duplicate_workflow(
     let workflow = sqlx::query_as::<_, Workflow>(
         r#"INSERT INTO management.workflows
            (tenant_id, database_id, name, slug, description, category, department,
-            trigger_type, trigger_config, nodes, edges, dependencies, is_enabled, timeout_ms, max_retries,
+            trigger_type, trigger_config, input_schema, nodes, edges, dependencies, is_enabled, timeout_ms, max_retries,
             alert_webhook_url, alert_webhook_template, alert_throttle_hours, created_by)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, false, $13, $14, $15, $16, $17, $18)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, false, $14, $15, $16, $17, $18, $19)
            RETURNING *"#,
     )
     .bind(src.tenant_id)
@@ -2692,6 +2800,7 @@ pub async fn duplicate_workflow(
     .bind(&src.department)
     .bind(&src.trigger_type)
     .bind(&src.trigger_config)
+    .bind(&src.input_schema)
     .bind(&src.nodes)
     .bind(&src.edges)
     .bind(&src.dependencies)
@@ -2807,6 +2916,34 @@ pub struct DebugWorkflowRequest {
     /// 页面调用默认 false，行为与从前一致。
     #[serde(default)]
     pub prod_readonly: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct QaWorkflowRequest {
+    pub nodes: Value,
+    pub edges: Value,
+    pub database_id: Option<i32>,
+    pub tenant_id: Option<i32>,
+    pub trigger_type: Option<String>,
+    pub input_schema: Option<Value>,
+}
+
+/// POST /api/admin/workflows/qa — 保存前本地规则预检（未保存定义）
+///
+/// 对当前编辑器里的 nodes/edges 跑 `workflow_qa::lint_unsaved`，只返回发现项，
+/// 不写库、不调用 AI Provider、不挡保存。鉴权同 debug：按 database_id / tenant_id 解析租户。
+pub async fn qa_workflow(
+    State(pool): State<PgPool>,
+    axum::Extension(claims): axum::Extension<Claims>,
+    Json(req): Json<QaWorkflowRequest>,
+) -> Result<Json<Value>> {
+    let _ =
+        resolve_tenant_for_workflow_input(&pool, &claims, req.database_id, req.tenant_id).await?;
+    let trigger = req.trigger_type.as_deref().unwrap_or("manual");
+    let schema = req.input_schema.as_ref().filter(|v| !v.is_null());
+    let findings = onebase::workflow_qa::lint_unsaved(trigger, schema, &req.nodes, &req.edges)
+        .map_err(AppError::InvalidQuery)?;
+    Ok(Json(json!({ "findings": findings })))
 }
 
 /// POST /api/admin/workflows/debug — 编辑态调试运行
@@ -3088,8 +3225,8 @@ pub async fn restore_workflow_version(
     let workflow = sqlx::query_as::<_, Workflow>(
         r#"UPDATE management.workflows SET
             name = $2, slug = $3, description = $4, category = $5, department = $6,
-            trigger_type = $7, trigger_config = $8, nodes = $9, edges = $10,
-            timeout_ms = $11, max_retries = $12
+            trigger_type = $7, trigger_config = $8, input_schema = $9, nodes = $10, edges = $11,
+            timeout_ms = $12, max_retries = $13
            WHERE id = $1
            RETURNING *"#,
     )
@@ -3101,6 +3238,7 @@ pub async fn restore_workflow_version(
     .bind(&snapshot.department)
     .bind(&snapshot.trigger_type)
     .bind(&snapshot.trigger_config)
+    .bind(&snapshot.input_schema)
     .bind(&snapshot.nodes)
     .bind(&snapshot.edges)
     .bind(snapshot.timeout_ms)
@@ -3323,6 +3461,114 @@ fn is_api_key_readonly_block(error: &str) -> bool {
 ///
 /// 注意：`FailedAllowed`（节点配置 allow_failure 被容错）不会触发错误分支——它本就期望
 /// 后续 response 节点正常产出，这里只兜底「无人收口」的失败/超时。
+enum StreamOrJson {
+    Stream {
+        status: u16,
+        headers: Vec<(String, String)>,
+        rx: tokio::sync::mpsc::Receiver<crate::workflow_stream::StreamEvent>,
+    },
+    Json(Result<Vec<NodeExecutionResult>>),
+}
+
+async fn wait_stream_or_complete(
+    mut rx: tokio::sync::mpsc::Receiver<crate::workflow_stream::StreamEvent>,
+    mut handle: tokio::task::JoinHandle<Result<Vec<NodeExecutionResult>>>,
+) -> StreamOrJson {
+    tokio::select! {
+        ev = rx.recv() => match ev {
+            Some(crate::workflow_stream::StreamEvent::Commit { status, headers }) => {
+                StreamOrJson::Stream { status, headers, rx }
+            }
+            Some(_) | None => {
+                let result = match handle.await {
+                    Ok(r) => r,
+                    Err(e) => Err(AppError::Internal(format!("工作流执行任务异常终止: {}", e))),
+                };
+                StreamOrJson::Json(result)
+            }
+        },
+        join = &mut handle => {
+            let result = match join {
+                Ok(r) => r,
+                Err(e) => Err(AppError::Internal(format!("工作流执行任务异常终止: {}", e))),
+            };
+            StreamOrJson::Json(result)
+        }
+    }
+}
+
+fn stream_response(
+    status: u16,
+    headers: Vec<(String, String)>,
+    rx: tokio::sync::mpsc::Receiver<crate::workflow_stream::StreamEvent>,
+) -> Response {
+    let status = StatusCode::from_u16(status).unwrap_or(StatusCode::OK);
+    let stream = futures::stream::unfold(rx, |mut rx| async move {
+        match rx.recv().await {
+            Some(crate::workflow_stream::StreamEvent::Chunk(bytes)) => {
+                Some((Ok::<_, std::io::Error>(axum::body::Bytes::from(bytes)), rx))
+            }
+            Some(crate::workflow_stream::StreamEvent::End) | None => None,
+            Some(crate::workflow_stream::StreamEvent::Commit { .. }) => {
+                Some((Ok(axum::body::Bytes::new()), rx))
+            }
+        }
+    });
+    let mut response = axum::http::Response::new(Body::from_stream(stream));
+    *response.status_mut() = status;
+    for (k, v) in headers {
+        if let (Ok(name), Ok(val)) = (
+            HeaderName::from_bytes(k.as_bytes()),
+            HeaderValue::from_str(&v),
+        ) {
+            response.headers_mut().insert(name, val);
+        }
+    }
+    response
+}
+
+async fn run_endpoint_maybe_stream(
+    pool: PgPool,
+    workflow: Workflow,
+    trigger_type: &'static str,
+    trigger_data: Value,
+    user_id: Option<i32>,
+    apikey_write_guard: ApiKeyWriteGuard,
+) -> Result<Response> {
+    if crate::workflow_stream::count_stream_http_calls_json(&workflow.nodes) == 0 {
+        let result = run_workflow_detached(
+            pool,
+            workflow.clone(),
+            trigger_type,
+            trigger_data,
+            user_id,
+            apikey_write_guard,
+            None,
+        )
+        .await;
+        return finalize_endpoint_response(&workflow, result);
+    }
+
+    let (bridge, rx) = crate::workflow_stream::StreamBridge::pair();
+    let handle = spawn_workflow_detached(
+        pool,
+        workflow.clone(),
+        trigger_type,
+        trigger_data,
+        user_id,
+        apikey_write_guard,
+        Some(bridge),
+    );
+    match wait_stream_or_complete(rx, handle).await {
+        StreamOrJson::Stream {
+            status,
+            headers,
+            rx,
+        } => Ok(stream_response(status, headers, rx)),
+        StreamOrJson::Json(result) => finalize_endpoint_response(&workflow, result),
+    }
+}
+
 fn finalize_endpoint_response(
     workflow: &Workflow,
     result: Result<Vec<NodeExecutionResult>>,
@@ -3543,6 +3789,29 @@ fn is_allowed_response_header(name: &str) -> bool {
 ///
 /// 诊断：内置 `CancelProbe`——若 handler 在工作流完成前被取消（客户端/代理断连），会打一条
 /// WARN（带 `elapsed_ms`），明确证明「30s 来自请求侧取消」而非工作流内部超时。
+fn spawn_workflow_detached(
+    pool: PgPool,
+    workflow: Workflow,
+    trigger_type: &'static str,
+    trigger_data: Value,
+    user_id: Option<i32>,
+    apikey_write_guard: ApiKeyWriteGuard,
+    stream_bridge: Option<crate::workflow_stream::StreamBridge>,
+) -> tokio::task::JoinHandle<Result<Vec<NodeExecutionResult>>> {
+    tokio::spawn(async move {
+        execute_workflow_with_bridge(
+            &pool,
+            &workflow,
+            trigger_type,
+            &trigger_data,
+            user_id,
+            apikey_write_guard,
+            stream_bridge,
+        )
+        .await
+    })
+}
+
 async fn run_workflow_detached(
     pool: PgPool,
     workflow: Workflow,
@@ -3550,6 +3819,7 @@ async fn run_workflow_detached(
     trigger_data: Value,
     user_id: Option<i32>,
     apikey_write_guard: ApiKeyWriteGuard,
+    stream_bridge: Option<crate::workflow_stream::StreamBridge>,
 ) -> Result<Vec<NodeExecutionResult>> {
     let started = std::time::Instant::now();
     let wf_id = workflow.id;
@@ -3563,17 +3833,15 @@ async fn run_workflow_detached(
         "端点触发：开始执行工作流（已 detach，客户端断开不影响执行）"
     );
 
-    let handle = tokio::spawn(async move {
-        execute_workflow_internal(
-            &pool,
-            &workflow,
-            trigger_type,
-            &trigger_data,
-            user_id,
-            apikey_write_guard,
-        )
-        .await
-    });
+    let handle = spawn_workflow_detached(
+        pool,
+        workflow,
+        trigger_type,
+        trigger_data,
+        user_id,
+        apikey_write_guard,
+        stream_bridge,
+    );
 
     // 请求侧取消探针：handler future 在 join 完成前被 drop（客户端/ingress/axios 断连）时触发。
     struct CancelProbe {
@@ -3742,16 +4010,15 @@ pub async fn endpoint_trigger(
         EndpointCaller::User(c) => Some(c.sub),
         EndpointCaller::ApiKey { .. } | EndpointCaller::Anonymous => None,
     };
-    let result = run_workflow_detached(
+    run_endpoint_maybe_stream(
         pool.clone(),
-        workflow.clone(),
+        workflow,
         "endpoint",
         trigger_data,
         user_id,
         apikey_write_guard,
     )
-    .await;
-    finalize_endpoint_response(&workflow, result)
+    .await
 }
 
 /// GET /workflow/:database_slug/:workflow_slug — 支持通过 query string 传参
@@ -3809,16 +4076,15 @@ pub async fn endpoint_trigger_get(
         EndpointCaller::User(c) => Some(c.sub),
         EndpointCaller::ApiKey { .. } | EndpointCaller::Anonymous => None,
     };
-    let result = run_workflow_detached(
+    run_endpoint_maybe_stream(
         pool.clone(),
-        workflow.clone(),
+        workflow,
         "endpoint",
         body,
         user_id,
         apikey_write_guard,
     )
-    .await;
-    finalize_endpoint_response(&workflow, result)
+    .await
 }
 
 /// POST /pub/workflow/:database_slug/:workflow_slug — 公开端点，无需认证（Stripe webhook 用）
@@ -3883,16 +4149,15 @@ pub async fn endpoint_trigger_public(
     }
 
     // 公开端点无 auth_middleware / ApiKeyContext，不接网关 key 读写护栏（维持现状）。
-    let result = run_workflow_detached(
+    run_endpoint_maybe_stream(
         pool.clone(),
-        workflow.clone(),
+        workflow,
         "endpoint",
         trigger_data,
         None,
         ApiKeyWriteGuard::Off,
     )
-    .await;
-    finalize_endpoint_response(&workflow, result)
+    .await
 }
 
 // ─── 内部执行逻辑 ─────────────────────────────────────────
@@ -3959,6 +4224,27 @@ pub async fn execute_workflow_internal(
     trigger_data: &Value,
     user_id: Option<i32>,
     apikey_write_guard: ApiKeyWriteGuard,
+) -> Result<Vec<NodeExecutionResult>> {
+    execute_workflow_with_bridge(
+        pool,
+        workflow,
+        trigger_type,
+        trigger_data,
+        user_id,
+        apikey_write_guard,
+        None,
+    )
+    .await
+}
+
+pub async fn execute_workflow_with_bridge(
+    pool: &PgPool,
+    workflow: &Workflow,
+    trigger_type: &str,
+    trigger_data: &Value,
+    user_id: Option<i32>,
+    apikey_write_guard: ApiKeyWriteGuard,
+    stream_bridge: Option<crate::workflow_stream::StreamBridge>,
 ) -> Result<Vec<NodeExecutionResult>> {
     // 防御性兜底（集中不变量）：任何触发路径都不得执行已禁用的工作流。
     //
@@ -4039,7 +4325,10 @@ pub async fn execute_workflow_internal(
         apikey_write_guard,
     };
 
-    let engine = DagEngine::new(pool.clone());
+    let engine = match stream_bridge {
+        Some(bridge) => DagEngine::new(pool.clone()).with_stream_bridge(bridge),
+        None => DagEngine::new(pool.clone()),
+    };
 
     // 整体执行超时兜底（可配置 / 可完全关闭）：resolve_workflow_timeout 返回 None 表示不限
     // （WORKFLOW_DISABLE_TIMEOUT 或 timeout_ms<0），此时不包 tokio::time::timeout，由
@@ -4636,9 +4925,9 @@ fn generate_doc_share_token() -> String {
 
 /// 从工作流当前定义提炼出「接口文档模型」（DocModel）。
 ///
-/// 与前端 `deriveDocModel` 同一业务规则：`input_fields` 来自节点里 `{{trigger.X}}` 引用的
-/// 自动扫描（复用 `mcp_tools::scan_trigger_fields`），`response_body`/`status_code` 取自
-/// response 节点的 config。**不含** nodes/edges，供公开页面渲染。
+/// 与前端 `deriveDocModel` 同一业务规则：`input_fields` 优先来自 `input_schema`，
+/// 否则扫描节点里 `{{trigger.X}}`（`workflow_input_schema::resolve_doc_inputs`），
+/// `response_body`/`status_code` 取自 response 节点的 config。**不含** nodes/edges，供公开页面渲染。
 fn build_doc_model(
     name: &str,
     description: Option<&str>,
@@ -4648,9 +4937,11 @@ fn build_doc_model(
     trigger_config: &Value,
     timeout_ms: i32,
     nodes: &Value,
+    input_schema: Option<&Value>,
 ) -> Value {
-    let mut input_fields = crate::mcp_tools::scan_trigger_fields(nodes);
-    input_fields.sort();
+    let (input_source, fields) =
+        crate::workflow_input_schema::resolve_doc_inputs(input_schema, nodes);
+    let input_fields: Vec<Value> = fields.iter().map(|f| f.to_json()).collect();
 
     let response_node = nodes.as_array().and_then(|arr| {
         arr.iter()
@@ -4682,6 +4973,7 @@ fn build_doc_model(
         "trigger_type": trigger_type,
         "trigger_config": trigger_config,
         "timeout_ms": timeout_ms,
+        "input_source": input_source.as_str(),
         "input_fields": input_fields,
         "response_body": response_body,
         "status_code": status_code,
@@ -4804,7 +5096,7 @@ pub async fn public_workflow_doc(
     Path(token): Path<String>,
 ) -> Result<Json<Value>> {
     let row = sqlx::query(
-        r#"SELECT name, description, slug, database_id, tenant_id, trigger_type, trigger_config, timeout_ms, nodes
+        r#"SELECT name, description, slug, database_id, tenant_id, trigger_type, trigger_config, input_schema, timeout_ms, nodes
            FROM management.workflows
            WHERE doc_share_token = $1 AND doc_share_enabled = true"#,
     )
@@ -4821,6 +5113,7 @@ pub async fn public_workflow_doc(
     let tenant_id: Option<i32> = row.try_get("tenant_id").ok();
     let trigger_type: String = row.get("trigger_type");
     let trigger_config: Value = row.get("trigger_config");
+    let input_schema: Option<Value> = row.get("input_schema");
     let timeout_ms: i32 = row.get("timeout_ms");
     let nodes: Value = row.get("nodes");
 
@@ -4845,6 +5138,7 @@ pub async fn public_workflow_doc(
         &trigger_config,
         timeout_ms,
         &nodes,
+        input_schema.as_ref(),
     );
     // 注入对外调用基址（网关域名），供公开文档页在服务端就拿到正确地址，
     // 不再依赖访客浏览器 origin（可能是内网 IP:端口）。优先级：项目级 > 平台全局 > 环境变量 > 转发头。
@@ -4973,6 +5267,7 @@ mod endpoint_response_tests {
             } else {
                 json!({})
             },
+            input_schema: None,
             nodes: json!([]),
             edges: json!([]),
             dependencies: json!({}),
@@ -5114,6 +5409,56 @@ mod endpoint_response_tests {
         assert_eq!(body["ok"], false);
         assert_eq!(body["error"], "内部错误: boom");
     }
+
+    #[tokio::test]
+    async fn wait_stream_or_complete_prefers_commit() {
+        let (bridge, rx) = crate::workflow_stream::StreamBridge::pair();
+        let handle = tokio::spawn(async move {
+            bridge
+                .commit(
+                    201,
+                    vec![("content-type".into(), "text/event-stream".into())],
+                )
+                .await;
+            bridge.chunk(b"abc".to_vec()).await;
+            bridge.end().await;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            Ok::<Vec<NodeExecutionResult>, AppError>(vec![])
+        });
+        match wait_stream_or_complete(rx, handle).await {
+            StreamOrJson::Stream {
+                status,
+                headers,
+                mut rx,
+            } => {
+                assert_eq!(status, 201);
+                assert_eq!(headers[0].0, "content-type");
+                assert!(matches!(
+                    rx.recv().await,
+                    Some(crate::workflow_stream::StreamEvent::Chunk(_))
+                ));
+            }
+            StreamOrJson::Json(_) => panic!("expected stream"),
+        }
+    }
+
+    #[tokio::test]
+    async fn wait_stream_or_complete_falls_back_when_no_commit() {
+        let (_bridge, rx) = crate::workflow_stream::StreamBridge::pair();
+        let handle = tokio::spawn(async {
+            Ok::<Vec<NodeExecutionResult>, AppError>(vec![success_response(json!({
+                "status_code": 200,
+                "body": { "ok": true }
+            }))])
+        });
+        match wait_stream_or_complete(rx, handle).await {
+            StreamOrJson::Json(Ok(results)) => {
+                assert_eq!(results[0].output["body"]["ok"], true);
+            }
+            StreamOrJson::Json(Err(e)) => panic!("expected ok json, got err: {e}"),
+            StreamOrJson::Stream { .. } => panic!("expected json"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -5181,5 +5526,21 @@ mod op_log_diff_tests {
         assert_eq!(modified.len(), 1);
         assert_eq!(modified[0]["field"], "timeout_ms");
         assert!(!modified.iter().any(|m| m["field"] == "_position"));
+    }
+}
+
+#[cfg(test)]
+mod batch_action_tests {
+    use super::*;
+
+    #[test]
+    fn parse_batch_action_accepts_move() {
+        assert_eq!(parse_batch_action("move").unwrap(), "move");
+    }
+
+    #[test]
+    fn parse_batch_action_rejects_unknown() {
+        let err = parse_batch_action("archive").unwrap_err().to_string();
+        assert!(err.contains("enable / disable / delete / move"));
     }
 }

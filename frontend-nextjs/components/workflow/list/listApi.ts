@@ -138,3 +138,13 @@ export async function fetchWorkflowsByCategory(
   const res = await api.get('/api/admin/workflows', { params })
   return res.data.workflows ?? []
 }
+
+export async function fetchWorkflowsByDepartment(
+  department: string,
+  defaultDatabaseId?: number | null,
+): Promise<WorkflowListItem[]> {
+  const params: Record<string, string | number> = { department }
+  if (defaultDatabaseId != null) params.database_id = defaultDatabaseId
+  const res = await api.get('/api/admin/workflows', { params })
+  return res.data.workflows ?? []
+}

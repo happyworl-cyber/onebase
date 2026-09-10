@@ -113,10 +113,13 @@ mod workflow_cron_trigger;
 mod workflow_engine;
 mod workflow_folder_handlers;
 mod workflow_handlers;
+mod workflow_input_schema;
 mod workflow_kafka_trigger;
 mod workflow_notify_trigger;
+mod workflow_stream;
 mod workflow_taxonomy;
 mod workflow_trigger;
+mod zlib_primitives;
 
 // binary 侧 `mod workflow_engine` 与 lib 共用源文件，需在此 re-export 批量配置模块。
 pub(crate) use onebase::sse_batch_config;
@@ -1474,6 +1477,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/admin/workflows/debug",
             post(workflow_handlers::debug_workflow),
         )
+        .route(
+            "/api/admin/workflows/qa",
+            post(workflow_handlers::qa_workflow),
+        )
         // 手动收口残留 running 的执行记录（卡死事故时清积压）。
         .route(
             "/api/admin/workflows/runs/cleanup",
@@ -1943,7 +1950,7 @@ async fn main() -> anyhow::Result<()> {
             middleware::auth_middleware,
         ));
 
-    // ─── 对象存储数据源（COS / OSS / MinIO，S3 兼容）─────────────────────
+    // ─── 对象存储数据源（COS / OSS / MinIO / GCS，S3 兼容）─────────────────────
     //
     // JWT 面：
     //  1) `/api/admin/object-storage-connections/*` — 连接 CRUD + health + tokens

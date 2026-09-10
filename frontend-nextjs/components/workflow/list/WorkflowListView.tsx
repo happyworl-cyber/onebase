@@ -28,6 +28,8 @@ import {
   buildFolderTree,
   folderTaxonomyFromFolderId,
   applyCustomFoldersCategoryMove,
+  applyCustomFoldersRename,
+  canRenameFolder,
   catIdFromNames,
   catNamesFromId,
   categoryExistsInDeptFromGroups,
@@ -35,6 +37,10 @@ import {
   defaultActiveFolderIdFromGroups,
   deptIdFromName,
   deptNameFromId,
+  remapFolderIdAfterDeptRename,
+  remapExpandedAfterRename,
+  renamedFolderId,
+  siblingFolderNames,
   expandFolderPath,
   folderNavStorageKey,
   loadCustomFolders,
@@ -59,6 +65,7 @@ import {
   fetchApiFolders,
   findApiCategoryFolder,
   moveApiCategoryFolder,
+  renameApiFolder,
   type ApiWorkflowFolder,
 } from './folderApi'
 import { fetchWorkflowList, fetchWorkflowSummary } from './listApi'
@@ -87,6 +94,11 @@ export interface WorkflowListViewProps {
     targetDeptFolderId: string,
     opts: { workflowCount: number },
   ) => Promise<void>
+  onRenameFolder?: (
+    folderId: string,
+    newName: string,
+    opts: { workflowCount: number },
+  ) => Promise<void>
 }
 
 function initialExpanded(folders: WorkflowFolder[]): Set<string> {
@@ -112,12 +124,15 @@ export default function WorkflowListView({
   onCleanupRuns,
   onShowMcpGuide,
   onMoveCategory,
+  onRenameFolder,
 }: WorkflowListViewProps) {
   const storageKey = customFoldersStorageKey(defaultDatabaseId)
   const folderNavKey = folderNavStorageKey(defaultDatabaseId)
   const [customFolders, setCustomFolders] = useState<WorkflowFolder[]>([])
   const [apiFolders, setApiFolders] = useState<ApiWorkflowFolder[]>([])
   const [newFolderParent, setNewFolderParent] = useState<string | null | false>(false)
+  const [renameTarget, setRenameTarget] = useState<string | false>(false)
+  const [renamingFolder, setRenamingFolder] = useState(false)
   const [movingCategory, setMovingCategory] = useState(false)
   const [pendingMove, setPendingMove] = useState<{
     categoryFolderId: string
@@ -139,6 +154,7 @@ export default function WorkflowListView({
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [selectedMap, setSelectedMap] = useState<Map<number, WorkflowListItem>>(new Map())
   const [batchModal, setBatchModal] = useState<BatchModalType>(null)
+  const [moveSubset, setMoveSubset] = useState<WorkflowListItem[] | null>(null)
   const [showBatchImport, setShowBatchImport] = useState(false)
   const bannerCheckboxRef = useRef<HTMLInputElement>(null)
 
@@ -608,6 +624,75 @@ export default function WorkflowListView({
     }
   }
 
+  const executeRenameFolder = async (folderId: string, newName: string) => {
+    const folder = folders.find((f) => f.id === folderId)
+    if (!folder || !canRenameFolder(folderId)) return
+    const trimmed = newName.trim()
+    if (!trimmed || trimmed === folder.name) {
+      setRenameTarget(false)
+      return
+    }
+    const workflowCount = countInFolderFromGroups(summaryGroups, folderId)
+    setRenamingFolder(true)
+    try {
+      if (useServerFolders && defaultDatabaseId != null) {
+        let serverId = folder.server_id
+        if (serverId == null) {
+          if (folderId.startsWith('dept:')) {
+            const dept = deptNameFromId(folderId)
+            serverId = apiFolders.find((f) => f.parent_id === null && f.name === dept)?.id
+          } else {
+            const cat = catNamesFromId(folderId)
+            if (cat) serverId = findApiCategoryFolder(apiFolders, cat.dept, cat.cat)?.id
+          }
+        }
+        if (serverId != null) {
+          await renameApiFolder(serverId, trimmed)
+        }
+        await reloadRemoteFolders()
+      } else {
+        persistLocalCustomFolders(applyCustomFoldersRename(customFolders, folderId, trimmed))
+      }
+
+      if (workflowCount > 0 && onRenameFolder) {
+        await onRenameFolder(folderId, trimmed, { workflowCount })
+      }
+
+      const oldDept = deptNameFromId(folderId)
+      setState((s) => {
+        let mapped = s.folderId
+        if (oldDept) {
+          mapped = remapFolderIdAfterDeptRename(s.folderId, oldDept, trimmed)
+        } else if (s.folderId === folderId) {
+          mapped = renamedFolderId(folderId, trimmed) ?? s.folderId
+        }
+        saveSavedFolderId(folderNavKey, mapped)
+        return {
+          ...s,
+          folderId: mapped,
+          expanded: remapExpandedAfterRename(s.expanded, folderId, trimmed),
+        }
+      })
+      setRenameTarget(false)
+      showToast('success', '已重命名')
+      void reloadSummary()
+      void reloadList()
+    } catch (err) {
+      console.error('重命名失败:', err)
+      showToast('error', '重命名失败，请重试')
+      void reloadRemoteFolders()
+      void reloadSummary()
+      void reloadList()
+    } finally {
+      setRenamingFolder(false)
+    }
+  }
+
+  const renameFolder = renameTarget ? folders.find((f) => f.id === renameTarget) : undefined
+  const renameKind: 'department' | 'category' =
+    renameTarget && renameTarget.startsWith('dept:') ? 'department' : 'category'
+  const renameCount = renameTarget ? countInFolderFromGroups(summaryGroups, renameTarget) : 0
+
   return (
     <div className="-m-6 flex flex-col bg-white border border-slate-200 rounded-xl overflow-hidden min-h-[calc(100vh-56px)] h-[calc(100vh-56px)]">
       <div className="flex flex-1 min-h-0">
@@ -627,6 +712,7 @@ export default function WorkflowListView({
             })
           }
           onNewFolder={(parentId) => setNewFolderParent(parentId)}
+          onRenameFolder={(folderId) => setRenameTarget(folderId)}
           onDeleteFolder={handleDeleteFolder}
           onMoveCategory={onMoveCategory ? handleMoveCategory : undefined}
           movingCategory={movingCategory}
@@ -787,6 +873,10 @@ export default function WorkflowListView({
                     onShare={() => onShare(wf)}
                     onOpenVersionHistory={onOpenVersionHistory ? () => onOpenVersionHistory(wf) : undefined}
                     onExport={() => onExport(wf)}
+                    onMove={() => {
+                      setMoveSubset([wf])
+                      setBatchModal('move')
+                    }}
                     onDelete={() => onDelete(wf)}
                     onOpenGraph={projectId != null ? () => openWorkflowInGraph(wf) : undefined}
                     selected={selectedMap.has(wf.id)}
@@ -812,6 +902,10 @@ export default function WorkflowListView({
                     onShare={() => onShare(wf)}
                     onOpenVersionHistory={onOpenVersionHistory ? () => onOpenVersionHistory(wf) : undefined}
                     onExport={() => onExport(wf)}
+                    onMove={() => {
+                      setMoveSubset([wf])
+                      setBatchModal('move')
+                    }}
                     onDelete={() => onDelete(wf)}
                     onOpenGraph={projectId != null ? () => openWorkflowInGraph(wf) : undefined}
                     selected={selectedMap.has(wf.id)}
@@ -838,6 +932,21 @@ export default function WorkflowListView({
           kind={newFolderKind}
           onConfirm={handleCreateFolder}
           onCancel={() => setNewFolderParent(false)}
+        />
+      )}
+
+      {renameFolder && (
+        <NewFolderDialog
+          parentName={renameFolder.name}
+          kind={renameKind}
+          mode="rename"
+          initialName={renameFolder.name}
+          workflowCount={renameCount}
+          siblingNames={siblingFolderNames(folders, renameFolder.id)}
+          onConfirm={(name) => void executeRenameFolder(renameFolder.id, name)}
+          onCancel={() => {
+            if (!renamingFolder) setRenameTarget(false)
+          }}
         />
       )}
 
@@ -870,15 +979,25 @@ export default function WorkflowListView({
         count={selectedCount}
         onExport={() => setBatchModal('export')}
         onStatus={() => setBatchModal('status')}
+        onMove={() => {
+          setMoveSubset(null)
+          setBatchModal('move')
+        }}
         onDelete={() => setBatchModal('delete')}
         onClear={clearSelection}
       />
 
       <WorkflowBatchModals
         modal={batchModal}
-        workflows={selectedList}
-        onClose={() => setBatchModal(null)}
+        workflows={moveSubset ?? selectedList}
+        onClose={() => {
+          setBatchModal(null)
+          setMoveSubset(null)
+        }}
         onComplete={handleBatchComplete}
+        summaryGroups={summaryGroups}
+        customFolders={customFolders}
+        currentFolderId={state.folderId}
       />
 
       {showBatchImport && (

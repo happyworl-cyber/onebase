@@ -10,6 +10,7 @@ export interface ImportWorkflowDef {
   category: string
   trigger_type: string
   trigger_config: Record<string, unknown>
+  input_schema?: Record<string, unknown> | null
   nodes: unknown[]
   edges: unknown[]
   dependencies?: Record<string, unknown> | null

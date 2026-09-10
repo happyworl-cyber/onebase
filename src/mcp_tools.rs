@@ -1,4 +1,4 @@
-//! MCP 工具集 —— 工作流创作工作台的 11 个固定工具
+//! MCP 工具集 —— 工作流创作工作台的 13 个固定工具
 //!
 //! 设计原则（见 .omc/plans/onebase-workflow-mcp-plan.md）：
 //! - 工具直接构造 axum extractor 调用现有 handler，权限/校验/审计零重复；
@@ -42,6 +42,12 @@ const NODE_SPEC: &str = r#"# OneBase 工作流节点规范
 - `{{trigger.字段}}`：本次触发的入参（endpoint 触发 = 请求 body / query）
 - `{{节点ID.字段}}`：上游节点输出，支持嵌套与下标：`{{q.rows[0].id}}`
 - `{{env.变量名}}`：项目级环境变量（在「设置 → 环境变量」页面管理），可用于任意节点 config，如 http_call 的 header、email 地址等；未定义的变量解析为空串。执行历史与 debug 输出中变量值会自动脱敏为 `***`。**引用前先调 `list_env_vars` 查当前项目实际有哪些变量**，不要凭猜测写变量名
+
+## 工作流入参 input_schema（可选）
+工作流顶层可声明 JSON Schema 对象 `input_schema`（create_workflow / update_workflow 的同名字段）。
+接口文档优先读它生成参数表与 curl 示例；未声明（null）时才扫描节点里的 `{{trigger.X}}`。
+code 节点直接读请求 body、节点里没有 `{{trigger.x}}` 时必须声明 `input_schema`，否则文档会误写成「无入参」。
+本阶段只用于文档，引擎不按 schema 校验请求。
 
 ## 节点类型（15 种）
 
@@ -100,8 +106,10 @@ config: `{ "connection_id": 整数, "op": "put|get|delete|list|presign", ...按 
 - 输出 `{ "op": "...", "result": ... }`；body 上限等限额与数据 API 一致（见 object_storage_ds::commands）
 
 ### http_call（外部 HTTP）
-config: `{ "method": "GET|POST|PUT|PATCH|DELETE", "url": "https://...", "headers": {对象}, "body": 任意 }`
-- 禁止内网地址；超时 30s；输出 `{ "status", "headers", "body" }`
+config: `{ "method": "GET|POST|PUT|PATCH|DELETE", "url": "https://...", "headers": {对象}, "body": 任意, "stream": 可选布尔, "async_poll": 可选布尔 }`
+- 禁止内网地址；超时由 timeout_secs / 默认 120s / 工作流 timeout_ms 兜底
+- 默认输出 `{ "status", "headers", "body" }`
+- `stream: true`：按上游字节流读取。endpoint 触发时把上游 status + Content-Type/Cache-Control/Content-Disposition 原样写入本次 HTTP 响应（其余头丢弃），调用方收到的 body 与上游一致。节点同时输出 `{ status, headers, body, text, streamed: true }`：`body` 为上游原文（UTF-8 有损，上限 8MiB，超出加 body_truncated），`text` 仅从 OpenAI 兼容 SSE（choices[0].delta.content|delta.text|text）和 Claude content_block_delta.delta.text 抽取，认不出则为空串。全图最多一个 stream http_call；不可与 async_poll 同开。上游流结束后才跑下游；调用方断开不停工作流。非 endpoint / 子工作流只缓冲+抽文本，不占用父 HTTP。
 
 ### email_send（邮件）
 config: `{ "from": "Name <a@b.c>", "to": "x@y.z 或逗号分隔", "cc"/"bcc" 可选, "subject", "body" }`
@@ -178,6 +186,8 @@ config: `{ "code": "源码", "language": "lua|javascript|python（可选，默�
   - 依赖安装失败时工作流仍可保存，但执行 JS code 节点前须 `ready`，否则节点失败
 - 宿主 API（IPC 桥，与 Lua 对齐）：`env.get(key)`、`http.get/post/put/delete`、`log.info/warn/error/debug`、`json.encode/encode_pretty/decode`、`time.now()`/`time.now_ms()`、`sse.publish`、`google.sa_assertion(project, scope)`
 - `crypto`（部分实现）：`sha256`、`hmac_sha256`、`uuid`、`base64_encode`/`base64_decode`；其余 `crypto.*`（md5/aes/rsa/base64url 等）调用会报错「not implemented by JS host bridge」
+- `zlib`（runtime 本地 Node zlib，不走 IPC）：`compress(bytes)` / `decompress(bytes)`，RFC 1950（与 Python `zlib.compress` / Node `deflateSync` 同格式）。入参 `string` 或 `Buffer`，出参 `Buffer`。明文与解压输出上限 8 MiB。不要把 `Buffer` 传给 host `crypto.base64_encode`（IPC 不能传裸字节），用 `buf.toString('base64')`
+- 腾讯 IM UserSig（TLS-Sig v2）配方：`hmac_sha256` 返回 hex → 每两字符 `parseInt(h,16)` 拼成 Buffer → JSON（`TLS.ver/identifier/sdkappid/expire/time/sig`，`sig` 为 HMAC 的标准 base64）→ `zlib.compress` → `toString('base64')` 后把 `+/=` 换成 `*-_`
 - 用户代码可通过 `require()` 加载工作流 `node_modules` 中的包（CommonJS）
 - 沙箱：子进程 + bwrap（若可用，`WORKFLOW_JS_SANDBOX=direct|none|raw` 可关闭）；生产库调试时 `http.*` 禁用
 - 示例：
@@ -224,6 +234,29 @@ def execute(ctx):
   - 随机：uuid、random_hex
   - RSA：rsa_encrypt（PKCS#1 v1.5）、rsa_encrypt_oaep（OAEP-SHA256）、rsa_decrypt、rsa_sign_sha256（RS256 签名，返回标准 base64；可用来在 Lua 里自建 RS256 JWT，如 Google SA 换 OAuth token）
   - 对称加密：aes_encrypt(opts) / aes_decrypt(opts)。opts：mode(cbc|gcm|ecb，默认cbc)、key + key_encoding(utf8|hex|base64|base64url)、iv + iv_encoding（cbc需16字节/gcm需12字节）、padding(pkcs7|zero|none，默认pkcs7)、plaintext/ciphertext、input_encoding、output_encoding、aad(仅gcm)。gcm密文为 `密文||16字节tag`。用于精确对接外部/旧系统的加解密方案
+- `zlib.compress(bytes)` / `zlib.decompress(bytes)`：RFC 1950 zlib wrapper，入参/出参为二进制字符串；明文与解压输出上限 8 MiB。压缩结果可直接交给 `crypto.base64_encode`
+- 腾讯 IM UserSig（TLS-Sig v2）配方（引擎不提供 `tencent_im.*`）：
+```lua
+local content = table.concat({
+  "TLS.identifier:" .. userId,
+  "TLS.sdkappid:" .. sdkAppId,
+  "TLS.time:" .. time.now(),
+  "TLS.expire:" .. expire,
+  "",
+}, "\n")
+local hex = crypto.hmac_sha256(secret, content)
+local raw = hex:gsub("..", function(c) return string.char(tonumber(c, 16)) end)
+local doc = json.encode({
+  ["TLS.ver"] = "2.0",
+  ["TLS.identifier"] = tostring(userId),
+  ["TLS.sdkappid"] = tonumber(sdkAppId),
+  ["TLS.expire"] = tonumber(expire),
+  ["TLS.time"] = time.now(),
+  ["TLS.sig"] = crypto.base64_encode(raw),
+})
+local usersig = crypto.base64_encode(zlib.compress(doc))
+  :gsub("%+", "*"):gsub("/", "-"):gsub("=", "_")
+```
 - google.sa_assertion(project, scope) -> { assertion, project_id, client_email }：只传 project 字符串，宿主按 project+工作流tenant_id+服务端保密盐派生 K8s 密钥名、读 Service Account JSON 签出 RS256 JWT，私钥永不进 Lua（需运维配 FCM_KEY_SALT + 挂载 SA JSON 到 /app/secrets/fcm，见 .env.example）。用 assertion 去 http.post https://oauth2.googleapis.com/token 换 access_token；project_id 供 FCM v1 发送 URL（projects/{project_id}/messages:send）使用，与 token 的 SA 同源、避免 azp/project 不匹配
 - `env.get("变量名")` 读项目级环境变量（同 `{{env.X}}` 的来源）：不再读进程环境变量、无 `PLUGIN_` 前缀限制；未配置的变量返回 nil（不再抛错），可写 `env.get("X") or "默认值"` 兜底
 - 沙箱：无 os/io/文件系统；生产库调试时 http.* 直接报错
@@ -288,6 +321,7 @@ pub fn tool_definitions() -> Value {
                 "tenant_id": { "type": "integer" },
                 "trigger_type": { "type": "string", "enum": ["endpoint", "hook", "cron", "manual", "notify", "kafka"] },
                 "trigger_config": { "type": "object" },
+                "input_schema": { "type": "object", "description": "工作流入参 JSON Schema。有则接口文档以它为准；传 null 表示未声明（走 {{trigger.x}} 扫描）。更新此字段会打版本快照。" },
                 "nodes": { "type": "array" },
                 "edges": { "type": "array" },
                 "timeout_ms": { "type": "integer" },
@@ -308,13 +342,14 @@ pub fn tool_definitions() -> Value {
                 "database_id": { "type": "integer" },
                 "trigger_type": { "type": "string" },
                 "trigger_config": { "type": "object" },
+                "input_schema": { "type": "object", "description": "工作流入参 JSON Schema。有则接口文档以它为准；传 null 表示未声明（走 {{trigger.x}} 扫描）。更新此字段会打版本快照。" },
                 "nodes": { "type": "array", "description": "全量替换整个节点数组；与 node_patch/remove_node_ids 互斥" },
                 "node_patch": { "type": "array", "description": "增量节点补丁：数组里每个节点按 id 与现有节点合并，整节点替换（id 存在则替换、不存在则新增），每个节点须带 id" },
                 "remove_node_ids": { "type": "array", "items": { "type": "string" }, "description": "要删除的节点 id 列表；可与 node_patch 同时用" },
                 "edges": { "type": "array" },
                 "timeout_ms": { "type": "integer" },
                 "max_retries": { "type": "integer" },
-                "version_note": { "type": "string", "description": "版本备注；仅当本次更新改动了定义（含 nodes/node_patch/remove_node_ids，产生新版本快照）时记录，纯元信息修改不产生版本" }
+                "version_note": { "type": "string", "description": "版本备注；仅当本次更新改动了定义（含 nodes/node_patch/remove_node_ids/input_schema，产生新版本快照）时记录，纯元信息修改不产生版本" }
             }, "required": ["id"] }
         },
         {
@@ -340,7 +375,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "workflow_api_doc",
-            "description": "生成工作流接口文档：扫描节点中 {{trigger.X}} 引用推导入参清单，给出调用地址与 curl 示例。交付前生成给人看。",
+            "description": "生成工作流接口文档：优先读 input_schema，否则扫描节点中 {{trigger.X}} 引用。交付前生成给人看。",
             "inputSchema": { "type": "object", "properties": {
                 "id": { "type": "integer", "description": "工作流 ID" }
             }, "required": ["id"] }
@@ -368,6 +403,25 @@ pub fn tool_definitions() -> Value {
                 "id": { "type": "integer", "description": "工作流 ID" },
                 "version": { "type": "integer", "description": "版本号（来自 list_workflow_versions）" }
             }, "required": ["id", "version"] }
+        },
+        {
+            "name": "review_workflow",
+            "description": "对单个工作流做质量检查：本地规则 + 工作流所属项目默认 AI Provider 的语义审查。项目未配置 Provider 时只跑本地规则。只出报告，不改工作流。权限与 get_workflow 相同。",
+            "inputSchema": { "type": "object", "properties": {
+                "id": { "type": "integer", "description": "工作流 ID" }
+            }, "required": ["id"] }
+        },
+        {
+            "name": "review_workflows",
+            "description": "按筛选批扫工作流质量。先全量跑本地规则，再对高危/有代码且规则命中的流串行送项目默认 AI Provider（max_ai 默认 20、上限 50）。只返回有规则命中或送了 AI 的项。权限与 list_workflows 相同。",
+            "inputSchema": { "type": "object", "properties": {
+                "database_id": { "type": "integer" },
+                "tenant_id": { "type": "integer" },
+                "department": { "type": "string" },
+                "category": { "type": "string" },
+                "search": { "type": "string" },
+                "max_ai": { "type": "integer", "description": "本批最多送 AI Provider 的条数，默认 20，上限 50" }
+            } }
         }
     ])
 }
@@ -425,6 +479,8 @@ pub async fn call_tool(pool: &PgPool, claims: &Claims, name: &str, args: &Value)
             .await?;
             Ok(resp.0)
         }
+        "review_workflow" => tool_review_workflow(pool, claims, args).await,
+        "review_workflows" => tool_review_workflows(pool, claims, args).await,
         "get_workflow_version" => {
             let id = require_id(args)?;
             // 与 require_id 同理：用 try_from 防止超出 i32 的值回绕命中错误版本
@@ -445,6 +501,80 @@ pub async fn call_tool(pool: &PgPool, claims: &Claims, name: &str, args: &Value)
         }
         _ => Err(AppError::NotFound(format!("未知工具: {}", name))),
     }
+}
+
+async fn tool_review_workflow(pool: &PgPool, claims: &Claims, args: &Value) -> Result<Value> {
+    let id = require_id(args)?;
+    let resp = workflow_handlers::get_workflow(
+        State(pool.clone()),
+        Path(id),
+        axum::Extension(claims.clone()),
+    )
+    .await?;
+    let snap = onebase::workflow_qa::snapshot_from_get_json(&resp.0)
+        .ok_or_else(|| AppError::InvalidQuery("工作流定义缺少 id/slug/nodes".to_string()))?;
+    let (red, rules) = onebase::workflow_qa::review_local(&snap);
+    let ai = crate::ai::review_workflow_with_project_provider(pool, &red, &rules).await;
+    Ok(onebase::workflow_qa::review_item_json(
+        &onebase::workflow_qa::to_review_item(&red, rules, ai),
+    ))
+}
+
+async fn tool_review_workflows(pool: &PgPool, claims: &Claims, args: &Value) -> Result<Value> {
+    let listed = tool_list_workflows(pool, claims, args).await?;
+    let empty = Vec::new();
+    let arr = listed
+        .get("workflows")
+        .and_then(|v| v.as_array())
+        .unwrap_or(&empty);
+    let max_ai = onebase::workflow_qa::clamp_max_ai(args.get("max_ai").and_then(|v| v.as_i64()));
+    let mut scanned_snaps = Vec::new();
+    let mut cand = Vec::new();
+    for item in arr {
+        let Some(snap) = onebase::workflow_qa::snapshot_from_list_item(item) else {
+            continue;
+        };
+        let (red, rules) = onebase::workflow_qa::review_local(&snap);
+        let has_code = onebase::workflow_qa::has_code_node(&red.nodes);
+        cand.push((red.id, rules.clone(), has_code));
+        scanned_snaps.push((red, rules));
+    }
+    let ai_ids = onebase::workflow_qa::pick_ai_ids(&cand, max_ai);
+    let mut sent = 0usize;
+    let mut ai_ok = 0usize;
+    let mut ai_error = 0usize;
+    let mut items = Vec::new();
+    for (red, rules) in scanned_snaps {
+        let send = ai_ids.contains(&red.id);
+        let ai = if send {
+            sent += 1;
+            let r = crate::ai::review_workflow_with_project_provider(pool, &red, &rules).await;
+            match r.status {
+                onebase::workflow_qa::AiStatus::Ok => ai_ok += 1,
+                onebase::workflow_qa::AiStatus::Error => ai_error += 1,
+                onebase::workflow_qa::AiStatus::Skipped => {}
+            }
+            r
+        } else {
+            onebase::workflow_qa::AiResult {
+                status: onebase::workflow_qa::AiStatus::Skipped,
+                findings: vec![],
+                error: None,
+            }
+        };
+        let item = onebase::workflow_qa::to_review_item(&red, rules, ai);
+        if send || !item.rules.is_empty() {
+            items.push(item);
+        }
+    }
+    let summary = onebase::workflow_qa::BatchSummary {
+        scanned: arr.len(),
+        rules_hit: items.iter().filter(|i| !i.rules.is_empty()).count(),
+        sent_to_ai: sent,
+        ai_ok,
+        ai_error,
+    };
+    Ok(onebase::workflow_qa::batch_json(&summary, &items))
 }
 
 fn require_id(args: &Value) -> Result<i32> {
@@ -613,42 +743,6 @@ async fn tool_debug_workflow(pool: &PgPool, claims: &Claims, args: &Value) -> Re
     Ok(out)
 }
 
-/// 扫描所有节点 config 中的 `{{trigger.X}}` 引用，提取顶层字段名。
-/// 与前端 collectTriggerFields 同一业务规则（正则 `/\{\{\s*trigger\./`）：
-/// - 容忍 `{{` 与 `trigger` 之间的空白（引擎 resolve 路径时会 trim）；
-/// - 字段名允许非 ASCII（中文等，引擎与 NODE_SPEC 示例都支持），用 is_alphanumeric。
-pub fn scan_trigger_fields(nodes: &Value) -> Vec<String> {
-    let raw = serde_json::to_string(nodes).unwrap_or_default();
-    let chars: Vec<char> = raw.chars().collect();
-    let n = chars.len();
-    let mut fields: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i + 1 < n {
-        if chars[i] == '{' && chars[i + 1] == '{' {
-            let mut j = i + 2;
-            while j < n && chars[j].is_whitespace() {
-                j += 1;
-            }
-            // 匹配关键字 "trigger."
-            let kw: String = chars[j..n.min(j + 8)].iter().collect();
-            if kw == "trigger." {
-                j += 8;
-                let field: String = chars[j..]
-                    .iter()
-                    .take_while(|c| c.is_alphanumeric() || **c == '_' || **c == '-')
-                    .collect();
-                if !field.is_empty() && !fields.contains(&field) {
-                    fields.push(field);
-                }
-            }
-            i = j;
-        } else {
-            i += 1;
-        }
-    }
-    fields
-}
-
 async fn tool_workflow_api_doc(pool: &PgPool, claims: &Claims, args: &Value) -> Result<Value> {
     let id = require_id(args)?;
     // 经 get_workflow 拿定义，顺带完成权限校验
@@ -677,12 +771,25 @@ async fn tool_workflow_api_doc(pool: &PgPool, claims: &Claims, args: &Value) -> 
         None => None,
     };
 
-    let fields = scan_trigger_fields(workflow.get("nodes").unwrap_or(&Value::Null));
-    let sample_body: Value = fields
-        .iter()
-        .map(|f| (f.clone(), json!("示例值")))
-        .collect::<serde_json::Map<String, Value>>()
-        .into();
+    let (source, fields) = crate::workflow_input_schema::resolve_doc_inputs(
+        workflow.get("input_schema"),
+        workflow.get("nodes").unwrap_or(&Value::Null),
+    );
+    let sample_body = crate::workflow_input_schema::sample_body_from_fields(&fields);
+    let note = match (source, fields.is_empty()) {
+        (crate::workflow_input_schema::InputSource::Schema, true) => {
+            "本工作流已声明无外部入参，传空 body 即可。"
+        }
+        (crate::workflow_input_schema::InputSource::Schema, false) => {
+            "字段来自工作流入参定义（input_schema）。"
+        }
+        (crate::workflow_input_schema::InputSource::Scan, true) => {
+            "未检测到 {{trigger.字段}} 引用——本工作流不依赖外部入参，传空 body 即可。"
+        }
+        (crate::workflow_input_schema::InputSource::Scan, false) => {
+            "字段来自节点中 {{trigger.X}} 引用的自动扫描，类型需按业务确认。"
+        }
+    };
 
     let (endpoint, curl) = match (trigger_type, &db_slug) {
         ("endpoint", Some(db)) => {
@@ -697,53 +804,34 @@ async fn tool_workflow_api_doc(pool: &PgPool, claims: &Claims, args: &Value) -> 
         _ => (None, None),
     };
 
+    let streaming = crate::workflow_stream::count_stream_http_calls_json(
+        workflow.get("nodes").unwrap_or(&Value::Null),
+    ) > 0;
+    let note = if streaming {
+        format!(
+            "{note}\n本工作流含 stream: true 的 http_call：成功时 HTTP 响应是上游字节流（通常 text/event-stream），不是 JSON。请按上游 Content-Type 解析；curl 加 --no-buffer 以便边收边看。"
+        )
+    } else {
+        note.to_string()
+    };
+
     Ok(json!({
         "workflow_id": id,
         "name": workflow.get("name"),
         "trigger_type": trigger_type,
         "endpoint": endpoint,
-        "input_fields": fields.iter().map(|f| json!({
-            "field": f,
-            "template": format!("{{{{trigger.{}}}}}", f),
-            "type": "按业务确认（自动扫描仅能推导字段名）"
-        })).collect::<Vec<_>>(),
+        "input_source": source.as_str(),
+        "input_fields": fields.iter().map(|f| f.to_json()).collect::<Vec<_>>(),
         "sample_body": sample_body,
         "curl_example": curl,
-        "note": if fields.is_empty() { "未检测到 {{trigger.字段}} 引用——本工作流不依赖外部入参，传空 body 即可。" } else { "字段来自节点中 {{trigger.X}} 引用的自动扫描，类型需按业务确认。" }
+        "note": note,
+        "stream": streaming,
     }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_scan_trigger_fields_nested_and_dedup() {
-        let nodes = json!([
-            { "id": "q", "type": "db_query", "config": { "sql": "SELECT * FROM t WHERE a = '{{trigger.user_id}}' AND b = '{{trigger.plan.name}}'" } },
-            { "id": "t", "type": "transform", "config": { "output": { "x": "{{trigger.user_id}}", "y": "{{q.rows[0].id}}" } } }
-        ]);
-        let fields = scan_trigger_fields(&nodes);
-        // user_id 去重；plan 取顶层字段名；{{q.*}} 不属于 trigger 不收
-        assert_eq!(fields, vec!["user_id".to_string(), "plan".to_string()]);
-    }
-
-    #[test]
-    fn test_scan_trigger_fields_empty() {
-        let nodes = json!([{ "id": "r", "type": "response", "config": { "body": {"ok": true} } }]);
-        assert!(scan_trigger_fields(&nodes).is_empty());
-    }
-
-    #[test]
-    fn test_scan_trigger_fields_whitespace_and_non_ascii() {
-        // 引擎支持带空格 {{ trigger.x }} 与非 ASCII 字段名，扫描器必须一致
-        let nodes = json!([
-            { "id": "a", "type": "transform", "config": { "v": "{{ trigger.user_id }}" } },
-            { "id": "b", "type": "transform", "config": { "v": "{{trigger.用户名}}" } }
-        ]);
-        let fields = scan_trigger_fields(&nodes);
-        assert_eq!(fields, vec!["user_id".to_string(), "用户名".to_string()]);
-    }
 
     #[test]
     fn test_require_id_rejects_out_of_i32_range() {
@@ -768,7 +856,10 @@ mod tests {
     fn test_tool_definitions_shape() {
         let defs = tool_definitions();
         let arr = defs.as_array().expect("tools 应为数组");
-        assert_eq!(arr.len(), 11);
+        assert_eq!(arr.len(), 13);
+        let names: Vec<_> = arr.iter().filter_map(|t| t["name"].as_str()).collect();
+        assert!(names.contains(&"review_workflow"));
+        assert!(names.contains(&"review_workflows"));
         for t in arr {
             assert!(t.get("name").is_some());
             assert!(t.get("description").is_some());

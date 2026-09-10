@@ -269,3 +269,37 @@ pub async fn delete_workflow_folder(
 
     Ok(Json(json!({ "message": "文件夹已删除", "id": id })))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::AppError;
+
+    fn query_msg(r: Result<String>) -> String {
+        match r {
+            Err(AppError::InvalidQuery(msg)) => msg,
+            other => panic!("expected InvalidQuery, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn trim_name_rejects_empty() {
+        assert_eq!(query_msg(trim_name("   ")), "文件夹名称不能为空");
+    }
+
+    #[test]
+    fn trim_name_rejects_slash() {
+        assert_eq!(query_msg(trim_name("a/b")), "文件夹名称不能包含 '/'");
+    }
+
+    #[test]
+    fn trim_name_rejects_over_64_chars() {
+        let name = "测".repeat(65);
+        assert_eq!(query_msg(trim_name(&name)), "文件夹名称不能超过 64 个字符");
+    }
+
+    #[test]
+    fn trim_name_accepts_trimmed() {
+        assert_eq!(trim_name("  订单同步  ").unwrap(), "订单同步");
+    }
+}

@@ -126,6 +126,117 @@ export function canMoveCategoryToDept(categoryFolderId: string, targetDeptFolder
   return cat.dept !== dept
 }
 
+export function canRenameFolder(folderId: string): boolean {
+  if (folderId === ROOT_FOLDER_ID) return false
+  const dept = deptNameFromId(folderId)
+  if (dept) return dept !== SHARED_DEPARTMENT_NAME
+  const cat = catNamesFromId(folderId)
+  if (cat) return cat.cat !== UNCATEGORIZED_FOLDER_NAME
+  return false
+}
+
+function unicodeCharCount(value: string): number {
+  let count = 0
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i)
+    if (code >= 0xdc00 && code <= 0xdfff) continue
+    count += 1
+  }
+  return count
+}
+
+export function validateFolderRename(
+  trimmed: string,
+  siblingNames: string[],
+  currentName: string,
+): string | null {
+  if (!trimmed) return '文件夹名称不能为空'
+  if (trimmed.includes('/')) return "文件夹名称不能包含 '/'"
+  if (unicodeCharCount(trimmed) > 64) return '文件夹名称不能超过 64 个字符'
+  if (trimmed === SHARED_DEPARTMENT_NAME || trimmed === UNCATEGORIZED_FOLDER_NAME) {
+    return `不能使用保留名称「${trimmed}」`
+  }
+  if (trimmed !== currentName && siblingNames.includes(trimmed)) {
+    return `文件夹「${trimmed}」已存在`
+  }
+  return null
+}
+
+export function renamedFolderId(folderId: string, newName: string): string | null {
+  const dept = deptNameFromId(folderId)
+  if (dept) return deptIdFromName(newName)
+  const cat = catNamesFromId(folderId)
+  if (cat) return catIdFromNames(cat.dept, newName)
+  return null
+}
+
+export function remapFolderIdAfterDeptRename(
+  folderId: string,
+  oldDept: string,
+  newDept: string,
+): string {
+  if (folderId === deptIdFromName(oldDept)) return deptIdFromName(newDept)
+  const cat = catNamesFromId(folderId)
+  if (cat && cat.dept === oldDept) return catIdFromNames(newDept, cat.cat)
+  return folderId
+}
+
+export function remapExpandedAfterRename(
+  expanded: Set<string>,
+  folderId: string,
+  newName: string,
+): Set<string> {
+  const dept = deptNameFromId(folderId)
+  if (dept) {
+    const next = new Set<string>()
+    expanded.forEach((id) => {
+      next.add(remapFolderIdAfterDeptRename(id, dept, newName))
+    })
+    return next
+  }
+  const newId = renamedFolderId(folderId, newName)
+  const next = new Set(expanded)
+  if (newId && next.has(folderId)) {
+    next.delete(folderId)
+    next.add(newId)
+  }
+  return next
+}
+
+export function siblingFolderNames(folders: WorkflowFolder[], folderId: string): string[] {
+  const folder = folders.find((f) => f.id === folderId)
+  if (!folder) return []
+  return folders.filter((f) => f.parent_id === folder.parent_id && f.id !== folderId).map((f) => f.name)
+}
+
+export function applyCustomFoldersRename(
+  customFolders: WorkflowFolder[],
+  folderId: string,
+  newName: string,
+): WorkflowFolder[] {
+  const dept = deptNameFromId(folderId)
+  if (dept) {
+    const newDeptId = deptIdFromName(newName)
+    const preset = FOLDER_NAME_PRESETS[newName] ?? { icon: 'fa-folder', color: 'text-slate-500' }
+    return customFolders.map((f) => {
+      if (f.id === folderId) {
+        return { ...f, id: newDeptId, name: newName, ...preset }
+      }
+      const cat = catNamesFromId(f.id)
+      if (cat && cat.dept === dept) {
+        return { ...f, id: catIdFromNames(newName, cat.cat), parent_id: newDeptId }
+      }
+      return f
+    })
+  }
+  const cat = catNamesFromId(folderId)
+  if (!cat) return customFolders
+  const newId = catIdFromNames(cat.dept, newName)
+  return customFolders
+    .filter((f) => f.id !== newId)
+    .map((f) => (f.id === folderId ? { ...f, id: newId, name: newName } : f))
+}
+
 /** 目标部门下是否已有同名分类（工作流或空文件夹占位） */
 export function categoryExistsInDept(
   workflows: WorkflowListItem[],
@@ -305,9 +416,8 @@ export function buildFolderTree(
   }
 
   ensureDept(SHARED_DEPARTMENT_NAME)
-  for (const deptName of Array.from(deptCats.keys())) {
-    deptCats.get(deptName)!.add(UNCATEGORIZED_FOLDER_NAME)
-  }
+  // 「未分类」只在该部门确有未分类工作流、或显式建了未分类文件夹时出现。
+  // 每个服务都强制插入会导致空「未分类」删完立刻被加回来。
 
   const deptNames = Array.from(deptCats.keys()).sort((a, b) => {
     if (a === SHARED_DEPARTMENT_NAME) return -1
@@ -775,4 +885,91 @@ export function editorCategoryOptions(
   const c = currentCat.trim()
   if (c) set.add(c)
   return Array.from(set).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+}
+
+/** 移动弹窗：服务下拉 = 聚合部门 + 侧边栏空部门文件夹 */
+export function moveDepartmentOptions(
+  groups: WorkflowGroupCount[],
+  customFolders: WorkflowFolder[],
+): string[] {
+  const set = new Set(listDepartmentsFromGroups(groups))
+  for (const f of customFolders) {
+    if (f.parent_id === ROOT_FOLDER_ID || f.parent_id === null) set.add(f.name)
+  }
+  if (set.size === 0) set.add(SHARED_DEPARTMENT_NAME)
+  return Array.from(set).sort((a, b) => {
+    if (a === SHARED_DEPARTMENT_NAME) return -1
+    if (b === SHARED_DEPARTMENT_NAME) return 1
+    return a.localeCompare(b, 'zh-Hans-CN')
+  })
+}
+
+/** 移动弹窗：当前服务下分类，始终含「未分类」+ 空自定义文件夹 */
+export function moveCategoryOptions(
+  groups: WorkflowGroupCount[],
+  customFolders: WorkflowFolder[],
+  department: string,
+): string[] {
+  const set = new Set(listCategoriesFromGroups(groups, department))
+  set.add(UNCATEGORIZED_FOLDER_NAME)
+  const deptFolder = customFolders.find(
+    (f) => (f.parent_id === ROOT_FOLDER_ID || f.parent_id === null) && f.name === department,
+  )
+  if (deptFolder) {
+    for (const f of customFolders) {
+      if (f.parent_id === deptFolder.id) set.add(f.name)
+    }
+  }
+  return Array.from(set).sort((a, b) => {
+    if (a === UNCATEGORIZED_FOLDER_NAME) return -1
+    if (b === UNCATEGORIZED_FOLDER_NAME) return 1
+    return a.localeCompare(b, 'zh-Hans-CN')
+  })
+}
+
+export function defaultMoveTarget(
+  workflows: Pick<WorkflowListItem, 'department' | 'category'>[],
+  currentFolderId: string,
+): { department: string; category: string } {
+  if (workflows.length === 1) {
+    const t = resolveWorkflowTaxonomy(workflows[0])
+    return {
+      department: t.department || SHARED_DEPARTMENT_NAME,
+      category: t.category || UNCATEGORIZED_FOLDER_NAME,
+    }
+  }
+  const taxes = workflows.map((w) => resolveWorkflowTaxonomy(w))
+  const same =
+    taxes.length > 0 &&
+    taxes.every(
+      (t) =>
+        (t.department || SHARED_DEPARTMENT_NAME) === (taxes[0].department || SHARED_DEPARTMENT_NAME) &&
+        (t.category || UNCATEGORIZED_FOLDER_NAME) === (taxes[0].category || UNCATEGORIZED_FOLDER_NAME),
+    )
+  if (same && taxes[0]) {
+    return {
+      department: taxes[0].department || SHARED_DEPARTMENT_NAME,
+      category: taxes[0].category || UNCATEGORIZED_FOLDER_NAME,
+    }
+  }
+  const cat = catNamesFromId(currentFolderId)
+  if (cat) return { department: cat.dept, category: cat.cat }
+  return { department: SHARED_DEPARTMENT_NAME, category: UNCATEGORIZED_FOLDER_NAME }
+}
+
+export function allWorkflowsAlreadyAt(
+  workflows: Pick<WorkflowListItem, 'department' | 'category'>[],
+  department: string,
+  category: string,
+): boolean {
+  return (
+    workflows.length > 0 &&
+    workflows.every((w) => {
+      const t = resolveWorkflowTaxonomy(w)
+      return (
+        (t.department || SHARED_DEPARTMENT_NAME) === department &&
+        (t.category || UNCATEGORIZED_FOLDER_NAME) === category
+      )
+    })
+  )
 }

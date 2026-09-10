@@ -47,13 +47,14 @@ export function catComboId(dept: string, cat: string): string {
  * violet 暖紫 → cyan 冷青 → orange 暖橙 → teal 冷青绿 → fuchsia 暖品红），不是按色相环顺序堆放。
  * 目的：在场 department 只有 2、3 个这种最常见的情况下，依次分配到的前几个颜色天然拉开，
  * 不会像"indigo 紧挨 violet"那样两个蓝紫系挤在最前面、远看分不清（原顺序的问题）。
- * "共享"固定归 slate 兜底档，不占用这 10 色。
+ * "共享"固定归 slate 兜底档，不占用这 20 色。前 10 色差异最大，后 10 色是为服务超过 10 个预留。
  */
 // boss 实测大规模截图反馈：这套色原先取的是 Tailwind-50 级极浅填充 + 500 级描边，图缩小/
 // 节点一多之后填充色几乎糊成白色、只剩描边能看见。填充从 50 级提到 100~200 级（更饱和一档），
 // 描边从 500 级提到 600 级、label 从 600~700 提到 700~800，整体对比在缩放/多节点下更扛得住，
 // 色相顺序不变（仍是冷暖交替拉开），只是每一级都往"更深"挪。
 const DEPT_PALETTE: { fill: string; stroke: string; label: string }[] = [
+  // ── 前 10 色：原调色板，顺序不变，保证服务数 ≤10 时与历史截图/记忆一致 ──
   { fill: '#c7d2fe', stroke: '#4f46e5', label: '#3730a3' }, // indigo
   { fill: '#fde68a', stroke: '#d97706', label: '#92400e' }, // amber
   { fill: '#a7f3d0', stroke: '#059669', label: '#065f46' }, // emerald
@@ -64,6 +65,19 @@ const DEPT_PALETTE: { fill: string; stroke: string; label: string }[] = [
   { fill: '#fed7aa', stroke: '#ea580c', label: '#9a3412' }, // orange
   { fill: '#99f6e4', stroke: '#0d9488', label: '#115e59' }, // teal
   { fill: '#f5d0fe', stroke: '#c026d3', label: '#86198f' }, // fuchsia
+  // ── 后 10 色：服务超过 10 个时才用到，仍按冷暖交替排；与前 10 色相近的色相（blue/sky、
+  //    purple/violet、pink/rose）刻意隔开放，且描边明度错开一档，同图内仍可分辨，只是差异
+  //    没有前 10 色那么大。超过 20 个服务才会真正循环撞色。 ──
+  { fill: '#bfdbfe', stroke: '#1d4ed8', label: '#1e3a8a' }, // blue（比 sky 深）
+  { fill: '#fef08a', stroke: '#a16207', label: '#713f12' }, // yellow（比 amber 暗）
+  { fill: '#bbf7d0', stroke: '#15803d', label: '#14532d' }, // green（比 emerald 黄）
+  { fill: '#fecaca', stroke: '#b91c1c', label: '#7f1d1d' }, // red（比 rose 正）
+  { fill: '#e9d5ff', stroke: '#6b21a8', label: '#3b0764' }, // purple（比 violet 深）
+  { fill: '#d9f99d', stroke: '#4d7c0f', label: '#365314' }, // lime
+  { fill: '#fbcfe8', stroke: '#be185d', label: '#831843' }, // pink
+  { fill: '#e7d3c1', stroke: '#8b5a2b', label: '#5c3a1a' }, // brown（Tailwind 无此色，自定义）
+  { fill: '#e3e6b8', stroke: '#6b7a1a', label: '#46510f' }, // olive（自定义）
+  { fill: '#f2c7cf', stroke: '#8b1d3a', label: '#5e1327' }, // maroon（自定义）
 ]
 const SHARED_DEPT_COLOR = { fill: '#e2e8f0', stroke: '#475569', label: '#1e293b' } // slate 兜底（同步加深）
 
@@ -75,7 +89,7 @@ function hashStr(s: string): number {
 
 /**
  * 按当前图里**实际出现**的 department 去重、按名称排序后依次分配调色板颜色，
- * 保证只要在场 department 数 ≤ 调色板长度，同一张图里绝不会有两个 department 撞色
+ * 保证只要在场 department 数 ≤ 调色板长度（20），同一张图里绝不会有两个 department 撞色
  * （原来按哈希取色，网关/用户服务这类会哈希碰撞落到同一色——已弃用）。
  * 超出调色板长度时循环取色，此时才会出现视觉上的"回退式"撞色，属预期降级。
  */
@@ -100,17 +114,18 @@ export function deptColorResolver(depts: Iterable<string>): (dept: string) => { 
 }
 
 /**
- * 工作流节点视觉大小：按 nodeCount 幂律缩放。boss 反复反馈"看不出差异"，20+3.4*n^0.85
- * 版（2cb4c6d）已解决了常见区间被压平的问题，但 boss 再反馈"多的和少的区别还是有点不明显"，
- * 要求在不换方案、不搞离散档位的前提下再稍微拉大对比。换成 18+3.8*n^0.92——底数系数略降、
- * 指数从 0.85 提到 0.92（更接近线性，边际递减更弱），整体把中大节点区间的直径差再拉开约
- * 25%~30%；MIN 从 20 提到 22（保证小节点仍装得下圆内图标/标签），MAX 从 70 提到 78
- * （大节点略微更大但仍留合理上限，不撑爆 combo）。
+ * 工作流节点视觉大小：按 nodeCount 幂律缩放。
+ * 历史：20+3.4*n^0.85 → 18+3.8*n^0.92（为拉开中小节点差异把指数推到近线性），副作用是曲线
+ * 涨得太快、n=20 就撞到 78px 封顶——生产 331 条工作流里 20+ 节点的有 58 条（18%），恰好是
+ * 最该一眼认出的"臃肿"那批，全被压成同一个尺寸（boss 反馈"40 个和 20 个看起来差不多"）。
+ * 现改为 20+6*n^0.7、封顶 120：指数放缓让 1~80 整个真实区间都有区分度（5→39, 10→50,
+ * 20→69, 40→99, 80→120），小节点区间的差异基本保留。碰撞尺寸/标签宽度/聚合簇大小都从
+ * 这条曲线派生，会跟着整体放大，整图略松一点是预期内的。
  */
 export function nodeVisualSize(nodeCount: number): number {
   const MIN = 22
-  const MAX = 78
-  const size = 18 + 3.8 * Math.pow(Math.max(nodeCount, 0), 0.92)
+  const MAX = 120
+  const size = 20 + 6 * Math.pow(Math.max(nodeCount, 0), 0.7)
   return Math.min(MAX, Math.max(MIN, size))
 }
 

@@ -3,16 +3,26 @@
 import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { downloadWorkflowJsonBatch, auditWorkflowExport } from './exportUtils'
-import { batchDeleteWorkflows, batchSetWorkflowEnabled } from './batchApi'
+import { batchDeleteWorkflows, batchMoveWorkflows, batchSetWorkflowEnabled } from './batchApi'
 import { showToast } from '@/components/Toast'
-import type { WorkflowListItem } from './types'
+import { UNCATEGORIZED_FOLDER_NAME, type WorkflowFolder, type WorkflowListItem } from './types'
 import type { BatchModalType } from './WorkflowBatchBar'
+import type { WorkflowGroupCount } from './utils'
+import {
+  allWorkflowsAlreadyAt,
+  defaultMoveTarget,
+  moveCategoryOptions,
+  moveDepartmentOptions,
+} from './utils'
 
 interface WorkflowBatchModalsProps {
   modal: BatchModalType
   workflows: WorkflowListItem[]
   onClose: () => void
   onComplete: () => void
+  summaryGroups: WorkflowGroupCount[]
+  customFolders: WorkflowFolder[]
+  currentFolderId: string
 }
 
 function ModalOverlay({
@@ -364,12 +374,162 @@ function BatchDeleteModal({
   )
 }
 
-export default function WorkflowBatchModals({ modal, workflows, onClose, onComplete }: WorkflowBatchModalsProps) {
+function BatchMoveModal({
+  open,
+  workflows,
+  onClose,
+  onComplete,
+  summaryGroups,
+  customFolders,
+  currentFolderId,
+}: {
+  open: boolean
+  workflows: WorkflowListItem[]
+  onClose: () => void
+  onComplete: () => void
+  summaryGroups: WorkflowGroupCount[]
+  customFolders: WorkflowFolder[]
+  currentFolderId: string
+}) {
+  const [department, setDepartment] = useState('')
+  const [category, setCategory] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const deptOptions = moveDepartmentOptions(summaryGroups, customFolders)
+  const catOptions = moveCategoryOptions(summaryGroups, customFolders, department)
+
+  useEffect(() => {
+    if (!open) {
+      setLoading(false)
+      return
+    }
+    const target = defaultMoveTarget(workflows, currentFolderId)
+    setDepartment(target.department)
+    setCategory(target.category)
+  }, [open, workflows, currentFolderId])
+
+  const handleDepartmentChange = (next: string) => {
+    setDepartment(next)
+    const nextCats = moveCategoryOptions(summaryGroups, customFolders, next)
+    setCategory(nextCats.includes(category) ? category : UNCATEGORIZED_FOLDER_NAME)
+  }
+
+  const confirm = async () => {
+    if (!department || !category) return
+    if (allWorkflowsAlreadyAt(workflows, department, category)) {
+      showToast('info', '已在该分类')
+      onClose()
+      return
+    }
+    setLoading(true)
+    try {
+      const result = await batchMoveWorkflows(
+        workflows.map((w) => w.id),
+        department,
+        category,
+      )
+      if (result.failed_count > 0) {
+        showToast('warning', `已移动 ${result.succeeded_count} 个，${result.failed_count} 个失败`)
+      } else {
+        showToast('success', `已移动 ${result.succeeded_count} 个工作流`)
+      }
+      onComplete()
+      onClose()
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      showToast('error', msg || '移动失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const title = workflows.length === 1 ? '移动工作流' : `移动 ${workflows.length} 个工作流`
+  const selectClass =
+    'w-full h-9 px-2.5 text-[12.5px] border border-slate-200 rounded-lg bg-white text-slate-800 focus:outline-none focus:border-indigo-400'
+
+  return (
+    <ModalOverlay open={open} onClose={loading ? () => {} : onClose}>
+      <ModalHead title={title} icon="fa-folder-tree" iconColor="#4f46e5" onClose={loading ? () => {} : onClose} />
+      <div className="px-[18px] py-4">
+        <div className="mb-3">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">服务</div>
+          <select
+            value={department}
+            onChange={(e) => handleDepartmentChange(e.target.value)}
+            className={selectClass}
+          >
+            {deptOptions.map((d) => (
+              <option key={d} value={d}>
+                {d}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="mb-4">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">分类</div>
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            className={selectClass}
+          >
+            {catOptions.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">将移动以下工作流</div>
+        <div className="bg-slate-50 border border-slate-200 rounded-lg max-h-24 overflow-y-auto p-2 flex flex-col gap-1">
+          {workflows.map((w) => (
+            <div key={w.id} className="flex items-center gap-1.5 text-[11px] text-slate-600 py-0.5">
+              <i className="fas fa-file-lines text-[9px] text-slate-400 shrink-0" />
+              <span className="font-semibold truncate">{w.name}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="flex items-center justify-end gap-1.5 px-[18px] py-3 border-t border-slate-100 bg-slate-50/80">
+        <button type="button" onClick={onClose} disabled={loading} className="workflow-batch-btn-cancel">
+          取消
+        </button>
+        <button
+          type="button"
+          disabled={!department || !category || loading}
+          onClick={() => void confirm()}
+          className="workflow-batch-btn-ok bg-indigo-600"
+        >
+          <i className="fas fa-folder-tree text-[10px]" />
+          {loading ? '移动中…' : '确认移动'}
+        </button>
+      </div>
+    </ModalOverlay>
+  )
+}
+
+export default function WorkflowBatchModals({
+  modal,
+  workflows,
+  onClose,
+  onComplete,
+  summaryGroups,
+  customFolders,
+  currentFolderId,
+}: WorkflowBatchModalsProps) {
   return (
     <>
       <BatchExportModal open={modal === 'export'} workflows={workflows} onClose={onClose} onComplete={onComplete} />
       <BatchStatusModal open={modal === 'status'} workflows={workflows} onClose={onClose} onComplete={onComplete} />
       <BatchDeleteModal open={modal === 'delete'} workflows={workflows} onClose={onClose} onComplete={onComplete} />
+      <BatchMoveModal
+        open={modal === 'move'}
+        workflows={workflows}
+        onClose={onClose}
+        onComplete={onComplete}
+        summaryGroups={summaryGroups}
+        customFolders={customFolders}
+        currentFolderId={currentFolderId}
+      />
     </>
   )
 }

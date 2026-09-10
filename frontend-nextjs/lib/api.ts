@@ -2353,9 +2353,9 @@ export const kafkaAPI = {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 对象存储数据源连接（COS / OSS / MinIO，S3 兼容）
+// 对象存储数据源连接（COS / OSS / MinIO / GCS，S3 兼容）
 
-export type ObjectStorageProvider = 'minio' | 'cos' | 'oss'
+export type ObjectStorageProvider = 'minio' | 'cos' | 'oss' | 'gcs'
 
 export interface ObjectStorageConnection {
   id: number

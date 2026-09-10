@@ -338,6 +338,14 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "066 workflow runs failed index",
         include_str!("../migrations/066_workflow_runs_failed_index.sql"),
     ),
+    (
+        "067 workflow input schema",
+        include_str!("../migrations/067_workflow_input_schema.sql"),
+    ),
+    (
+        "068 object storage gcs",
+        include_str!("../migrations/068_object_storage_gcs.sql"),
+    ),
 ];
 
 /// API Keys 表（内联 SQL，历史上由独立的 migrate_api_keys 维护，这里随主序列一起跑）。
