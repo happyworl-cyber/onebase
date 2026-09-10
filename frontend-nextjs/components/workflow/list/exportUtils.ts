@@ -27,6 +27,7 @@ type ExportableWorkflow = Pick<
   | 'category'
   | 'trigger_type'
   | 'trigger_config'
+  | 'input_schema'
   | 'nodes'
   | 'edges'
   | 'timeout_ms'
@@ -59,6 +60,7 @@ export function buildWorkflowExportEnvelope(wf: ExportableWorkflow) {
       category: placement.category,
       trigger_type: wf.trigger_type,
       trigger_config: wf.trigger_config ?? {},
+      input_schema: wf.input_schema ?? null,
       nodes: wf.nodes ?? [],
       edges: wf.edges ?? [],
       dependencies: wf.dependencies ?? {},

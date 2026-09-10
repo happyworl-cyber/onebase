@@ -50,14 +50,14 @@ pub struct ObjectStorageAccessToken {
 }
 
 pub fn default_force_path_style(provider: &str) -> bool {
-    matches!(provider, "minio")
+    matches!(provider, "minio" | "gcs")
 }
 
 pub fn validate_provider(provider: &str) -> Result<()> {
     match provider {
-        "minio" | "cos" | "oss" => Ok(()),
+        "minio" | "cos" | "oss" | "gcs" => Ok(()),
         _ => Err(AppError::InvalidQuery(
-            "provider 必须是 minio / cos / oss".into(),
+            "provider 必须是 minio / cos / oss / gcs".into(),
         )),
     }
 }
@@ -115,6 +115,7 @@ mod tests {
     #[test]
     fn force_path_style_defaults() {
         assert!(default_force_path_style("minio"));
+        assert!(default_force_path_style("gcs"));
         assert!(!default_force_path_style("cos"));
         assert!(!default_force_path_style("oss"));
     }
@@ -122,6 +123,7 @@ mod tests {
     #[test]
     fn provider_validation() {
         assert!(validate_provider("minio").is_ok());
+        assert!(validate_provider("gcs").is_ok());
         assert!(validate_provider("s3").is_err());
     }
 

@@ -10,6 +10,7 @@ export interface RowMenuProps {
   onShare: () => void
   onOpenVersionHistory?: () => void
   onExport: () => void
+  onMove: () => void
   onDelete: () => void
   /** 多入口 focus（P1.3⑤）：在依赖图中查看此工作流，带 focus 参数进图并自动定位。缺省则不渲染该菜单项。 */
   onOpenGraph?: () => void
@@ -53,6 +54,7 @@ export default function RowMenu({
   onShare,
   onOpenVersionHistory,
   onExport,
+  onMove,
   onDelete,
   onOpenGraph,
   size = 'compact',
@@ -131,6 +133,10 @@ export default function RowMenu({
               在依赖图中查看
             </MenuItem>
           )}
+          <MenuItem onClick={onMove} close={() => setMenuOpen(false)}>
+            <i className="fas fa-folder-tree text-[10px] w-3.5 text-slate-400" />
+            移动
+          </MenuItem>
           <div className="h-px bg-slate-100 my-1" />
           <MenuItem onClick={onDelete} destructive close={() => setMenuOpen(false)}>
             <i className="fas fa-trash text-[10px] w-3.5" />
@@ -152,6 +158,7 @@ interface WorkflowRowActionsProps {
   onShare: () => void
   onOpenVersionHistory?: () => void
   onExport: () => void
+  onMove: () => void
   onDelete: () => void
   onOpenGraph?: () => void
   size?: 'compact' | 'card'
@@ -168,6 +175,7 @@ export function WorkflowRowActions({
   onShare,
   onOpenVersionHistory,
   onExport,
+  onMove,
   onDelete,
   onOpenGraph,
   size = 'compact',
@@ -217,6 +225,7 @@ export function WorkflowRowActions({
         onShare={onShare}
         onOpenVersionHistory={onOpenVersionHistory}
         onExport={onExport}
+        onMove={onMove}
         onDelete={onDelete}
         onOpenGraph={onOpenGraph}
         onOpenChange={onMenuOpenChange}

@@ -1422,6 +1422,104 @@ fn extract_text(provider: &ProviderRecord, response: &Value) -> Option<String> {
     }
 }
 
+/// 使用工作流所属项目的默认 AI Provider 做语义质量检查。
+///
+/// MCP 已在调用前完成工作流读取权限校验；这里仅根据工作流归属选择项目级密钥，
+/// 不接受调用方传入 Provider 或密钥，避免跨项目使用配置。
+pub(crate) async fn review_workflow_with_project_provider(
+    pool: &PgPool,
+    workflow: &onebase::workflow_qa::WorkflowSnapshot,
+    rules: &[onebase::workflow_qa::Finding],
+) -> onebase::workflow_qa::AiResult {
+    use onebase::workflow_qa::{AiResult, AiStatus};
+
+    let failed = |message: &'static str| AiResult {
+        status: AiStatus::Error,
+        findings: vec![],
+        error: Some(message.to_string()),
+    };
+
+    let tenant_id = match sqlx::query_scalar::<_, Option<i32>>(
+        "SELECT COALESCE(w.tenant_id, d.tenant_id) \
+         FROM management.workflows w \
+         LEFT JOIN management.tenant_databases d ON d.id = w.database_id \
+         WHERE w.id = $1",
+    )
+    .bind(workflow.id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(Some(id))) => id,
+        Ok(_) => return failed("无法确定工作流所属项目"),
+        Err(error) => {
+            tracing::warn!(workflow_id = workflow.id, %error, "查询工作流 AI Provider 归属失败");
+            return failed("无法读取项目 AI Provider");
+        }
+    };
+
+    let provider = match select_provider(pool, tenant_id, None).await {
+        Ok(provider) => provider,
+        Err(AppError::NotFound(_)) => {
+            return AiResult {
+                status: AiStatus::Skipped,
+                findings: vec![],
+                error: None,
+            };
+        }
+        Err(error) => {
+            tracing::warn!(workflow_id = workflow.id, tenant_id, %error, "选择工作流 AI Provider 失败");
+            return failed("无法读取项目 AI Provider");
+        }
+    };
+
+    let api_key = match crypto::decrypt_secret(&provider.api_key_enc) {
+        Ok(api_key) => api_key,
+        Err(error) => {
+            tracing::warn!(workflow_id = workflow.id, provider_id = provider.id, %error, "解密工作流 AI Provider 密钥失败");
+            return failed("项目 AI Provider 密钥不可用");
+        }
+    };
+    let client = match client_for_provider(&provider).await {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(workflow_id = workflow.id, provider_id = provider.id, %error, "创建工作流 AI Provider 客户端失败");
+            return failed("项目 AI Provider 配置不可用");
+        }
+    };
+    let messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: onebase::workflow_qa::build_query(workflow, rules),
+    }];
+    let body = match request_body(&provider, &messages, false, false, Some(4096), Some(0.1)) {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::warn!(workflow_id = workflow.id, provider_id = provider.id, %error, "构造工作流 AI 审查请求失败");
+            return failed("无法构造 AI 审查请求");
+        }
+    };
+    let response = match send_json(&client, &provider, &api_key, &body).await {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::warn!(workflow_id = workflow.id, provider_id = provider.id, %error, "工作流 AI 审查请求失败");
+            return failed("AI Provider 请求失败");
+        }
+    };
+    let Some(text) = extract_text(&provider, &response) else {
+        return failed("AI Provider 响应中没有文本");
+    };
+    match onebase::workflow_qa::parse_findings_json(&text) {
+        Ok(findings) => AiResult {
+            status: AiStatus::Ok,
+            findings,
+            error: None,
+        },
+        Err(error) => {
+            tracing::warn!(workflow_id = workflow.id, provider_id = provider.id, %error, "工作流 AI 审查结果不是合法 JSON");
+            failed("AI Provider 未返回合法的检查结果 JSON")
+        }
+    }
+}
+
 fn continuation_request_body(
     provider: &ProviderRecord,
     initial_messages: &[ChatMessage],

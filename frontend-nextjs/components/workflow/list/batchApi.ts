@@ -1,6 +1,6 @@
 import api from '@/lib/api'
 
-export type BatchWorkflowAction = 'enable' | 'disable' | 'delete'
+export type BatchWorkflowAction = 'enable' | 'disable' | 'delete' | 'move'
 
 export interface BatchWorkflowResult {
   action: BatchWorkflowAction
@@ -26,4 +26,18 @@ export async function batchSetWorkflowEnabled(ids: number[], enabled: boolean) {
 
 export async function batchDeleteWorkflows(ids: number[]) {
   return batchWorkflows('delete', ids)
+}
+
+export async function batchMoveWorkflows(
+  ids: number[],
+  department: string,
+  category: string,
+) {
+  const res = await api.post('/api/admin/workflows/batch', {
+    action: 'move',
+    ids,
+    department,
+    category,
+  })
+  return res.data as BatchWorkflowResult
 }

@@ -62,6 +62,9 @@ pub mod session_hooks;
 pub mod sse_batch_config;
 pub mod sse_publisher;
 pub mod workflow_engine;
+pub mod workflow_qa;
+pub mod workflow_stream;
+pub mod zlib_primitives;
 
 // `rpc` 的传递依赖——本身不暴露给集成测试用，只是让 lib 能完整编译。
 // 真正的调用方（tenant_handlers / main 路由等）只在 bin crate；lib 侧会误报 dead_code。

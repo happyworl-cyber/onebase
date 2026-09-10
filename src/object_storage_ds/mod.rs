@@ -1,4 +1,4 @@
-//! 对象存储数据源：租户登记 COS / OSS / MinIO（S3 兼容）并统一使用。
+//! 对象存储数据源：租户登记 COS / OSS / MinIO / GCS（S3 兼容）并统一使用。
 //!
 //! lib-safe：models / client_cache / commands 可随 lib crate 编译（便于后续工作流节点）。
 //! axum handlers 在 bin-only 的 `crate::object_storage_handlers`。

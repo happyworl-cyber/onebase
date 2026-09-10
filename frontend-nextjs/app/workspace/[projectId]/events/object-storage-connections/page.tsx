@@ -2,7 +2,7 @@
 
 /**
  * `/workspace/[projectId]/events/object-storage-connections` — 项目维度的对象存储
- * （COS / OSS / MinIO，S3 兼容）数据源管理。
+ * （COS / OSS / MinIO / GCS，S3 兼容）数据源管理。
  *
  * 视图分两层（同 Redis / Kafka 连接页）：
  *   1. **连接列表**（左）：当前项目登记的所有对象存储连接
@@ -42,7 +42,53 @@ const PROVIDERS: { value: ObjectStorageProvider; label: string }[] = [
   { value: 'minio', label: 'MinIO' },
   { value: 'cos', label: '腾讯云 COS' },
   { value: 'oss', label: '阿里云 OSS' },
+  { value: 'gcs', label: 'Google Cloud Storage' },
 ]
+
+const GCS_DEFAULT_ENDPOINT = 'https://storage.googleapis.com'
+const GCS_DEFAULT_REGION = 'auto'
+const MINIO_DEFAULT_REGION = 'us-east-1'
+
+function defaultForcePathStyle(provider: ObjectStorageProvider): boolean {
+  return provider === 'minio' || provider === 'gcs'
+}
+
+type ProviderFormFields = {
+  provider: ObjectStorageProvider
+  endpoint: string
+  region: string
+  force_path_style: boolean
+}
+
+function applyProviderFormDefaults<T extends ProviderFormFields>(
+  prev: T,
+  provider: ObjectStorageProvider,
+  pathStyleTouched: boolean,
+): T {
+  const next = {
+    ...prev,
+    provider,
+    force_path_style: pathStyleTouched ? prev.force_path_style : defaultForcePathStyle(provider),
+  }
+  if (provider === 'gcs') {
+    if (!prev.endpoint.trim()) next.endpoint = GCS_DEFAULT_ENDPOINT
+    if (!prev.region.trim() || prev.region === MINIO_DEFAULT_REGION) next.region = GCS_DEFAULT_REGION
+  }
+  return next
+}
+
+function endpointHint(provider: ObjectStorageProvider): string {
+  if (provider === 'gcs') return 'GCS HMAC 默认 https://storage.googleapis.com'
+  if (provider === 'minio') return '形如 http://minio.local:9000'
+  if (provider === 'oss') return '形如 https://oss-cn-hangzhou.aliyuncs.com'
+  return '形如 https://cos.ap-guangzhou.myqcloud.com'
+}
+
+function regionHint(provider: ObjectStorageProvider): string {
+  if (provider === 'gcs') return 'GCS SigV4 推荐填 auto'
+  if (provider === 'minio') return 'MinIO 可任意填，如 us-east-1'
+  return '与厂商地域一致，如 ap-guangzhou / cn-hangzhou'
+}
 
 const DEFAULT_EXEC_ARGS = '{"key":"demo.txt","content":"hello"}'
 
@@ -115,7 +161,7 @@ function ObjectStorageConnectionsManager({ tenantId }: { tenantId: number }) {
             对象存储数据源
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            登记租户已有的 COS / OSS / MinIO（S3 兼容）桶；平台保管 endpoint / 密钥，业务经数据
+            登记租户已有的 COS / OSS / MinIO / GCS（S3 兼容）桶；平台保管 endpoint / 密钥，业务经数据
             API 与工作流统一读写，无需散落凭据。
           </p>
         </div>
@@ -818,11 +864,7 @@ function SettingsTab({
   } | null>(null)
 
   const handleProviderChange = (provider: ObjectStorageProvider) => {
-    setForm((prev) => ({
-      ...prev,
-      provider,
-      force_path_style: pathStyleTouched ? prev.force_path_style : provider === 'minio',
-    }))
+    setForm((prev) => applyProviderFormDefaults(prev, provider, pathStyleTouched))
   }
 
   const save = async () => {
@@ -895,7 +937,7 @@ function SettingsTab({
             ))}
           </select>
         </FormRow>
-        <FormRow label="region">
+        <FormRow label="region" hint={regionHint(form.provider)}>
           <input
             value={form.region}
             onChange={(e) => setForm({ ...form, region: e.target.value })}
@@ -903,7 +945,7 @@ function SettingsTab({
           />
         </FormRow>
       </div>
-      <FormRow label="endpoint" hint="形如 https://cos.ap-guangzhou.myqcloud.com">
+      <FormRow label="endpoint" hint={endpointHint(form.provider)}>
         <input
           value={form.endpoint}
           onChange={(e) => setForm({ ...form, endpoint: e.target.value })}
@@ -931,7 +973,10 @@ function SettingsTab({
           />
         </FormRow>
       </div>
-      <FormRow label="access_key_id">
+      <FormRow
+        label="access_key_id"
+        hint={form.provider === 'gcs' ? 'GCS 控制台「互操作性」HMAC Access Key' : undefined}
+      >
         <input
           value={form.access_key_id}
           onChange={(e) => setForm({ ...form, access_key_id: e.target.value })}
@@ -1062,11 +1107,7 @@ function CreateConnectionDialog({
   const [saving, setSaving] = useState(false)
 
   const handleProviderChange = (provider: ObjectStorageProvider) => {
-    setForm((prev) => ({
-      ...prev,
-      provider,
-      force_path_style: pathStyleTouched ? prev.force_path_style : provider === 'minio',
-    }))
+    setForm((prev) => applyProviderFormDefaults(prev, provider, pathStyleTouched))
   }
 
   const submit = async () => {
@@ -1139,7 +1180,7 @@ function CreateConnectionDialog({
               ))}
             </select>
           </FormRow>
-          <FormRow label="region" hint="MinIO 可任意填，如 us-east-1">
+          <FormRow label="region" hint={regionHint(form.provider)}>
             <input
               value={form.region}
               onChange={(e) => setForm({ ...form, region: e.target.value })}
@@ -1147,12 +1188,12 @@ function CreateConnectionDialog({
             />
           </FormRow>
         </div>
-        <FormRow label="endpoint *" hint="形如 https://cos.ap-guangzhou.myqcloud.com">
+        <FormRow label="endpoint *" hint={endpointHint(form.provider)}>
           <input
             value={form.endpoint}
             onChange={(e) => setForm({ ...form, endpoint: e.target.value })}
             className="input-base w-full font-mono"
-            placeholder="https://s3.example.internal:9000"
+            placeholder={form.provider === 'gcs' ? GCS_DEFAULT_ENDPOINT : 'https://s3.example.internal:9000'}
           />
         </FormRow>
         <div className="grid grid-cols-2 gap-3">
@@ -1176,7 +1217,10 @@ function CreateConnectionDialog({
             />
           </FormRow>
         </div>
-        <FormRow label="access_key_id *">
+        <FormRow
+          label="access_key_id *"
+          hint={form.provider === 'gcs' ? 'GCS 控制台「互操作性」HMAC Access Key' : undefined}
+        >
           <input
             value={form.access_key_id}
             onChange={(e) => setForm({ ...form, access_key_id: e.target.value })}
@@ -1203,7 +1247,7 @@ function CreateConnectionDialog({
           <span>
             强制 path-style 寻址
             <span className="text-xs text-gray-400 ml-1">
-              （MinIO / 自建 S3 常需开启；COS / OSS 通常关闭）
+              （MinIO / GCS / 自建 S3 常需开启；COS / OSS 通常关闭）
             </span>
           </span>
         </label>

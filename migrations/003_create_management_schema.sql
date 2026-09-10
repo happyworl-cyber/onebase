@@ -108,11 +108,22 @@ CREATE TRIGGER update_tenant_schemas_updated_at
 -- 插入示例数据
 -- ============================================
 
--- 示例租户
-INSERT INTO management.tenants (name, slug, contact_email) VALUES
-    ('示例公司A', 'company-a', 'admin@company-a.com'),
-    ('示例公司B', 'company-b', 'admin@company-b.com')
-ON CONFLICT (slug) DO NOTHING;
+-- 示例租户。060 之后 organization_id 为 NOT NULL；PG 会先做 NOT NULL 再走
+-- ON CONFLICT，重跑这条 INSERT 会误报空值。列已存在时不再种演示数据。
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'management'
+          AND table_name = 'tenants'
+          AND column_name = 'organization_id'
+    ) THEN
+        INSERT INTO management.tenants (name, slug, contact_email) VALUES
+            ('示例公司A', 'company-a', 'admin@company-a.com'),
+            ('示例公司B', 'company-b', 'admin@company-b.com')
+        ON CONFLICT (slug) DO NOTHING;
+    END IF;
+END $$;
 
 -- 注意：示例租户的数据库连接（management.tenant_databases）和业务 schema
 -- (management.tenant_schemas) 不在此处自动种入——曾经种过的占位行

@@ -14,6 +14,18 @@ import { useMemo, useState } from 'react'
 import type { WorkflowNodeDef } from '@/components/workflow/WorkflowCanvas'
 import { copyTextToClipboard } from '@/lib/clipboard'
 
+export type InputRequired = 'yes' | 'no' | 'conditional'
+export type InputSource = 'schema' | 'scan'
+
+export interface DocInputField {
+  field: string
+  type?: string | null
+  description?: string | null
+  required: InputRequired
+  example?: unknown
+  template: string
+}
+
 /** 提炼后的接口文档模型：前后端一致的数据契约（不含 nodes/edges）。 */
 export interface DocModel {
   name: string
@@ -24,8 +36,8 @@ export interface DocModel {
   trigger_type: string
   trigger_config: Record<string, unknown>
   timeout_ms: number
-  /** 节点里 {{trigger.X}} 引用扫描出的入参字段名（已去重排序）。 */
-  input_fields: string[]
+  input_source: InputSource
+  input_fields: DocInputField[]
   /** response 节点的 body 模板（字符串化）；无则 null。 */
   response_body: string | null
   status_code: number
@@ -93,10 +105,9 @@ export function resolveDocPurpose(model: Pick<DocModel, 'name' | 'description' |
   }
 }
 
-// 从节点配置里扫描所有 {{trigger.xxx}} 引用，提取顶层字段名作为入参清单。
-// 与后端 mcp_tools::scan_trigger_fields 同一业务规则。
+// 与后端 workflow_input_schema::scan_trigger_fields 同一规则（字母数字含非 ASCII、`_`、`-`）。
 function collectTriggerFields(nodes: WorkflowNodeDef[]): string[] {
-  const re = /\{\{\s*trigger\.([A-Za-z0-9_]+)/g
+  const re = new RegExp(String.raw`\{\{\s*trigger\.([\p{L}\p{N}_-]+)`, 'gu')
   const found = new Set<string>()
   const blob = JSON.stringify(nodes || [])
   let m: RegExpExecArray | null
@@ -104,6 +115,95 @@ function collectTriggerFields(nodes: WorkflowNodeDef[]): string[] {
     if (m[1]) found.add(m[1])
   }
   return Array.from(found).sort()
+}
+
+function requiredNameSet(value: unknown): Set<string> {
+  if (!Array.isArray(value)) return new Set()
+  return new Set(value.filter((item): item is string => typeof item === 'string'))
+}
+
+function collectConditionalRequired(schema: Record<string, unknown>): Set<string> {
+  const out = new Set<string>()
+  for (const key of ['oneOf', 'anyOf'] as const) {
+    const arr = schema[key]
+    if (!Array.isArray(arr)) continue
+    for (const branch of arr) {
+      if (branch && typeof branch === 'object' && !Array.isArray(branch)) {
+        for (const name of Array.from(
+          requiredNameSet((branch as Record<string, unknown>).required),
+        )) {
+          out.add(name)
+        }
+      }
+    }
+  }
+  return out
+}
+
+function fieldsFromSchema(schema: Record<string, unknown>): DocInputField[] {
+  const properties = schema.properties
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) return []
+  const topRequired = requiredNameSet(schema.required)
+  const conditional = collectConditionalRequired(schema)
+  const fields: DocInputField[] = Object.entries(properties as Record<string, unknown>).map(([name, raw]) => {
+    const prop = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
+    const propRequired = prop.required === true
+    const required: InputRequired = topRequired.has(name) || propRequired
+      ? 'yes'
+      : conditional.has(name)
+        ? 'conditional'
+        : 'no'
+    return {
+      field: name,
+      type: typeof prop.type === 'string' ? prop.type : null,
+      description: typeof prop.description === 'string' ? prop.description : null,
+      required,
+      example: 'example' in prop ? prop.example : undefined,
+      template: `{{trigger.${name}}}`,
+    }
+  })
+  return fields.sort((a, b) => a.field.localeCompare(b.field))
+}
+
+function parseInputSchemaValue(raw: unknown): Record<string, unknown> | null {
+  if (raw == null || raw === '') return null
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw)
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+    } catch {
+      return null
+    }
+  }
+  if (typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>
+  return null
+}
+
+function resolveDocInputs(schema: unknown, nodes: WorkflowNodeDef[]): { source: InputSource; fields: DocInputField[] } {
+  const parsed = parseInputSchemaValue(schema)
+  if (parsed) {
+    return { source: 'schema', fields: fieldsFromSchema(parsed) }
+  }
+  return {
+    source: 'scan',
+    fields: collectTriggerFields(nodes).map((name) => ({
+      field: name,
+      required: 'no' as const,
+      template: `{{trigger.${name}}}`,
+    })),
+  }
+}
+
+function requiredLabel(required: InputRequired): string {
+  if (required === 'yes') return '是'
+  if (required === 'conditional') return '条件必填'
+  return '否'
+}
+
+function emptyInputCopy(source: InputSource): string {
+  return source === 'schema'
+    ? '本工作流已声明无外部入参，传空 body 即可。'
+    : '未检测到 {{trigger.字段}} 引用——本工作流不依赖外部入参，传空 body 即可。'
 }
 
 /** 登录态：从内存中的工作流定义推导 DocModel（与后端 build_doc_model 等价）。 */
@@ -115,6 +215,7 @@ export function deriveDocModel(
     trigger_type: string
     trigger_config: string
     timeout_ms: number
+    input_schema?: string | Record<string, unknown> | null
   },
   nodes: WorkflowNodeDef[],
   dbSlug: string,
@@ -135,6 +236,7 @@ export function deriveDocModel(
     }
   }
   const status_code = Number(responseNode?.config?.status_code) || 200
+  const resolved = resolveDocInputs(meta.input_schema, nodes)
 
   return {
     name: meta.name,
@@ -144,7 +246,8 @@ export function deriveDocModel(
     trigger_type: meta.trigger_type,
     trigger_config,
     timeout_ms: meta.timeout_ms,
-    input_fields: collectTriggerFields(nodes),
+    input_source: resolved.source,
+    input_fields: resolved.fields,
     response_body,
     status_code,
     has_response_node: !!responseNode,
@@ -158,14 +261,24 @@ function endpointUrl(model: DocModel, apiBase: string): string {
   return `${base}/workflow/${dbSlug}/${slug}`
 }
 
-function sampleBody(fields: string[]): string {
+function placeholderForType(typeName: string | null | undefined, field: string): unknown {
+  if (typeName === 'number' || typeName === 'integer') return 0
+  if (typeName === 'boolean') return false
+  if (typeName === 'object') return {}
+  if (typeName === 'array') return []
+  return `<${field}>`
+}
+
+function sampleBody(fields: DocInputField[]): string {
   if (fields.length === 0) return '{}'
-  const obj: Record<string, string> = {}
-  for (const f of fields) obj[f] = `<${f}>`
+  const obj: Record<string, unknown> = {}
+  for (const f of fields) {
+    obj[f.field] = f.example !== undefined ? f.example : placeholderForType(f.type, f.field)
+  }
   return JSON.stringify(obj, null, 2)
 }
 
-function curlExample(url: string, fields: string[], gatewayMode = false): string {
+function curlExample(url: string, fields: DocInputField[], gatewayMode = false): string {
   const lines = [`curl -X POST '${url}' \\`]
   // 走网关时鉴权由网关统一处理，示例不再展示 API Key 头。
   if (!gatewayMode) lines.push(`  -H 'Authorization: Bearer ob_<your_api_key>' \\`)
@@ -211,10 +324,15 @@ export function buildDocMarkdown(model: DocModel, apiBase: string, gatewayMode =
   }
   L.push('', '## 请求参数')
   if (model.input_fields.length === 0) {
-    L.push('未检测到 {{trigger.字段}} 引用——不依赖外部入参，传空 body 即可。')
+    L.push(emptyInputCopy(model.input_source))
+  } else if (model.input_source === 'schema') {
+    L.push('以下字段来自工作流入参定义（input_schema）。', '', '| 字段 | 类型 | 必填 | 说明 |', '| --- | --- | --- | --- |')
+    for (const f of model.input_fields) {
+      L.push(`| ${f.field} | ${f.type || ''} | ${requiredLabel(f.required)} | ${f.description || ''} |`)
+    }
   } else {
     L.push('以下字段来自节点中 {{trigger.X}} 引用（自动扫描，类型需按业务确认）：', '', '| 字段 | 模板引用 |', '| --- | --- |')
-    for (const f of model.input_fields) L.push(`| ${f} | {{trigger.${f}}} |`)
+    for (const f of model.input_fields) L.push(`| ${f.field} | ${f.template} |`)
   }
   if (isEndpoint) {
     L.push('', '## 请求示例', '```bash', curlExample(url, model.input_fields, gatewayMode), '```')
@@ -324,7 +442,7 @@ export default function WorkflowDocContent({
             </div>
             <p className="text-xs text-gray-500 leading-relaxed">
               外部系统直接请求该地址即可触发。<strong>POST</strong> 用 JSON body 传参；
-              <strong>GET</strong> 用 query string 传参（如 <code className="bg-gray-100 px-1 rounded">?{triggerFields[0] || 'key'}=值</code>）。
+              <strong>GET</strong> 用 query string 传参（如 <code className="bg-gray-100 px-1 rounded">?{triggerFields[0]?.field || 'key'}=值</code>）。
             </p>
           </div>
         ) : model.trigger_type === 'hook' ? (
@@ -385,9 +503,33 @@ export default function WorkflowDocContent({
       <section>
         <h4 className="font-semibold text-gray-900 mb-2">请求参数</h4>
         {triggerFields.length === 0 ? (
-          <p className="text-xs text-gray-500">
-            未检测到 <code className="bg-gray-100 px-1 rounded">{'{{trigger.字段}}'}</code> 引用——本工作流不依赖外部入参，传空 body 即可。
-          </p>
+          <p className="text-xs text-gray-500">{emptyInputCopy(model.input_source)}</p>
+        ) : model.input_source === 'schema' ? (
+          <>
+            <p className="text-xs text-gray-500 mb-2">以下字段来自工作流入参定义（input_schema）。</p>
+            <div className="border rounded-lg overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="bg-gray-50 text-gray-500">
+                  <tr>
+                    <th className="text-left px-3 py-1.5 font-medium">字段</th>
+                    <th className="text-left px-3 py-1.5 font-medium">类型</th>
+                    <th className="text-left px-3 py-1.5 font-medium">必填</th>
+                    <th className="text-left px-3 py-1.5 font-medium">说明</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {triggerFields.map((f) => (
+                    <tr key={f.field} className="border-t">
+                      <td className="px-3 py-1.5 font-mono text-gray-700">{f.field}</td>
+                      <td className="px-3 py-1.5 font-mono text-gray-500">{f.type || '—'}</td>
+                      <td className="px-3 py-1.5 text-gray-600">{requiredLabel(f.required)}</td>
+                      <td className="px-3 py-1.5 text-gray-600">{f.description || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         ) : (
           <>
             <p className="text-xs text-gray-500 mb-2">
@@ -402,10 +544,10 @@ export default function WorkflowDocContent({
                   </tr>
                 </thead>
                 <tbody>
-                  {triggerFields.map(f => (
-                    <tr key={f} className="border-t">
-                      <td className="px-3 py-1.5 font-mono text-gray-700">{f}</td>
-                      <td className="px-3 py-1.5 font-mono text-gray-400">{`{{trigger.${f}}}`}</td>
+                  {triggerFields.map((f) => (
+                    <tr key={f.field} className="border-t">
+                      <td className="px-3 py-1.5 font-mono text-gray-700">{f.field}</td>
+                      <td className="px-3 py-1.5 font-mono text-gray-400">{f.template}</td>
                     </tr>
                   ))}
                 </tbody>

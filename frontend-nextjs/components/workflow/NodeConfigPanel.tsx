@@ -114,6 +114,7 @@ export default function NodeConfigPanel({
 }: Props) {
   // 面板宽度（受控 + localStorage 持久化），用户可拖拽左边缘调整。
   const [width, setWidth] = useState(DEFAULT_WIDTH)
+  const [ideFullscreen, setIdeFullscreen] = useState(false)
   const [isResizing, setIsResizing] = useState(false)
   const [jsonFieldErrors, setJsonFieldErrors] = useState<Record<string, string>>({})
   // 分支名输入聚焦时的旧值，失焦时用「旧值→新值」原子提交改名，避免逐字编辑过程中的中间态错配。
@@ -325,12 +326,26 @@ export default function NodeConfigPanel({
     setJsonFieldErrors({})
   }, [node.id, node.type])
 
+  useEffect(() => {
+    if (!ideFullscreen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIdeFullscreen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [ideFullscreen])
+
+  const fillCodeEditor = ideFullscreen && node.type === 'code'
+
   return (
     <div
-      className="relative shrink-0 border-l border-slate-200 bg-white flex flex-col h-full overflow-hidden"
-      style={{ width: `${width}px` }}
+      className={`border-l border-slate-200 bg-white flex flex-col h-full overflow-hidden ${
+        ideFullscreen ? 'absolute inset-0 z-30' : 'relative shrink-0'
+      }`}
+      style={ideFullscreen ? undefined : { width: `${width}px` }}
     >
       {/* 左边缘拖拽手柄：拖动调整面板宽度，双击复位默认宽度 */}
+      {!ideFullscreen && (
       <div
         onPointerDown={startResize}
         onDoubleClick={() => {
@@ -342,19 +357,33 @@ export default function NodeConfigPanel({
           isResizing ? 'bg-indigo-400/60' : 'bg-transparent'
         }`}
       />
+      )}
       {/* 拖拽期间的全屏遮罩：接住指针事件，避免移到画布上时被 ReactFlow 吞掉导致拖拽中断 */}
       {isResizing && <div className="fixed inset-0 z-[9999] cursor-col-resize" />}
-      <div className="p-3.5 border-b border-slate-100 flex items-start justify-between">
+      <div className="p-3.5 border-b border-slate-100 flex items-start justify-between shrink-0">
         <div>
           <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-0.5">{meta.label}</div>
           <div className="text-sm font-semibold text-slate-800">{node.label || node.id}</div>
         </div>
-        <button onClick={onClose} className="w-6 h-6 rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600 text-lg leading-none flex items-center justify-center">&times;</button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setIdeFullscreen((v) => !v)}
+            title={ideFullscreen ? '退出全屏' : '右侧 IDE 全屏'}
+            className="h-6 px-2 rounded-md text-[11px] font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+          >
+            <i className={`fas ${ideFullscreen ? 'fa-compress' : 'fa-expand'} mr-1 text-[10px]`} />
+            {ideFullscreen ? '退出全屏' : '全屏'}
+          </button>
+          <button onClick={onClose} className="w-6 h-6 rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600 text-lg leading-none flex items-center justify-center">&times;</button>
+        </div>
       </div>
 
       <fieldset
         disabled={readOnly}
-        className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0 min-w-0 border-0"
+        className={`flex-1 p-4 min-h-0 min-w-0 border-0 ${
+          fillCodeEditor ? 'flex flex-col overflow-hidden space-y-3' : 'overflow-y-auto space-y-4'
+        }`}
       >
         <div>
           <label className="block text-xs font-medium text-gray-500 mb-1">节点 ID</label>
@@ -407,24 +436,27 @@ export default function NodeConfigPanel({
                   <option value="python">Python</option>
                 </select>
               </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">代码</label>
-                <CodeSnippetEditor
-                  value={node.config.code || ''}
-                  onChange={readOnly ? undefined : (next) => updateConfig('code', next)}
-                  language={lang}
-                  label="代码"
-                  minRows={12}
-                  readOnly={readOnly}
-                  placeholder={
-                    lang === 'javascript'
-                      ? 'async function execute(ctx) {\n  // ctx.body: trigger payload\n  // ctx.nodes.nodeId: upstream output\n  ctx.body = { ok: true };\n}'
-                      : lang === 'python'
-                      ? 'def execute(ctx):\n    # ctx.body: 触发 payload\n    # ctx.nodes["nodeId"]: 上游输出\n    return { "ok": True }'
-                      : 'function execute(ctx)\n  -- ctx.body: 触发 payload\n  -- ctx.nodes.xxx: 上游输出\n  ctx.body = { ok = true }\nend'
-                  }
-                />
-                <p className="text-xs text-gray-400 mt-1">
+              <div className={fillCodeEditor ? 'flex-1 min-h-0 flex flex-col' : undefined}>
+                <label className="block text-xs font-medium text-gray-500 mb-1 shrink-0">代码</label>
+                <div className={fillCodeEditor ? 'flex-1 min-h-0' : undefined}>
+                  <CodeSnippetEditor
+                    value={node.config.code || ''}
+                    onChange={readOnly ? undefined : (next) => updateConfig('code', next)}
+                    language={lang}
+                    label="代码"
+                    minRows={12}
+                    fill={fillCodeEditor}
+                    readOnly={readOnly}
+                    placeholder={
+                      lang === 'javascript'
+                        ? 'async function execute(ctx) {\n  // ctx.body: trigger payload\n  // ctx.nodes.nodeId: upstream output\n  ctx.body = { ok: true };\n}'
+                        : lang === 'python'
+                        ? 'def execute(ctx):\n    # ctx.body: 触发 payload\n    # ctx.nodes["nodeId"]: 上游输出\n    return { "ok": True }'
+                        : 'function execute(ctx)\n  -- ctx.body: 触发 payload\n  -- ctx.nodes.xxx: 上游输出\n  ctx.body = { ok = true }\nend'
+                    }
+                  />
+                </div>
+                <p className="text-xs text-gray-400 mt-1 shrink-0">
                   可用变量: ctx.body（触发 payload）、ctx.nodes.nodeId（上游输出）
                 </p>
               </div>
@@ -710,41 +742,72 @@ export default function NodeConfigPanel({
               <input
                 type="checkbox"
                 className="mt-0.5"
-                checked={!!node.config.async_poll}
-                onChange={e => updateConfig('async_poll', e.target.checked)}
+                checked={!!node.config.stream}
+                disabled={readOnly}
+                onChange={e => {
+                  const on = e.target.checked
+                  if (readOnly || !onChange) return
+                  onChange({
+                    ...node,
+                    config: {
+                      ...node.config,
+                      stream: on,
+                      ...(on ? { async_poll: false } : {}),
+                    },
+                  })
+                }}
               />
               <span>
-                <span className="block text-sm font-medium text-gray-700">启用异步轮询</span>
+                <span className="block text-sm font-medium text-gray-700">流式输出</span>
                 <span className="block text-xs text-gray-400 mt-0.5">
-                  开启后，收到 HTTP 202 或 body.status=pending 时自动轮询直至完成（协议对齐 Provisioner）。
-                  总等待仍受工作流超时（timeout_ms）限制，长任务请一并调大。
+                  把上游 HTTP 响应当成这次工作流请求的响应流（适合 LLM）。全图只能有一个。不可与异步轮询同时开。
                 </span>
               </span>
             </label>
 
-            {!!node.config.async_poll && (
-              <div className="grid grid-cols-2 gap-2 p-3 bg-gray-50 border rounded-lg">
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">轮询间隔（秒）</label>
+            {!node.config.stream && (
+              <>
+                <label className="flex items-start gap-2 cursor-pointer">
                   <input
-                    type="number"
-                    min={1}
-                    value={node.config.poll_interval_secs ?? 5}
-                    onChange={e => updateConfig('poll_interval_secs', Number(e.target.value) || 5)}
-                    className="w-full px-3 py-2 border rounded-lg text-sm"
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={!!node.config.async_poll}
+                    onChange={e => updateConfig('async_poll', e.target.checked)}
                   />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">最长等待（秒）</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={node.config.poll_max_secs ?? 600}
-                    onChange={e => updateConfig('poll_max_secs', Number(e.target.value) || 600)}
-                    className="w-full px-3 py-2 border rounded-lg text-sm"
-                  />
-                </div>
-              </div>
+                  <span>
+                    <span className="block text-sm font-medium text-gray-700">启用异步轮询</span>
+                    <span className="block text-xs text-gray-400 mt-0.5">
+                      开启后，收到 HTTP 202 或 body.status=pending 时自动轮询直至完成（协议对齐 Provisioner）。
+                      总等待仍受工作流超时（timeout_ms）限制，长任务请一并调大。
+                    </span>
+                  </span>
+                </label>
+
+                {!!node.config.async_poll && (
+                  <div className="grid grid-cols-2 gap-2 p-3 bg-gray-50 border rounded-lg">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">轮询间隔（秒）</label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={node.config.poll_interval_secs ?? 5}
+                        onChange={e => updateConfig('poll_interval_secs', Number(e.target.value) || 5)}
+                        className="w-full px-3 py-2 border rounded-lg text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">最长等待（秒）</label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={node.config.poll_max_secs ?? 600}
+                        onChange={e => updateConfig('poll_max_secs', Number(e.target.value) || 600)}
+                        className="w-full px-3 py-2 border rounded-lg text-sm"
+                      />
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </>
         )}

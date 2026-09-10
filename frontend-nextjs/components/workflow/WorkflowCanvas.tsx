@@ -561,7 +561,7 @@ function WorkflowCanvasInner({ initialNodes, initialEdges, workflowSlug, onChang
   const defaultEdgeOptions = useMemo(() => ({ type: 'workflowEdge' }), [])
 
   return (
-    <div className="flex h-full workflow-canvas overflow-hidden">
+    <div className="relative flex h-full workflow-canvas overflow-hidden">
       <div ref={canvasRef} className="flex-1 relative min-w-0 overflow-hidden">
         <ReactFlow
           nodes={nodes}

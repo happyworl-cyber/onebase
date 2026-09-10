@@ -1,12 +1,13 @@
 'use client'
 
-export type BatchModalType = 'export' | 'status' | 'delete' | null
+export type BatchModalType = 'export' | 'status' | 'delete' | 'move' | null
 
 interface WorkflowBatchBarProps {
   visible: boolean
   count: number
   onExport: () => void
   onStatus: () => void
+  onMove: () => void
   onDelete: () => void
   onClear: () => void
 }
@@ -16,6 +17,7 @@ export default function WorkflowBatchBar({
   count,
   onExport,
   onStatus,
+  onMove,
   onDelete,
   onClear,
 }: WorkflowBatchBarProps) {
@@ -31,6 +33,11 @@ export default function WorkflowBatchBar({
       <button type="button" className="workflow-batch-btn workflow-batch-btn-status" onClick={onStatus}>
         <i className="fas fa-toggle-on" />
         修改状态
+      </button>
+      <div className="workflow-batch-sep" />
+      <button type="button" className="workflow-batch-btn workflow-batch-btn-status" onClick={onMove}>
+        <i className="fas fa-folder-tree" />
+        移动
       </button>
       <div className="workflow-batch-sep" />
       <button type="button" className="workflow-batch-btn workflow-batch-btn-del" onClick={onDelete}>

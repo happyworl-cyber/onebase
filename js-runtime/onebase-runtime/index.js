@@ -1,5 +1,19 @@
 'use strict';
 
+const nodeZlib = require('zlib');
+const ZLIB_MAX_BYTES = 8 * 1024 * 1024;
+
+function zlibInput(bytes, name) {
+  if (typeof bytes !== 'string' && !Buffer.isBuffer(bytes)) {
+    throw new TypeError(`${name}: 需要 string 或 Buffer`);
+  }
+  const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  if (buf.length > ZLIB_MAX_BYTES) {
+    throw new Error(`${name}: 输入超过 8 MiB（${buf.length} bytes）`);
+  }
+  return buf;
+}
+
 /**
  * OneBase JavaScript workflow host API.
  *
@@ -116,4 +130,20 @@ installGlobal('time', { now: () => call('time.now', {}), now_ms: () => call('tim
 installGlobal('sse', { publish: (topic, event, data) => call('sse.publish', { topic, event, data }) });
 installGlobal('google', {
   sa_assertion: (project, scope) => call('google.sa_assertion', { project, scope }),
+});
+installGlobal('zlib', {
+  compress: (bytes) => nodeZlib.deflateSync(zlibInput(bytes, 'zlib.compress')),
+  decompress: (bytes) => {
+    try {
+      return nodeZlib.inflateSync(zlibInput(bytes, 'zlib.decompress'), {
+        maxOutputLength: ZLIB_MAX_BYTES,
+      });
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      if (/too large|maxOutputLength|ERR_BUFFER_TOO_LARGE/i.test(String(error))) {
+        throw new Error('zlib.decompress: 输出超过 8 MiB');
+      }
+      throw new Error(`zlib.decompress: ${message}`);
+    }
+  },
 });

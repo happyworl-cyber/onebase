@@ -28,6 +28,8 @@ export interface WorkflowDepsStatus {
   hash?: string
 }
 
+const META_COLLAPSED_KEY = 'workflow-editor-meta-collapsed'
+
 function depsStatusLabel(status: WorkflowDepsStatus['status']): string {
   switch (status) {
     case 'installing':
@@ -133,6 +135,7 @@ interface FormMeta {
   database_id: string
   trigger_type: string
   trigger_config: string
+  input_schema: string
   timeout_ms: number
   max_retries: number
   alert_webhook_url: string
@@ -469,9 +472,20 @@ function FieldSelectAnchor({
 }
 
 const MENU_FIELD_KEYS = new Set(['department', 'category', 'database_id', 'trigger_type'])
-const TEXT_FIELD_KEYS = new Set(['name', 'slug', 'description', 'timeout_ms', 'trigger_config'])
+const TEXT_FIELD_KEYS = new Set(['name', 'slug', 'description', 'timeout_ms', 'trigger_config', 'input_schema'])
 
-function focusFieldControl(el: HTMLInputElement | null) {
+const INPUT_SCHEMA_PLACEHOLDER = `{
+  "type": "object",
+  "properties": {
+    "email": { "type": "string", "description": "邮箱（与 phone 二选一）" },
+    "phone": { "type": "string", "description": "手机号（与 email 二选一）" },
+    "password": { "type": "string", "description": "密码" }
+  },
+  "required": ["password"],
+  "oneOf": [{ "required": ["email"] }, { "required": ["phone"] }]
+}`
+
+function focusFieldControl(el: HTMLInputElement | HTMLTextAreaElement | null) {
   if (!el) return
   el.focus()
   el.select()
@@ -557,9 +571,10 @@ export default function WorkflowEditorHeader({
   const [npmDepsOpen, setNpmDepsOpen] = useState(false)
   const [npmDepsText, setNpmDepsText] = useState('')
   const [npmDepsError, setNpmDepsError] = useState<string | null>(null)
+  const [metaCollapsed, setMetaCollapsed] = useState(false)
   const [pipDepsOpen, setPipDepsOpen] = useState(false)
   const [pipDepsText, setPipDepsText] = useState('')
-  const inputRefs = useRef<Record<string, HTMLInputElement | null>>({})
+  const inputRefs = useRef<Record<string, HTMLInputElement | HTMLTextAreaElement | null>>({})
   const editBaseline = useRef('')
   const editingFieldRef = useRef<string | null>(null)
   // 旧 session 草稿可能缺少告警字段；分享深链打开时也要能安全渲染
@@ -571,6 +586,18 @@ export default function WorkflowEditorHeader({
 
   const title = formMeta.name || editingName || '新建工作流'
   const selectedDb = databaseOptions.find((d) => String(d.database_id) === formMeta.database_id)
+
+  useEffect(() => {
+    if (localStorage.getItem(META_COLLAPSED_KEY) === '1') setMetaCollapsed(true)
+  }, [])
+
+  const toggleMetaCollapsed = useCallback(() => {
+    setMetaCollapsed((prev) => {
+      const next = !prev
+      localStorage.setItem(META_COLLAPSED_KEY, next ? '1' : '0')
+      return next
+    })
+  }, [])
 
   const markDirty = useCallback((key: string) => {
     setDirtyFields((prev) => new Set(prev).add(key))
@@ -656,6 +683,9 @@ export default function WorkflowEditorHeader({
       }
       case 'trigger_config':
         setFormMeta((f) => ({ ...f, trigger_config: raw }))
+        break
+      case 'input_schema':
+        setFormMeta((f) => ({ ...f, input_schema: raw }))
         break
     }
   }, [setFormMeta])
@@ -861,6 +891,15 @@ export default function WorkflowEditorHeader({
         <div className="flex-1" />
         <button
           type="button"
+          onClick={toggleMetaCollapsed}
+          title={metaCollapsed ? '展开名称、服务、依赖等设置' : '折叠信息栏，画布占满下方'}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[7px] text-xs font-medium text-slate-500 hover:bg-slate-50 shrink-0"
+        >
+          <i className={`fas ${metaCollapsed ? 'fa-chevron-down' : 'fa-chevron-up'} text-[10px] text-slate-400`} />
+          {metaCollapsed ? '展开' : '折叠'}
+        </button>
+        <button
+          type="button"
           onClick={onShowHelp}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[7px] text-xs font-medium text-slate-500 hover:bg-slate-50 shrink-0"
         >
@@ -927,7 +966,8 @@ export default function WorkflowEditorHeader({
         </button>
       </div>
 
-      {/* 信息栏：两行内联编辑 */}
+      {/* 信息栏：两行内联编辑。折叠后只留顶栏，下方画布占满剩余高度。 */}
+      {!metaCollapsed && (
       <div className="bg-[#fafbfc] border-t border-[#f0f1f3]">
         {/* Row 1：身份 + 触发 + 端点 */}
         <div className="flex items-stretch h-[50px] border-b border-[#f0f1f3] overflow-x-auto">
@@ -1282,6 +1322,40 @@ export default function WorkflowEditorHeader({
 
         </div>
 
+        <div className={cn('border-t border-[#f0f1f3]', isEditing('input_schema') ? 'min-h-[140px]' : 'min-h-[50px]')}>
+          <InlineField
+            fieldKey="input_schema"
+            label="入参定义"
+            fieldClassName="flex-1 min-w-0"
+            editValue={formMeta.input_schema ?? ''}
+            editing={isEditing('input_schema')}
+            dirty={isDirty('input_schema')}
+            onStartEdit={startEdit}
+          >
+            {isEditing('input_schema') ? (
+              <textarea
+                ref={(el) => { inputRefs.current.input_schema = el }}
+                className="w-full min-h-[88px] text-[12px] font-mono text-slate-800 border-none outline-none bg-transparent p-0 resize-y"
+                rows={6}
+                value={editDraft}
+                placeholder={INPUT_SCHEMA_PLACEHOLDER}
+                onChange={(e) => setEditDraft(e.target.value)}
+                onBlur={(e) => commitDraft('input_schema', e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') { setEditDraft(editBaseline.current); stopEdit() }
+                }}
+                onClick={(e) => e.stopPropagation()}
+              />
+            ) : (
+              <span className="text-[13px] font-medium font-mono text-slate-700 truncate leading-tight">
+                {formMeta.input_schema?.trim()
+                  ? formMeta.input_schema.replace(/\s+/g, ' ')
+                  : <span className="text-slate-400 italic font-sans font-normal">未声明（文档将扫描 {'{{trigger.x}}'}）</span>}
+              </span>
+            )}
+          </InlineField>
+        </div>
+
         {/* Row 3：JavaScript npm 依赖（默认折叠） */}
         <div className="border-t border-[#f0f1f3]">
           <button
@@ -1525,6 +1599,7 @@ export default function WorkflowEditorHeader({
           />
         )}
       </div>
+      )}
 
       {toast && (
         <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-[100] bg-slate-800 text-slate-50 px-4 py-1.5 rounded-lg text-xs font-medium shadow-lg whitespace-nowrap pointer-events-none">

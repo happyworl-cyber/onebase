@@ -53,6 +53,7 @@ export interface WorkflowListItem {
   database_id: number | null
   trigger_type: string
   trigger_config: Record<string, unknown> | null
+  input_schema?: Record<string, unknown> | null
   nodes: WorkflowNodeDef[]
   edges: WorkflowEdgeDef[]
   is_enabled: boolean

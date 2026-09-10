@@ -22,11 +22,12 @@ ALTER TABLE management.scheduled_tasks
     ADD COLUMN IF NOT EXISTS shell_env         JSONB,
     ADD COLUMN IF NOT EXISTS shell_cwd         TEXT;
 
--- 替换 kind 白名单约束（含 'shell'）。
+-- 替换 kind 白名单。并集含后续 061 的 workflow，避免整库重跑时
+-- 先收窄再被已有 workflow 行挡住。
 ALTER TABLE management.scheduled_tasks
     DROP CONSTRAINT IF EXISTS chk_st_kind;
 ALTER TABLE management.scheduled_tasks
-    ADD CONSTRAINT chk_st_kind CHECK (kind IN ('rpc', 'http', 'shell'));
+    ADD CONSTRAINT chk_st_kind CHECK (kind IN ('rpc', 'http', 'shell', 'workflow'));
 
 -- kind='shell' 必须提供脚本内容（沙盒里 echo '' 没意义，强制非空）。
 ALTER TABLE management.scheduled_tasks

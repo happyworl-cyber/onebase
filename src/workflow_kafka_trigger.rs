@@ -317,6 +317,7 @@ mod tests {
             department: None,
             trigger_type: trigger_type.to_string(),
             trigger_config,
+            input_schema: None,
             nodes: json!([]),
             edges: json!([]),
             dependencies: json!({}),

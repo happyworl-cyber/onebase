@@ -32,6 +32,8 @@ export type CodeSnippetEditorProps = {
   onBlur?: () => void
   invalid?: boolean
   placeholder?: string
+  /** 铺满父容器剩余高度（右侧面板全屏时用） */
+  fill?: boolean
 }
 
 type MirrorProps = {
@@ -200,9 +202,9 @@ function ExpandControl({
         }
       }}
       className="px-1.5 py-0.5 rounded text-[11px] text-gray-500 hover:bg-gray-100 hover:text-gray-800 cursor-pointer select-none"
-      aria-label={`放大编辑${label}`}
+      aria-label={`全屏编辑${label}`}
     >
-      放大
+      全屏
     </div>
   )
 }
@@ -217,6 +219,7 @@ export default function CodeSnippetEditor({
   onBlur,
   invalid,
   placeholder,
+  fill = false,
 }: CodeSnippetEditorProps) {
   const reactId = useId()
   const [expanded, setExpanded] = useState(false)
@@ -247,12 +250,14 @@ export default function CodeSnippetEditor({
     const prev = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeExpanded()
+      if (e.key !== 'Escape') return
+      e.stopImmediatePropagation()
+      closeExpanded()
     }
-    document.addEventListener('keydown', onKey)
+    document.addEventListener('keydown', onKey, true)
     return () => {
       document.body.style.overflow = prev
-      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('keydown', onKey, true)
     }
   }, [expanded, closeExpanded])
 
@@ -298,8 +303,7 @@ export default function CodeSnippetEditor({
               role="dialog"
               aria-modal="true"
               aria-labelledby={`${reactId}-title`}
-              className="relative flex flex-col bg-white rounded-xl shadow-2xl overflow-hidden"
-              style={{ width: '92%', height: '88%' }}
+              className="relative flex flex-col bg-white overflow-hidden w-full h-full"
             >
               <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between shrink-0">
                 <h3 id={`${reactId}-title`} className="text-sm font-semibold text-gray-900">
@@ -316,7 +320,7 @@ export default function CodeSnippetEditor({
                     }
                   }}
                   className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 cursor-pointer"
-                  aria-label="关闭"
+                  aria-label="退出全屏"
                 >
                   ×
                 </div>
@@ -337,16 +341,32 @@ export default function CodeSnippetEditor({
         )
       : null
 
+  const inlineEditor = fill ? (
+    <FillParentMirror
+      value={value}
+      onChange={onChange}
+      language={language}
+      readOnly={readOnly}
+      placeholder={placeholder}
+      invalid={invalid}
+    />
+  ) : (
+    pane
+  )
+
   return (
-    <div className={`border rounded-lg overflow-hidden ${border} ${chrome}`}>
-      <div className="flex items-center justify-between px-2 py-1 border-b border-gray-200/80 bg-gray-50">
+    <div className={`border rounded-lg overflow-hidden ${border} ${chrome}${fill ? ' flex flex-col h-full min-h-0' : ''}`}>
+      <div className="flex items-center justify-between px-2 py-1 border-b border-gray-200/80 bg-gray-50 shrink-0">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
           {SNIPPET_LANG_LABEL[language]}
         </span>
         <ExpandControl onClick={openExpanded} label={label} />
       </div>
-      <div style={{ height: paneHeight }} className="nowheel min-h-0 overflow-hidden">
-        {pane}
+      <div
+        style={fill ? undefined : { height: paneHeight }}
+        className={`nowheel min-h-0 overflow-hidden${fill ? ' flex-1' : ''}`}
+      >
+        {inlineEditor}
       </div>
       {overlay}
     </div>

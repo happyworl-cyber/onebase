@@ -228,6 +228,9 @@ server.registerTool(
         .optional()
         .describe("触发方式，默认 endpoint"),
       trigger_config: z.record(z.any()).optional().describe("触发配置 JSON"),
+      input_schema: z.record(z.any()).nullable().optional().describe(
+        "工作流入参 JSON Schema；null 表示未声明",
+      ),
       nodes: z.array(z.any()).describe(NODES_DESC),
       edges: z.array(z.any()).describe(EDGES_DESC),
       is_enabled: z.boolean().optional(),
@@ -250,7 +253,7 @@ server.registerTool(
   {
     title: "更新工作流",
     description:
-      "按 id 局部更新工作流（仅传需要改的字段）。同时传 nodes+edges 才会触发版本快照。需要 workflow:write scope。",
+      "按 id 局部更新工作流（仅传需要改的字段）。同时传 nodes+edges 或 input_schema 会触发版本快照。需要 workflow:write scope。",
     inputSchema: {
       id: z.number().int().describe("工作流 id"),
       name: z.string().optional(),
@@ -261,6 +264,9 @@ server.registerTool(
         .enum(["endpoint", "hook", "cron", "manual", "notify"])
         .optional(),
       trigger_config: z.record(z.any()).optional(),
+      input_schema: z.record(z.any()).nullable().optional().describe(
+        "工作流入参 JSON Schema；null 表示未声明",
+      ),
       nodes: z.array(z.any()).optional().describe(NODES_DESC),
       edges: z.array(z.any()).optional().describe(EDGES_DESC),
       is_enabled: z.boolean().optional(),

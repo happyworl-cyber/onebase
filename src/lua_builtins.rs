@@ -62,6 +62,7 @@ pub fn register_builtins(lua: &Lua, env_vars: HashMap<String, String>) -> LuaRes
     register_json_module(lua)?;
     register_log_module(lua)?;
     register_crypto_module(lua)?;
+    register_zlib_module(lua)?;
     register_env_module(lua, env_vars)?;
     register_sse_module(lua)?;
     register_time_module(lua)?;
@@ -754,6 +755,31 @@ fn register_crypto_module(lua: &Lua) -> LuaResult<()> {
     Ok(())
 }
 
+fn register_zlib_module(lua: &Lua) -> LuaResult<()> {
+    let zlib_mod = lua.create_table()?;
+
+    zlib_mod.set(
+        "compress",
+        lua.create_function(|lua, input: mlua::String| {
+            let out = crate::zlib_primitives::compress(&input.as_bytes())
+                .map_err(mlua::Error::RuntimeError)?;
+            lua.create_string(&out)
+        })?,
+    )?;
+
+    zlib_mod.set(
+        "decompress",
+        lua.create_function(|lua, input: mlua::String| {
+            let out = crate::zlib_primitives::decompress(&input.as_bytes())
+                .map_err(mlua::Error::RuntimeError)?;
+            lua.create_string(&out)
+        })?,
+    )?;
+
+    lua.globals().set("zlib", zlib_mod)?;
+    Ok(())
+}
+
 /// env 模块：读取项目级环境变量
 ///
 /// 语义变化（相对旧版，写入文档）：
@@ -1315,6 +1341,43 @@ mQIDAQAB\n\
         )
         .exec()
         .unwrap();
+    }
+
+    #[test]
+    fn test_zlib_roundtrip_and_base64() {
+        let lua = Lua::new();
+        register_builtins(&lua, HashMap::new()).unwrap();
+        lua.load(
+            r#"
+            local c = zlib.compress("hello")
+            assert(type(c) == "string" and #c > 0, "compress should return non-empty binary")
+            assert(c ~= "hello", "compressed bytes must differ from plaintext")
+            assert(zlib.decompress(c) == "hello", "zlib roundtrip mismatch")
+
+            local empty = zlib.compress("")
+            assert(zlib.decompress(empty) == "", "empty roundtrip")
+
+            local bin = string.char(0, 255, 0, 127)
+            assert(zlib.decompress(zlib.compress(bin)) == bin, "binary roundtrip")
+
+            local b64 = crypto.base64_encode(c)
+            assert(type(b64) == "string" and #b64 > 0, "compressed output must be base64-encodable")
+        "#,
+        )
+        .exec()
+        .unwrap();
+    }
+
+    #[test]
+    fn test_zlib_decompress_garbage() {
+        let lua = Lua::new();
+        register_builtins(&lua, HashMap::new()).unwrap();
+        let err = lua
+            .load(r#"zlib.decompress("not-zlib")"#)
+            .exec()
+            .expect_err("garbage must error");
+        let msg = err.to_string();
+        assert!(msg.contains("zlib.decompress"), "{msg}");
     }
 
     #[test]

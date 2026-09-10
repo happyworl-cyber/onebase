@@ -24,6 +24,7 @@ export interface WorkflowVersionSnapshot {
   department: string | null
   trigger_type: string
   trigger_config: Record<string, unknown>
+  input_schema?: Record<string, unknown> | null
   nodes: WorkflowNodeDef[]
   edges: WorkflowEdgeDef[]
   timeout_ms: number

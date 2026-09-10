@@ -176,6 +176,25 @@ pub fn resolve_taxonomy_update(
     normalize_for_storage(from_parts(dept.as_deref(), cat.as_deref()))
 }
 
+/// 批量移动：JSON 里 `department` / `category` 都缺则报错；否则归一入库。
+pub fn resolve_batch_move_target(
+    department: Option<&str>,
+    category: Option<&str>,
+) -> Result<WorkflowTaxonomy, String> {
+    if department.is_none() && category.is_none() {
+        return Err("move 需要 department 与 category".to_string());
+    }
+    Ok(normalize_for_storage(from_parts(department, category)))
+}
+
+pub fn same_taxonomy(
+    existing_dept: Option<&str>,
+    existing_cat: Option<&str>,
+    target: &WorkflowTaxonomy,
+) -> bool {
+    normalize_for_storage(from_parts(existing_dept, existing_cat)) == *target
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,5 +239,32 @@ mod tests {
         let t = resolve_taxonomy_input(Some("运营部"), None);
         assert_eq!(t.department.as_deref(), Some("运营部"));
         assert_eq!(t.category.as_deref(), Some(UNCATEGORIZED_CATEGORY));
+    }
+
+    #[test]
+    fn batch_move_requires_at_least_one_field() {
+        let err = resolve_batch_move_target(None, None).unwrap_err();
+        assert_eq!(err, "move 需要 department 与 category");
+    }
+
+    #[test]
+    fn batch_move_empty_strings_normalize_shared_uncategorized() {
+        let t = resolve_batch_move_target(Some(""), Some("")).unwrap();
+        assert_eq!(t.department.as_deref(), Some(SHARED_DEPARTMENT));
+        assert_eq!(t.category.as_deref(), Some(UNCATEGORIZED_CATEGORY));
+    }
+
+    #[test]
+    fn batch_move_dept_only_fills_uncategorized() {
+        let t = resolve_batch_move_target(Some("运营部"), None).unwrap();
+        assert_eq!(t.department.as_deref(), Some("运营部"));
+        assert_eq!(t.category.as_deref(), Some(UNCATEGORIZED_CATEGORY));
+    }
+
+    #[test]
+    fn same_taxonomy_treats_null_shared_uncategorized_as_equal() {
+        let target = resolve_batch_move_target(Some("共享"), Some("未分类")).unwrap();
+        assert!(same_taxonomy(None, None, &target));
+        assert!(!same_taxonomy(Some("运营部"), Some("通知"), &target));
     }
 }

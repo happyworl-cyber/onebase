@@ -260,7 +260,7 @@ pub enum NodeType {
     /// Kafka produce。
     /// config: `{ "connection_id": <i64>, "op": "produce", "topic", "key"?, "value", "headers"? }`
     Kafka,
-    /// 对象存储（COS / OSS / MinIO）精选操作。
+    /// 对象存储（COS / OSS / MinIO / GCS）精选操作。
     /// config: `{ "connection_id": <i64>, "op": "put|get|delete|list|presign", ...templated args... }`
     /// 连接按 `ctx.tenant_id` 校验，杜绝跨租户取数。
     ObjectStorage,
@@ -2378,11 +2378,20 @@ impl Drop for SubworkflowRunGuard {
 /// 工作流 DAG 引擎：按拓扑顺序调度各节点
 pub struct DagEngine {
     pool: PgPool,
+    stream_bridge: Option<crate::workflow_stream::StreamBridge>,
 }
 
 impl DagEngine {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            stream_bridge: None,
+        }
+    }
+
+    pub fn with_stream_bridge(mut self, bridge: crate::workflow_stream::StreamBridge) -> Self {
+        self.stream_bridge = Some(bridge);
+        self
     }
 
     /// 执行整个工作流 DAG（顶层入口；子工作流递归从空调用栈开始）。
@@ -2710,7 +2719,7 @@ impl DagEngine {
             NodeType::Code => self.exec_code_node(config, ctx).await,
             NodeType::DbQuery => self.exec_db_query_node_with_stale_retry(config, ctx).await,
             NodeType::DbExecute => self.exec_db_execute_node(config, ctx).await,
-            NodeType::HttpCall => self.exec_http_call_node(config).await,
+            NodeType::HttpCall => self.exec_http_call_node(config, ctx).await,
             NodeType::EmailSend => self.exec_email_send_node(config).await,
             NodeType::Condition => self.exec_condition_node(config, ctx).await,
             NodeType::Transform => self.exec_transform_node(config, ctx).await,
@@ -4290,7 +4299,11 @@ end
 
     // ─── HTTP Call 节点 ─────────────────────────────────────────
 
-    async fn exec_http_call_node(&self, config: &JsonValue) -> Result<(JsonValue, Option<String>)> {
+    async fn exec_http_call_node(
+        &self,
+        config: &JsonValue,
+        ctx: &ExecutionContext,
+    ) -> Result<(JsonValue, Option<String>)> {
         use crate::http_async_poll::{
             parse_async_poll_config, run_async_poll_loop, HttpExchange, PollRequest,
         };
@@ -4354,6 +4367,101 @@ end
             .connect_timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| AppError::Internal(format!("HTTP 客户端创建失败: {}", e)))?;
+
+        if crate::workflow_stream::stream_enabled(config) {
+            if parse_async_poll_config(config).enabled {
+                return Err(AppError::InvalidQuery(
+                    "http_call 不能同时开启 stream 与 async_poll".to_string(),
+                ));
+            }
+            let sink = if ctx.trigger_type == "endpoint" {
+                self.stream_bridge.clone()
+            } else {
+                None
+            };
+            let headers_for_req = headers.clone();
+            let body_for_req = body_config.clone();
+            let stream_client = client.clone();
+            let stream_url = url.clone();
+            let stream_method = method.clone();
+            let execute = async move {
+                use futures::StreamExt;
+                let mut req = match stream_method.as_str() {
+                    "POST" => stream_client.post(&stream_url),
+                    "PUT" => stream_client.put(&stream_url),
+                    "PATCH" => stream_client.patch(&stream_url),
+                    "DELETE" => stream_client.delete(&stream_url),
+                    _ => stream_client.get(&stream_url),
+                };
+                if let Some(headers) = headers_for_req.as_ref().and_then(|v| v.as_object()) {
+                    for (k, v) in headers {
+                        if let Some(val) = v.as_str() {
+                            req = req.header(k.as_str(), val);
+                        }
+                    }
+                }
+                if let Some(body) = &body_for_req {
+                    req = req.json(body);
+                }
+                let resp = req
+                    .send()
+                    .await
+                    .map_err(|e| AppError::Internal(format!("HTTP 请求失败: {}", e)))?;
+                let status = resp.status().as_u16();
+                let resp_headers: HashMap<String, String> = resp
+                    .headers()
+                    .iter()
+                    .filter_map(|(k, v)| Some((k.to_string(), v.to_str().ok()?.to_string())))
+                    .collect();
+                let filtered = crate::workflow_stream::filter_stream_response_headers(
+                    resp.headers()
+                        .iter()
+                        .filter_map(|(k, v)| Some((k.as_str(), v.to_str().ok()?))),
+                );
+                if let Some(bridge) = sink.as_ref() {
+                    bridge.commit(status, filtered).await;
+                }
+                let mut buf = crate::workflow_stream::BodyBuffer::new();
+                let mut byte_stream = resp.bytes_stream();
+                while let Some(item) = byte_stream.next().await {
+                    let bytes =
+                        item.map_err(|e| AppError::Internal(format!("读取响应失败: {}", e)))?;
+                    if let Some(bridge) = sink.as_ref() {
+                        bridge.chunk(bytes.to_vec()).await;
+                    }
+                    buf.push(&bytes);
+                }
+                if let Some(bridge) = sink.as_ref() {
+                    bridge.end().await;
+                }
+                let body = buf.body_string();
+                let text = crate::workflow_stream::extract_stream_text(&body);
+                let mut output = json!({
+                    "status": status,
+                    "headers": resp_headers,
+                    "body": body,
+                    "text": text,
+                    "streamed": true,
+                });
+                if buf.is_truncated() {
+                    output["body_truncated"] = json!(true);
+                }
+                Ok::<JsonValue, AppError>(output)
+            };
+            let output = if timeout_secs > 0 {
+                tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), execute)
+                    .await
+                    .map_err(|_| {
+                        AppError::Internal(format!(
+                            "HTTP 请求超时（超过 {} 秒未响应）",
+                            timeout_secs
+                        ))
+                    })??
+            } else {
+                execute.await?
+            };
+            return Ok((output, None));
+        }
 
         let initial_client = client.clone();
         let initial_url = url.clone();
@@ -5630,6 +5738,27 @@ pub fn validate_definition(def: &WorkflowDefinition) -> Result<()> {
 
     // 检测是否有环（loop 回边已在 topological_sort 内被剔除，不会误报）。
     topological_sort(def)?;
+
+    let mut stream_http_calls = 0usize;
+    for node in &def.nodes {
+        if node.node_type != NodeType::HttpCall {
+            continue;
+        }
+        let streaming = crate::workflow_stream::stream_enabled(&node.config);
+        if streaming {
+            stream_http_calls += 1;
+        }
+        if streaming && crate::http_async_poll::parse_async_poll_config(&node.config).enabled {
+            return Err(AppError::InvalidQuery(
+                "http_call 不能同时开启 stream 与 async_poll".to_string(),
+            ));
+        }
+    }
+    if stream_http_calls > 1 {
+        return Err(AppError::InvalidQuery(
+            "工作流最多只能有一个 stream: true 的 http_call 节点".to_string(),
+        ));
+    }
 
     Ok(())
 }
@@ -8314,12 +8443,15 @@ mod tests {
                 .unwrap(),
         );
         let (output, _) = engine
-            .exec_http_call_node(&json!({
-                "url": url,
-                "async_poll": true,
-                "poll_interval_secs": 1,
-                "poll_max_secs": 5,
-            }))
+            .exec_http_call_node(
+                &json!({
+                    "url": url,
+                    "async_poll": true,
+                    "poll_interval_secs": 1,
+                    "poll_max_secs": 5,
+                }),
+                &exec_ctx(),
+            )
             .await
             .unwrap();
 
@@ -8327,5 +8459,147 @@ mod tests {
         assert_eq!(output["body"]["result"], 42);
         assert_eq!(output["async_poll"]["enabled"], true);
         assert_eq!(output["async_poll"]["attempts"], 1);
+    }
+
+    fn http_node(id: &str, config: JsonValue) -> WorkflowNode {
+        WorkflowNode {
+            id: id.into(),
+            node_type: NodeType::HttpCall,
+            label: None,
+            config,
+        }
+    }
+
+    #[test]
+    fn validate_rejects_two_stream_http_calls() {
+        let def = WorkflowDefinition {
+            nodes: vec![
+                http_node("a", json!({"url":"https://x","stream":true})),
+                http_node("b", json!({"url":"https://y","stream":true})),
+            ],
+            edges: vec![],
+        };
+        let err = validate_definition(&def).unwrap_err().to_string();
+        assert!(err.contains("最多只能有一个 stream"));
+    }
+
+    #[test]
+    fn validate_rejects_stream_plus_async_poll() {
+        let def = WorkflowDefinition {
+            nodes: vec![http_node(
+                "a",
+                json!({"url":"https://x","stream":true,"async_poll":true}),
+            )],
+            edges: vec![],
+        };
+        let err = validate_definition(&def).unwrap_err().to_string();
+        assert!(err.contains("stream 与 async_poll"));
+    }
+
+    #[test]
+    fn validate_allows_single_stream_http_call() {
+        let def = WorkflowDefinition {
+            nodes: vec![http_node("a", json!({"url":"https://x","stream":true}))],
+            edges: vec![],
+        };
+        assert!(validate_definition(&def).is_ok());
+    }
+
+    #[tokio::test]
+    async fn stream_http_call_pipes_bytes_and_extracts_openai_text() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("[::1]:0").await.unwrap();
+        let url = format!("http://[::1]:{}", listener.local_addr().unwrap().port());
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let sse_len = sse.len();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 1024];
+            let _ = sock.read(&mut buf).await;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {sse_len}\r\nSet-Cookie: x=1\r\nConnection: close\r\n\r\n"
+            );
+            sock.write_all(head.as_bytes()).await.unwrap();
+            sock.write_all(sse.as_bytes()).await.unwrap();
+        });
+
+        let (bridge, mut rx) = crate::workflow_stream::StreamBridge::pair();
+        let engine = lazy_engine().with_stream_bridge(bridge);
+        let (output, _) = engine
+            .exec_http_call_node(&json!({"url": url, "stream": true}), &exec_ctx())
+            .await
+            .unwrap();
+
+        assert_eq!(output["status"], 200);
+        assert_eq!(output["text"], "Hi");
+        assert_eq!(output["streamed"], true);
+        assert_eq!(output["body"].as_str().unwrap(), sse);
+
+        match rx.recv().await {
+            Some(crate::workflow_stream::StreamEvent::Commit { status, headers }) => {
+                assert_eq!(status, 200);
+                assert!(headers
+                    .iter()
+                    .any(|(k, v)| k == "content-type" && v.starts_with("text/event-stream")));
+                assert!(!headers.iter().any(|(k, _)| k == "set-cookie"));
+            }
+            other => panic!("expected Commit, got {other:?}"),
+        }
+        let mut piped = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            match ev {
+                crate::workflow_stream::StreamEvent::Chunk(b) => piped.extend_from_slice(&b),
+                crate::workflow_stream::StreamEvent::End => break,
+                crate::workflow_stream::StreamEvent::Commit { .. } => {}
+            }
+        }
+        assert_eq!(piped, sse.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn stream_http_call_does_not_commit_for_subworkflow_trigger() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("[::1]:0").await.unwrap();
+        let url = format!("http://[::1]:{}", listener.local_addr().unwrap().port());
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 1024];
+            let _ = sock.read(&mut buf).await;
+            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")
+                .await
+                .unwrap();
+        });
+
+        let (bridge, mut rx) = crate::workflow_stream::StreamBridge::pair();
+        let engine = lazy_engine().with_stream_bridge(bridge);
+        let mut ctx = exec_ctx();
+        ctx.trigger_type = "subworkflow".into();
+        let (output, _) = engine
+            .exec_http_call_node(&json!({"url": url, "stream": true}), &ctx)
+            .await
+            .unwrap();
+        assert_eq!(output["body"], "OK");
+        assert!(rx.try_recv().is_err(), "child/subworkflow must not Commit");
+    }
+
+    #[tokio::test]
+    async fn stream_plus_async_poll_is_runtime_error() {
+        let engine = lazy_engine();
+        let err = engine
+            .exec_http_call_node(
+                &json!({"url":"https://example.com","stream":true,"async_poll":true}),
+                &exec_ctx(),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("stream 与 async_poll"));
     }
 }

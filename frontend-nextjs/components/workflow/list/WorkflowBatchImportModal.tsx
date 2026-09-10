@@ -62,6 +62,12 @@ function buildDef(file: ParsedFile): ImportWorkflowDef {
     category: file.def?.category ?? '',
     trigger_type: file.triggerType,
     trigger_config: file.def?.trigger_config ?? {},
+    input_schema:
+      file.def?.input_schema &&
+      typeof file.def.input_schema === 'object' &&
+      !Array.isArray(file.def.input_schema)
+        ? file.def.input_schema
+        : null,
     nodes: file.def?.nodes ?? [],
     edges: file.def?.edges ?? [],
     dependencies: file.def?.dependencies ?? null,
@@ -168,6 +174,12 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
                 workflow.trigger_config && typeof workflow.trigger_config === 'object'
                   ? (workflow.trigger_config as Record<string, unknown>)
                   : {},
+              input_schema:
+                workflow.input_schema &&
+                typeof workflow.input_schema === 'object' &&
+                !Array.isArray(workflow.input_schema)
+                  ? (workflow.input_schema as Record<string, unknown>)
+                  : null,
               nodes: Array.isArray(workflow.nodes) ? workflow.nodes : [],
               edges: Array.isArray(workflow.edges) ? workflow.edges : [],
               dependencies:
