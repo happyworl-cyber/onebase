@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 
 export interface RowMenuProps {
+  onPublish?: () => void
+  onDiscardDraft?: () => void
   onRun: () => void
   onShowRuns: () => void
   onDuplicate: () => void
@@ -48,6 +50,8 @@ function MenuItem({
 }
 
 export default function RowMenu({
+  onPublish,
+  onDiscardDraft,
   onRun,
   onShowRuns,
   onDuplicate,
@@ -101,6 +105,18 @@ export default function RowMenu({
           className="absolute top-full mt-1 right-0 bg-white border border-slate-200 rounded-xl py-1 z-30 w-40 shadow-lg"
           onClick={(e) => e.stopPropagation()}
         >
+          {onPublish && (
+            <MenuItem onClick={onPublish} close={() => setMenuOpen(false)}>
+              <i className="fas fa-upload text-[10px] w-3.5 text-indigo-500" />
+              发布
+            </MenuItem>
+          )}
+          {onDiscardDraft && (
+            <MenuItem onClick={onDiscardDraft} close={() => setMenuOpen(false)}>
+              <i className="fas fa-rotate-left text-[10px] w-3.5 text-slate-400" />
+              丢弃草稿
+            </MenuItem>
+          )}
           <MenuItem onClick={onRun} close={() => setMenuOpen(false)}>
             <i className="fas fa-play text-[10px] w-3.5 text-amber-500" />
             运行
@@ -152,6 +168,8 @@ interface WorkflowRowActionsProps {
   enabled: boolean
   onEdit: () => void
   onToggle: () => void
+  onPublish?: () => void
+  onDiscardDraft?: () => void
   onRun: () => void
   onShowRuns: () => void
   onDuplicate: () => void
@@ -169,6 +187,8 @@ export function WorkflowRowActions({
   enabled,
   onEdit,
   onToggle,
+  onPublish,
+  onDiscardDraft,
   onRun,
   onShowRuns,
   onDuplicate,
@@ -219,6 +239,8 @@ export function WorkflowRowActions({
       </button>
       <RowMenu
         size={size}
+        onPublish={onPublish}
+        onDiscardDraft={onDiscardDraft}
         onRun={onRun}
         onShowRuns={onShowRuns}
         onDuplicate={onDuplicate}

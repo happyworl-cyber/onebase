@@ -158,6 +158,13 @@ interface Props {
   setSaveNote: (v: string) => void
   onBack: () => void
   onSave: () => void
+  onPublish?: () => void
+  onDiscardDraft?: () => void
+  hasUnpublished?: boolean
+  publishedVersion?: number | null
+  liveSlug?: string
+  canvasDirty?: boolean
+  dirtyResetNonce?: number
   onShowHelp: () => void
   onShowDebug: () => void
   onShowVersions?: () => void
@@ -550,6 +557,13 @@ export default function WorkflowEditorHeader({
   setSaveNote,
   onBack,
   onSave,
+  onPublish,
+  onDiscardDraft,
+  hasUnpublished = false,
+  publishedVersion = null,
+  liveSlug,
+  canvasDirty = false,
+  dirtyResetNonce,
   onShowHelp,
   onShowDebug,
   onShowVersions,
@@ -571,7 +585,7 @@ export default function WorkflowEditorHeader({
   const [npmDepsOpen, setNpmDepsOpen] = useState(false)
   const [npmDepsText, setNpmDepsText] = useState('')
   const [npmDepsError, setNpmDepsError] = useState<string | null>(null)
-  const [metaCollapsed, setMetaCollapsed] = useState(false)
+  const [metaCollapsed, setMetaCollapsed] = useState(true)
   const [pipDepsOpen, setPipDepsOpen] = useState(false)
   const [pipDepsText, setPipDepsText] = useState('')
   const inputRefs = useRef<Record<string, HTMLInputElement | HTMLTextAreaElement | null>>({})
@@ -588,7 +602,7 @@ export default function WorkflowEditorHeader({
   const selectedDb = databaseOptions.find((d) => String(d.database_id) === formMeta.database_id)
 
   useEffect(() => {
-    if (localStorage.getItem(META_COLLAPSED_KEY) === '1') setMetaCollapsed(true)
+    if (localStorage.getItem(META_COLLAPSED_KEY) === '0') setMetaCollapsed(false)
   }, [])
 
   const toggleMetaCollapsed = useCallback(() => {
@@ -603,6 +617,10 @@ export default function WorkflowEditorHeader({
     setDirtyFields((prev) => new Set(prev).add(key))
     setToast('已修改，记得保存')
   }, [])
+
+  useEffect(() => {
+    setDirtyFields(new Set())
+  }, [dirtyResetNonce])
 
   useEffect(() => {
     const obj = extractJsDependencies(workflowDependencies)
@@ -751,9 +769,16 @@ export default function WorkflowEditorHeader({
   )
 
   const handleSave = () => {
-    setDirtyFields(new Set())
     onSave()
   }
+
+  const handlePublish = () => {
+    if (!onPublish) return
+    onPublish()
+  }
+
+  const publishDisabled =
+    publishedVersion != null && !hasUnpublished && dirtyFields.size === 0 && !canvasDirty
 
   const copyEndpoint = async () => {
     if (!endpointPath) return
@@ -857,6 +882,15 @@ export default function WorkflowEditorHeader({
         </button>
         <div className="w-px h-[18px] bg-slate-200 shrink-0" />
         <span className="text-sm font-semibold text-slate-800 truncate shrink-0">{title}</span>
+        {publishedVersion == null ? (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold shrink-0 bg-slate-100 border border-slate-200 text-slate-500">
+            未发布
+          </span>
+        ) : hasUnpublished ? (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold shrink-0 bg-amber-50 border border-amber-200 text-amber-700">
+            有未发布修改
+          </span>
+        ) : null}
         {isEnabled != null && (
           onToggleEnabled ? (
             <button
@@ -887,6 +921,9 @@ export default function WorkflowEditorHeader({
               {isEnabled ? '已启用' : '已禁用'}
             </span>
           )
+        )}
+        {publishedVersion == null && (
+          <span className="text-[11px] text-amber-600 shrink-0">发布后才会接收请求</span>
         )}
         <div className="flex-1" />
         <button
@@ -957,13 +994,32 @@ export default function WorkflowEditorHeader({
           placeholder="保存备注（可选）"
           className="w-28 shrink-0 px-2 py-1.5 border border-slate-200 rounded-[7px] text-xs text-slate-600 outline-none focus:border-indigo-300"
         />
+        {hasUnpublished && onDiscardDraft && (
+          <button
+            type="button"
+            onClick={onDiscardDraft}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[7px] text-xs font-medium border border-slate-200 text-slate-600 bg-white hover:bg-slate-50 shrink-0"
+          >
+            丢弃草稿
+          </button>
+        )}
         <button
           type="button"
           onClick={handleSave}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-[7px] text-xs font-semibold bg-indigo-600 text-white hover:bg-indigo-700 shadow-[0_1px_4px_rgba(79,70,229,0.3)] shrink-0"
+          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-[7px] text-xs font-semibold border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 shrink-0"
         >
           保存
         </button>
+        {onPublish && (
+          <button
+            type="button"
+            onClick={handlePublish}
+            disabled={publishDisabled}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-[7px] text-xs font-semibold bg-indigo-600 text-white hover:bg-indigo-700 shadow-[0_1px_4px_rgba(79,70,229,0.3)] shrink-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-indigo-600"
+          >
+            {publishDisabled ? '已发布' : '发布'}
+          </button>
+        )}
       </div>
 
       {/* 信息栏：两行内联编辑。折叠后只留顶栏，下方画布占满剩余高度。 */}
@@ -1143,19 +1199,26 @@ export default function WorkflowEditorHeader({
               onStartEdit={() => {}}
               readOnly
             >
-              <button
-                type="button"
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={copyEndpoint}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[5px] text-[12px] font-mono bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors max-w-full truncate"
-                title="点击复制"
-              >
-                <span className="text-[10px] font-extrabold tracking-wide opacity-70 shrink-0">POST</span>
-                <span className="truncate">{endpointPath.replace(/^POST\s+/, '')}</span>
-                <svg className="w-2.5 h-2.5 opacity-45 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-              </button>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={copyEndpoint}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[5px] text-[12px] font-mono bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors max-w-full truncate"
+                  title="点击复制"
+                >
+                  <span className="text-[10px] font-extrabold tracking-wide opacity-70 shrink-0">POST</span>
+                  <span className="truncate">{endpointPath.replace(/^POST\s+/, '')}</span>
+                  <svg className="w-2.5 h-2.5 opacity-45 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                </button>
+                {hasUnpublished && liveSlug && formMeta.slug && formMeta.slug !== liveSlug && (
+                  <span className="text-[11px] text-amber-700 truncate shrink-0">
+                    发布后地址变为 {formMeta.slug}
+                  </span>
+                )}
+              </div>
             </InlineField>
           )}
         </div>

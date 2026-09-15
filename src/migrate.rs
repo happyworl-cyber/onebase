@@ -346,6 +346,18 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "068 object storage gcs",
         include_str!("../migrations/068_object_storage_gcs.sql"),
     ),
+    (
+        "069 wf credentials api key",
+        include_str!("../migrations/069_wf_credentials_api_key.sql"),
+    ),
+    (
+        "070 project log sources",
+        include_str!("../migrations/070_project_log_sources.sql"),
+    ),
+    (
+        "071 workflow drafts",
+        include_str!("../migrations/071_workflow_drafts.sql"),
+    ),
 ];
 
 /// API Keys 表（内联 SQL，历史上由独立的 migrate_api_keys 维护，这里随主序列一起跑）。

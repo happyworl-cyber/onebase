@@ -173,6 +173,11 @@ async fn load_enabled_workflow_for_tenant(
     if !wf.is_enabled {
         return Err(AppError::InvalidQuery("只能选择已启用的工作流".to_string()));
     }
+    if wf.published_version.is_none() {
+        return Err(AppError::InvalidQuery(
+            "只能选择已发布且启用的工作流".into(),
+        ));
+    }
     Ok(wf)
 }
 

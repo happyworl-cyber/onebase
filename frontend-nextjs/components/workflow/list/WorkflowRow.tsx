@@ -29,6 +29,8 @@ interface WorkflowRowProps {
   folders: WorkflowFolder[]
   onEdit: () => void
   onToggle: () => void
+  onPublish?: () => void
+  onDiscardDraft?: () => void
   onRun: () => void
   onShowRuns: () => void
   onDuplicate: () => void
@@ -41,6 +43,25 @@ interface WorkflowRowProps {
   onOpenGraph?: () => void
   selected?: boolean
   onSelectToggle?: () => void
+}
+
+function PublishBadge({ w }: { w: WorkflowListItem }) {
+  if (w.published_version == null) {
+    return <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">未发布</span>
+  }
+  if (w.has_unpublished) {
+    return <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">有修改</span>
+  }
+  return null
+}
+
+function draftMenuHandlers(
+  w: WorkflowListItem,
+  onPublish?: () => void,
+  onDiscardDraft?: () => void,
+) {
+  if (!w.has_unpublished) return { onPublish: undefined, onDiscardDraft: undefined }
+  return { onPublish, onDiscardDraft }
 }
 
 function TriggerBadge({ triggerType }: { triggerType: string }) {
@@ -117,6 +138,8 @@ export default function WorkflowRow({
   folderId,
   onEdit,
   onToggle,
+  onPublish,
+  onDiscardDraft,
   onRun,
   onShowRuns,
   onDuplicate,
@@ -134,6 +157,7 @@ export default function WorkflowRow({
   const [menuOpen, setMenuOpen] = useState(false)
   const iconBg = on ? TRIGGER_BADGE_CLASS[meta.color].split(' ')[0] : 'bg-slate-100'
   const iconClass = on ? TRIGGER_ICON_CLASS[meta.color] : 'text-slate-400'
+  const draftMenu = draftMenuHandlers(w, onPublish, onDiscardDraft)
 
   return (
     <div
@@ -171,6 +195,7 @@ export default function WorkflowRow({
           >
             <HighlightText text={w.slug} query={search} />
           </code>
+          <PublishBadge w={w} />
           {globalSearch && <FolderBadge folderId={folderId} folders={folders} />}
         </div>
         {w.description && <WorkflowDescription text={w.description} highlight={search} />}
@@ -217,6 +242,8 @@ export default function WorkflowRow({
           enabled={on}
           onEdit={onEdit}
           onToggle={onToggle}
+          onPublish={draftMenu.onPublish}
+          onDiscardDraft={draftMenu.onDiscardDraft}
           onRun={onRun}
           onShowRuns={onShowRuns}
           onDuplicate={onDuplicate}
@@ -242,6 +269,8 @@ export function WorkflowCard({
   folderId,
   onEdit,
   onToggle,
+  onPublish,
+  onDiscardDraft,
   onRun,
   onShowRuns,
   onDuplicate,
@@ -259,6 +288,7 @@ export function WorkflowCard({
   const [menuOpen, setMenuOpen] = useState(false)
   const iconBg = on ? TRIGGER_BADGE_CLASS[meta.color].split(' ')[0] : 'bg-slate-100'
   const iconClass = on ? TRIGGER_ICON_CLASS[meta.color] : 'text-slate-400'
+  const draftMenu = draftMenuHandlers(w, onPublish, onDiscardDraft)
 
   return (
     <div
@@ -301,6 +331,7 @@ export function WorkflowCard({
             <code className="text-xs bg-slate-100 px-1.5 py-0.5 rounded text-slate-500 font-mono truncate min-w-0">
               <HighlightText text={w.slug} query={search} />
             </code>
+            <PublishBadge w={w} />
           </div>
           {w.description && <WorkflowDescription text={w.description} highlight={search} className="mt-1.5" />}
           <div className={cn('flex items-center gap-3 mt-2 text-slate-400', LIST_SECONDARY_TEXT_CLASS)}>
@@ -316,6 +347,8 @@ export function WorkflowCard({
             enabled={on}
             onEdit={onEdit}
             onToggle={onToggle}
+            onPublish={draftMenu.onPublish}
+            onDiscardDraft={draftMenu.onDiscardDraft}
             onRun={onRun}
             onShowRuns={onShowRuns}
             onDuplicate={onDuplicate}

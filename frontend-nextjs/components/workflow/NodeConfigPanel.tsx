@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'next/navigation'
 import { NODE_TYPE_META } from './NodeTypes'
 import CodeSnippetEditor from './CodeSnippetEditor'
-import { wfDatasourceAPI, type WfDatasource } from '@/lib/api'
+import { wfDatasourceAPI, wfCredentialAPI, type WfDatasource, type WfCredential } from '@/lib/api'
 import { redisAPI, REDIS_OPS, type RedisConnection, type RedisOp } from '@/lib/api'
 import { kafkaAPI, type KafkaConnection } from '@/lib/api'
 import {
@@ -13,6 +13,7 @@ import {
   type ObjectStorageConnection,
   type ObjectStorageOp,
 } from '@/lib/api'
+import { validateNodeId } from './nodeId'
 
 interface WorkflowNodeData {
   id: string
@@ -29,6 +30,9 @@ interface Props {
   onDelete?: () => void
   /** 条件节点分支改名时通知画布同步旧连线的 branch，避免失配 */
   onBranchRename?: (nodeId: string, oldBranch: string, newBranch: string) => void
+  /** 当前图上已有节点 id，改名时用来判重 */
+  usedIds?: string[]
+  onRenameId?: (oldId: string, newId: string) => void
   readOnly?: boolean
 }
 
@@ -110,6 +114,8 @@ export default function NodeConfigPanel({
   onClose,
   onDelete,
   onBranchRename,
+  usedIds = [],
+  onRenameId,
   readOnly = false,
 }: Props) {
   // 面板宽度（受控 + localStorage 持久化），用户可拖拽左边缘调整。
@@ -117,6 +123,8 @@ export default function NodeConfigPanel({
   const [ideFullscreen, setIdeFullscreen] = useState(false)
   const [isResizing, setIsResizing] = useState(false)
   const [jsonFieldErrors, setJsonFieldErrors] = useState<Record<string, string>>({})
+  const [idDraft, setIdDraft] = useState(node?.id ?? '')
+  const [idError, setIdError] = useState<string | null>(null)
   // 分支名输入聚焦时的旧值，失焦时用「旧值→新值」原子提交改名，避免逐字编辑过程中的中间态错配。
   const branchEditStart = useRef<string>('')
   const widthRef = useRef(width)
@@ -129,6 +137,8 @@ export default function NodeConfigPanel({
   // （不选即默认库），不阻塞编辑。
   const params = useParams<{ projectId?: string }>()
   const [datasources, setDatasources] = useState<WfDatasource[]>([])
+  const [httpCredentials, setHttpCredentials] = useState<WfCredential[]>([])
+  const isHttpNode = node?.type === 'http_call'
   const isDbNode =
     node?.type === 'db_query' ||
     node?.type === 'db_execute' ||
@@ -150,6 +160,26 @@ export default function NodeConfigPanel({
       cancelled = true
     }
   }, [params?.projectId, isDbNode])
+
+  useEffect(() => {
+    const pid = Number(params?.projectId)
+    if (!isHttpNode || !Number.isFinite(pid)) return
+    let cancelled = false
+    wfCredentialAPI
+      .list(pid)
+      .then((res) => {
+        if (!cancelled) setHttpCredentials(res.data)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [params?.projectId, isHttpNode])
+
+  useEffect(() => {
+    setIdDraft(node?.id ?? '')
+    setIdError(null)
+  }, [node?.id])
 
   // 当前节点选中的数据源（用于信息条展示）。config.datasource_id 兼容数字/字符串。
   const selectedDatasource = (() => {
@@ -217,6 +247,23 @@ export default function NodeConfigPanel({
   const patch = (next: WorkflowNodeData) => {
     if (readOnly) return
     onChange?.(next)
+  }
+
+  const commitId = () => {
+    if (readOnly || !onRenameId) return
+    const next = idDraft.trim()
+    if (next === node.id) {
+      setIdDraft(node.id)
+      setIdError(null)
+      return
+    }
+    const err = validateNodeId(next, usedIds, node.id)
+    if (err) {
+      setIdError(err)
+      return
+    }
+    setIdError(null)
+    onRenameId(node.id, next)
   }
 
   const updateConfig = (key: string, value: unknown) => {
@@ -388,10 +435,28 @@ export default function NodeConfigPanel({
         <div>
           <label className="block text-xs font-medium text-gray-500 mb-1">节点 ID</label>
           <input
-            value={node.id}
-            disabled
-            className="w-full px-3 py-2 border rounded-lg bg-gray-50 text-sm font-mono text-gray-500"
+            value={idDraft}
+            onChange={(e) => {
+              setIdDraft(e.target.value)
+              if (idError) setIdError(null)
+            }}
+            onBlur={commitId}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                ;(e.target as HTMLInputElement).blur()
+              }
+            }}
+            className={`w-full px-3 py-2 border rounded-lg text-sm font-mono ${
+              idError ? 'border-red-300' : ''
+            }`}
+            placeholder="如 output、resp_ok"
           />
+          {idError ? (
+            <p className="mt-1 text-[11px] text-red-500">{idError}</p>
+          ) : (
+            <p className="mt-1 text-[11px] text-slate-400">失焦或回车生效。下游模板 {'{{'}id.字段{'}}'} 会一并改掉。</p>
+          )}
         </div>
 
         <div>
@@ -672,6 +737,32 @@ export default function NodeConfigPanel({
                   placeholder="https://api.example.com/data"
                 />
               </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">凭证</label>
+              <select
+                value={node.config.credential_id ?? ''}
+                onChange={e =>
+                  updateConfig(
+                    'credential_id',
+                    e.target.value === '' ? undefined : Number(e.target.value),
+                  )
+                }
+                disabled={readOnly}
+                className="w-full px-2 py-2 border rounded-lg text-sm"
+              >
+                <option value="">不使用凭证</option>
+                {httpCredentials
+                  .filter((c) => c.kind !== 'aliyun_ak')
+                  .map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}（{c.kind === 'basic' ? '用户名/密码' : c.kind === 'bearer' ? 'Bearer' : 'API Key'}）
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-400 mt-1">
+                选中后按类型自动加认证头，并覆盖 Headers 里的同名头。也可用 {'{{cred.名称.token}}'} 等模板。
+              </p>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Headers (JSON)</label>

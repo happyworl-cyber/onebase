@@ -89,7 +89,8 @@ pub fn start_event_trigger(event_bus: EventBus, pool: PgPool) {
 async fn load_enabled_hook_workflows(pool: &PgPool) -> Result<Vec<Workflow>, sqlx::Error> {
     sqlx::query_as::<_, Workflow>(
         r#"SELECT * FROM management.workflows
-           WHERE is_enabled = true AND trigger_type = 'hook'"#,
+           WHERE is_enabled = true AND published_version IS NOT NULL
+             AND trigger_type = 'hook'"#,
     )
     .fetch_all(pool)
     .await
@@ -167,22 +168,26 @@ async fn trigger_workflow_for_event(pool: &PgPool, workflow: &Workflow, event: &
     let pool_clone = pool.clone();
     let wf = workflow.clone();
     tokio::spawn(async move {
-        if let Err(e) = workflow_handlers::execute_workflow_internal(
-            &pool_clone,
-            &wf,
-            "hook",
-            &trigger_data,
-            None,
-            crate::workflow_engine::ApiKeyWriteGuard::Off,
-        )
-        .await
-        {
-            tracing::error!(
-                workflow_id = wf.id,
-                error = %e,
-                "Hook 触发的工作流执行失败"
-            );
-        }
+        let tid = crate::execution_log::new_trace_id();
+        crate::request_id::scope_with(Some(tid), async move {
+            if let Err(e) = workflow_handlers::execute_workflow_internal(
+                &pool_clone,
+                &wf,
+                "hook",
+                &trigger_data,
+                None,
+                crate::workflow_engine::ApiKeyWriteGuard::Off,
+            )
+            .await
+            {
+                tracing::error!(
+                    workflow_id = wf.id,
+                    error = %e,
+                    "Hook 触发的工作流执行失败"
+                );
+            }
+        })
+        .await;
     });
 }
 

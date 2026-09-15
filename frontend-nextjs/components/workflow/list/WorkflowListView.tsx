@@ -80,6 +80,8 @@ export interface WorkflowListViewProps {
   onNewWorkflow: (folderPlacement?: { department: string; category?: string | null }) => void
   onEdit: (wf: WorkflowListItem) => void
   onToggle: (wf: WorkflowListItem) => void
+  onPublish: (wf: WorkflowListItem) => void
+  onDiscardDraft: (wf: WorkflowListItem) => void
   onRun: (wf: WorkflowListItem) => void
   onShowRuns: (wf: WorkflowListItem) => void
   onDuplicate: (wf: WorkflowListItem) => void
@@ -114,6 +116,8 @@ export default function WorkflowListView({
   onNewWorkflow,
   onEdit,
   onToggle,
+  onPublish,
+  onDiscardDraft,
   onRun,
   onShowRuns,
   onDuplicate,
@@ -867,6 +871,8 @@ export default function WorkflowListView({
                     search={debouncedSearch}
                     onEdit={() => onEdit(wf)}
                     onToggle={() => onToggle(wf)}
+                    onPublish={() => onPublish(wf)}
+                    onDiscardDraft={() => onDiscardDraft(wf)}
                     onRun={() => onRun(wf)}
                     onShowRuns={() => onShowRuns(wf)}
                     onDuplicate={() => onDuplicate(wf)}
@@ -896,6 +902,8 @@ export default function WorkflowListView({
                     search={debouncedSearch}
                     onEdit={() => onEdit(wf)}
                     onToggle={() => onToggle(wf)}
+                    onPublish={() => onPublish(wf)}
+                    onDiscardDraft={() => onDiscardDraft(wf)}
                     onRun={() => onRun(wf)}
                     onShowRuns={() => onShowRuns(wf)}
                     onDuplicate={() => onDuplicate(wf)}

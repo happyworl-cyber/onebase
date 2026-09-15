@@ -116,6 +116,8 @@ pub mod resource_type {
     pub const USER: &str = "用户";
     pub const ROLE: &str = "角色";
     pub const ENV_VAR: &str = "环境变量";
+    pub const CREDENTIAL: &str = "凭证";
+    pub const LOG_SOURCE: &str = "云日志源";
     pub const PROJECT_SETTING: &str = "项目设置";
     pub const RLS: &str = "RLS";
     pub const RPC_ACL: &str = "RPC ACL";

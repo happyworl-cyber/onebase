@@ -92,6 +92,9 @@ interface Workflow {
   created_by_email: string | null
   created_at: string
   updated_at: string
+  published_version?: number | null
+  has_unpublished?: boolean
+  published_slug?: string | null
 }
 type QaFinding = {
   severity: 'crit' | 'high' | 'med' | 'low'
@@ -286,6 +289,11 @@ function normalizeNodesForExecution(nodes: WorkflowNodeDef[]): WorkflowNodeDef[]
   })
 }
 
+interface NodeLogLine {
+  level: string
+  message: string
+}
+
 interface NodeResultItem {
   node_id: string
   status: string
@@ -295,6 +303,7 @@ interface NodeResultItem {
   error?: string | null
   branch?: string | null
   node_type?: string | null
+  logs?: NodeLogLine[]
 }
 
 /** 从节点输出中提取简短摘要，便于在折叠状态下定位问题节点 */
@@ -315,6 +324,21 @@ function JsonLogBlock({ title, value }: { title?: string; value: unknown }) {
     <>
       <div className={`flex items-center gap-2 ${title ? 'mt-2 justify-between' : 'mt-1 justify-end'}`}>
         {title ? <div className="text-[11px] font-medium text-gray-500">{title}</div> : null}
+        <CopyButton text={text} />
+      </div>
+      <pre className="mt-1 p-2 bg-white border rounded font-mono overflow-auto max-h-48 text-[11px] leading-relaxed">
+        {text}
+      </pre>
+    </>
+  )
+}
+
+function DebugLogsBlock({ logs }: { logs: NodeLogLine[] }) {
+  const text = logs.map((line) => `${line.level}  ${line.message}`).join('\n')
+  return (
+    <>
+      <div className="flex items-center gap-2 mt-2 justify-between">
+        <div className="text-[11px] font-medium text-gray-500">调试日志</div>
         <CopyButton text={text} />
       </div>
       <pre className="mt-1 p-2 bg-white border rounded font-mono overflow-auto max-h-48 text-[11px] leading-relaxed">
@@ -372,6 +396,7 @@ function NodeResultCard({ nr, defaultOpen = false }: { nr: NodeResultItem; defau
         {nr.output != null && (
           <JsonLogBlock title="输出（对方响应）" value={nr.output} />
         )}
+        {!!nr.logs?.length && <DebugLogsBlock logs={nr.logs} />}
       </div>
     </details>
   )
@@ -387,7 +412,7 @@ function NodeResultList({ results }: { results: NodeResultItem[] }) {
         <NodeResultCard
           key={`${nr.node_id}-${idx}`}
           nr={nr}
-          defaultOpen={nr.status === 'failed' || nr.status === 'failed_allowed' || !!extractOutputHint(nr.output)}
+          defaultOpen={nr.status === 'failed' || nr.status === 'failed_allowed' || !!extractOutputHint(nr.output) || !!nr.logs?.length}
         />
       ))}
     </div>
@@ -800,6 +825,24 @@ export default function WorkflowsManager({
   const [qaFindings, setQaFindings] = useState<QaFinding[] | null>(null)
   const [qaFailed, setQaFailed] = useState(false)
   const pendingPayloadRef = useRef<Record<string, unknown> | null>(null)
+  const pendingPublishRef = useRef(false)
+  const [canvasNonce, setCanvasNonce] = useState(0)
+  const [canvasDirty, setCanvasDirty] = useState(() => !!initialDraft)
+  const [dirtyResetNonce, setDirtyResetNonce] = useState(0)
+  const editorGenRef = useRef(0)
+  const persistEditorGenRef = useRef(0)
+  const bumpEditorGen = () => {
+    editorGenRef.current += 1
+  }
+
+  const markEditorClean = useCallback(() => {
+    setCanvasDirty(false)
+    setDirtyResetNonce((n) => n + 1)
+  }, [])
+
+  const markEditorCleanIfUnchanged = (gen: number) => {
+    if (editorGenRef.current === gen) markEditorClean()
+  }
 
   // AI 助手面板布局（右侧抽屉），用于让接口文档 / 调试抽屉避让，避免重叠。
   const [aiPanel, setAiPanel] = useState<{ open: boolean; width: number; mobile: boolean }>(
@@ -1089,6 +1132,7 @@ export default function WorkflowsManager({
       syncWorkflowIdInUrl(null)
     }
     void ensureEditorTaxonomy()
+    markEditorClean()
     setView('editor')
   }
 
@@ -1166,8 +1210,10 @@ export default function WorkflowsManager({
   }, [])
 
   const handleCanvasChange = useCallback((nodes: WorkflowNodeDef[], edges: WorkflowEdgeDef[]) => {
+    bumpEditorGen()
     setEditorNodes(nodes)
     setEditorEdges(edges)
+    setCanvasDirty(true)
   }, [])
 
   const handleMoveCategory = useCallback(
@@ -1236,53 +1282,71 @@ export default function WorkflowsManager({
     [defaultDatabaseId, refreshList],
   )
 
-  const persistWorkflow = async () => {
-    const payload = pendingPayloadRef.current
-    if (!payload) return
-    try {
-      if (editing) {
-        await api.patch(`/api/admin/workflows/${editing.id}`, payload)
-      } else {
-        await api.post('/api/admin/workflows', payload)
-      }
-      pendingPayloadRef.current = null
-      setSaveNote('')
-      setView('list')
-      consumedShareIdRef.current = null
-      syncWorkflowIdInUrl(null)
-      refreshList()
-    } catch (err: any) {
-      alert(err.response?.data?.error || '保存失败')
-    }
+  const applyEditorWorkflow = (
+    wf: Workflow,
+    extras?: { depsStatus?: WorkflowDepsStatus | null; pyDepsStatus?: WorkflowDepsStatus | null },
+  ) => {
+    const tax = resolveWorkflowTaxonomy(wf)
+    setEditing(wf)
+    setWorkflowDependencies(wf.dependencies ?? null)
+    if (extras && 'depsStatus' in extras) setDepsStatus(extras.depsStatus ?? null)
+    if (extras && 'pyDepsStatus' in extras) setPyDepsStatus(extras.pyDepsStatus ?? null)
+    setFormMeta({
+      name: wf.name, slug: wf.slug,
+      description: wf.description || '',
+      department: tax.department || SHARED_DEPARTMENT_NAME,
+      category: tax.category || '',
+      database_id: wf.database_id?.toString() || '',
+      trigger_type: wf.trigger_type,
+      trigger_config: JSON.stringify(wf.trigger_config || {}, null, 2),
+      input_schema: inputSchemaToForm(wf.input_schema),
+      timeout_ms: wf.timeout_ms, max_retries: wf.max_retries,
+      alert_webhook_url: wf.alert_webhook_url ?? '',
+      alert_webhook_template: JSON.stringify(
+        wf.alert_webhook_template ?? JSON.parse(DEFAULT_ALERT_WEBHOOK_TEMPLATE),
+        null,
+        2,
+      ),
+      alert_throttle_hours: wf.alert_throttle_hours ?? 24,
+      last_alert_sent_at: wf.last_alert_sent_at ?? null,
+    })
+    setEditorNodes(wf.nodes || [])
+    setEditorEdges(wf.edges || [])
+    setCanvasNonce((n) => n + 1)
+    markEditorClean()
   }
 
-  const dismissQaModal = () => {
-    setQaFindings(null)
-    setQaFailed(false)
-  }
-
-  const handleSave = async () => {
+  const buildPayload = (): Record<string, unknown> | null => {
     let triggerConfig: any
-    try { triggerConfig = JSON.parse(formMeta.trigger_config) } catch { return alert('触发配置 JSON 格式错误') }
+    try { triggerConfig = JSON.parse(formMeta.trigger_config) } catch {
+      alert('触发配置 JSON 格式错误')
+      return null
+    }
     const parsedInputSchema = parseInputSchemaForSave(formMeta.input_schema ?? '')
-    if (!parsedInputSchema.ok) return alert(parsedInputSchema.error)
+    if (!parsedInputSchema.ok) {
+      alert(parsedInputSchema.error)
+      return null
+    }
     let alertWebhookTemplate: Record<string, unknown> | null = null
     if ((formMeta.alert_webhook_url ?? '').trim()) {
       try {
         const parsed = JSON.parse(formMeta.alert_webhook_template || '{}')
         if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object') {
-          return alert('告警模板必须是 JSON 对象')
+          alert('告警模板必须是 JSON 对象')
+          return null
         }
         alertWebhookTemplate = parsed as Record<string, unknown>
       } catch {
-        return alert('告警模板 JSON 格式错误')
+        alert('告警模板 JSON 格式错误')
+        return null
       }
     }
     let normalizedNodes: WorkflowNodeDef[]
     try {
       normalizedNodes = normalizeNodesForExecution(editorNodes)
     } catch (err: any) {
-      return alert(err?.message || '节点配置 JSON 格式错误')
+      alert(err?.message || '节点配置 JSON 格式错误')
+      return null
     }
 
     // Strip internal _position from config before saving (keep for frontend)
@@ -1295,7 +1359,7 @@ export default function WorkflowsManager({
       (formMeta.department ?? '').trim() || SHARED_DEPARTMENT_NAME,
       formMeta.category,
     )
-    const payload = {
+    return {
       name: formMeta.name,
       slug: formMeta.slug,
       description: formMeta.description || null,
@@ -1315,10 +1379,69 @@ export default function WorkflowsManager({
       dependencies: workflowDependencies,
       version_note: saveNote.trim() || null,
     }
-    pendingPayloadRef.current = payload
+  }
 
+  const persistWorkflow = async ({ closeEditor }: { closeEditor: boolean }): Promise<Workflow | undefined> => {
+    const payload = pendingPayloadRef.current
+    if (!payload) return undefined
+    const gen = persistEditorGenRef.current
+    try {
+      const res = editing
+        ? await api.patch(`/api/admin/workflows/${editing.id}`, payload)
+        : await api.post('/api/admin/workflows', payload)
+      const workflow = res.data?.workflow as Workflow | undefined
+      pendingPayloadRef.current = null
+      markEditorCleanIfUnchanged(gen)
+      if (closeEditor) {
+        setSaveNote('')
+        setView('list')
+        consumedShareIdRef.current = null
+        syncWorkflowIdInUrl(null)
+        refreshList()
+      } else if (workflow) {
+        setEditing(workflow)
+        consumedShareIdRef.current = workflow.id
+        syncWorkflowIdInUrl(workflow.id)
+        refreshList()
+      }
+      return workflow
+    } catch (err: any) {
+      alert(err.response?.data?.error || '保存失败')
+      return undefined
+    }
+  }
+
+  const persistThenPublish = async () => {
+    const gen = persistEditorGenRef.current
+    const saved = await persistWorkflow({ closeEditor: false })
+    if (!saved) {
+      pendingPublishRef.current = false
+      return
+    }
+    try {
+      const res = await api.post(`/api/admin/workflows/${saved.id}/publish`, {
+        version_note: saveNote.trim() || null,
+      })
+      const workflow = res.data?.workflow as Workflow | undefined
+      if (workflow) setEditing(workflow)
+      setSaveNote('')
+      pendingPublishRef.current = false
+      markEditorCleanIfUnchanged(gen)
+      showToast('success', '已发布')
+      refreshList()
+    } catch (err: any) {
+      pendingPublishRef.current = false
+      alert(err.response?.data?.error || '发布失败')
+    }
+  }
+
+  const runSaveQa = async () => {
+    const payload = pendingPayloadRef.current
+    if (!payload) return
     try {
       const res = await api.post('/api/admin/workflows/qa', {
+        id: editing?.id ?? null,
+        slug: payload.slug,
         database_id: payload.database_id,
         trigger_type: payload.trigger_type,
         input_schema: payload.input_schema,
@@ -1327,7 +1450,11 @@ export default function WorkflowsManager({
       })
       const findings = (res.data?.findings ?? []) as QaFinding[]
       if (findings.length === 0) {
-        await persistWorkflow()
+        if (pendingPublishRef.current) {
+          await persistThenPublish()
+        } else {
+          await persistWorkflow({ closeEditor: true })
+        }
         return
       }
       setQaFailed(false)
@@ -1336,6 +1463,44 @@ export default function WorkflowsManager({
       showToast('error', '规范预检失败，仍可保存')
       setQaFailed(true)
       setQaFindings([])
+    }
+  }
+
+  const dismissQaModal = () => {
+    setQaFindings(null)
+    setQaFailed(false)
+  }
+
+  const handleSave = async () => {
+    const payload = buildPayload()
+    if (!payload) return
+    pendingPayloadRef.current = payload
+    pendingPublishRef.current = false
+    persistEditorGenRef.current = editorGenRef.current
+    await runSaveQa()
+  }
+
+  const handlePublish = async () => {
+    const payload = buildPayload()
+    if (!payload) return
+    pendingPayloadRef.current = payload
+    pendingPublishRef.current = true
+    persistEditorGenRef.current = editorGenRef.current
+    await runSaveQa()
+  }
+
+  const handleDiscardDraft = async () => {
+    if (!editing) return
+    if (!confirm('确认丢弃未发布的修改？画布将恢复为已发布版本。')) return
+    try {
+      const res = await api.post(`/api/admin/workflows/${editing.id}/discard-draft`)
+      const workflow = res.data?.workflow as Workflow | undefined
+      if (!workflow) throw new Error('empty')
+      applyEditorWorkflow(workflow)
+      showToast('success', '已丢弃草稿')
+      refreshList()
+    } catch (err: any) {
+      alert(err.response?.data?.error || '丢弃草稿失败')
     }
   }
 
@@ -1366,43 +1531,20 @@ export default function WorkflowsManager({
     }
   }
 
-  // 恢复到某版本：后端把该快照写回当前定义并追加一条新版本，前端重新载入编辑器。
+  // 恢复到某版本：后端把该快照写入草稿（不上线），前端重新载入编辑器。
   const restoreVersion = async (version: number) => {
     if (!editing) return
-    if (!confirm(`确认把工作流恢复到版本 v${version}？\n当前未保存的改动将被覆盖；恢复会作为一个新版本记录，可再次回滚。`)) {
+    if (!confirm(`确认恢复到版本 v${version}？将写入草稿，不会立刻上线。`)) {
       return
     }
     try {
       await api.post(`/api/admin/workflows/${editing.id}/versions/${version}/restore`)
-      // 重新拉取最新工作流并载回编辑器。
       const res = await api.get(`/api/admin/workflows/${editing.id}`)
       const wf: Workflow = res.data.workflow
-      const tax = resolveWorkflowTaxonomy(wf)
-      setEditing(wf)
-      setWorkflowDependencies(wf.dependencies ?? null)
-      setDepsStatus((res.data?.deps_status as WorkflowDepsStatus | undefined) ?? null)
-      setPyDepsStatus((res.data?.py_deps_status as WorkflowDepsStatus | undefined) ?? null)
-      setFormMeta({
-        name: wf.name, slug: wf.slug,
-        description: wf.description || '',
-        department: tax.department || SHARED_DEPARTMENT_NAME,
-        category: tax.category || '',
-        database_id: wf.database_id?.toString() || '',
-        trigger_type: wf.trigger_type,
-        trigger_config: JSON.stringify(wf.trigger_config || {}, null, 2),
-        input_schema: inputSchemaToForm(wf.input_schema),
-        timeout_ms: wf.timeout_ms, max_retries: wf.max_retries,
-        alert_webhook_url: wf.alert_webhook_url ?? '',
-        alert_webhook_template: JSON.stringify(
-          wf.alert_webhook_template ?? JSON.parse(DEFAULT_ALERT_WEBHOOK_TEMPLATE),
-          null,
-          2,
-        ),
-        alert_throttle_hours: wf.alert_throttle_hours ?? 24,
-        last_alert_sent_at: wf.last_alert_sent_at ?? null,
+      applyEditorWorkflow(wf, {
+        depsStatus: (res.data?.deps_status as WorkflowDepsStatus | undefined) ?? null,
+        pyDepsStatus: (res.data?.py_deps_status as WorkflowDepsStatus | undefined) ?? null,
       })
-      setEditorNodes(wf.nodes || [])
-      setEditorEdges(wf.edges || [])
       setShowVersions(false)
       setVersionDetail(null)
       refreshList()
@@ -1468,13 +1610,38 @@ export default function WorkflowsManager({
     }
   }
 
-  const handleTrigger = async (id: number) => {
+  const handleListPublish = async (id: number) => {
+    try {
+      await api.post(`/api/admin/workflows/${id}/publish`, { version_note: null })
+      refreshList()
+      showToast('success', '已发布')
+    } catch (err: any) {
+      showToast('error', err.response?.data?.error || '发布失败')
+    }
+  }
+
+  const handleListDiscardDraft = async (id: number) => {
+    if (!confirm('丢弃未发布的修改？已发布的工作流将回到线上定义。')) return
+    try {
+      await api.post(`/api/admin/workflows/${id}/discard-draft`)
+      refreshList()
+      showToast('success', '已丢弃草稿')
+    } catch (err: any) {
+      showToast('error', err.response?.data?.error || '丢弃草稿失败')
+    }
+  }
+
+  const handleTrigger = async (wf: { id: number; published_version?: number | null }) => {
+    if (wf.published_version == null) {
+      showToast('error', '尚未发布')
+      return
+    }
     // 二次确认：手动运行会真实执行全部节点（写库 / HTTP / 邮件 / Stripe 等副作用与费用），不可逆。
     if (!confirm('确认手动运行此工作流？\n这会真实执行所有节点（可能写库 / 发 HTTP / 产生 Stripe 等外部副作用与费用）。')) return
     try {
-      await api.post(`/api/admin/workflows/${id}/trigger`, {})
+      await api.post(`/api/admin/workflows/${wf.id}/trigger`, {})
       showToast('success', '工作流已触发')
-      if (showRuns === id) loadRuns(id)
+      if (showRuns === wf.id) loadRuns(wf.id)
     } catch (err: any) {
       showToast('error', err.response?.data?.error || '触发失败')
     }
@@ -1583,9 +1750,10 @@ export default function WorkflowsManager({
     auditWorkflowExport([editing?.id])
   }
 
+  const liveSlug = editing ? (editing.published_slug ?? editing.slug) : formMeta.slug
   const editorEndpointPath =
-    formMeta.trigger_type === 'endpoint' && formMeta.slug
-      ? `POST /workflow/${endpointRouteForDb(formMeta.database_id ? parseInt(formMeta.database_id) : null)}/${formMeta.slug}`
+    formMeta.trigger_type === 'endpoint' && liveSlug
+      ? `POST /workflow/${endpointRouteForDb(formMeta.database_id ? parseInt(formMeta.database_id) : null)}/${liveSlug}`
       : undefined
 
   // ── List + Editor：列表保持挂载，进入详情时仅隐藏，返回后保留翻页等状态 ──
@@ -1601,7 +1769,9 @@ export default function WorkflowsManager({
           onNewWorkflow={(folderPlacement) => openEditor(undefined, folderPlacement)}
           onEdit={(wf) => openEditor(wf)}
           onToggle={handleToggle}
-          onRun={(wf) => handleTrigger(wf.id)}
+          onPublish={(wf) => void handleListPublish(wf.id)}
+          onDiscardDraft={(wf) => void handleListDiscardDraft(wf.id)}
+          onRun={(wf) => handleTrigger(wf)}
           onShowRuns={(wf) => loadRuns(wf.id)}
           onDuplicate={(wf) => handleDuplicate(wf.id)}
           onShare={(wf) => void handleCopyWorkflowLink(wf.id)}
@@ -1645,7 +1815,10 @@ export default function WorkflowsManager({
           editingName={editing?.name}
           isEnabled={editing?.is_enabled}
           formMeta={formMeta}
-          setFormMeta={setFormMeta}
+          setFormMeta={(update) => {
+            bumpEditorGen()
+            setFormMeta(update)
+          }}
           editorDepartments={editorDepartments}
           editorCategories={editorCategories}
           databaseOptions={databaseOptions}
@@ -1655,6 +1828,13 @@ export default function WorkflowsManager({
           setSaveNote={setSaveNote}
           onBack={backToList}
           onSave={handleSave}
+          onPublish={handlePublish}
+          onDiscardDraft={editing ? handleDiscardDraft : undefined}
+          hasUnpublished={!!editing?.has_unpublished}
+          publishedVersion={editing?.published_version ?? null}
+          liveSlug={liveSlug}
+          canvasDirty={canvasDirty}
+          dirtyResetNonce={dirtyResetNonce}
           onShowHelp={() => setShowHelp(true)}
           onShowDebug={() => { setShowDebug(true); setDebugResult(null); setDebugError(null) }}
           onShowVersions={editing ? openVersions : undefined}
@@ -1663,6 +1843,7 @@ export default function WorkflowsManager({
           onShare={editing ? () => void handleCopyWorkflowLink(editing.id) : undefined}
           onExport={handleExportEditor}
           onDepartmentChange={(department) => {
+            bumpEditorGen()
             setFormMeta((f) => {
               const cats = editorCategoryOptions(taxonomyGroups, editorFolders, department, f.category)
               const category = f.category && cats.includes(f.category) ? f.category : UNCATEGORIZED_FOLDER_NAME
@@ -1670,7 +1851,10 @@ export default function WorkflowsManager({
             })
           }}
           workflowDependencies={workflowDependencies}
-          onWorkflowDependenciesChange={setWorkflowDependencies}
+          onWorkflowDependenciesChange={(deps) => {
+            bumpEditorGen()
+            setWorkflowDependencies(deps)
+          }}
           depsStatus={depsStatus}
           pyDepsStatus={pyDepsStatus}
         />
@@ -1678,7 +1862,7 @@ export default function WorkflowsManager({
         {/* Canvas */}
         <div className="flex-1 min-h-0">
           <WorkflowCanvas
-            key={editing?.id || 'new'}
+            key={`${editing?.id || 'new'}-${canvasNonce}`}
             initialNodes={editorNodes}
             initialEdges={editorEdges}
             workflowSlug={formMeta.slug}
@@ -2004,7 +2188,11 @@ export default function WorkflowsManager({
               type="button"
               onClick={() => {
                 dismissQaModal()
-                void persistWorkflow()
+                if (pendingPublishRef.current) {
+                  void persistThenPublish()
+                } else {
+                  void persistWorkflow({ closeEditor: true })
+                }
               }}
               className="px-4 py-2 text-sm rounded-lg font-medium bg-indigo-600 text-white hover:bg-indigo-700"
             >

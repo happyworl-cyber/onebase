@@ -68,6 +68,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     rm -rf src
 
 COPY src/ src/
+COPY skills/ skills/
 COPY migrations/ migrations/
 # 保留 stub 阶段编好的依赖层；直接重编 onebase，避免每次 cargo clean -p 毁掉增量。
 # 若偶发 stub 指纹粘连导致链接旧产物，可临时加回：cargo clean -p onebase --release

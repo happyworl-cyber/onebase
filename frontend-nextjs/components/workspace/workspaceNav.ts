@@ -149,6 +149,12 @@ export const NAV_GROUPS: NavGroup[] = [
         visibleIf: (caps) => caps.canManageSecurity,
       },
       {
+        label: '云日志',
+        href: '/cloud-logs',
+        icon: 'fas fa-cloud-download-alt',
+        visibleIf: (caps) => caps.canManageSecurity,
+      },
+      {
         label: '操作日志',
         href: '/operation-logs',
         icon: 'fas fa-clipboard-list',
@@ -188,6 +194,18 @@ export const NAV_GROUPS: NavGroup[] = [
         visibleIf: (caps) => AI_ASSISTANT_ENABLED && caps.canManageMembers,
       },
       {
+        label: '凭证管理',
+        href: '/settings/credentials',
+        icon: 'fas fa-key',
+        visibleIf: (caps) => caps.canManageMembers,
+      },
+      {
+        label: '云日志源',
+        href: '/settings/log-sources',
+        icon: 'fas fa-cloud',
+        visibleIf: (caps) => caps.canManageSecurity,
+      },
+      {
         label: '数据库连接',
         href: '/settings/connections',
         icon: 'fas fa-database',
@@ -217,8 +235,17 @@ export function isWorkflowVersionsPath(relPath: string): boolean {
   return WORKFLOW_VERSIONS_RE.test(relPath)
 }
 
+export function isHelpPath(relPath: string): boolean {
+  return relPath === '/help' || relPath.startsWith('/help/')
+}
+
+export function shouldReplaceKeepAliveCache(relPath: string): boolean {
+  return isWorkflowVersionsPath(relPath) || isHelpPath(relPath)
+}
+
 /** Same-workflow version list and detail share one Tab identity. Other paths are unchanged. */
 export function tabIdentity(relPath: string): string {
+  if (isHelpPath(relPath)) return '/help'
   const m = relPath.match(WORKFLOW_VERSIONS_RE)
   return m ? m[1] : relPath
 }
@@ -232,6 +259,10 @@ export function tabIdentity(relPath: string): string {
  *   3) 兜底：用末段路径生成一个可读标题，图标给默认。
  */
 export function resolveNavMeta(relPath: string): NavMeta {
+  if (isHelpPath(relPath)) {
+    return { label: '使用帮助', icon: 'fas fa-circle-question' }
+  }
+
   if (isWorkflowVersionsPath(relPath)) {
     return { label: '工作流版本', icon: 'fas fa-clock-rotate-left' }
   }

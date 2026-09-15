@@ -58,7 +58,8 @@ async fn fire_due_workflows(
     sem: &Arc<Semaphore>,
 ) -> Result<(), sqlx::Error> {
     let workflows = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM management.workflows WHERE trigger_type = 'cron' AND is_enabled = true",
+        "SELECT * FROM management.workflows \
+         WHERE trigger_type = 'cron' AND is_enabled = true AND published_version IS NOT NULL",
     )
     .fetch_all(pool)
     .await?;
@@ -131,18 +132,22 @@ async fn fire_due_workflows(
         };
         tokio::spawn(async move {
             let _permit = permit;
-            if let Err(e) = workflow_handlers::execute_workflow_internal(
-                &pool_clone,
-                &wf,
-                "cron",
-                &serde_json::json!({ "fired_at": fired_at }),
-                None,
-                crate::workflow_engine::ApiKeyWriteGuard::Off,
-            )
-            .await
-            {
-                tracing::error!(workflow_id = wf.id, error = %e, "Cron 工作流执行失败");
-            }
+            let tid = crate::execution_log::new_trace_id();
+            crate::request_id::scope_with(Some(tid), async move {
+                if let Err(e) = workflow_handlers::execute_workflow_internal(
+                    &pool_clone,
+                    &wf,
+                    "cron",
+                    &serde_json::json!({ "fired_at": fired_at }),
+                    None,
+                    crate::workflow_engine::ApiKeyWriteGuard::Off,
+                )
+                .await
+                {
+                    tracing::error!(workflow_id = wf.id, error = %e, "Cron 工作流执行失败");
+                }
+            })
+            .await;
         });
     }
 

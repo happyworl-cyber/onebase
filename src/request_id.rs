@@ -175,4 +175,26 @@ mod tests {
         let s = "a".repeat(200);
         assert!(!looks_like_request_id(&s));
     }
+
+    #[tokio::test]
+    async fn spawn_without_scope_drops_request_id() {
+        REQUEST_ID
+            .scope("abc12345".to_string(), async {
+                let handle = tokio::spawn(async { current() });
+                assert!(handle.await.unwrap().is_none());
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn spawn_with_scope_keeps_request_id() {
+        REQUEST_ID
+            .scope("abc12345".to_string(), async {
+                let captured = current();
+                let handle =
+                    tokio::spawn(async move { scope_with(captured, async { current() }).await });
+                assert_eq!(handle.await.unwrap().as_deref(), Some("abc12345"));
+            })
+            .await;
+    }
 }

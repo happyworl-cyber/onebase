@@ -1,9 +1,11 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import api from '@/lib/api'
+import { useRouter } from 'next/navigation'
+import api, { projectLogSourceAPI, type ProjectLogSource } from '@/lib/api'
 import Pagination from '@/components/Pagination'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { useNotification } from '@/hooks/useNotification'
 
 /**
  * 统一执行日志视图（平台级 + 项目级共用）。
@@ -255,6 +257,9 @@ export default function ExecutionLogsView({
   const [detail, setDetail] = useState<DetailResponse | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [levelFilter, setLevelFilter] = useState('')
+  const [sourcePick, setSourcePick] = useState<ProjectLogSource[] | null>(null)
+  const router = useRouter()
+  const notify = useNotification()
 
   // AI 助手面板布局（右侧 fixed 抽屉，z-[10000]）。详情抽屉监听它的广播并向右避让，
   // 避免两者重叠（与 WorkflowsManager 调试抽屉同款约定）。
@@ -488,6 +493,31 @@ export default function ExecutionLogsView({
                 <p className="text-xs font-mono text-gray-400 mt-0.5">{detail.trace_id}</p>
               </div>
               <div className="flex items-center gap-2">
+                {Number.isFinite(tenantId) && (
+                  <button
+                    onClick={async () => {
+                      try {
+                        const res = await projectLogSourceAPI.list(tenantId as number)
+                        if (res.data.length === 0) {
+                          notify.warning('请先在设置 → 云日志源中配置')
+                          return
+                        }
+                        if (res.data.length === 1) {
+                          router.push(
+                            `/workspace/${tenantId}/cloud-logs?source_id=${res.data[0].id}&trace_id=${encodeURIComponent(detail.trace_id)}`,
+                          )
+                          return
+                        }
+                        setSourcePick(res.data)
+                      } catch (err: unknown) {
+                        notify.error(err)
+                      }
+                    }}
+                    className="btn-default text-xs"
+                  >
+                    <i className="fas fa-cloud mr-1"></i>云日志
+                  </button>
+                )}
                 <button
                   onClick={() => navigator.clipboard?.writeText(detail.trace_id)}
                   className="btn-default text-xs"
@@ -500,6 +530,30 @@ export default function ExecutionLogsView({
                 </button>
               </div>
             </div>
+            {sourcePick && Number.isFinite(tenantId) && (
+              <div className="px-5 py-2 border-b bg-gray-50 text-sm">
+                <div className="text-xs text-gray-500 mb-1">选择云日志源</div>
+                <div className="flex flex-wrap gap-2">
+                  {sourcePick.map((s) => (
+                    <button
+                      key={s.id}
+                      className="btn-default text-xs"
+                      onClick={() => {
+                        router.push(
+                          `/workspace/${tenantId}/cloud-logs?source_id=${s.id}&trace_id=${encodeURIComponent(detail.trace_id)}`,
+                        )
+                        setSourcePick(null)
+                      }}
+                    >
+                      {s.name}
+                    </button>
+                  ))}
+                  <button className="text-xs text-gray-400" onClick={() => setSourcePick(null)}>
+                    取消
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="p-5 space-y-5">
               {/* 执行索引（可能多行：重试） */}

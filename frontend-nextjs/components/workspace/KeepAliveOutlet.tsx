@@ -1,6 +1,6 @@
 'use client'
 
-import { isWorkflowVersionsPath, tabIdentity } from '@/components/workspace/workspaceNav'
+import { shouldReplaceKeepAliveCache, tabIdentity } from '@/components/workspace/workspaceNav'
 import { ReactNode, useRef } from 'react'
 
 /**
@@ -10,6 +10,7 @@ import { ReactNode, useRef } from 'react'
  *   - 某路径**首次进入**时缓存它对应的 `children` 元素；
  *   - 之后再切回该路径时**复用同一元素引用**（不拿 Next 新生成的 children 覆盖）。
  *     同一引用 → React 不卸载该子树 → 组件状态 / 滚动 / 在途请求全部保留。
+ *   - 工作流版本与帮助路径例外：同一 Tab 身份下切换子路由时覆盖缓存，否则会卡在第一篇。
  *   - 非激活面板用 `hidden`（display:none）隐藏但仍挂载；只有 Tab 被关闭
  *     （从 openPaths 移除）时才从缓存删除 → 真正卸载销毁。
  *
@@ -32,7 +33,7 @@ export default function KeepAliveOutlet({ currentPath, openPaths, children }: Pr
 
   const cacheKey = tabIdentity(currentPath)
 
-  if (isWorkflowVersionsPath(currentPath) || !cache.has(cacheKey)) {
+  if (shouldReplaceKeepAliveCache(currentPath) || !cache.has(cacheKey)) {
     cache.set(cacheKey, children)
   }
 

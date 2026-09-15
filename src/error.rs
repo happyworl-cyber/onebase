@@ -29,6 +29,9 @@ pub enum AppError {
     #[error("资源未找到: {0}")]
     NotFound(String),
 
+    #[error("{0}")]
+    Conflict(String),
+
     #[error("内部错误: {0}")]
     Internal(String),
 
@@ -50,6 +53,7 @@ const CODE_UNAUTHORIZED: &str = "unauthorized";
 const CODE_FORBIDDEN: &str = "forbidden";
 const CODE_PASSWORD_CHANGE_REQUIRED: &str = "password_change_required";
 const CODE_NOT_FOUND: &str = "not_found";
+const CODE_CONFLICT: &str = "conflict";
 const CODE_INTERNAL: &str = "internal_error";
 const CODE_TOO_MANY_REQUESTS: &str = "too_many_requests";
 const CODE_SERVICE_UNAVAILABLE: &str = "service_unavailable";
@@ -99,6 +103,7 @@ impl IntoResponse for AppError {
                 CODE_PASSWORD_CHANGE_REQUIRED,
             ),
             AppError::NotFound(ref msg) => (StatusCode::NOT_FOUND, msg.clone(), CODE_NOT_FOUND),
+            AppError::Conflict(ref msg) => (StatusCode::CONFLICT, msg.clone(), CODE_CONFLICT),
             AppError::Internal(ref msg) => {
                 tracing::error!(error.kind = "internal", "内部错误: {}", msg);
                 (

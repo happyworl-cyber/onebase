@@ -1,6 +1,9 @@
 use mlua::{Lua, Result as LuaResult, Table, Value as LuaValue};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use crate::workflow_logs::{NodeLogLevel, NodeLogLine};
 
 use crate::crypto_primitives as cp;
 use crate::http_async_poll::{
@@ -59,13 +62,43 @@ fn tbl_decode_optional(
 /// `env_vars` 为项目级环境变量（owned 副本），供 `env.get` 读取。Lua VM 运行在
 /// spawn_blocking 线程内，无法异步查库，故由调用方在进入阻塞线程前一次性装好。
 pub fn register_builtins(lua: &Lua, env_vars: HashMap<String, String>) -> LuaResult<()> {
+    register_builtins_with_creds(
+        lua,
+        env_vars,
+        crate::workflow_credentials::CredentialStore::default(),
+        None,
+    )
+}
+
+pub fn register_builtins_with_creds(
+    lua: &Lua,
+    env_vars: HashMap<String, String>,
+    credentials: crate::workflow_credentials::CredentialStore,
+    log_sink: Option<Arc<Mutex<Vec<NodeLogLine>>>>,
+) -> LuaResult<()> {
     register_json_module(lua)?;
-    register_log_module(lua)?;
+    register_log_module(lua, log_sink)?;
     register_crypto_module(lua)?;
     register_zlib_module(lua)?;
     register_env_module(lua, env_vars)?;
+    register_cred_module(lua, credentials)?;
     register_sse_module(lua)?;
     register_time_module(lua)?;
+    Ok(())
+}
+
+fn register_cred_module(
+    lua: &Lua,
+    credentials: crate::workflow_credentials::CredentialStore,
+) -> LuaResult<()> {
+    let cred = lua.create_table()?;
+    cred.set(
+        "get",
+        lua.create_function(move |_, (name, field): (String, String)| {
+            Ok(credentials.get_field(&name, &field))
+        })?,
+    )?;
+    lua.globals().set("cred", cred)?;
     Ok(())
 }
 
@@ -314,6 +347,88 @@ fn build_google_sa_jwt(
     Ok(format!("{}.{}", signing_input, sig_b64))
 }
 
+/// RSASSA-PKCS1-v1.5 + SHA-256（JWT RS256）验签。
+///
+/// `public_key`：SPKI（`BEGIN PUBLIC KEY`）或 PKCS#1（`BEGIN RSA PUBLIC KEY`）PEM，
+/// 或 JWKS 里的 RSA JWK JSON（至少含 `n`/`e`，`kty` 若出现须为 `RSA`）。
+/// `signature`：`rsa_sign_sha256` 返回的标准 base64，或 JWT 第三段的 base64url。
+/// 验签失败返回 `Ok(false)`；公钥无法解析返回 `Err`。
+pub fn rsa_verify_sha256(
+    public_key: &str,
+    message: &[u8],
+    signature: &str,
+) -> Result<bool, String> {
+    use rsa::pkcs1v15::{Signature, VerifyingKey};
+    use rsa::signature::Verifier;
+    use sha2::Sha256;
+
+    let pub_key = parse_rsa_verify_public_key(public_key.trim())?;
+    let sig_bytes = decode_rsa_verify_signature(signature)?;
+    let verifying_key = VerifyingKey::<Sha256>::new(pub_key);
+    let Ok(sig) = Signature::try_from(sig_bytes.as_slice()) else {
+        return Ok(false);
+    };
+    Ok(verifying_key.verify(message, &sig).is_ok())
+}
+
+fn parse_rsa_verify_public_key(public_key: &str) -> Result<rsa::RsaPublicKey, String> {
+    use rsa::pkcs1::DecodeRsaPublicKey;
+    use rsa::pkcs8::DecodePublicKey;
+    use rsa::{BigUint, RsaPublicKey};
+
+    if public_key.starts_with('{') {
+        let v: JsonValue = serde_json::from_str(public_key)
+            .map_err(|e| format!("rsa_verify_sha256: 解析公钥失败: {e}"))?;
+        if let Some(kty) = v.get("kty").and_then(|x| x.as_str()) {
+            if !kty.eq_ignore_ascii_case("RSA") {
+                return Err(format!(
+                    "rsa_verify_sha256: 解析公钥失败: 不支持的 JWK kty={kty}"
+                ));
+            }
+        }
+        let n = v
+            .get("n")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| "rsa_verify_sha256: 解析公钥失败: JWK 缺少 n".to_string())?;
+        let e = v
+            .get("e")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| "rsa_verify_sha256: 解析公钥失败: JWK 缺少 e".to_string())?;
+        return RsaPublicKey::new(
+            BigUint::from_bytes_be(
+                &decode_std_or_b64url(n).map_err(|e| {
+                    format!("rsa_verify_sha256: 解析公钥失败: JWK 分量解码失败: {e}")
+                })?,
+            ),
+            BigUint::from_bytes_be(
+                &decode_std_or_b64url(e).map_err(|e| {
+                    format!("rsa_verify_sha256: 解析公钥失败: JWK 分量解码失败: {e}")
+                })?,
+            ),
+        )
+        .map_err(|e| format!("rsa_verify_sha256: 解析公钥失败: {e}"));
+    }
+
+    RsaPublicKey::from_public_key_pem(public_key)
+        .or_else(|_| RsaPublicKey::from_pkcs1_pem(public_key))
+        .map_err(|e| format!("rsa_verify_sha256: 解析公钥失败: {e}"))
+}
+
+fn decode_rsa_verify_signature(signature: &str) -> Result<Vec<u8>, String> {
+    decode_std_or_b64url(signature).map_err(|e| format!("rsa_verify_sha256: 签名解码失败: {e}"))
+}
+
+/// 标准 base64（`rsa_sign_sha256` 输出）或 JWT 用的 base64url（可带/不带 padding）。
+fn decode_std_or_b64url(value: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    use base64::{engine::general_purpose, Engine as _};
+    let value = value.trim();
+    general_purpose::STANDARD.decode(value).or_else(|_| {
+        general_purpose::URL_SAFE_NO_PAD
+            .decode(value.trim_end_matches('='))
+            .or_else(|_| general_purpose::URL_SAFE.decode(value))
+    })
+}
+
 /// sse 模块：sse.publish(topic, event?, data?) —— 经全局 publisher 推送 SSE 消息。
 ///
 /// 在工作流 Code 节点 / 定时任务 / RPC 插件等任意 Lua 上下文可用。
@@ -385,40 +500,31 @@ fn register_json_module(lua: &Lua) -> LuaResult<()> {
 }
 
 /// log 模块：info / warn / error / debug
-fn register_log_module(lua: &Lua) -> LuaResult<()> {
+fn register_log_module(lua: &Lua, sink: Option<Arc<Mutex<Vec<NodeLogLine>>>>) -> LuaResult<()> {
     let log_mod = lua.create_table()?;
 
-    log_mod.set(
-        "info",
-        lua.create_function(|_, msg: String| {
-            tracing::info!(target: "lua_plugin", "{}", msg);
-            Ok(())
-        })?,
-    )?;
-
-    log_mod.set(
-        "warn",
-        lua.create_function(|_, msg: String| {
-            tracing::warn!(target: "lua_plugin", "{}", msg);
-            Ok(())
-        })?,
-    )?;
-
-    log_mod.set(
-        "error",
-        lua.create_function(|_, msg: String| {
-            tracing::error!(target: "lua_plugin", "{}", msg);
-            Ok(())
-        })?,
-    )?;
-
-    log_mod.set(
-        "debug",
-        lua.create_function(|_, msg: String| {
+    fn bind_log(
+        lua: &Lua,
+        sink: &Option<Arc<Mutex<Vec<NodeLogLine>>>>,
+        level: NodeLogLevel,
+    ) -> LuaResult<mlua::Function> {
+        let sink = sink.clone();
+        lua.create_function(move |_, msg: String| {
             tracing::debug!(target: "lua_plugin", "{}", msg);
+            if let Some(sink) = &sink {
+                sink.lock().unwrap().push(NodeLogLine {
+                    level,
+                    message: msg,
+                });
+            }
             Ok(())
-        })?,
-    )?;
+        })
+    }
+
+    log_mod.set("info", bind_log(lua, &sink, NodeLogLevel::Info)?)?;
+    log_mod.set("warn", bind_log(lua, &sink, NodeLogLevel::Warn)?)?;
+    log_mod.set("error", bind_log(lua, &sink, NodeLogLevel::Error)?)?;
+    log_mod.set("debug", bind_log(lua, &sink, NodeLogLevel::Debug)?)?;
 
     lua.globals().set("log", log_mod)?;
     Ok(())
@@ -739,6 +845,20 @@ fn register_crypto_module(lua: &Lua) -> LuaResult<()> {
             })?;
             Ok(general_purpose::STANDARD.encode(sig.to_vec()))
         })?,
+    )?;
+
+    // crypto.rsa_verify_sha256(public_key, message, signature) -> boolean
+    // 算法：RSASSA-PKCS1-v1.5 + SHA-256（JWT RS256）。用于本地校验 Apple /
+    // Facebook Limited Login 等 IdP 签发的 idToken。公钥为 PEM 或 RSA JWK JSON；
+    // 签名接受标准 base64（rsa_sign_sha256 输出）或 JWT 第三段的 base64url。
+    crypto_mod.set(
+        "rsa_verify_sha256",
+        lua.create_function(
+            |_, (public_key, message, signature): (String, mlua::String, String)| {
+                rsa_verify_sha256(&public_key, &message.as_bytes(), &signature)
+                    .map_err(mlua::Error::RuntimeError)
+            },
+        )?,
     )?;
 
     // crypto.base64url_encode(input) -> base64url 字符串（无 padding）
@@ -1617,6 +1737,137 @@ mQIDAQAB\n\
     }
 
     #[test]
+    fn test_crypto_rsa_verify_sha256_roundtrip() {
+        let lua = Lua::new();
+        register_builtins(&lua, HashMap::new()).unwrap();
+        lua.globals().set("priv_pem", TEST_RSA_PRIV_PEM).unwrap();
+        lua.globals().set("pub_pem", TEST_RSA_PUB_PEM).unwrap();
+        lua.load(
+            r#"
+            local msg = "header.payload"
+            local sig = crypto.rsa_sign_sha256(priv_pem, msg)
+            assert(crypto.rsa_verify_sha256(pub_pem, msg, sig) == true, "matching signature should verify")
+            "#,
+        )
+        .exec()
+        .unwrap();
+    }
+
+    #[test]
+    fn test_crypto_rsa_verify_sha256_rejects_tampered_message() {
+        let lua = Lua::new();
+        register_builtins(&lua, HashMap::new()).unwrap();
+        lua.globals().set("priv_pem", TEST_RSA_PRIV_PEM).unwrap();
+        lua.globals().set("pub_pem", TEST_RSA_PUB_PEM).unwrap();
+        lua.load(
+            r#"
+            local sig = crypto.rsa_sign_sha256(priv_pem, "original")
+            assert(crypto.rsa_verify_sha256(pub_pem, "tampered", sig) == false, "tampered message should not verify")
+            "#,
+        )
+        .exec()
+        .unwrap();
+    }
+
+    #[test]
+    fn test_crypto_rsa_verify_sha256_accepts_jwt_base64url_signature() {
+        let lua = Lua::new();
+        register_builtins(&lua, HashMap::new()).unwrap();
+        lua.globals().set("priv_pem", TEST_RSA_PRIV_PEM).unwrap();
+        lua.globals().set("pub_pem", TEST_RSA_PUB_PEM).unwrap();
+        lua.load(
+            r#"
+            local header = crypto.base64url_encode('{"alg":"RS256","typ":"JWT"}')
+            local payload = crypto.base64url_encode('{"iss":"https://appleid.apple.com","sub":"user-1"}')
+            local signing_input = header .. "." .. payload
+            local raw_sig = crypto.base64_decode(crypto.rsa_sign_sha256(priv_pem, signing_input))
+            local jwt_sig = crypto.base64url_encode(raw_sig)
+            assert(crypto.rsa_verify_sha256(pub_pem, signing_input, jwt_sig) == true, "JWT base64url signature should verify")
+            "#,
+        )
+        .exec()
+        .unwrap();
+    }
+
+    #[test]
+    fn test_crypto_rsa_verify_sha256_accepts_jwk() {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        use rsa::pkcs8::DecodePublicKey;
+        use rsa::traits::PublicKeyParts;
+        use rsa::RsaPublicKey;
+
+        let key = RsaPublicKey::from_public_key_pem(TEST_RSA_PUB_PEM).unwrap();
+        let jwk = serde_json::json!({
+            "kty": "RSA",
+            "n": URL_SAFE_NO_PAD.encode(key.n().to_bytes_be()),
+            "e": URL_SAFE_NO_PAD.encode(key.e().to_bytes_be()),
+        })
+        .to_string();
+
+        let lua = Lua::new();
+        register_builtins(&lua, HashMap::new()).unwrap();
+        lua.globals().set("priv_pem", TEST_RSA_PRIV_PEM).unwrap();
+        lua.globals().set("jwk", jwk).unwrap();
+        lua.load(
+            r#"
+            local msg = "id-token-signing-input"
+            local sig = crypto.rsa_sign_sha256(priv_pem, msg)
+            assert(crypto.rsa_verify_sha256(jwk, msg, sig) == true, "JWK public key should verify")
+            "#,
+        )
+        .exec()
+        .unwrap();
+    }
+
+    #[test]
+    fn test_crypto_rsa_verify_sha256_accepts_pkcs1_pem() {
+        use rsa::pkcs1::EncodeRsaPublicKey;
+        use rsa::pkcs8::DecodePublicKey;
+        use rsa::RsaPublicKey;
+
+        let key = RsaPublicKey::from_public_key_pem(TEST_RSA_PUB_PEM).unwrap();
+        let pkcs1 = key
+            .to_pkcs1_pem(rsa::pkcs1::LineEnding::LF)
+            .unwrap()
+            .to_string();
+
+        let lua = Lua::new();
+        register_builtins(&lua, HashMap::new()).unwrap();
+        lua.globals().set("priv_pem", TEST_RSA_PRIV_PEM).unwrap();
+        lua.globals().set("pkcs1_pem", pkcs1).unwrap();
+        lua.load(
+            r#"
+            local msg = "pkcs1-pem"
+            local sig = crypto.rsa_sign_sha256(priv_pem, msg)
+            assert(crypto.rsa_verify_sha256(pkcs1_pem, msg, sig) == true, "PKCS#1 public key should verify")
+            "#,
+        )
+        .exec()
+        .unwrap();
+    }
+
+    #[test]
+    fn test_crypto_rsa_verify_sha256_bad_pem_errors() {
+        let lua = Lua::new();
+        register_builtins(&lua, HashMap::new()).unwrap();
+        lua.globals().set("priv_pem", TEST_RSA_PRIV_PEM).unwrap();
+        let res = lua
+            .load(
+                r#"
+                local sig = crypto.rsa_sign_sha256(priv_pem, "msg")
+                crypto.rsa_verify_sha256("not-a-key", "msg", sig)
+                "#,
+            )
+            .exec();
+        assert!(res.is_err(), "invalid public key should error");
+        let err = res.unwrap_err().to_string();
+        assert!(
+            err.contains("解析公钥失败"),
+            "error should report public key parse failure, got: {err}"
+        );
+    }
+
+    #[test]
     fn test_env_get_returns_nil_for_unset() {
         let lua = Lua::new();
         register_builtins(&lua, HashMap::new()).unwrap();
@@ -1650,6 +1901,30 @@ mQIDAQAB\n\
             assert(env.get("API_TOKEN") == "tok_123")
             assert(env.get("NOT_CONFIGURED") == nil)
         "#,
+        )
+        .exec()
+        .unwrap();
+    }
+
+    #[test]
+    fn test_cred_get_hit_and_miss() {
+        let lua = Lua::new();
+        let mut store = crate::workflow_credentials::CredentialStore::default();
+        store.insert(crate::workflow_credentials::CredentialFields {
+            id: 1,
+            name: "生产库账号".into(),
+            kind: "basic".into(),
+            username: Some("u".into()),
+            header_name: None,
+            secret: Some("p".into()),
+        });
+        register_builtins_with_creds(&lua, HashMap::new(), store, None).unwrap();
+        lua.load(
+            r#"
+            assert(cred.get("生产库账号", "password") == "p")
+            assert(cred.get("生产库账号", "token") == nil)
+            assert(cred.get("nope", "password") == nil)
+            "#,
         )
         .exec()
         .unwrap();

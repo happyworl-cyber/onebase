@@ -3,9 +3,8 @@
 /**
  * `/workspace/[projectId]/events/datasources` —— 工作流「数据源 / 凭证」集成模块。
  *
- * 形态：单页双 Tab（数据源列表 / 凭证管理）+ 居中弹窗新建/编辑。数据源携带连接
- * 信息并引用一份加密凭证；工作流的 db_query / db_execute 节点可在配置里选择数据源，
- * 覆盖默认的「工作流绑定库」。
+ * 形态：数据源列表 + 居中弹窗新建/编辑。凭证入口已迁到「设置 → 凭证管理」。
+ * 数据源只绑定 basic 凭证；工作流 db 节点可选择数据源覆盖默认绑定库。
  *
  * 鉴权：admin+（含 owner / 平台超管）。后端 `require_tenant_admin`，前端用
  * `canManageEvents`（与集成组其它入口同档）决定是否渲染。
@@ -13,13 +12,12 @@
  * 安全模型：凭证密钥加密入库、永不回显（编辑时留空表示保持不变）。
  */
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import {
   wfCredentialAPI,
   wfDatasourceAPI,
   type WfCredential,
-  type WfCredentialKind,
   type WfDatasource,
   type WfDatasourceType,
   type WfDatasourceStatus,
@@ -27,8 +25,6 @@ import {
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import { useNotification } from '@/hooks/useNotification'
 import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
-
-type Tab = 'datasources' | 'credentials'
 
 const DS_TYPE_LABELS: Record<WfDatasourceType, string> = {
   postgresql: 'PostgreSQL',
@@ -63,37 +59,17 @@ const EMPTY_DS_FORM: DsForm = {
   credential_id: '',
 }
 
-interface CredForm {
-  editing: WfCredential | null
-  name: string
-  kind: WfCredentialKind
-  username: string
-  secret: string
-  description: string
-}
-
-const EMPTY_CRED_FORM: CredForm = {
-  editing: null,
-  name: '',
-  kind: 'basic',
-  username: '',
-  secret: '',
-  description: '',
-}
-
 export default function DatasourcesPage() {
   const params = useParams<{ projectId: string }>()
   const projectId = parseInt(params.projectId, 10)
   const caps = useCurrentProjectCapabilities()
   const notify = useNotification()
 
-  const [tab, setTab] = useState<Tab>('datasources')
   const [datasources, setDatasources] = useState<WfDatasource[] | null>(null)
   const [credentials, setCredentials] = useState<WfCredential[] | null>(null)
   const [loading, setLoading] = useState(true)
 
   const [dsForm, setDsForm] = useState<DsForm | null>(null)
-  const [credForm, setCredForm] = useState<CredForm | null>(null)
   const [saving, setSaving] = useState(false)
   const [testingId, setTestingId] = useState<number | null>(null)
 
@@ -117,12 +93,6 @@ export default function DatasourcesPage() {
     if (Number.isFinite(projectId) && caps.canManageEvents) load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, caps.canManageEvents])
-
-  const credNameById = useMemo(() => {
-    const m = new Map<number, string>()
-    credentials?.forEach((c) => m.set(c.id, c.name))
-    return m
-  }, [credentials])
 
   if (!caps.canManageEvents) {
     return <ForbiddenPlaceholder reason="数据源管理需要项目 admin 或 owner 角色（或平台超管）" />
@@ -191,48 +161,6 @@ export default function DatasourcesPage() {
     }
   }
 
-  // ── 凭证：保存 ──
-  const handleCredSave = async () => {
-    if (!credForm) return
-    if (!credForm.name.trim()) return notify.warning('请填写凭证名称')
-    if (!credForm.editing && !credForm.secret) return notify.warning('新建凭证必须填写密码 / 令牌')
-    setSaving(true)
-    try {
-      const body = {
-        name: credForm.name.trim(),
-        kind: credForm.kind,
-        username: credForm.kind === 'basic' ? credForm.username.trim() || null : null,
-        secret: credForm.secret || undefined,
-        description: credForm.description.trim() || null,
-      }
-      if (credForm.editing) {
-        const res = await wfCredentialAPI.update(projectId, credForm.editing.id, body)
-        setCredentials((prev) => prev?.map((c) => (c.id === res.data.id ? res.data : c)) ?? null)
-        notify.success(`已更新凭证 ${res.data.name}`)
-      } else {
-        const res = await wfCredentialAPI.create(projectId, body)
-        setCredentials((prev) => (prev ? [...prev, res.data] : [res.data]))
-        notify.success(`已新建凭证 ${res.data.name}`)
-      }
-      setCredForm(null)
-    } catch (err: any) {
-      notify.error(err)
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleCredDelete = async (c: WfCredential) => {
-    if (!window.confirm(`确认删除凭证 ${c.name} 吗？`)) return
-    try {
-      await wfCredentialAPI.remove(projectId, c.id)
-      setCredentials((prev) => prev?.filter((x) => x.id !== c.id) ?? null)
-      notify.success(`已删除 ${c.name}`)
-    } catch (err: any) {
-      notify.error(err)
-    }
-  }
-
   const connInfo = (d: WfDatasource) => {
     const hostPort = d.port ? `${d.host}:${d.port}` : d.host
     return d.database ? `${hostPort}/${d.database}` : hostPort || '—'
@@ -250,35 +178,12 @@ export default function DatasourcesPage() {
           </p>
         </div>
         <button
-          onClick={() => (tab === 'datasources' ? setDsForm(EMPTY_DS_FORM) : setCredForm(EMPTY_CRED_FORM))}
+          onClick={() => setDsForm(EMPTY_DS_FORM)}
           className="btn-primary flex-shrink-0 whitespace-nowrap"
         >
           <i className="fas fa-plus mr-2" />
-          {tab === 'datasources' ? '新增数据源' : '新增凭证'}
+          新增数据源
         </button>
-      </div>
-
-      {/* Tab 切换 */}
-      <div className="flex items-center gap-1 border-b border-gray-200">
-        {(
-          [
-            ['datasources', '数据源列表', 'fas fa-plug-circle-bolt'],
-            ['credentials', '凭证管理', 'fas fa-key'],
-          ] as [Tab, string, string][]
-        ).map(([key, label, icon]) => (
-          <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px flex items-center gap-2 transition-colors ${
-              tab === key
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            <i className={`${icon} text-xs`} />
-            {label}
-          </button>
-        ))}
       </div>
 
       {loading && (
@@ -288,7 +193,7 @@ export default function DatasourcesPage() {
       )}
 
       {/* ── 数据源列表 ── */}
-      {!loading && tab === 'datasources' && (
+      {!loading && (
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
           <table className="min-w-full text-sm">
             <thead className="bg-gray-50 text-xs uppercase text-gray-500 tracking-wider">
@@ -390,83 +295,6 @@ export default function DatasourcesPage() {
         </div>
       )}
 
-      {/* ── 凭证管理 ── */}
-      {!loading && tab === 'credentials' && (
-        <div>
-          <p className="text-xs text-gray-500 mb-3">
-            凭证以加密形式存储，配置后可在数据源中引用。密码 / 令牌仅写入不回显。
-          </p>
-          {(credentials?.length ?? 0) === 0 ? (
-            <div className="bg-white border border-gray-200 rounded-xl py-12 text-center text-gray-400">
-              暂无凭证，点击右上角「新增凭证」添加第一个。
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {credentials?.map((c) => (
-                <div
-                  key={c.id}
-                  className="border border-gray-200 rounded-lg p-4 hover:border-blue-300 hover:shadow-sm transition-all bg-white"
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-md bg-amber-50 flex items-center justify-center">
-                        <i className="fas fa-key text-amber-600 text-xs" />
-                      </div>
-                      <div>
-                        <div className="text-sm font-medium text-gray-800">{c.name}</div>
-                        <div className="text-[11px] text-gray-400">
-                          {c.kind === 'bearer' ? 'Bearer Token' : '用户名/密码'}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="mt-3 space-y-1 text-xs">
-                    {c.kind === 'basic' && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-400">用户名</span>
-                        <span className="font-mono text-gray-600">{c.username || '—'}</span>
-                      </div>
-                    )}
-                    <div className="flex justify-between">
-                      <span className="text-gray-400">{c.kind === 'bearer' ? 'Token' : '密码'}</span>
-                      <span className="font-mono text-gray-400">••••••••</span>
-                    </div>
-                  </div>
-                  <div className="mt-3 pt-3 border-t border-gray-100 flex items-center justify-between">
-                    <span className="text-[11px] text-gray-400 flex items-center gap-1">
-                      <i className="fas fa-link text-[9px]" />被 {c.ref_count} 个数据源引用
-                    </span>
-                    <span className="whitespace-nowrap">
-                      <button
-                        onClick={() =>
-                          setCredForm({
-                            editing: c,
-                            name: c.name,
-                            kind: c.kind,
-                            username: c.username ?? '',
-                            secret: '',
-                            description: c.description ?? '',
-                          })
-                        }
-                        className="text-blue-600 hover:text-blue-800 text-xs mr-3"
-                      >
-                        编辑
-                      </button>
-                      <button
-                        onClick={() => handleCredDelete(c)}
-                        className="text-red-600 hover:text-red-800 text-xs"
-                      >
-                        删除
-                      </button>
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
       {/* ── 数据源新建/编辑弹窗 ── */}
       {dsForm && (
         <Modal title={dsForm.editing ? `编辑 ${dsForm.editing.name}` : '新增数据源'} onClose={() => !saving && setDsForm(null)}>
@@ -515,12 +343,23 @@ export default function DatasourcesPage() {
                 className="w-full input-base"
               >
                 <option value="">— 免密 / 匿名 —</option>
-                {credentials?.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
+                {credentials
+                  ?.filter((c) => c.kind === 'basic')
+                  .map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
               </select>
+              <p className="text-[11px] text-gray-400 mt-1">
+                仅列出用户名/密码凭证。
+                <a
+                  className="text-blue-600 hover:underline ml-1"
+                  href={`/workspace/${projectId}/settings/credentials`}
+                >
+                  去设置中管理
+                </a>
+              </p>
             </Field>
             <Field label="主机地址" required className="col-span-2">
               <input
@@ -551,64 +390,6 @@ export default function DatasourcesPage() {
         </Modal>
       )}
 
-      {/* ── 凭证新建/编辑弹窗 ── */}
-      {credForm && (
-        <Modal
-          title={credForm.editing ? `编辑 ${credForm.editing.name}` : '新增凭证'}
-          onClose={() => !saving && setCredForm(null)}
-        >
-          <div className="space-y-4">
-            <Field label="名称" required>
-              <input
-                value={credForm.name}
-                onChange={(e) => setCredForm({ ...credForm, name: e.target.value })}
-                className="w-full input-base"
-                placeholder="hr_service"
-                autoFocus
-              />
-            </Field>
-            <Field label="类型" required>
-              <select
-                value={credForm.kind}
-                onChange={(e) => setCredForm({ ...credForm, kind: e.target.value as WfCredentialKind })}
-                className="w-full input-base"
-              >
-                <option value="basic">用户名 / 密码</option>
-                <option value="bearer">Bearer Token</option>
-              </select>
-            </Field>
-            {credForm.kind === 'basic' && (
-              <Field label="用户名">
-                <input
-                  value={credForm.username}
-                  onChange={(e) => setCredForm({ ...credForm, username: e.target.value })}
-                  className="w-full input-base font-mono"
-                  placeholder="hr_svc"
-                />
-              </Field>
-            )}
-            <Field label={credForm.kind === 'bearer' ? 'Token' : '密码'} required={!credForm.editing}>
-              <input
-                type="password"
-                value={credForm.secret}
-                onChange={(e) => setCredForm({ ...credForm, secret: e.target.value })}
-                className="w-full input-base font-mono"
-                placeholder={credForm.editing ? '留空表示保持不变' : '仅写入不回显'}
-                autoComplete="new-password"
-              />
-            </Field>
-            <Field label="描述">
-              <input
-                value={credForm.description}
-                onChange={(e) => setCredForm({ ...credForm, description: e.target.value })}
-                className="w-full input-base"
-                placeholder="选填"
-              />
-            </Field>
-          </div>
-          <ModalFooter onCancel={() => setCredForm(null)} onSave={handleCredSave} saving={saving} />
-        </Modal>
-      )}
     </div>
   )
 }

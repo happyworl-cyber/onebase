@@ -8,6 +8,7 @@
 use crate::js_host_bridge::{start_bridge, HostBridgeConfig};
 use crate::lua_engine::PluginContext;
 use crate::py_deps::{self, PyDependencies};
+use crate::workflow_logs::{logs_from_json, CodeExecError, CodeExecOutput};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,7 @@ pub struct PyExecRequest {
     pub code: String,
     pub plugin_ctx: PluginContext,
     pub env_vars: HashMap<String, String>,
+    pub credentials: crate::workflow_credentials::CredentialStore,
     pub tenant_id: Option<i32>,
     pub http_disabled: bool,
     pub timeout_ms: u64,
@@ -50,12 +52,13 @@ pub fn py_timeout_ms() -> u64 {
         .unwrap_or(30_000)
 }
 
-/// Execute user-supplied Python and return its final `ctx.body`.
-pub async fn execute_python(req: PyExecRequest) -> Result<Value, String> {
+/// Execute user-supplied Python and return its final `ctx.body` plus logs.
+pub async fn execute_python(req: PyExecRequest) -> Result<CodeExecOutput, CodeExecError> {
     if !py_enabled() {
         return Err(
             "Python workflow code nodes are disabled（Python 工作流代码节点已禁用）；set WORKFLOW_PY_CODE_ENABLED=true to enable them"
-                .to_string(),
+                .to_string()
+                .into(),
         );
     }
 
@@ -69,10 +72,13 @@ pub async fn execute_python(req: PyExecRequest) -> Result<Value, String> {
                 status
                     .error
                     .unwrap_or_else(|| "pip install failed".to_string())
-            ));
+            )
+            .into());
         }
         if status.status == DepsStatusKind::Installing {
-            return Err("Python dependencies are still installing".to_string());
+            return Err("Python dependencies are still installing"
+                .to_string()
+                .into());
         }
         let dir = py_deps::site_packages_dir(req.workflow_id);
         dir.is_dir().then_some(dir)
@@ -91,7 +97,7 @@ async fn execute_in_dir(
     req: &PyExecRequest,
     site_packages: Option<&Path>,
     temp_dir: &Path,
-) -> Result<Value, String> {
+) -> Result<CodeExecOutput, CodeExecError> {
     let ctx_path = temp_dir.join("ctx.json");
     let user_path = temp_dir.join("user.py");
     let entry_path = temp_dir.join("entry.py");
@@ -101,6 +107,7 @@ async fn execute_in_dir(
     let socket_path = temp_dir.join("bridge.sock");
     let bridge = start_bridge(HostBridgeConfig {
         env_vars: req.env_vars.clone(),
+        credentials: req.credentials.clone(),
         tenant_id: req.tenant_id,
         http_disabled: req.http_disabled,
         socket_path: socket_path.clone(),
@@ -122,14 +129,30 @@ async fn execute_in_dir(
     )
     .await;
     bridge.shutdown().await;
-    run_result?;
 
-    let raw = tokio::fs::read_to_string(&result_path)
-        .await
-        .map_err(|error| format!("Python execution did not write result.json: {error}"))?;
-    let result: Value = serde_json::from_str(&raw)
-        .map_err(|error| format!("invalid Python result.json: {error}"))?;
-    Ok(result.get("body").cloned().unwrap_or(Value::Null))
+    match run_result {
+        Ok(()) => {
+            let raw = tokio::fs::read_to_string(&result_path)
+                .await
+                .map_err(|error| format!("Python execution did not write result.json: {error}"))?;
+            let result: Value = serde_json::from_str(&raw)
+                .map_err(|error| format!("invalid Python result.json: {error}"))?;
+            Ok(CodeExecOutput {
+                body: result.get("body").cloned().unwrap_or(Value::Null),
+                logs: logs_from_json(result.get("logs").unwrap_or(&Value::Null)),
+            })
+        }
+        Err(message) => {
+            let logs = match tokio::fs::read_to_string(&result_path).await.ok() {
+                Some(raw) => serde_json::from_str::<Value>(&raw)
+                    .ok()
+                    .map(|result| logs_from_json(result.get("logs").unwrap_or(&Value::Null)))
+                    .unwrap_or_default(),
+                None => vec![],
+            };
+            Err(CodeExecError { message, logs })
+        }
+    }
 }
 
 fn write_execution_files(
@@ -335,7 +358,8 @@ const SAFE_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin
 #[cfg(test)]
 pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-const ENTRY_PY: &str = r#"import json as _json
+const ENTRY_PY: &str = r#"import builtins as _builtins
+import json as _json
 import os as _os
 import sys as _sys
 from types import SimpleNamespace as _SimpleNamespace
@@ -343,6 +367,39 @@ from types import SimpleNamespace as _SimpleNamespace
 import onebase_host as _host
 
 _dir = _os.path.dirname(_os.path.abspath(__file__))
+_logs = []
+
+def _push(level, *args):
+    _logs.append({"level": level, "message": " ".join(str(a) for a in args)})
+
+_orig_print = _builtins.print
+
+def _print(*args, **kwargs):
+    _push("info", *args)
+
+def _flush(body):
+    with open(_os.path.join(_dir, "result.json"), "w", encoding="utf-8") as _f:
+        _json.dump({"body": body, "logs": _logs}, _f)
+
+_orig_log = {
+    "info": _host.log.info,
+    "warn": _host.log.warn,
+    "error": _host.log.error,
+    "debug": _host.log.debug,
+}
+
+def _wrap_log(level):
+    orig = _orig_log[level]
+    def _fn(message, *rest):
+        _push(level, message, *rest)
+        return orig(message)
+    return _fn
+
+_host.log.info = _wrap_log("info")
+_host.log.warn = _wrap_log("warn")
+_host.log.error = _wrap_log("error")
+_host.log.debug = _wrap_log("debug")
+_builtins.print = _print
 
 with open(_os.path.join(_dir, "ctx.json"), "r", encoding="utf-8") as _f:
     _ctx_data = _json.load(_f)
@@ -358,6 +415,7 @@ with open(_os.path.join(_dir, "user.py"), "r", encoding="utf-8") as _f:
 _user_globals = {
     "ctx": ctx,
     "env": _host.env,
+    "cred": _host.cred,
     "http": _host.http,
     "crypto": _host.crypto,
     "log": _host.log,
@@ -365,6 +423,7 @@ _user_globals = {
     "time": _host.time,
     "sse": _host.sse,
     "google": _host.google,
+    "print": _print,
 }
 
 try:
@@ -374,10 +433,11 @@ try:
         _returned = _execute(ctx)
         if _returned is not None:
             ctx.body = _returned
-    with open(_os.path.join(_dir, "result.json"), "w", encoding="utf-8") as _f:
-        _json.dump({"body": getattr(ctx, "body", None)}, _f)
+    _flush(getattr(ctx, "body", None))
 except Exception:
     import traceback
+    _flush(getattr(ctx, "body", None))
+    _builtins.print = _orig_print
     traceback.print_exc()
     _sys.exit(1)
 "#;
@@ -411,6 +471,7 @@ mod tests {
             code: code.to_string(),
             plugin_ctx: plugin_ctx(json!({"x": 7})),
             env_vars: HashMap::new(),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
             tenant_id: None,
             http_disabled: false,
             timeout_ms: 5_000,
@@ -429,8 +490,9 @@ mod tests {
 
         std::env::remove_var("WORKFLOW_PY_CODE_ENABLED");
         assert!(
-            error.contains("disabled") || error.contains("禁用"),
-            "unexpected error: {error}"
+            error.message.contains("disabled") || error.message.contains("禁用"),
+            "unexpected error: {}",
+            error.message
         );
     }
 
@@ -455,7 +517,7 @@ mod tests {
 
         std::env::remove_var("WORKFLOW_PY_CODE_ENABLED");
         std::env::remove_var("WORKFLOW_PY_SANDBOX");
-        assert_eq!(result, json!({"ok": true, "n": 7}));
+        assert_eq!(result.body, json!({"ok": true, "n": 7}));
     }
 
     #[test]
@@ -503,7 +565,7 @@ mod tests {
         std::fs::remove_dir_all(&deps_dir).ok();
 
         let result = result.expect("Python should install and import the pip dependency");
-        assert_eq!(result, json!({"six": "1.17.0"}));
+        assert_eq!(result.body, json!({"six": "1.17.0"}));
     }
 
     #[tokio::test]
@@ -529,6 +591,90 @@ mod tests {
 
         std::env::remove_var("WORKFLOW_PY_CODE_ENABLED");
         std::env::remove_var("WORKFLOW_PY_SANDBOX");
-        assert_eq!(result, json!({"token": "secret-123"}));
+        assert_eq!(result.body, json!({"token": "secret-123"}));
+    }
+
+    #[tokio::test]
+    async fn execute_reads_injected_cred_through_host_bridge() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        std::env::set_var("WORKFLOW_PY_CODE_ENABLED", "true");
+        std::env::set_var("WORKFLOW_PY_SANDBOX", "direct");
+
+        let mut req =
+            request("def execute(ctx):\n    return { 'token': cred.get('crm', 'token') }\n");
+        req.credentials
+            .insert(crate::workflow_credentials::CredentialFields {
+                id: 1,
+                name: "crm".into(),
+                kind: "bearer".into(),
+                username: None,
+                header_name: None,
+                secret: Some("tok_abc".into()),
+            });
+
+        let result = execute_python(req)
+            .await
+            .expect("Python should read cred via host bridge");
+
+        std::env::remove_var("WORKFLOW_PY_CODE_ENABLED");
+        std::env::remove_var("WORKFLOW_PY_SANDBOX");
+        assert_eq!(result.body, json!({"token": "tok_abc"}));
+    }
+
+    #[tokio::test]
+    async fn execute_collects_print_and_log_and_survives_throw() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        std::env::set_var("WORKFLOW_PY_CODE_ENABLED", "true");
+        std::env::set_var("WORKFLOW_PY_SANDBOX", "direct");
+        let ok = execute_python(request(
+            r#"
+print("hello", 1)
+log.error("e")
+ctx.body = {"ok": True}
+"#,
+        ))
+        .await
+        .expect("py ok");
+        std::env::remove_var("WORKFLOW_PY_CODE_ENABLED");
+        std::env::remove_var("WORKFLOW_PY_SANDBOX");
+        assert_eq!(ok.body, json!({"ok": true}));
+        assert!(ok
+            .logs
+            .iter()
+            .any(|l| l.level == crate::workflow_logs::NodeLogLevel::Info
+                && l.message.contains("hello")));
+        assert!(ok
+            .logs
+            .iter()
+            .any(|l| l.level == crate::workflow_logs::NodeLogLevel::Error && l.message == "e"));
+
+        std::env::set_var("WORKFLOW_PY_CODE_ENABLED", "true");
+        std::env::set_var("WORKFLOW_PY_SANDBOX", "direct");
+        let err = execute_python(request(
+            r#"
+print("before")
+raise RuntimeError("boom")
+"#,
+        ))
+        .await
+        .expect_err("must fail");
+        std::env::remove_var("WORKFLOW_PY_CODE_ENABLED");
+        std::env::remove_var("WORKFLOW_PY_SANDBOX");
+        assert!(err.message.to_lowercase().contains("boom") || err.message.contains("Error"));
+        assert!(err.logs.iter().any(|l| l.message.contains("before")));
     }
 }

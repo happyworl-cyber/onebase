@@ -19,8 +19,11 @@
 //! 这是最小必要集——多加任何 handler 模块会引入和 main.rs 的双重 mod 树，
 //! 容易踩 once_cell static 重复初始化等坑。
 
+pub mod ai_skills;
 pub mod alert_webhook;
 pub mod auth;
+pub mod cloud_log;
+pub mod cloud_log_aliyun;
 pub mod crypto;
 pub mod crypto_primitives;
 pub mod error;
@@ -61,7 +64,9 @@ pub mod scheduler;
 pub mod session_hooks;
 pub mod sse_batch_config;
 pub mod sse_publisher;
+pub mod workflow_credentials;
 pub mod workflow_engine;
+pub mod workflow_logs;
 pub mod workflow_qa;
 pub mod workflow_stream;
 pub mod zlib_primitives;

@@ -1,14 +1,18 @@
+mod callers;
 mod finding;
 mod provider;
 mod redact;
 mod rules;
+mod store;
 
+pub use callers::{scan_call_graph, WorkflowSketch};
 pub use finding::{BatchSummary, Finding, ReviewItem, Severity, WorkflowMeta};
 pub use provider::{
     build_query, extract_answer_text, interpret_http, parse_findings_json, AiResult, AiStatus,
 };
 pub use redact::{redact_value, truncate_codes_for_query};
 pub use rules::{has_code_node, scan_rules};
+pub use store::{load_saved_slug, load_tenant_sketches};
 
 #[derive(Debug, Clone)]
 pub struct WorkflowSnapshot {
@@ -96,6 +100,31 @@ pub fn review_local(wf: &WorkflowSnapshot) -> (WorkflowSnapshot, Vec<Finding>) {
     redacted.edges = redact_value(&wf.edges);
     let rules = scan_rules(&redacted);
     (redacted, rules)
+}
+
+/// 用同租户已保存工作流补上 call_workflow 调用方 / 子流契约。失败只记日志，不挡本地规则。
+pub async fn attach_call_graph(
+    pool: &sqlx::PgPool,
+    wf: &WorkflowSnapshot,
+    tenant_id: Option<i32>,
+    previous_slug: Option<&str>,
+    rules: &mut Vec<Finding>,
+) {
+    let sketches = match load_tenant_sketches(pool, tenant_id).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "加载工作流依赖以检查调用方失败");
+            return;
+        }
+    };
+    let saved = if previous_slug.is_none() && wf.id > 0 {
+        load_saved_slug(pool, wf.id).await.ok().flatten()
+    } else {
+        None
+    };
+    let prev = previous_slug.or(saved.as_deref());
+    rules.extend(scan_call_graph(wf, prev, &sketches));
+    sort_findings(rules);
 }
 
 pub fn sort_findings(findings: &mut [Finding]) {

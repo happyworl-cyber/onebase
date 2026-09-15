@@ -46,7 +46,7 @@ interface Props {
   onDone: () => void
 }
 
-const SLUG_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
+const SLUG_RE = /^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$/
 
 function triggerLabel(type: string): string {
   const meta = TRIGGER_META[type] ?? TRIGGER_META.manual
@@ -251,7 +251,7 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
       const v = (newSlug || '').trim()
       if (!v) return { valid: false, msg: 'Slug 不能为空' }
       if (!SLUG_RE.test(v))
-        return { valid: false, msg: '只能用小写字母、数字、连字符，且首尾不能是连字符' }
+        return { valid: false, msg: '只能用小写字母、数字、下划线、连字符，且首尾不能是连字符或下划线' }
       if (existingSlugs.has(v)) return { valid: false, msg: '该 Slug 在系统中已存在，请换一个' }
       // 与批次中其他文件原始 slug 冲突
       const batchSlugs = files.filter((f) => f.slug && f.slug !== originalSlug).map((f) => f.slug)
