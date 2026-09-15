@@ -25,6 +25,7 @@ import {
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import { useNotification } from '@/hooks/useNotification'
 import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
+import { closeOnBackdropPress } from '@/lib/utils'
 
 const DS_TYPE_LABELS: Record<WfDatasourceType, string> = {
   postgresql: 'PostgreSQL',
@@ -398,10 +399,9 @@ export default function DatasourcesPage() {
 
 function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
   return (
-    <div className="fixed inset-0 bg-black/40 z-40 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/40 z-40 flex items-center justify-center p-4" onMouseDown={closeOnBackdropPress(onClose)}>
       <div
         className="bg-white w-full max-w-2xl rounded-xl shadow-xl p-6 max-h-[88vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
       >
         <h3 className="text-lg font-semibold text-gray-900 mb-4">{title}</h3>
         {children}

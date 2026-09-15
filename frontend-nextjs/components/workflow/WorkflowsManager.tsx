@@ -17,7 +17,8 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import api, { tenantAPI } from '@/lib/api'
 import { usePublicApiConfig } from '@/lib/apiBase'
 import { copyTextToClipboard } from '@/lib/clipboard'
-import { formatDateTime } from '@/lib/utils'
+import { formatDateTime, closeOnBackdropPress } from '@/lib/utils'
+import { EXECUTION_REPLAY_ENTRY_VISIBLE } from '@/lib/featureFlags'
 import { useAppStore } from '@/lib/store'
 import type { WorkflowNodeDef, WorkflowEdgeDef } from '@/components/workflow/WorkflowCanvas'
 import WorkflowEditorHeader, {
@@ -419,6 +420,26 @@ function NodeResultList({ results }: { results: NodeResultItem[] }) {
   )
 }
 
+// MCP 工具清单（与后端 mcp_tools.rs 注册的工具一一对应）。
+// Markdown「复制全部」与页面表格共用这一份，新增工具只改这里。
+const MCP_TOOLS: ReadonlyArray<readonly [string, string]> = [
+  ['node_spec', '节点规范知识库（AI 写定义前必读）'],
+  ['list_skills / get_skill', '列出 / 读取仓库内助手技能，做检测、审查前先看'],
+  ['list_workflows / get_workflow', '查列表 / 查完整定义（有草稿时返回草稿）'],
+  ['list_env_vars', '列出项目环境变量，写 {{env.X}} 前确认存在'],
+  ['create_workflow', '创建并保存为草稿，不进运行时'],
+  ['update_workflow', '更新草稿，不进运行时、不打版本；不能改启用状态'],
+  ['publish_workflow', '把草稿发布为线上定义，发布后运行时才用新图'],
+  ['discard_workflow_draft', '丢弃草稿，回到当前已发布定义'],
+  ['duplicate_workflow', '复制为新副本（草稿态、强制禁用，启用归人）'],
+  ['debug_workflow', '调试试跑，不依赖发布；默认干跑，真实执行受环境护栏约束'],
+  ['review_workflow / review_workflows', '单个 / 批量质量检查，只出报告不改工作流'],
+  ['workflow_api_doc', '按已发布定义生成入参清单 + curl 示例；未发布则按草稿预览'],
+  ['get_workflow_runs', '查执行历史排错'],
+  ['list_workflow_versions', '查询版本历史（仅元信息，只含已发布快照）'],
+  ['get_workflow_version', '获取历史版本完整快照（含 nodes/edges），恢复归人'],
+]
+
 // MCP 接入教程：指导用户把本实例接入本地 AI 客户端，让 AI 创作/调试工作流。
 // 接入地址取当前页面 origin——测试/生产是独立部署（不同域名），在哪个环境打开本页，
 // 教程里的 URL 就指向哪个环境，无需手动区分。
@@ -470,25 +491,16 @@ function McpGuideModal({ onClose }: { onClose: () => void }) {
     '重开一个 AI 会话，直接描述接口需求，例如：',
     '> 帮我在 onebase 建一个工作流：按用户 ID 查询最近 10 笔订单，调试通过后给我接口文档',
     '',
-    'AI 会：读节点规范 → 创建工作流（创建即启用）→ 调试验证 → 生成接口文档。如需下线在页面禁用即可（启停留人）。',
+    'AI 会：读节点规范 → 创建工作流（只落草稿）→ 调试验证 → 发布（草稿才进运行时）→ 生成接口文档。启用 / 禁用仍只在页面操作（启停留人）。',
     '',
     '## AI 可用工具',
-    '- `node_spec`：节点规范知识库（写定义前必读）',
-    '- `list_workflows` / `get_workflow`：查列表 / 查完整定义',
-    '- `create_workflow`：创建（创建即启用，下线归人）',
-    '- `update_workflow`：更新（不能改启用状态）',
-    '- `debug_workflow`：调试试跑，默认干跑；真实执行受环境护栏约束',
-    '- `workflow_api_doc`：生成入参清单 + curl 示例',
-    '- `get_workflow_runs`：查执行历史排错',
-    '- `duplicate_workflow`：复制一个已有工作流为新副本（强制禁用态，启用归人）',
-    '- `list_workflow_versions`：查询工作流版本历史（仅元信息）',
-    '- `get_workflow_version`：获取工作流某个历史版本的完整快照',
+    ...MCP_TOOLS.map(([name, desc]) => `- \`${name}\`：${desc}`),
   ].join('\n'), [mcpUrl, claudeCmd, genericConfig])
 
   return (
-    <div data-alt="mcp-guide-modal" className="fixed inset-0 z-50 flex items-center justify-center" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/40" />
-      <div className="relative bg-white w-[720px] max-w-[92vw] max-h-[85vh] rounded-xl shadow-xl flex flex-col" onClick={e => e.stopPropagation()}>
+    <div data-alt="mcp-guide-modal" className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40" onMouseDown={onClose} />
+      <div className="relative bg-white w-[720px] max-w-[92vw] max-h-[85vh] rounded-xl shadow-xl flex flex-col">
         <div className="px-6 py-4 border-b flex items-center justify-between shrink-0">
           <div>
             <h3 className="font-semibold text-gray-800">MCP 接入 · 让你的 AI 来写工作流</h3>
@@ -550,28 +562,17 @@ function McpGuideModal({ onClose }: { onClose: () => void }) {
               "帮我在 onebase 建一个工作流：按用户 ID 查询最近 10 笔订单，调试通过后给我接口文档"
             </blockquote>
             <p className="text-xs text-gray-500 mt-2 leading-relaxed">
-              AI 会自动完成：读节点规范 → 创建工作流（<strong>创建即启用</strong>）→ 调试验证 → 生成接口文档。
-              如需下线，在本页面点<strong>禁用</strong>即可——启停始终在人手里。
+              AI 会自动完成：读节点规范 → 创建工作流（<strong>只落草稿</strong>）→ 调试验证 → <strong>发布</strong>（草稿才进运行时）→ 生成接口文档。
+              启用 / 禁用仍只在本页面操作——启停始终在人手里。
             </p>
           </section>
 
           {/* 工具清单 */}
           <section>
-            <h4 className="font-semibold text-gray-900 mb-2">AI 可用的工具（11 个）</h4>
+            <h4 className="font-semibold text-gray-900 mb-2">AI 可用的工具（{MCP_TOOLS.length} 组）</h4>
             <table className="w-full text-xs border-separate border-spacing-0">
               <tbody>
-                {[
-                  ['node_spec', '节点规范知识库（AI 写定义前必读）'],
-                  ['list_workflows / get_workflow', '查列表 / 查完整定义'],
-                  ['create_workflow', '创建（创建即启用，下线归人）'],
-                  ['update_workflow', '更新（不能改启用状态）'],
-                  ['duplicate_workflow', '复制一个已有工作流为新副本（强制禁用态，启用归人）'],
-                  ['debug_workflow', '调试试跑，默认干跑；真实执行受环境护栏约束'],
-                  ['workflow_api_doc', '生成入参清单 + curl 示例'],
-                  ['get_workflow_runs', '查执行历史排错'],
-                  ['list_workflow_versions', '查询工作流版本历史（仅元信息）'],
-                  ['get_workflow_version', '获取历史版本完整快照（含 nodes/edges）'],
-                ].map(([name, desc]) => (
+                {MCP_TOOLS.map(([name, desc]) => (
                   <tr key={name}>
                     <td className="py-1 pr-3 font-mono text-indigo-700 whitespace-nowrap align-top">{name}</td>
                     <td className="py-1 text-gray-600">{desc}</td>
@@ -726,9 +727,9 @@ function WorkflowDocModal({
   const docMarkdown = useMemo(() => buildDocMarkdown(model, apiBase, gatewayMode), [model, apiBase, gatewayMode])
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ paddingRight: rightOffset }} onClick={onClose}>
-      <div className="absolute inset-0 bg-black/40" />
-      <div className="relative bg-white w-[720px] max-w-[92vw] max-h-[85vh] rounded-xl shadow-xl flex flex-col" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ paddingRight: rightOffset }}>
+      <div className="absolute inset-0 bg-black/40" onMouseDown={onClose} />
+      <div className="relative bg-white w-[720px] max-w-[92vw] max-h-[85vh] rounded-xl shadow-xl flex flex-col">
         <div className="px-6 py-4 border-b flex items-center justify-between shrink-0">
           <div>
             <h3 className="font-semibold text-gray-800">接口文档 · {meta.name || '未命名工作流'}</h3>
@@ -1199,6 +1200,21 @@ export default function WorkflowsManager({
     // 只跟随 workflowId 字符串；openEditor / view 用渲染时闭包即可。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shareWorkflowIdParam])
+
+  // 消费 ?replayRun=<运行id> 深链：须与 workflowId 同时给，等上面的深链把编辑器打开后再弹出回放层。
+  // 「查看执行回放」按钮已按 lib/featureFlags.ts 隐藏，这条 URL 是线上打开回放的唯一入口。
+  const replayRunParam = searchParams.get('replayRun')
+  const consumedReplayRunRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (!replayRunParam || !shareWorkflowIdParam) return
+    const runId = parseInt(replayRunParam, 10)
+    if (!Number.isFinite(runId) || runId <= 0) return
+    if (consumedReplayRunRef.current === runId) return
+    if (view !== 'editor' || editing?.id !== parseInt(shareWorkflowIdParam, 10)) return
+    consumedReplayRunRef.current = runId
+    setReplayInitialRunId(runId)
+    setShowReplay(true)
+  }, [replayRunParam, shareWorkflowIdParam, view, editing?.id])
 
   // 从 session 草稿恢复到已有工作流时，补齐地址栏 workflowId。
   useEffect(() => {
@@ -1884,9 +1900,9 @@ export default function WorkflowsManager({
 
         {/* 版本历史抽屉 */}
         {showVersions && (
-          <div className="fixed inset-0 z-50 flex justify-end" style={{ paddingRight: aiOffset }} onClick={() => setShowVersions(false)}>
-            <div className="absolute inset-0 bg-black/30" />
-            <div className="relative bg-white w-full max-w-lg h-full shadow-xl flex flex-col" onClick={e => e.stopPropagation()}>
+          <div className="fixed inset-0 z-50 flex justify-end" style={{ paddingRight: aiOffset }}>
+            <div className="absolute inset-0 bg-black/30" onMouseDown={() => setShowVersions(false)} />
+            <div className="relative bg-white w-full max-w-lg h-full shadow-xl flex flex-col">
               <div className="px-5 py-4 border-b flex items-center justify-between shrink-0">
                 <h3 className="font-semibold text-gray-800 flex items-center gap-2">
                   <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
@@ -1971,9 +1987,9 @@ export default function WorkflowsManager({
 
         {/* 调试抽屉 */}
         {showDebug && (
-          <div className="fixed inset-0 z-50 flex justify-end" style={{ paddingRight: aiOffset }} onClick={() => setShowDebug(false)}>
-            <div className="absolute inset-0 bg-black/30" />
-            <div className="relative bg-white w-full max-w-xl h-full shadow-xl flex flex-col" onClick={e => e.stopPropagation()}>
+          <div className="fixed inset-0 z-50 flex justify-end" style={{ paddingRight: aiOffset }}>
+            <div className="absolute inset-0 bg-black/30" onMouseDown={() => setShowDebug(false)} />
+            <div className="relative bg-white w-full max-w-xl h-full shadow-xl flex flex-col">
               <div className="px-5 py-4 border-b flex items-center justify-between shrink-0">
                 <h3 className="font-semibold text-gray-800 flex items-center gap-2">
                   <span className="text-amber-500">●</span> 调试运行
@@ -2091,9 +2107,9 @@ export default function WorkflowsManager({
         <div
           className="fixed bg-black/30 flex items-center justify-center z-50"
           style={{ top: 0, left: 0, right: 'var(--ai-panel-offset, 0px)', bottom: 0 }}
-          onClick={() => setShowRuns(null)}
+          onMouseDown={closeOnBackdropPress(() => setShowRuns(null))}
         >
-          <div className="bg-white rounded-xl shadow-xl w-[960px] max-w-[95vw] max-h-[85vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-xl shadow-xl w-[960px] max-w-[95vw] max-h-[85vh] overflow-hidden">
             <div className="p-4 border-b flex justify-between items-center">
               <div>
                 <h3 className="font-semibold">执行记录</h3>
@@ -2130,12 +2146,14 @@ export default function WorkflowsManager({
                           </div>
                           <div className="flex items-center gap-3 shrink-0">
                             <span className="text-xs text-gray-400">{formatDateTime(run.started_at)}</span>
-                            <button
-                              onClick={() => handleViewReplay(run)}
-                              className="text-xs text-indigo-600 hover:text-indigo-800 whitespace-nowrap"
-                            >
-                              <i className="fas fa-diagram-project mr-1"></i>查看执行回放
-                            </button>
+                            {EXECUTION_REPLAY_ENTRY_VISIBLE && (
+                              <button
+                                onClick={() => handleViewReplay(run)}
+                                className="text-xs text-indigo-600 hover:text-indigo-800 whitespace-nowrap"
+                              >
+                                <i className="fas fa-diagram-project mr-1"></i>查看执行回放
+                              </button>
+                            )}
                           </div>
                         </div>
                         {run.error_message && (

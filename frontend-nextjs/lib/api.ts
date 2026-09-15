@@ -1583,8 +1583,9 @@ export const scheduledTaskAPI = {
     params?: { limit?: number; offset?: number },
   ) => api.get<ScheduledTaskRun[]>(`/api/admin/scheduled-tasks/${id}/runs`, { params }),
 
-  /** 仅超管可调。 */
-  stats: () => api.get<ScheduledTaskStats>('/api/admin/scheduled-tasks/stats'),
+  /** 不传 tenant_id = 全平台；项目页必须传当前项目，否则会显示别的租户的数。 */
+  stats: (params?: { tenant_id?: number }) =>
+    api.get<ScheduledTaskStats>('/api/admin/scheduled-tasks/stats', { params }),
 
   validateCron: (cron_expr: string, timezone?: string) =>
     api.post<CronValidationResult>(
@@ -2167,6 +2168,56 @@ export const redisAPI = {
     ),
 }
 
+export interface LlmConnection {
+  id: number
+  tenant_id: number
+  connection_name: string
+  base_url: string
+  credential_id: number | null
+  models: string[]
+  is_active: boolean
+  created_by: number
+  created_at: string
+  updated_at: string
+}
+
+export const llmAPI = {
+  listConnections: (tenantId: number) =>
+    api.get<LlmConnection[]>('/api/admin/llm-connections', {
+      params: { tenant_id: tenantId },
+    }),
+  getConnection: (id: number) =>
+    api.get<LlmConnection>(`/api/admin/llm-connections/${id}`),
+  createConnection: (input: {
+    tenant_id: number
+    connection_name: string
+    base_url: string
+    credential_id?: number | null
+    models?: string[]
+    is_active?: boolean
+  }) => api.post<LlmConnection>('/api/admin/llm-connections', input),
+  updateConnection: (id: number, input: Record<string, unknown>) =>
+    api.put<LlmConnection>(`/api/admin/llm-connections/${id}`, input),
+  deleteConnection: (id: number) =>
+    api.delete<{ deleted: number }>(`/api/admin/llm-connections/${id}`),
+  testConnection: (input: {
+    tenant_id: number
+    base_url: string
+    credential_id?: number | null
+  }) =>
+    api.post<{ ok: boolean; status?: number; error?: string }>(
+      '/api/admin/llm-connections/test',
+      input,
+      { suppressErrorToast: true } as ApiRequestConfig,
+    ),
+  healthConnection: (id: number) =>
+    api.post<{ ok: boolean; status?: number; error?: string }>(
+      `/api/admin/llm-connections/${id}/health`,
+      {},
+      { suppressErrorToast: true } as ApiRequestConfig,
+    ),
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Kafka 数据源连接
 
@@ -2453,7 +2504,20 @@ export interface UpdateObjectStorageTokenInput {
   is_active?: boolean
 }
 
+export interface ObjectStorageConnectionPublic {
+  id: number
+  tenant_id: number
+  connection_name: string
+  provider: string
+  bucket: string
+}
+
 export const objectStorageAPI = {
+  listCatalog: (tenantId: number) =>
+    api.get<ObjectStorageConnectionPublic[]>('/api/object-storage-connections', {
+      params: { tenant_id: tenantId },
+      suppressErrorToast: true,
+    } as ApiRequestConfig),
   listConnections: (tenantId?: number) =>
     api.get<ObjectStorageConnection[]>('/api/admin/object-storage-connections', {
       params: tenantId !== undefined ? { tenant_id: tenantId } : undefined,

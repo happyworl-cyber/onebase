@@ -16,6 +16,7 @@ export default function WorkflowListHeader() {
       <span className="justify-self-start">触发方式</span>
       <span className="hidden sm:block justify-self-start">状态</span>
       <span className="hidden md:block justify-self-start">作者</span>
+      <span className="hidden md:block justify-self-start">最近修改人</span>
       <span className="hidden md:block justify-self-start">更新时间</span>
       <span className={cn(COMPACT_LIST_ACTIONS_CLASS, 'text-right')}>操作</span>
     </div>

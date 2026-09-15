@@ -17,6 +17,7 @@
 import { useEffect, useState } from 'react'
 import { pgPoolAPI, type PgPoolAdminEntry, type CreatePgPoolBody } from '@/lib/api'
 import { useNotification } from '@/hooks/useNotification'
+import { closeOnBackdropPress } from '@/lib/utils'
 
 interface DrawerState {
   mode: 'create' | 'edit'
@@ -286,11 +287,10 @@ export default function PlatformPgPoolsPage() {
       {drawer && (
         <div
           className="fixed inset-0 bg-black/40 z-40 flex items-center justify-center"
-          onClick={() => !saving && setDrawer(null)}
+          onMouseDown={closeOnBackdropPress(() => { if (!saving) setDrawer(null) })}
         >
           <div
             className="bg-white w-full max-w-lg rounded-xl shadow-xl p-6 m-4"
-            onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-lg font-semibold text-gray-900 mb-1">
               {drawer.mode === 'create' ? '注册 PG 服务器' : `编辑 PG 池 #${drawer.editingId}`}

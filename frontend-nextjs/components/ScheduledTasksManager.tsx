@@ -263,13 +263,15 @@ export default function ScheduledTasksManager({
 
   const loadStats = useCallback(async () => {
     try {
-      const res = await scheduledTaskAPI.stats()
+      const res = await scheduledTaskAPI.stats(
+        tenantMode ? { tenant_id: lockedTenantId } : undefined,
+      )
       setStats(res.data)
     } catch {
-      // 仅超管可访问；非超管会 403，正常 ignore。
+      // 无权查看该租户统计时 403，卡片不展示。
       setStats(null)
     }
-  }, [])
+  }, [tenantMode, lockedTenantId])
 
   // 一次性把可见的连接列表拉过来：表单要用、列表的展示名也要用。
   // tenantMode（项目内）只取本租户连接；platform 模式（超管）取全部可见。
@@ -862,7 +864,7 @@ export default function ScheduledTasksManager({
         </div>
       </div>
 
-      {/* 超管统计 */}
+      {/* 项目页按租户；平台页全量 */}
       {stats && (
         <div className="grid grid-cols-4 gap-3">
           <StatCard label="任务总数" value={stats.total_tasks} />

@@ -28,6 +28,33 @@ pub struct ObjectStorageConnection {
     pub updated_at: DateTime<Utc>,
 }
 
+/// 成员可读的连接目录：不含密钥与运维字段。
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct ObjectStorageConnectionPublic {
+    pub id: i64,
+    pub tenant_id: i32,
+    pub connection_name: String,
+    pub provider: String,
+    pub bucket: String,
+}
+
+impl From<&ObjectStorageConnection> for ObjectStorageConnectionPublic {
+    fn from(row: &ObjectStorageConnection) -> Self {
+        Self {
+            id: row.id,
+            tenant_id: row.tenant_id,
+            connection_name: row.connection_name.clone(),
+            provider: row.provider.clone(),
+            bucket: row.bucket.clone(),
+        }
+    }
+}
+
+/// 文件页连接目录必须带本项目 `tenant_id`，禁止无参扫全表。
+pub fn require_catalog_tenant_id(tenant_id: Option<i32>) -> Result<i32> {
+    tenant_id.ok_or_else(|| AppError::InvalidQuery("缺少 tenant_id".into()))
+}
+
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct ObjectStorageAccessToken {
     pub id: i64,
@@ -133,6 +160,42 @@ mod tests {
         assert!(validate_endpoint("http://127.0.0.1:9000").is_ok());
         assert!(validate_endpoint("cos.example.com").is_err());
         assert!(validate_endpoint("https://bad host").is_err());
+    }
+
+    #[test]
+    fn catalog_tenant_id_required() {
+        assert!(require_catalog_tenant_id(None).is_err());
+        assert_eq!(require_catalog_tenant_id(Some(42)).unwrap(), 42);
+    }
+
+    #[test]
+    fn public_dto_omits_secrets_and_ops_fields() {
+        let row = ObjectStorageConnection {
+            id: 1,
+            tenant_id: 1,
+            connection_name: "c".into(),
+            provider: "minio".into(),
+            endpoint: "http://localhost:9000".into(),
+            region: "us-east-1".into(),
+            bucket: "b".into(),
+            access_key_id: "ak".into(),
+            secret_key_enc: "ENC".into(),
+            force_path_style: true,
+            connect_timeout_secs: 5,
+            is_active: true,
+            created_by: 1,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let public = ObjectStorageConnectionPublic::from(&row);
+        let v = serde_json::to_value(&public).unwrap();
+        assert_eq!(v["id"], 1);
+        assert_eq!(v["connection_name"], "c");
+        assert_eq!(v["bucket"], "b");
+        assert!(v.get("access_key_id").is_none());
+        assert!(v.get("secret_key_enc").is_none());
+        assert!(v.get("endpoint").is_none());
+        assert!(v.get("is_active").is_none());
     }
 
     #[test]

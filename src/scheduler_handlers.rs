@@ -29,6 +29,7 @@ use crate::middleware::ApiKeyContext;
 use crate::scheduler::cron_parser;
 use crate::scheduler::models::ScheduledTask;
 use crate::scheduler::runner::SchedulerRunner;
+use crate::scheduler::stats::{stats_bind_tenant, stats_sql, StatsScope};
 
 // ─── Request / Response 形状 ────────────────────────────────
 
@@ -103,6 +104,11 @@ pub struct ListQuery {
     pub is_active: Option<bool>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StatsQuery {
+    pub tenant_id: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -960,39 +966,39 @@ pub async fn list_runs(
 pub async fn stats(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
+    Query(q): Query<StatsQuery>,
 ) -> Result<Json<Value>, AppError> {
-    // 平台超管限制已移除：任何已认证用户均可查看全局统计。
-    let _ = &claims;
-    let total: (i64,) = sqlx::query_as("SELECT COUNT(*)::bigint FROM management.scheduled_tasks")
-        .fetch_one(&pool)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-    let active: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*)::bigint FROM management.scheduled_tasks WHERE is_active = true",
-    )
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?;
-    let runs_24h: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*)::bigint FROM management.scheduled_task_runs \
-         WHERE started_at >= NOW() - INTERVAL '24 hours'",
-    )
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?;
-    let failed_24h: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*)::bigint FROM management.scheduled_task_runs \
-         WHERE started_at >= NOW() - INTERVAL '24 hours' AND status IN ('failed','timeout')",
-    )
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?;
+    // 传 tenant_id = 项目页：只数该租户；不传 = 平台页：全量。
+    // 项目页必须带 tenant_id，否则空项目会显示别的租户的「启用中」。
+    if let Some(tid) = q.tenant_id {
+        validate_can_manage(&claims, Some(tid), &pool).await?;
+    }
+    let scope = match q.tenant_id {
+        Some(id) => StatsScope::Tenant(id),
+        None => StatsScope::All,
+    };
+    let sql = stats_sql(scope);
+    let bind = stats_bind_tenant(scope);
+    let total = count_stats(&pool, sql.total, bind).await?;
+    let active = count_stats(&pool, sql.active, bind).await?;
+    let runs_24h = count_stats(&pool, sql.runs_24h, bind).await?;
+    let failed_24h = count_stats(&pool, sql.failed_24h, bind).await?;
     Ok(Json(json!({
-        "total_tasks": total.0,
-        "active_tasks": active.0,
-        "runs_24h": runs_24h.0,
-        "failed_24h": failed_24h.0,
+        "total_tasks": total,
+        "active_tasks": active,
+        "runs_24h": runs_24h,
+        "failed_24h": failed_24h,
     })))
+}
+
+async fn count_stats(pool: &PgPool, sql: &str, tenant_id: Option<i32>) -> Result<i64, AppError> {
+    let row: (i64,) = if let Some(tid) = tenant_id {
+        sqlx::query_as(sql).bind(tid).fetch_one(pool).await
+    } else {
+        sqlx::query_as(sql).fetch_one(pool).await
+    }
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok(row.0)
 }
 
 pub async fn validate_cron(

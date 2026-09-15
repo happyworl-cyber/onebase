@@ -18,6 +18,7 @@
 //! GET|POST /api/admin/object-storage-connections/:id/tokens
 //! PATCH|DELETE /api/admin/object-storage-connections/:id/tokens/:token_id
 //!
+//! GET    /api/object-storage-connections?tenant_id=  （成员目录，瘦 DTO）
 //! POST   /api/object-storage-connections/:id/exec
 //! ```
 
@@ -37,8 +38,9 @@ use crate::crypto;
 use crate::error::AppError;
 use crate::object_storage_ds::auth as os_auth;
 use crate::object_storage_ds::models::{
-    default_force_path_style, validate_access_key_id, validate_bucket, validate_endpoint,
-    validate_provider, validate_region, ObjectStorageAccessToken, ObjectStorageConnection,
+    default_force_path_style, require_catalog_tenant_id, validate_access_key_id, validate_bucket,
+    validate_endpoint, validate_provider, validate_region, ObjectStorageAccessToken,
+    ObjectStorageConnection, ObjectStorageConnectionPublic,
 };
 use crate::object_storage_ds::{self, client_cache, commands};
 use crate::permissions;
@@ -159,6 +161,28 @@ pub async fn list_connections(
         .fetch_all(&pool)
         .await
     }
+    .map_err(|e| AppError::Internal(format!("列出对象存储连接失败: {e}")))?;
+    Ok(Json(rows))
+}
+
+/// 项目成员（含 viewer）可读的连接目录：仅活跃连接，不含密钥。
+pub async fn list_catalog(
+    State(pool): State<PgPool>,
+    Extension(claims): Extension<Claims>,
+    Query(q): Query<ListConnectionsQuery>,
+) -> Result<Json<Vec<ObjectStorageConnectionPublic>>, AppError> {
+    let tenant_id = require_catalog_tenant_id(q.tenant_id)?;
+    permissions::require_tenant_membership_any(&pool, &claims, tenant_id).await?;
+
+    let rows = sqlx::query_as::<_, ObjectStorageConnectionPublic>(
+        "SELECT id, tenant_id, connection_name, provider, bucket \
+         FROM management.object_storage_connections \
+         WHERE tenant_id = $1 AND is_active = true \
+         ORDER BY connection_name ASC, id DESC",
+    )
+    .bind(tenant_id)
+    .fetch_all(&pool)
+    .await
     .map_err(|e| AppError::Internal(format!("列出对象存储连接失败: {e}")))?;
     Ok(Json(rows))
 }

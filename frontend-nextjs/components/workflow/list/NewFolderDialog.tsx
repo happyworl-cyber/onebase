@@ -29,11 +29,10 @@ export default function NewFolderDialog({
   const label = kind === 'department' ? '服务' : '分类'
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={onCancel}>
-      <div className="absolute inset-0 bg-black/40" />
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40" onMouseDown={onCancel} />
       <form
         className="relative bg-white rounded-xl shadow-xl w-full max-w-sm p-5"
-        onClick={(e) => e.stopPropagation()}
         onSubmit={(e) => {
           e.preventDefault()
           const fd = new FormData(e.currentTarget)

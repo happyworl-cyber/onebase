@@ -38,6 +38,8 @@ mod kafka_ds;
 mod kafka_handlers;
 mod license_enforcement;
 mod license_features;
+mod llm_connection_handlers;
+mod llm_ds;
 mod logging;
 mod lua_builtins;
 mod lua_engine;
@@ -121,6 +123,7 @@ mod workflow_folder_handlers;
 mod workflow_handlers;
 mod workflow_input_schema;
 mod workflow_kafka_trigger;
+mod workflow_llm;
 mod workflow_logs;
 mod workflow_notify_trigger;
 mod workflow_stream;
@@ -1956,6 +1959,31 @@ async fn main() -> anyhow::Result<()> {
             middleware::auth_middleware,
         ));
 
+    let llm_admin_routes = Router::new()
+        .route(
+            "/api/admin/llm-connections",
+            get(llm_connection_handlers::list_connections)
+                .post(llm_connection_handlers::create_connection),
+        )
+        .route(
+            "/api/admin/llm-connections/test",
+            post(llm_connection_handlers::test_connection),
+        )
+        .route(
+            "/api/admin/llm-connections/:id",
+            get(llm_connection_handlers::get_connection)
+                .put(llm_connection_handlers::update_connection)
+                .delete(llm_connection_handlers::delete_connection),
+        )
+        .route(
+            "/api/admin/llm-connections/:id/health",
+            post(llm_connection_handlers::health_connection),
+        )
+        .layer(axum_middleware::from_fn_with_state(
+            pool.clone(),
+            middleware::auth_middleware,
+        ));
+
     // ─── Kafka 数据源 ───────────────────────────────────────────────────
     //
     // 管理接口限租户 owner/admin；exec 的 produce 限 member+，只读操作允许 viewer。
@@ -2007,7 +2035,7 @@ async fn main() -> anyhow::Result<()> {
     //
     // JWT 面：
     //  1) `/api/admin/object-storage-connections/*` — 连接 CRUD + health + tokens
-    //  2) `/api/object-storage-connections/:id/exec` — 租户成员数据读写
+    //  2) `/api/object-storage-connections` GET 成员目录；`/:id/exec` 租户成员数据读写
     // 令牌面（见下方 object_storage_app_routes）：`obes_os_*` 自鉴权，不挂 JWT。
     let object_storage_admin_routes = Router::new()
         .route(
@@ -2033,6 +2061,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/admin/object-storage-connections/:id/tokens/:token_id",
             axum::routing::patch(object_storage_handlers::update_token)
                 .delete(object_storage_handlers::delete_token),
+        )
+        .route(
+            "/api/object-storage-connections",
+            get(object_storage_handlers::list_catalog),
         )
         .route(
             "/api/object-storage-connections/:id/exec",
@@ -2217,6 +2249,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(session_rules_routes)
         .merge(es_admin_routes)
         .merge(redis_admin_routes)
+        .merge(llm_admin_routes)
         .merge(kafka_admin_routes)
         .merge(object_storage_admin_routes)
         .merge(object_storage_app_routes)

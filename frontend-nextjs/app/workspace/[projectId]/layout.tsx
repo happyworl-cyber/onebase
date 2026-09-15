@@ -195,9 +195,9 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-50">
+    <div className="h-screen flex flex-col overflow-hidden bg-gray-50">
       <ProjectTopbar />
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex min-h-0 overflow-hidden">
         <WorkspaceSidebar />
         {/* 内容区：Tab 栏 + 保活容器。各页面的滚动/内边距下沉到 KeepAliveOutlet
             的每个面板里（p-6 overflow-auto），非激活面板 display:none 但保持挂载。 */}

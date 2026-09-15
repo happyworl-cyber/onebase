@@ -6,6 +6,7 @@ import { NODE_TYPE_META } from './NodeTypes'
 import CodeSnippetEditor from './CodeSnippetEditor'
 import { wfDatasourceAPI, wfCredentialAPI, type WfDatasource, type WfCredential } from '@/lib/api'
 import { redisAPI, REDIS_OPS, type RedisConnection, type RedisOp } from '@/lib/api'
+import { llmAPI, type LlmConnection } from '@/lib/api'
 import { kafkaAPI, type KafkaConnection } from '@/lib/api'
 import {
   objectStorageAPI,
@@ -57,6 +58,9 @@ const JSON_FIELD_RULES: Record<string, Record<string, JsonFieldRule>> = {
   http_call: {
     headers: { label: 'Headers', requireObject: true },
     body: { label: 'Body' },
+  },
+  llm: {
+    messages: { label: 'messages' },
   },
   response: {
     headers: { label: '响应 Headers', requireObject: true },
@@ -1626,6 +1630,17 @@ export default function NodeConfigPanel({
           </>
         )}
 
+        {node.type === 'llm' && (
+          <LlmNodeConfig
+            node={node}
+            updateConfig={updateConfig}
+            patchConfig={(partial) => {
+              if (readOnly || !onChange) return
+              onChange({ ...node, config: { ...node.config, ...partial } })
+            }}
+          />
+        )}
+
         {node.type === 'redis' && (
           <RedisNodeConfig node={node} updateConfig={updateConfig} />
         )}
@@ -1793,6 +1808,221 @@ function StatementsEditor({
         禁止 DROP / TRUNCATE。SQL 里也可直接写 <code className="font-mono">{'{{...}}'}</code> 模板（会自动参数化防注入）。
       </p>
     </div>
+  )
+}
+
+function LlmNodeConfig({
+  node,
+  updateConfig,
+  patchConfig,
+}: {
+  node: WorkflowNodeData
+  updateConfig: (key: string, value: unknown) => void
+  patchConfig: (partial: Record<string, unknown>) => void
+}) {
+  const params = useParams<{ projectId: string }>()
+  const tenantId = parseInt(params?.projectId ?? '', 10)
+  const [connections, setConnections] = useState<LlmConnection[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let alive = true
+    setLoading(true)
+    llmAPI
+      .listConnections(Number.isNaN(tenantId) ? 0 : tenantId)
+      .then((res) => {
+        if (!alive) return
+        const rows = Number.isNaN(tenantId)
+          ? res.data
+          : res.data.filter((c) => c.tenant_id === tenantId)
+        setConnections(rows)
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (alive) setLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [tenantId])
+
+  const connId = Number(node.config.connection_id) || 0
+  const selected = connections.find((c) => c.id === connId)
+  const models = selected?.models ?? []
+
+  const setConnection = (id: number) => {
+    const next = connections.find((c) => c.id === id)
+    const list = next?.models ?? []
+    const model = String(node.config.model || '')
+    patchConfig({
+      connection_id: id,
+      model: list.includes(model) ? model : list[0] || '',
+    })
+  }
+
+  const messagesRaw =
+    typeof node.config.messages === 'string'
+      ? node.config.messages
+      : node.config.messages == null
+        ? ''
+        : JSON.stringify(node.config.messages, null, 2)
+
+  return (
+    <>
+      <div>
+        <label className="block text-xs font-medium text-gray-500 mb-1">LLM 连接 *</label>
+        <select
+          value={connId || ''}
+          onChange={(e) => setConnection(Number(e.target.value))}
+          className="w-full px-3 py-2 border rounded-lg text-sm"
+        >
+          <option value="">{loading ? '加载中…' : '选择连接'}</option>
+          {connections.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.connection_name}
+              {!c.is_active ? '（已停用）' : ''}
+            </option>
+          ))}
+        </select>
+        <p className="text-xs text-gray-400 mt-1">
+          在「集成 → LLM」登记连接。没有可选模型时请先补模型列表。
+        </p>
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-500 mb-1">模型 *</label>
+        <select
+          value={node.config.model || ''}
+          onChange={(e) => updateConfig('model', e.target.value)}
+          disabled={!models.length}
+          className="w-full px-3 py-2 border rounded-lg text-sm font-mono"
+        >
+          <option value="">{models.length ? '选择模型' : '当前连接没有模型'}</option>
+          {models.map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-500 mb-1">system_prompt</label>
+        <textarea
+          value={node.config.system_prompt ?? ''}
+          onChange={(e) => updateConfig('system_prompt', e.target.value)}
+          className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
+          rows={3}
+          placeholder="你是客服。用户等级={{trigger.level}}"
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-500 mb-1">user_prompt</label>
+        <textarea
+          value={node.config.user_prompt ?? ''}
+          onChange={(e) => updateConfig('user_prompt', e.target.value)}
+          className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
+          rows={3}
+          placeholder="问题：{{trigger.question}}"
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-500 mb-1">messages（可选 JSON 数组）</label>
+        <textarea
+          value={messagesRaw}
+          onChange={(e) => {
+            const raw = e.target.value
+            if (raw.trim().startsWith('{{') && raw.trim().endsWith('}}')) {
+              updateConfig('messages', raw.trim())
+              return
+            }
+            try {
+              updateConfig('messages', raw.trim() ? JSON.parse(raw) : '')
+            } catch {
+              updateConfig('messages', raw)
+            }
+          }}
+          className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
+          rows={4}
+          placeholder='{{trigger.messages}} 或 [{"role":"user","content":"..."}]'
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block">
+          <span className="block text-xs font-medium text-gray-500 mb-1">temperature</span>
+          <input
+            type="number"
+            min={0}
+            max={2}
+            step={0.1}
+            value={node.config.temperature ?? 0.7}
+            onChange={(e) =>
+              updateConfig('temperature', e.target.value === '' ? 0.7 : Number(e.target.value))
+            }
+            className="w-full px-3 py-2 border rounded-lg text-sm"
+          />
+        </label>
+        <label className="block">
+          <span className="block text-xs font-medium text-gray-500 mb-1">max_tokens</span>
+          <input
+            type="number"
+            min={1}
+            value={node.config.max_tokens ?? ''}
+            onChange={(e) =>
+              updateConfig('max_tokens', e.target.value === '' ? undefined : Number(e.target.value))
+            }
+            className="w-full px-3 py-2 border rounded-lg text-sm"
+            placeholder="默认"
+          />
+        </label>
+      </div>
+      <label className="block">
+        <span className="block text-xs font-medium text-gray-500 mb-1">timeout_secs</span>
+        <input
+          type="number"
+          min={0}
+          value={node.config.timeout_secs ?? ''}
+          onChange={(e) =>
+            updateConfig('timeout_secs', e.target.value === '' ? undefined : Number(e.target.value))
+          }
+          className="w-full px-3 py-2 border rounded-lg text-sm"
+          placeholder="120（0 = 不限制）"
+        />
+      </label>
+      <label className="flex items-start gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={!!node.config.json_mode}
+          onChange={(e) => updateConfig('json_mode', e.target.checked)}
+        />
+        <span>
+          <span className="block text-sm font-medium text-gray-700">JSON 模式</span>
+          <span className="block text-xs text-gray-400">成功时下游可用 {'{{'}节点id.json.字段{'}}'}</span>
+        </span>
+      </label>
+      <label className="flex items-start gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={!!node.config.stream}
+          onChange={(e) => updateConfig('stream', e.target.checked)}
+        />
+        <span>
+          <span className="block text-sm font-medium text-gray-700">流式输出（适合 endpoint 打字机）</span>
+          <span className="block text-xs text-gray-400">与 http_call.stream 合计全图最多一个</span>
+        </span>
+      </label>
+      <label className="flex items-start gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={!!node.config.skip_llm}
+          onChange={(e) => updateConfig('skip_llm', e.target.checked)}
+        />
+        <span>
+          <span className="block text-sm font-medium text-gray-700">跳过真实调用（debug mock）</span>
+        </span>
+      </label>
+    </>
   )
 }
 

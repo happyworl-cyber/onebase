@@ -686,11 +686,10 @@ export default function ConnectionsPage() {
 
       {/* 编辑连接弹窗 */}
       {editConn && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={() => setEditConn(null)}>
-          <div className="absolute inset-0 bg-black/30" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/30" onMouseDown={() => setEditConn(null)} />
           <div
             className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-white rounded-xl shadow-xl"
-            onClick={(e) => e.stopPropagation()}
           >
             <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
               <div>
@@ -840,11 +839,10 @@ export default function ConnectionsPage() {
       )}
 
       {poolConn && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={() => setPoolConn(null)}>
-          <div className="absolute inset-0 bg-black/30" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/30" onMouseDown={() => setPoolConn(null)} />
           <div
             className="relative w-full max-w-lg bg-white rounded-xl shadow-xl p-6"
-            onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between mb-4">
               <div>

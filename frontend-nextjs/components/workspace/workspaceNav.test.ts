@@ -26,6 +26,10 @@ assert.deepEqual(resolveNavMeta('/help/getting-started'), {
   label: '使用帮助',
   icon: 'fas fa-circle-question',
 })
+assert.deepEqual(resolveNavMeta('/files'), {
+  label: '文件',
+  icon: 'fas fa-folder-open',
+})
 assert.equal(resolveNavMeta('/automation/workflows/3/versions').label, '工作流版本')
 
 assert.equal(shouldReplaceKeepAliveCache('/help/connecting-apis'), true)

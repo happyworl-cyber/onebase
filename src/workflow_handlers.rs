@@ -346,6 +346,7 @@ pub struct Workflow {
     pub alert_throttle_hours: i32,
     pub last_alert_sent_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: Option<i32>,
+    pub updated_by: Option<i32>,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
     // 创建者账号信息：仅在列表/详情查询里 JOIN users 填充；其它 SELECT * 查询缺列时默认 None。
@@ -353,6 +354,10 @@ pub struct Workflow {
     pub created_by_name: Option<String>,
     #[sqlx(default)]
     pub created_by_email: Option<String>,
+    #[sqlx(default)]
+    pub updated_by_name: Option<String>,
+    #[sqlx(default)]
+    pub updated_by_email: Option<String>,
     #[serde(default)]
     #[sqlx(default)]
     pub published_version: Option<i32>,
@@ -702,6 +707,25 @@ async fn resolve_tenant_for_workflow_input(
 const LIST_DEFAULT_PAGE_SIZE: i64 = 10;
 const LIST_MAX_PAGE_SIZE: i64 = 100;
 
+fn list_from_sql() -> &'static str {
+    "FROM management.workflows w \
+     LEFT JOIN users cu ON cu.id = w.created_by \
+     LEFT JOIN users uu ON uu.id = w.updated_by "
+}
+
+const LIST_SELECT: &str =
+    "SELECT w.*, cu.username AS created_by_name, cu.email AS created_by_email, \
+     uu.username AS updated_by_name, uu.email AS updated_by_email ";
+
+fn publish_live_update_sql() -> &'static str {
+    r#"UPDATE management.workflows SET
+            name = $2, slug = $3, description = $4, category = $5, department = $6,
+            trigger_type = $7, trigger_config = $8, input_schema = $9, nodes = $10, edges = $11,
+            dependencies = $12, timeout_ms = $13, max_retries = $14, updated_by = $15
+           WHERE id = $1
+           RETURNING *"#
+}
+
 #[derive(Debug, Clone)]
 struct ParsedListParams {
     tenant_id: Option<i32>,
@@ -714,10 +738,12 @@ struct ParsedListParams {
     is_enabled: Option<bool>,
     trigger_types: Vec<String>,
     author: Option<String>,
+    updater: Option<String>,
     sort: String,
     page: Option<i64>,
     page_size: Option<i64>,
     include_authors: bool,
+    include_updaters: bool,
 }
 
 #[derive(Debug)]
@@ -779,6 +805,11 @@ fn parse_list_params(params: &HashMap<String, String>) -> ParsedListParams {
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .map(str::to_string),
+        updater: params
+            .get("updater")
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
         sort: params
             .get("sort")
             .map(|s| s.trim().to_string())
@@ -788,6 +819,10 @@ fn parse_list_params(params: &HashMap<String, String>) -> ParsedListParams {
         page_size: params.get("page_size").and_then(|v| v.parse().ok()),
         include_authors: params
             .get("include_authors")
+            .map(|s| parse_bool_param(s))
+            .unwrap_or(false),
+        include_updaters: params
+            .get("include_updaters")
             .map(|s| parse_bool_param(s))
             .unwrap_or(false),
     }
@@ -894,6 +929,14 @@ fn push_list_filters(qb: &mut sqlx::QueryBuilder<'_, sqlx::Postgres>, p: &Parsed
             qb.push(" AND cu.username IS NULL");
         } else {
             qb.push(" AND cu.username = ").push_bind(author.clone());
+        }
+    }
+
+    if let Some(updater) = &p.updater {
+        if updater == "未知" {
+            qb.push(" AND uu.username IS NULL");
+        } else {
+            qb.push(" AND uu.username = ").push_bind(updater.clone());
         }
     }
 
@@ -1009,10 +1052,8 @@ pub async fn list_workflows(
 
     let paginate = p.page.is_some() || p.page_size.is_some();
 
-    let mut count_qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
-        "SELECT COUNT(*)::bigint FROM management.workflows w \
-         LEFT JOIN users cu ON cu.id = w.created_by ",
-    );
+    let mut count_qb: sqlx::QueryBuilder<sqlx::Postgres> =
+        sqlx::QueryBuilder::new(format!("SELECT COUNT(*)::bigint {}", list_from_sql()));
     push_list_scope(&mut count_qb, &scope);
     push_list_filters(&mut count_qb, &p);
     let total: i64 = count_qb
@@ -1020,11 +1061,8 @@ pub async fn list_workflows(
         .fetch_one(&pool)
         .await?;
 
-    let mut qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
-        "SELECT w.*, cu.username AS created_by_name, cu.email AS created_by_email \
-         FROM management.workflows w \
-         LEFT JOIN users cu ON cu.id = w.created_by ",
-    );
+    let mut qb: sqlx::QueryBuilder<sqlx::Postgres> =
+        sqlx::QueryBuilder::new(format!("{}{}", LIST_SELECT, list_from_sql()));
     push_list_scope(&mut qb, &scope);
     push_list_filters(&mut qb, &p);
     push_list_sort(&mut qb, &p);
@@ -1064,11 +1102,10 @@ pub async fn list_workflows(
     }
 
     if p.include_authors {
-        let mut auth_qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
-            "SELECT DISTINCT COALESCE(cu.username, '未知') AS author \
-             FROM management.workflows w \
-             LEFT JOIN users cu ON cu.id = w.created_by ",
-        );
+        let mut auth_qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(format!(
+            "SELECT DISTINCT COALESCE(cu.username, '未知') AS author {}",
+            list_from_sql()
+        ));
         push_list_scope(&mut auth_qb, &scope);
         push_list_filters(&mut auth_qb, &p);
         auth_qb.push(" ORDER BY author ASC");
@@ -1077,6 +1114,21 @@ pub async fn list_workflows(
             .fetch_all(&pool)
             .await?;
         out["authors"] = json!(authors);
+    }
+
+    if p.include_updaters {
+        let mut up_qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(format!(
+            "SELECT DISTINCT COALESCE(uu.username, '未知') AS updater {}",
+            list_from_sql()
+        ));
+        push_list_scope(&mut up_qb, &scope);
+        push_list_filters(&mut up_qb, &p);
+        up_qb.push(" ORDER BY updater ASC");
+        let updaters: Vec<String> = up_qb
+            .build_query_scalar::<String>()
+            .fetch_all(&pool)
+            .await?;
+        out["updaters"] = json!(updaters);
     }
 
     Ok(Json(out))
@@ -3564,32 +3616,26 @@ pub async fn publish_workflow(
     let def = parse_definition(&draft.nodes, &draft.edges)?;
     workflow_engine::validate_definition(&def)?;
 
-    let workflow = sqlx::query_as::<_, Workflow>(
-        r#"UPDATE management.workflows SET
-            name = $2, slug = $3, description = $4, category = $5, department = $6,
-            trigger_type = $7, trigger_config = $8, input_schema = $9, nodes = $10, edges = $11,
-            dependencies = $12, timeout_ms = $13, max_retries = $14
-           WHERE id = $1
-           RETURNING *"#,
-    )
-    .bind(id)
-    .bind(&draft.name)
-    .bind(&draft.slug)
-    .bind(&draft.description)
-    .bind(&draft.category)
-    .bind(&draft.department)
-    .bind(&draft.trigger_type)
-    .bind(&draft.trigger_config)
-    .bind(&draft.input_schema)
-    .bind(&draft.nodes)
-    .bind(&draft.edges)
-    .bind(&draft.dependencies)
-    .bind(draft.timeout_ms)
-    .bind(draft.max_retries)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(map_workflow_write_err)?
-    .ok_or_else(|| AppError::NotFound(format!("工作流 {} 不存在", id)))?;
+    let workflow = sqlx::query_as::<_, Workflow>(publish_live_update_sql())
+        .bind(id)
+        .bind(&draft.name)
+        .bind(&draft.slug)
+        .bind(&draft.description)
+        .bind(&draft.category)
+        .bind(&draft.department)
+        .bind(&draft.trigger_type)
+        .bind(&draft.trigger_config)
+        .bind(&draft.input_schema)
+        .bind(&draft.nodes)
+        .bind(&draft.edges)
+        .bind(&draft.dependencies)
+        .bind(draft.timeout_ms)
+        .bind(draft.max_retries)
+        .bind(claims.sub)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_workflow_write_err)?
+        .ok_or_else(|| AppError::NotFound(format!("工作流 {} 不存在", id)))?;
 
     let note = publish_version_note(req.version_note.as_deref(), draft.note.as_deref());
     let version =
@@ -5725,6 +5771,37 @@ mod tests {
         }
         assert!(require_published_to_trigger(Some(1)).is_ok());
     }
+
+    #[test]
+    fn parse_list_params_reads_updater_and_include_updaters() {
+        let mut params = std::collections::HashMap::new();
+        params.insert("updater".into(), " 宗心 ".into());
+        params.insert("include_updaters".into(), "1".into());
+        let p = parse_list_params(&params);
+        assert_eq!(p.updater.as_deref(), Some("宗心"));
+        assert!(p.include_updaters);
+        assert!(!p.include_authors);
+    }
+
+    #[test]
+    fn list_from_sql_joins_creator_and_updater() {
+        let sql = list_from_sql();
+        assert!(
+            sql.contains("LEFT JOIN users cu ON cu.id = w.created_by"),
+            "{sql}"
+        );
+        assert!(
+            sql.contains("LEFT JOIN users uu ON uu.id = w.updated_by"),
+            "{sql}"
+        );
+    }
+
+    #[test]
+    fn publish_live_update_sql_sets_updated_by() {
+        let sql = publish_live_update_sql();
+        assert!(sql.contains("updated_by = $15"), "{sql}");
+        assert!(sql.contains("name = $2"), "{sql}");
+    }
 }
 
 #[cfg(test)]
@@ -5761,8 +5838,11 @@ mod endpoint_response_tests {
             alert_throttle_hours: 24,
             last_alert_sent_at: None,
             created_by: Some(1),
+            updated_by: None,
             created_by_name: None,
             created_by_email: None,
+            updated_by_name: None,
+            updated_by_email: None,
             created_at: chrono::NaiveDateTime::default(),
             updated_at: chrono::NaiveDateTime::default(),
             published_version: None,
