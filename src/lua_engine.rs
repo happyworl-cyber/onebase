@@ -1,10 +1,11 @@
 use mlua::{Function, Lua, Result as LuaResult, StdLib, Table, Value as LuaValue};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 
 use crate::lua_builtins;
+use crate::workflow_logs::{NodeLogLevel, NodeLogLine};
 
 /// Lua 脚本执行的请求上下文
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -39,6 +40,9 @@ pub struct PluginResult {
     pub modified_response: Option<JsonValue>,
     /// 插件设置的额外 headers
     pub extra_headers: Option<JsonValue>,
+    /// `print` / `log.*` 收集到的调试日志
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub logs: Vec<NodeLogLine>,
 }
 
 impl Default for PluginResult {
@@ -50,6 +54,7 @@ impl Default for PluginResult {
             modified_body: None,
             modified_response: None,
             extra_headers: None,
+            logs: vec![],
         }
     }
 }
@@ -85,9 +90,11 @@ pub struct LuaEngine {
     http_disabled: bool,
     /// 项目级环境变量，供 Lua `env.get` 读取（执行期从 DB 解密装入）
     env_vars: HashMap<String, String>,
+    credentials: crate::workflow_credentials::CredentialStore,
     /// 当前工作流所属项目（租户）id，供 `google.sa_assertion` 派生 K8s 密钥名时绑定
     /// 租户使用（可信、用户不可伪造）。非工作流场景可为 None。
     tenant_id: Option<i32>,
+    log_sink: Arc<Mutex<Vec<NodeLogLine>>>,
 }
 
 impl LuaEngine {
@@ -99,8 +106,15 @@ impl LuaEngine {
             max_memory_bytes,
             http_disabled: false,
             env_vars: HashMap::new(),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
             tenant_id: None,
+            log_sink: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    pub fn with_log_sink(mut self, sink: Arc<Mutex<Vec<NodeLogLine>>>) -> Self {
+        self.log_sink = sink;
+        self
     }
 
     /// 以"http 禁用"模式运行（生产只读护栏专用）
@@ -112,6 +126,14 @@ impl LuaEngine {
     /// 注入项目级环境变量，供 Lua `env.get` 读取
     pub fn with_env_vars(mut self, env_vars: HashMap<String, String>) -> Self {
         self.env_vars = env_vars;
+        self
+    }
+
+    pub fn with_credentials(
+        mut self,
+        credentials: crate::workflow_credentials::CredentialStore,
+    ) -> Self {
+        self.credentials = credentials;
         self
     }
 
@@ -133,7 +155,12 @@ impl LuaEngine {
         self.inject_safe_globals(&lua)?;
 
         // 注册内置库（json / log / crypto / env / time）；env.get 读取本引擎装入的项目变量
-        lua_builtins::register_builtins(&lua, self.env_vars.clone())?;
+        lua_builtins::register_builtins_with_creds(
+            &lua,
+            self.env_vars.clone(),
+            self.credentials.clone(),
+            Some(self.log_sink.clone()),
+        )?;
 
         // 注册 google 宿主模块（sa_assertion）：私钥留在 Rust，按 tenant_id + 派生名读 K8s。
         lua_builtins::register_google_module(&lua, self.tenant_id)?;
@@ -218,12 +245,18 @@ impl LuaEngine {
             })?,
         )?;
 
-        // print → 记录到 tracing
+        // print → 记录到 tracing，并写入节点日志缓冲
+        let print_sink = self.log_sink.clone();
         globals.set(
             "print",
-            lua.create_function(|_, args: mlua::MultiValue| {
+            lua.create_function(move |_, args: mlua::MultiValue| {
                 let msg: Vec<String> = args.iter().map(|v| format!("{:?}", v)).collect();
-                tracing::info!(target: "lua_plugin", "{}", msg.join("\t"));
+                let message = msg.join("\t");
+                tracing::debug!(target: "lua_plugin", "{}", message);
+                print_sink.lock().unwrap().push(NodeLogLine {
+                    level: NodeLogLevel::Info,
+                    message,
+                });
                 Ok(())
             })?,
         )?;
@@ -394,7 +427,12 @@ impl LuaEngine {
             modified_body,
             modified_response: None,
             extra_headers,
+            logs: vec![],
         })
+    }
+
+    fn drain_logs(sink: &Arc<Mutex<Vec<NodeLogLine>>>) -> Vec<NodeLogLine> {
+        std::mem::take(&mut *sink.lock().unwrap())
     }
 
     /// 执行插件脚本
@@ -424,12 +462,14 @@ impl LuaEngine {
         // tenant_id 同样要过 spawn_blocking 边界透传，否则内层重建丢失（与 http_disabled 同坑），
         // 导致 google.sa_assertion 拿不到租户上下文。
         let tenant_id = self.tenant_id;
+        let log_sink = self.log_sink.clone();
 
         // 在阻塞线程中执行 Lua（Lua VM 非 Send，必须在同一线程）
         let result = tokio::task::spawn_blocking(move || {
             let mut engine = LuaEngine::new(1, max_ms, max_mem)
                 .with_env_vars(env_vars)
-                .with_tenant_id(tenant_id);
+                .with_tenant_id(tenant_id)
+                .with_log_sink(log_sink.clone());
             if http_disabled {
                 engine = engine.with_http_disabled();
             }
@@ -472,18 +512,30 @@ impl LuaEngine {
                 .get(hook_fn.as_str())
                 .map_err(|_| PluginError::HookNotFound(hook_fn.clone()))?;
 
-            let ctx_val: LuaValue = lua
-                .globals()
-                .get("ctx")
-                .map_err(|e| PluginError::ExecutionError(e.to_string()))?;
+            let ctx_val: LuaValue =
+                lua.globals()
+                    .get("ctx")
+                    .map_err(|e| PluginError::ExecutionError {
+                        message: e.to_string(),
+                        logs: Self::drain_logs(&engine.log_sink),
+                    })?;
 
             func.call::<()>(ctx_val)
-                .map_err(|e| PluginError::ExecutionError(e.to_string()))?;
+                .map_err(|e| PluginError::ExecutionError {
+                    message: e.to_string(),
+                    logs: Self::drain_logs(&engine.log_sink),
+                })?;
 
-            Self::extract_result(&lua).map_err(|e| PluginError::ResultError(e.to_string()))
+            let mut result =
+                Self::extract_result(&lua).map_err(|e| PluginError::ResultError(e.to_string()))?;
+            result.logs = Self::drain_logs(&engine.log_sink);
+            Ok(result)
         })
         .await
-        .map_err(|e| PluginError::ExecutionError(format!("task panicked: {}", e)))??;
+        .map_err(|e| PluginError::ExecutionError {
+            message: format!("task panicked: {}", e),
+            logs: vec![],
+        })??;
 
         Ok(result)
     }
@@ -509,8 +561,11 @@ pub enum PluginError {
     #[error("Hook 函数 '{0}' 未找到")]
     HookNotFound(String),
 
-    #[error("执行错误: {0}")]
-    ExecutionError(String),
+    #[error("执行错误: {message}")]
+    ExecutionError {
+        message: String,
+        logs: Vec<NodeLogLine>,
+    },
 
     #[error("结果提取失败: {0}")]
     ResultError(String),
@@ -521,6 +576,15 @@ pub enum PluginError {
     #[allow(dead_code)]
     #[error("执行超时")]
     Timeout,
+}
+
+impl PluginError {
+    pub fn logs(&self) -> Vec<NodeLogLine> {
+        match self {
+            PluginError::ExecutionError { logs, .. } => logs.clone(),
+            _ => vec![],
+        }
+    }
 }
 
 #[cfg(test)]
@@ -780,5 +844,46 @@ mod tests {
             .execute_plugin(script, "on_request", &minimal_ctx())
             .await;
         assert!(result.is_ok(), "env.get 穿透失败: {:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn execute_plugin_collects_print_and_log_and_keeps_them_on_error() {
+        let engine = LuaEngine::new(1, 5_000, 8 * 1024 * 1024);
+        let ctx = minimal_ctx();
+        let ok = engine
+            .execute_plugin(
+                r#"
+function execute(ctx)
+  print("p1", 2)
+  log.info("i1")
+  ctx.body = { ok = true }
+end
+"#,
+                "execute",
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert!(ok.logs.iter().any(|l| l.message.contains("p1")));
+        assert!(ok
+            .logs
+            .iter()
+            .any(|l| l.level == crate::workflow_logs::NodeLogLevel::Info && l.message == "i1"));
+
+        let err = engine
+            .execute_plugin(
+                r#"
+function execute(ctx)
+  print("before")
+  error("boom")
+end
+"#,
+                "execute",
+                &ctx,
+            )
+            .await
+            .expect_err("must fail");
+        let logs = err.logs();
+        assert!(logs.iter().any(|l| l.message.contains("before")));
     }
 }

@@ -1,8 +1,8 @@
-//! MCP 工具集 —— 工作流创作工作台的 13 个固定工具
+//! MCP 工具集 —— 工作流创作工作台的固定工具
 //!
 //! 设计原则（见 .omc/plans/onebase-workflow-mcp-plan.md）：
 //! - 工具直接构造 axum extractor 调用现有 handler，权限/校验/审计零重复；
-//! - create 创建即启用（is_enabled=true）；update 剥离 is_enabled——启停仍留人在页面操作；
+//! - create 保持 is_enabled=true；create/update 只写草稿，publish 后才进入运行时；
 //! - debug 默认 dry_run=true；**生产实例**（RUST_ENV 非 development/staging/test，
 //!   含未设置，与 auth.rs 的 fail-safe 惯例一致）注入 prod_readonly，由引擎层
 //!   拦截副作用（含 Lua http / CTE 写穿透）。测试/正式独立部署，权限随实例环境走。
@@ -15,8 +15,13 @@ use std::collections::HashMap;
 use crate::auth::Claims;
 use crate::error::{AppError, Result};
 use crate::workflow_handlers::{
-    self, CreateWorkflowRequest, DebugWorkflowRequest, UpdateWorkflowRequest,
+    self, CreateWorkflowRequest, DebugWorkflowRequest, PublishWorkflowRequest,
+    UpdateWorkflowRequest,
 };
+
+fn unpublished_api_doc_note() -> &'static str {
+    "尚未发布，无线上接口"
+}
 
 /// 节点知识库：AI 编写工作流定义的"说明书"。
 /// 内容与引擎实际行为对齐（workflow_engine.rs 各 exec_*_node + NodeType 定义）。
@@ -42,12 +47,16 @@ const NODE_SPEC: &str = r#"# OneBase 工作流节点规范
 - `{{trigger.字段}}`：本次触发的入参（endpoint 触发 = 请求 body / query）
 - `{{节点ID.字段}}`：上游节点输出，支持嵌套与下标：`{{q.rows[0].id}}`
 - `{{env.变量名}}`：项目级环境变量（在「设置 → 环境变量」页面管理），可用于任意节点 config，如 http_call 的 header、email 地址等；未定义的变量解析为空串。执行历史与 debug 输出中变量值会自动脱敏为 `***`。**引用前先调 `list_env_vars` 查当前项目实际有哪些变量**，不要凭猜测写变量名
+- `{{cred.名称.字段}}`：项目凭证（设置 → 凭证管理）。字段：basic=`username`/`password`，bearer=`token`，api_key=`api_key`/`header_name`。未定义渲染为空串。执行输出中 password/token/api_key 脱敏为 `***`
 
 ## 工作流入参 input_schema（可选）
 工作流顶层可声明 JSON Schema 对象 `input_schema`（create_workflow / update_workflow 的同名字段）。
 接口文档优先读它生成参数表与 curl 示例；未声明（null）时才扫描节点里的 `{{trigger.X}}`。
 code 节点直接读请求 body、节点里没有 `{{trigger.x}}` 时必须声明 `input_schema`，否则文档会误写成「无入参」。
 本阶段只用于文档，引擎不按 schema 校验请求。
+
+## 助手技能
+先 `list_skills`；名称对得上就 `get_skill` 再按正文做。检测 / 审查 / 改子流影响父流用 `workflow-qa`。新能力加 `skills/<name>/SKILL.md` 并在 `src/ai_skills.rs` 注册。
 
 ## 节点类型（15 种）
 
@@ -106,8 +115,9 @@ config: `{ "connection_id": 整数, "op": "put|get|delete|list|presign", ...按 
 - 输出 `{ "op": "...", "result": ... }`；body 上限等限额与数据 API 一致（见 object_storage_ds::commands）
 
 ### http_call（外部 HTTP）
-config: `{ "method": "GET|POST|PUT|PATCH|DELETE", "url": "https://...", "headers": {对象}, "body": 任意, "stream": 可选布尔, "async_poll": 可选布尔 }`
+config: `{ "method": "GET|POST|PUT|PATCH|DELETE", "url": "https://...", "headers": {对象}, "body": 任意, "credential_id": 可选整数, "stream": 可选布尔, "async_poll": 可选布尔 }`
 - 禁止内网地址；超时由 timeout_secs / 默认 120s / 工作流 timeout_ms 兜底
+- `credential_id`：引用项目凭证。basic → Authorization Basic；bearer → Authorization Bearer；api_key → `{header_name}`（默认 X-API-Key）。覆盖节点 Headers 同名头
 - 默认输出 `{ "status", "headers", "body" }`
 - `stream: true`：按上游字节流读取。endpoint 触发时把上游 status + Content-Type/Cache-Control/Content-Disposition 原样写入本次 HTTP 响应（其余头丢弃），调用方收到的 body 与上游一致。节点同时输出 `{ status, headers, body, text, streamed: true }`：`body` 为上游原文（UTF-8 有损，上限 8MiB，超出加 body_truncated），`text` 仅从 OpenAI 兼容 SSE（choices[0].delta.content|delta.text|text）和 Claude content_block_delta.delta.text 抽取，认不出则为空串。全图最多一个 stream http_call；不可与 async_poll 同开。上游流结束后才跑下游；调用方断开不停工作流。非 endpoint / 子工作流只缓冲+抽文本，不占用父 HTTP。
 
@@ -184,8 +194,8 @@ config: `{ "code": "源码", "language": "lua|javascript|python（可选，默�
   - `packageJson`：完整或最小 `package.json` 对象，至少含 `dependencies`
   - `packageLock`：可选 lockfile 全文字符串；有则优先 `npm ci --omit=dev`，否则 `npm install --omit=dev`
   - 依赖安装失败时工作流仍可保存，但执行 JS code 节点前须 `ready`，否则节点失败
-- 宿主 API（IPC 桥，与 Lua 对齐）：`env.get(key)`、`http.get/post/put/delete`、`log.info/warn/error/debug`、`json.encode/encode_pretty/decode`、`time.now()`/`time.now_ms()`、`sse.publish`、`google.sa_assertion(project, scope)`
-- `crypto`（部分实现）：`sha256`、`hmac_sha256`、`uuid`、`base64_encode`/`base64_decode`；其余 `crypto.*`（md5/aes/rsa/base64url 等）调用会报错「not implemented by JS host bridge」
+- 宿主 API（IPC 桥，与 Lua 对齐）：`env.get(key)`、`cred.get(name, field)`、`http.get/post/put/delete`、`log.info/warn/error/debug`、`json.encode/encode_pretty/decode`、`time.now()`/`time.now_ms()`、`sse.publish`、`google.sa_assertion(project, scope)`
+- `crypto`（部分实现）：`sha256`、`hmac_sha256`、`uuid`、`base64_encode`/`base64_decode`、`rsa_verify_sha256(公钥, 原文, 签名)`（RS256 验签，参数与 Lua 相同：PEM 或 RSA JWK JSON + 标准 base64/JWT base64url 签名；Apple / Facebook Limited Login idToken 可在 JS 节点本地验签，无需 npm）；其余 `crypto.*`（md5/aes/rsa_encrypt/rsa_sign/base64url 等）调用会报错「not implemented by JS host bridge」
 - `zlib`（runtime 本地 Node zlib，不走 IPC）：`compress(bytes)` / `decompress(bytes)`，RFC 1950（与 Python `zlib.compress` / Node `deflateSync` 同格式）。入参 `string` 或 `Buffer`，出参 `Buffer`。明文与解压输出上限 8 MiB。不要把 `Buffer` 传给 host `crypto.base64_encode`（IPC 不能传裸字节），用 `buf.toString('base64')`
 - 腾讯 IM UserSig（TLS-Sig v2）配方：`hmac_sha256` 返回 hex → 每两字符 `parseInt(h,16)` 拼成 Buffer → JSON（`TLS.ver/identifier/sdkappid/expire/time/sig`，`sig` 为 HMAC 的标准 base64）→ `zlib.compress` → `toString('base64')` 后把 `+/=` 换成 `*-_`
 - 用户代码可通过 `require()` 加载工作流 `node_modules` 中的包（CommonJS）
@@ -215,7 +225,7 @@ ctx.body = { ok: true, id: row?.id, hasToken: !!token };
 ```
   - 依赖以 `pip install --target site-packages` 装到工作流私有目录（可用 `WORKFLOW_PIP_INDEX_URL` 指定源、`WORKFLOW_PIP_INSTALL_TIMEOUT_MS` 调超时）
   - 依赖安装失败时工作流仍可保存，但执行 Python code 节点前须 `ready`，否则节点失败
-- 宿主 API（复用同一 IPC 桥，与 Lua/JS 对齐）：`env.get(key)`、`http.get/post/put/delete`、`log.info/warn/error/debug`、`json.encode/encode_pretty/decode`、`time.now()`/`time.now_ms()`、`sse.publish`、`google.sa_assertion(project, scope)`
+- 宿主 API（复用同一 IPC 桥，与 Lua/JS 对齐）：`env.get(key)`、`cred.get(name, field)`、`http.get/post/put/delete`、`log.info/warn/error/debug`、`json.encode/encode_pretty/decode`、`time.now()`/`time.now_ms()`、`sse.publish`、`google.sa_assertion(project, scope)`
 - `crypto`（部分实现）：`sha256`、`hmac_sha256`、`uuid`、`base64_encode`/`base64_decode`
 - 沙箱：子进程 + bwrap（若可用，`WORKFLOW_PY_SANDBOX=direct|none|raw` 可关闭）；超时 `WORKFLOW_PY_TIMEOUT_MS`（默认 30s）；生产库调试时 `http.*` 禁用
 - 示例：
@@ -232,7 +242,12 @@ def execute(ctx):
   - 摘要/HMAC：sha256、hmac_sha256、hmac_sha256_raw_key、md5、sha1、hmac_sha1（后三者仅兼容旧系统，勿用于安全场景）
   - 编码：base64_encode/base64_decode、base64url_encode（JWT 段用）
   - 随机：uuid、random_hex
-  - RSA：rsa_encrypt（PKCS#1 v1.5）、rsa_encrypt_oaep（OAEP-SHA256）、rsa_decrypt、rsa_sign_sha256（RS256 签名，返回标准 base64；可用来在 Lua 里自建 RS256 JWT，如 Google SA 换 OAuth token）
+  - RSA：rsa_encrypt（PKCS#1 v1.5）、rsa_encrypt_oaep（OAEP-SHA256）、rsa_decrypt、rsa_sign_sha256（RS256 签名，返回标准 base64；可用来在 Lua 里自建 RS256 JWT，如 Google SA 换 OAuth token）、rsa_verify_sha256(公钥, 原文, 签名)（RS256 验签，返回 true/false。公钥为 SPKI/PKCS#1 PEM 或 JWKS 里的 RSA JWK JSON；签名接受标准 base64 或 JWT 第三段 base64url。Apple 登录 / Facebook Limited Login 的 idToken 用它本地验签）
+```lua
+-- IdP JWKS 里按 kid 找到的 RSA JWK（json.encode 后）或 PEM
+local h, p, s = id_token:match("^([^%.]+)%.([^%.]+)%.([^%.]+)$")
+assert(crypto.rsa_verify_sha256(jwk_json, h .. "." .. p, s), "invalid idToken")
+```
   - 对称加密：aes_encrypt(opts) / aes_decrypt(opts)。opts：mode(cbc|gcm|ecb，默认cbc)、key + key_encoding(utf8|hex|base64|base64url)、iv + iv_encoding（cbc需16字节/gcm需12字节）、padding(pkcs7|zero|none，默认pkcs7)、plaintext/ciphertext、input_encoding、output_encoding、aad(仅gcm)。gcm密文为 `密文||16字节tag`。用于精确对接外部/旧系统的加解密方案
 - `zlib.compress(bytes)` / `zlib.decompress(bytes)`：RFC 1950 zlib wrapper，入参/出参为二进制字符串；明文与解压输出上限 8 MiB。压缩结果可直接交给 `crypto.base64_encode`
 - 腾讯 IM UserSig（TLS-Sig v2）配方（引擎不提供 `tencent_im.*`）：
@@ -259,6 +274,7 @@ local usersig = crypto.base64_encode(zlib.compress(doc))
 ```
 - google.sa_assertion(project, scope) -> { assertion, project_id, client_email }：只传 project 字符串，宿主按 project+工作流tenant_id+服务端保密盐派生 K8s 密钥名、读 Service Account JSON 签出 RS256 JWT，私钥永不进 Lua（需运维配 FCM_KEY_SALT + 挂载 SA JSON 到 /app/secrets/fcm，见 .env.example）。用 assertion 去 http.post https://oauth2.googleapis.com/token 换 access_token；project_id 供 FCM v1 发送 URL（projects/{project_id}/messages:send）使用，与 token 的 SA 同源、避免 azp/project 不匹配
 - `env.get("变量名")` 读项目级环境变量（同 `{{env.X}}` 的来源）：不再读进程环境变量、无 `PLUGIN_` 前缀限制；未配置的变量返回 nil（不再抛错），可写 `env.get("X") or "默认值"` 兜底
+- `cred.get(name, field)` 读项目凭证字段（同 `{{cred.名称.字段}}`）：未配置返回 nil
 - 沙箱：无 os/io/文件系统；生产库调试时 http.* 直接报错
 
 ## 触发类型（trigger_type）
@@ -272,10 +288,10 @@ local usersig = crypto.base64_encode(zlib.compress(doc))
 ## 约束
 - 除 loop 回边(edge_type=loop_back)外必须无环；condition 分支边必须带 branch 标签；loop 出边用 body/done 标签
 - endpoint 工作流建议以 response 节点收尾，否则返回最后一个成功节点的输出
-- MCP 创建的工作流创建即启用（is_enabled=true）；如需下线由人在页面禁用
+- MCP 创建或更新的定义先保存为草稿；调用 publish_workflow 后才进入运行时
 "#;
 
-/// 12 个工具的 MCP 定义（tools/list 响应体）
+/// MCP 定义（tools/list 响应体）
 pub fn tool_definitions() -> Value {
     json!([
         {
@@ -310,10 +326,10 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "create_workflow",
-            "description": "创建工作流，创建即启用（is_enabled 默认 true）；如需下线由人在页面禁用。nodes/edges 结构见 node_spec。",
+            "description": "创建工作流并保存为草稿；调用 publish_workflow 后才会进入运行时。nodes/edges 结构见 node_spec。",
             "inputSchema": { "type": "object", "properties": {
                 "name": { "type": "string" },
-                "slug": { "type": "string", "description": "小写字母/数字/连字符" },
+                "slug": { "type": "string", "description": "小写字母/数字/下划线/连字符/斜杠" },
                 "description": { "type": "string" },
                 "department": { "type": "string", "description": "服务/部门（树第一级）。只用已有值（先 list_workflows 看现有 department 取值，如 共享/Acme/acme-central）；跨项目复用的归「共享」；要新增服务名必须先与人确认，不许随手造新值" },
                 "category": { "type": "string", "description": "分类（树第二级），按业务领域命名（如 发帖/帖子列表/登录），不按技术来源命名（禁止「xx迁移」这类）。优先复用该 department 下已有分类，避免新造同义词；APP/web 行为差异不用分类区分，用 slug 后缀（-app/-web）区分" },
@@ -321,17 +337,17 @@ pub fn tool_definitions() -> Value {
                 "tenant_id": { "type": "integer" },
                 "trigger_type": { "type": "string", "enum": ["endpoint", "hook", "cron", "manual", "notify", "kafka"] },
                 "trigger_config": { "type": "object" },
-                "input_schema": { "type": "object", "description": "工作流入参 JSON Schema。有则接口文档以它为准；传 null 表示未声明（走 {{trigger.x}} 扫描）。更新此字段会打版本快照。" },
+                "input_schema": { "type": "object", "description": "工作流入参 JSON Schema。有则接口文档以它为准；传 null 表示未声明（走 {{trigger.x}} 扫描）。" },
                 "nodes": { "type": "array" },
                 "edges": { "type": "array" },
                 "timeout_ms": { "type": "integer" },
                 "max_retries": { "type": "integer" },
-                "version_note": { "type": "string", "description": "本次保存的版本备注（展示在版本历史中）" }
+                "version_note": { "type": "string", "description": "草稿版本备注，发布时写入版本历史" }
             }, "required": ["name", "slug", "nodes", "edges"] }
         },
         {
             "name": "update_workflow",
-            "description": "更新工作流（不能修改启用状态——发布权留人）。仅传需要变更的字段。改节点有两种方式：① 全量——传 nodes（整段替换）；② 增量——传 node_patch（按节点 id upsert，只改动的节点，未涉及节点原样保留）和/或 remove_node_ids（删节点）。node_patch/remove_node_ids 与全量 nodes 互斥。edges 仍为全量替换。",
+            "description": "更新工作流草稿，不进入运行时、不打版本。仅传需要变更的字段。改节点有两种方式：① 全量——传 nodes（整段替换）；② 增量——传 node_patch（按节点 id upsert，只改动的节点，未涉及节点原样保留）和/或 remove_node_ids（删节点）。node_patch/remove_node_ids 与全量 nodes 互斥。edges 仍为全量替换。",
             "inputSchema": { "type": "object", "properties": {
                 "id": { "type": "integer", "description": "工作流 ID" },
                 "name": { "type": "string" },
@@ -342,14 +358,29 @@ pub fn tool_definitions() -> Value {
                 "database_id": { "type": "integer" },
                 "trigger_type": { "type": "string" },
                 "trigger_config": { "type": "object" },
-                "input_schema": { "type": "object", "description": "工作流入参 JSON Schema。有则接口文档以它为准；传 null 表示未声明（走 {{trigger.x}} 扫描）。更新此字段会打版本快照。" },
+                "input_schema": { "type": "object", "description": "工作流入参 JSON Schema。有则接口文档以它为准；传 null 表示未声明（走 {{trigger.x}} 扫描）。" },
                 "nodes": { "type": "array", "description": "全量替换整个节点数组；与 node_patch/remove_node_ids 互斥" },
                 "node_patch": { "type": "array", "description": "增量节点补丁：数组里每个节点按 id 与现有节点合并，整节点替换（id 存在则替换、不存在则新增），每个节点须带 id" },
                 "remove_node_ids": { "type": "array", "items": { "type": "string" }, "description": "要删除的节点 id 列表；可与 node_patch 同时用" },
                 "edges": { "type": "array" },
                 "timeout_ms": { "type": "integer" },
                 "max_retries": { "type": "integer" },
-                "version_note": { "type": "string", "description": "版本备注；仅当本次更新改动了定义（含 nodes/node_patch/remove_node_ids/input_schema，产生新版本快照）时记录，纯元信息修改不产生版本" }
+                "version_note": { "type": "string", "description": "暂存在草稿的版本备注，发布时写入版本历史" }
+            }, "required": ["id"] }
+        },
+        {
+            "name": "publish_workflow",
+            "description": "把工作流的未发布草稿发布为线上定义。无草稿则失败。发布后运行时才会使用新图。",
+            "inputSchema": { "type": "object", "properties": {
+                "id": { "type": "integer" },
+                "version_note": { "type": "string" }
+            }, "required": ["id"] }
+        },
+        {
+            "name": "discard_workflow_draft",
+            "description": "丢弃未发布草稿，编辑稿回到当前已发布定义。从未发布过的丢弃后画布为空。",
+            "inputSchema": { "type": "object", "properties": {
+                "id": { "type": "integer" }
             }, "required": ["id"] }
         },
         {
@@ -406,14 +437,14 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "review_workflow",
-            "description": "对单个工作流做质量检查：本地规则 + 工作流所属项目默认 AI Provider 的语义审查。项目未配置 Provider 时只跑本地规则。只出报告，不改工作流。权限与 get_workflow 相同。",
+            "description": "对单个工作流做质量检查：本地规则、call_workflow 父/子流契约，以及工作流所属项目默认 AI Provider 的语义审查。项目未配置 Provider 时只跑本地规则。只出报告，不改工作流。权限与 get_workflow 相同。",
             "inputSchema": { "type": "object", "properties": {
                 "id": { "type": "integer", "description": "工作流 ID" }
             }, "required": ["id"] }
         },
         {
             "name": "review_workflows",
-            "description": "按筛选批扫工作流质量。先全量跑本地规则，再对高危/有代码且规则命中的流串行送项目默认 AI Provider（max_ai 默认 20、上限 50）。只返回有规则命中或送了 AI 的项。权限与 list_workflows 相同。",
+            "description": "按筛选批扫工作流质量。先全量跑本地规则和 call_workflow 父/子流契约，再对高危/有代码且规则命中的流串行送项目默认 AI Provider（max_ai 默认 20、上限 50）。只返回有规则命中或送了 AI 的项。权限与 list_workflows 相同。",
             "inputSchema": { "type": "object", "properties": {
                 "database_id": { "type": "integer" },
                 "tenant_id": { "type": "integer" },
@@ -422,6 +453,18 @@ pub fn tool_definitions() -> Value {
                 "search": { "type": "string" },
                 "max_ai": { "type": "integer", "description": "本批最多送 AI Provider 的条数，默认 20，上限 50" }
             } }
+        },
+        {
+            "name": "list_skills",
+            "description": "列出仓库内助手技能（name + description）。做检测/审查等工作前先看这里，命中再 get_skill。",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        },
+        {
+            "name": "get_skill",
+            "description": "读取某个助手技能的完整说明（来自仓库 skills/<name>/SKILL.md，已打进二进制）。",
+            "inputSchema": { "type": "object", "properties": {
+                "name": { "type": "string", "description": "技能名，如 workflow-qa" }
+            }, "required": ["name"] }
         }
     ])
 }
@@ -430,6 +473,18 @@ pub fn tool_definitions() -> Value {
 pub async fn call_tool(pool: &PgPool, claims: &Claims, name: &str, args: &Value) -> Result<Value> {
     match name {
         "node_spec" => Ok(json!({ "spec": NODE_SPEC })),
+        "list_skills" => Ok(onebase::ai_skills::list_skills_json()),
+        "get_skill" => {
+            let name = args
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| AppError::InvalidQuery("缺少必填参数 name".into()))?;
+            let skill = onebase::ai_skills::get_skill(name)
+                .ok_or_else(|| AppError::NotFound(format!("技能「{name}」不存在")))?;
+            Ok(onebase::ai_skills::skill_json(&skill))
+        }
         "list_workflows" => tool_list_workflows(pool, claims, args).await,
         "list_env_vars" => tool_list_env_vars(pool, claims, args).await,
         "get_workflow" => {
@@ -444,6 +499,31 @@ pub async fn call_tool(pool: &PgPool, claims: &Claims, name: &str, args: &Value)
         }
         "create_workflow" => tool_create_workflow(pool, claims, args).await,
         "update_workflow" => tool_update_workflow(pool, claims, args).await,
+        "publish_workflow" => {
+            let id = require_id(args)?;
+            let req: PublishWorkflowRequest = serde_json::from_value(args.clone())
+                .map_err(|e| AppError::InvalidQuery(format!("publish_workflow 参数错误: {}", e)))?;
+            let resp = workflow_handlers::publish_workflow(
+                State(pool.clone()),
+                Path(id),
+                axum::Extension(claims.clone()),
+                None,
+                axum::Json(req),
+            )
+            .await?;
+            Ok(resp.0)
+        }
+        "discard_workflow_draft" => {
+            let id = require_id(args)?;
+            let resp = workflow_handlers::discard_workflow_draft(
+                State(pool.clone()),
+                Path(id),
+                axum::Extension(claims.clone()),
+                None,
+            )
+            .await?;
+            Ok(resp.0)
+        }
         "duplicate_workflow" => tool_duplicate_workflow(pool, claims, args).await,
         "debug_workflow" => tool_debug_workflow(pool, claims, args).await,
         "workflow_api_doc" => tool_workflow_api_doc(pool, claims, args).await,
@@ -513,7 +593,14 @@ async fn tool_review_workflow(pool: &PgPool, claims: &Claims, args: &Value) -> R
     .await?;
     let snap = onebase::workflow_qa::snapshot_from_get_json(&resp.0)
         .ok_or_else(|| AppError::InvalidQuery("工作流定义缺少 id/slug/nodes".to_string()))?;
-    let (red, rules) = onebase::workflow_qa::review_local(&snap);
+    let (red, mut rules) = onebase::workflow_qa::review_local(&snap);
+    let tenant_id = resp
+        .0
+        .get("workflow")
+        .and_then(|w| w.get("tenant_id"))
+        .and_then(|v| v.as_i64())
+        .and_then(|n| i32::try_from(n).ok());
+    onebase::workflow_qa::attach_call_graph(pool, &snap, tenant_id, None, &mut rules).await;
     let ai = crate::ai::review_workflow_with_project_provider(pool, &red, &rules).await;
     Ok(onebase::workflow_qa::review_item_json(
         &onebase::workflow_qa::to_review_item(&red, rules, ai),
@@ -530,11 +617,29 @@ async fn tool_review_workflows(pool: &PgPool, claims: &Claims, args: &Value) -> 
     let max_ai = onebase::workflow_qa::clamp_max_ai(args.get("max_ai").and_then(|v| v.as_i64()));
     let mut scanned_snaps = Vec::new();
     let mut cand = Vec::new();
+    let mut sketches_by_tenant: std::collections::HashMap<
+        Option<i32>,
+        Vec<onebase::workflow_qa::WorkflowSketch>,
+    > = std::collections::HashMap::new();
     for item in arr {
         let Some(snap) = onebase::workflow_qa::snapshot_from_list_item(item) else {
             continue;
         };
-        let (red, rules) = onebase::workflow_qa::review_local(&snap);
+        let (red, mut rules) = onebase::workflow_qa::review_local(&snap);
+        let tenant_id = item
+            .get("tenant_id")
+            .and_then(|v| v.as_i64())
+            .and_then(|n| i32::try_from(n).ok());
+        if !sketches_by_tenant.contains_key(&tenant_id) {
+            let loaded = onebase::workflow_qa::load_tenant_sketches(pool, tenant_id)
+                .await
+                .unwrap_or_default();
+            sketches_by_tenant.insert(tenant_id, loaded);
+        }
+        if let Some(sketches) = sketches_by_tenant.get(&tenant_id) {
+            rules.extend(onebase::workflow_qa::scan_call_graph(&snap, None, sketches));
+            onebase::workflow_qa::sort_findings(&mut rules);
+        }
         let has_code = onebase::workflow_qa::has_code_node(&red.nodes);
         cand.push((red.id, rules.clone(), has_code));
         scanned_snaps.push((red, rules));
@@ -635,7 +740,7 @@ async fn tool_list_workflows(pool: &PgPool, claims: &Claims, args: &Value) -> Re
 async fn tool_create_workflow(pool: &PgPool, claims: &Claims, args: &Value) -> Result<Value> {
     let mut req: CreateWorkflowRequest = serde_json::from_value(args.clone())
         .map_err(|e| AppError::InvalidQuery(format!("create_workflow 参数错误: {}", e)))?;
-    // MCP 创建即启用（创建就是为了用）；如需下线由人在页面禁用
+    // 保持默认开关为启用，但定义只保存为草稿，发布后才进入运行时
     req.is_enabled = Some(true);
     let (_status, resp) = workflow_handlers::create_workflow(
         State(pool.clone()),
@@ -651,7 +756,7 @@ async fn tool_create_workflow(pool: &PgPool, claims: &Claims, args: &Value) -> R
     if let Some(obj) = out.as_object_mut() {
         obj.insert(
             "notice".to_string(),
-            json!("工作流已创建并启用；如需下线可在页面禁用"),
+            json!("工作流已保存为草稿；调用 publish_workflow 后才会进入运行时"),
         );
     }
     Ok(out)
@@ -745,14 +850,14 @@ async fn tool_debug_workflow(pool: &PgPool, claims: &Claims, args: &Value) -> Re
 
 async fn tool_workflow_api_doc(pool: &PgPool, claims: &Claims, args: &Value) -> Result<Value> {
     let id = require_id(args)?;
-    // 经 get_workflow 拿定义，顺带完成权限校验
-    let resp = workflow_handlers::get_workflow(
-        State(pool.clone()),
-        Path(id),
-        axum::Extension(claims.clone()),
-    )
-    .await?;
-    let workflow = resp.0.get("workflow").cloned().unwrap_or(Value::Null);
+    let live = workflow_handlers::fetch_workflow_for_admin(pool, claims, id).await?;
+    let draft = if live.published_version.is_none() {
+        crate::workflow_draft::fetch_draft(pool, id).await?
+    } else {
+        None
+    };
+    let (doc_wf, unpublished) = crate::workflow_draft::workflow_for_api_doc(live, draft);
+    let workflow = serde_json::to_value(&doc_wf).unwrap_or(Value::Null);
 
     let slug = workflow.get("slug").and_then(|v| v.as_str()).unwrap_or("");
     let trigger_type = workflow
@@ -807,13 +912,20 @@ async fn tool_workflow_api_doc(pool: &PgPool, claims: &Claims, args: &Value) -> 
     let streaming = crate::workflow_stream::count_stream_http_calls_json(
         workflow.get("nodes").unwrap_or(&Value::Null),
     ) > 0;
-    let note = if streaming {
+    let mut note = if streaming {
         format!(
             "{note}\n本工作流含 stream: true 的 http_call：成功时 HTTP 响应是上游字节流（通常 text/event-stream），不是 JSON。请按上游 Content-Type 解析；curl 加 --no-buffer 以便边收边看。"
         )
     } else {
         note.to_string()
     };
+    if unpublished {
+        if note.is_empty() {
+            note = unpublished_api_doc_note().to_string();
+        } else {
+            note = format!("{note}\n{}", unpublished_api_doc_note());
+        }
+    }
 
     Ok(json!({
         "workflow_id": id,
@@ -826,6 +938,7 @@ async fn tool_workflow_api_doc(pool: &PgPool, claims: &Claims, args: &Value) -> 
         "curl_example": curl,
         "note": note,
         "stream": streaming,
+        "unpublished": unpublished,
     }))
 }
 
@@ -853,13 +966,23 @@ mod tests {
     }
 
     #[test]
+    fn unpublished_api_doc_note_is_chinese() {
+        assert!(unpublished_api_doc_note().contains("尚未发布，无线上接口"));
+    }
+
+    #[test]
     fn test_tool_definitions_shape() {
         let defs = tool_definitions();
         let arr = defs.as_array().expect("tools 应为数组");
-        assert_eq!(arr.len(), 13);
+        assert_eq!(arr.len(), 18);
         let names: Vec<_> = arr.iter().filter_map(|t| t["name"].as_str()).collect();
+        assert!(names.contains(&"list_env_vars"));
+        assert!(names.contains(&"publish_workflow"));
+        assert!(names.contains(&"discard_workflow_draft"));
         assert!(names.contains(&"review_workflow"));
         assert!(names.contains(&"review_workflows"));
+        assert!(names.contains(&"list_skills"));
+        assert!(names.contains(&"get_skill"));
         for t in arr {
             assert!(t.get("name").is_some());
             assert!(t.get("description").is_some());

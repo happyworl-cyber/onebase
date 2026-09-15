@@ -829,7 +829,9 @@ fn workflow_topic_to_public_template(topic: &str) -> Option<String> {
 
 async fn load_workflow_public_endpoint(pool: &PgPool, slug: &str) -> Option<PublicEndpointCfg> {
     let rows = sqlx::query(
-        "SELECT slug, nodes FROM management.workflows WHERE is_enabled = true ORDER BY updated_at DESC",
+        "SELECT slug, nodes FROM management.workflows \
+         WHERE is_enabled = true AND published_version IS NOT NULL \
+         ORDER BY updated_at DESC",
     )
     .fetch_all(pool)
     .await

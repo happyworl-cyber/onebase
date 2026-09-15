@@ -21,6 +21,7 @@ use tokio::task::JoinHandle;
 /// Per-execution host capabilities made available to JavaScript code.
 pub struct HostBridgeConfig {
     pub env_vars: HashMap<String, String>,
+    pub credentials: crate::workflow_credentials::CredentialStore,
     pub tenant_id: Option<i32>,
     pub http_disabled: bool,
     pub socket_path: PathBuf,
@@ -137,6 +138,16 @@ async fn handle_request(
             .and_then(|key| config.env_vars.get(key))
             .map(|value| Value::String(value.clone()))
             .unwrap_or(Value::Null)),
+        "cred.get" => Ok(args
+            .get("name")
+            .and_then(Value::as_str)
+            .and_then(|name| {
+                args.get("field")
+                    .and_then(Value::as_str)
+                    .and_then(|field| config.credentials.get_field(name, field))
+            })
+            .map(Value::String)
+            .unwrap_or(Value::Null)),
         "json.encode" => serde_json::to_string(args.get("value").unwrap_or(&Value::Null))
             .map(Value::String)
             .map_err(|e| format!("json.encode 失败: {e}")),
@@ -188,6 +199,26 @@ async fn handle_request(
             String::from_utf8(bytes).map(Value::String).map_err(|_| {
                 "base64_decode 结果不是 UTF-8；JS runtime 暂不支持二进制字符串".to_string()
             })
+        }
+        "crypto.rsa_verify_sha256" => {
+            let arr = args
+                .get("args")
+                .and_then(Value::as_array)
+                .ok_or_else(|| "crypto.rsa_verify_sha256: 缺少参数".to_string())?;
+            let public_key = arr
+                .first()
+                .and_then(Value::as_str)
+                .ok_or_else(|| "crypto.rsa_verify_sha256: 公钥必须是字符串".to_string())?;
+            let message = arr
+                .get(1)
+                .and_then(Value::as_str)
+                .ok_or_else(|| "crypto.rsa_verify_sha256: 原文必须是字符串".to_string())?;
+            let signature = arr
+                .get(2)
+                .and_then(Value::as_str)
+                .ok_or_else(|| "crypto.rsa_verify_sha256: 签名必须是字符串".to_string())?;
+            crate::lua_builtins::rsa_verify_sha256(public_key, message.as_bytes(), signature)
+                .map(Value::Bool)
         }
         "sse.publish" => {
             let topic = required_str(args, "topic")?;
@@ -312,6 +343,7 @@ mod tests {
             PathBuf::from("/tmp").join(format!("ctr-js-{}.sock", uuid::Uuid::new_v4()));
         let bridge = start_bridge(HostBridgeConfig {
             env_vars: HashMap::from([("FOO".to_string(), "bar".to_string())]),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
             tenant_id: None,
             http_disabled: false,
             socket_path: socket_path.clone(),
@@ -341,5 +373,129 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(String::from_utf8(output.stdout).unwrap(), "bar");
+    }
+
+    #[tokio::test]
+    async fn node_runtime_reads_injected_credential() {
+        if Command::new("node").arg("--version").output().is_err() {
+            return;
+        }
+        let socket_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("c-{}.sock", &uuid::Uuid::new_v4().to_string()[..8]));
+        let mut credentials = crate::workflow_credentials::CredentialStore::default();
+        credentials.insert(crate::workflow_credentials::CredentialFields {
+            id: 1,
+            name: "crm".into(),
+            kind: "bearer".into(),
+            username: None,
+            header_name: None,
+            secret: Some("tok_abc".into()),
+        });
+        let bridge = match start_bridge(HostBridgeConfig {
+            env_vars: HashMap::new(),
+            credentials,
+            tenant_id: None,
+            http_disabled: false,
+            socket_path: socket_path.clone(),
+        })
+        .await
+        {
+            Ok(bridge) => bridge,
+            Err(error) if error.contains("Operation not permitted") => return,
+            Err(error) => panic!("bridge starts: {error}"),
+        };
+        let runtime =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("js-runtime/onebase-runtime/index.js");
+        let output = tokio::task::spawn_blocking(move || {
+            Command::new("node")
+                .arg("--require")
+                .arg(runtime)
+                .arg("-e")
+                .arg("process.stdout.write(String(cred.get('crm','token')))")
+                .env("ONEBASE_HOST_SOCK", &socket_path)
+                .output()
+                .expect("node starts")
+        })
+        .await
+        .expect("node task completes");
+        bridge.shutdown().await;
+        assert!(
+            output.status.success(),
+            "node stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "tok_abc");
+    }
+
+    #[tokio::test]
+    async fn node_runtime_rsa_verify_sha256() {
+        use base64::{engine::general_purpose, Engine as _};
+        use rsa::pkcs1v15::SigningKey;
+        use rsa::pkcs8::EncodePublicKey;
+        use rsa::signature::{SignatureEncoding, Signer};
+        use rsa::{RsaPrivateKey, RsaPublicKey};
+        use sha2::Sha256;
+
+        if Command::new("node").arg("--version").output().is_err() {
+            return;
+        }
+
+        let mut rng = rsa::rand_core::OsRng;
+        let private_key = RsaPrivateKey::new(&mut rng, 2048).expect("rsa keygen");
+        let public_pem = RsaPublicKey::from(&private_key)
+            .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
+            .expect("pem");
+        let signing_key = SigningKey::<Sha256>::new(private_key);
+        let message = "header.payload";
+        let sig = general_purpose::URL_SAFE_NO_PAD.encode(
+            signing_key
+                .try_sign(message.as_bytes())
+                .expect("sign")
+                .to_vec(),
+        );
+
+        let socket_path =
+            PathBuf::from("/tmp").join(format!("ctr-js-{}.sock", uuid::Uuid::new_v4()));
+        let bridge = start_bridge(HostBridgeConfig {
+            env_vars: HashMap::new(),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
+            tenant_id: None,
+            http_disabled: false,
+            socket_path: socket_path.clone(),
+        })
+        .await
+        .expect("bridge starts");
+
+        let runtime =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("js-runtime/onebase-runtime/index.js");
+        // Node 25 wraps `node -e` as `(crypto => { ... })(require('node:crypto'))`,
+        // which would shadow the host `crypto` global. Workflow files don't.
+        let script = format!(
+            "process.stdout.write(String(globalThis.crypto.rsa_verify_sha256({}, {}, {})))",
+            serde_json::to_string(&public_pem).unwrap(),
+            serde_json::to_string(message).unwrap(),
+            serde_json::to_string(&sig).unwrap(),
+        );
+        let output = tokio::task::spawn_blocking(move || {
+            Command::new("node")
+                .arg("--require")
+                .arg(runtime)
+                .arg("-e")
+                .arg(script)
+                .env("ONEBASE_HOST_SOCK", &socket_path)
+                .output()
+                .expect("node starts")
+        })
+        .await
+        .expect("node task completes");
+
+        bridge.shutdown().await;
+        assert!(
+            output.status.success(),
+            "node stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "true");
     }
 }

@@ -139,9 +139,7 @@ export default function WorkflowVersionBrowser({
   const restore = async () => {
     if (!canRestore || restoring) return
     if (
-      !confirm(
-        `确认把工作流恢复到版本 v${version}？\n当前未保存的改动将被覆盖；恢复会作为一个新版本记录，可再次回滚。`,
-      )
+      !confirm(`确认恢复到版本 v${version}？将写入草稿，不会立刻上线。`)
     ) {
       return
     }

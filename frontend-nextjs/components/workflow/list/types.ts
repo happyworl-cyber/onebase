@@ -68,4 +68,8 @@ export interface WorkflowListItem {
   created_by_email: string | null
   created_at: string
   updated_at: string
+  /** 线上已发布版本号；null 表示从未发布 */
+  published_version: number | null
+  /** 存在未发布草稿（列表 overlay 后） */
+  has_unpublished: boolean
 }

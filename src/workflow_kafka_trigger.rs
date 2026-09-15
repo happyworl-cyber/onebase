@@ -96,7 +96,8 @@ async fn load_active_kafka_configs(
 ) -> Result<HashMap<i32, KafkaTriggerConfig>, sqlx::Error> {
     let workflows = sqlx::query_as::<_, Workflow>(
         "SELECT * FROM management.workflows \
-         WHERE is_enabled = true AND trigger_type = 'kafka'",
+         WHERE is_enabled = true AND published_version IS NOT NULL \
+           AND trigger_type = 'kafka'",
     )
     .fetch_all(pool)
     .await?;
@@ -273,7 +274,8 @@ async fn fetch_current_workflow(
 ) -> Result<Option<Workflow>, sqlx::Error> {
     let workflow = sqlx::query_as::<_, Workflow>(
         "SELECT * FROM management.workflows \
-         WHERE id = $1 AND is_enabled = true AND trigger_type = 'kafka'",
+         WHERE id = $1 AND is_enabled = true AND published_version IS NOT NULL \
+           AND trigger_type = 'kafka'",
     )
     .bind(workflow_id)
     .fetch_optional(pool)
@@ -333,6 +335,9 @@ mod tests {
             created_by_email: None,
             created_at: chrono::NaiveDateTime::default(),
             updated_at: chrono::NaiveDateTime::default(),
+            published_version: None,
+            has_unpublished: false,
+            published_slug: None,
         }
     }
 

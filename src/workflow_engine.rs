@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::error::{AppError, Result};
+use crate::workflow_logs::{truncate_logs, NodeLogLine};
 
 // ─── 运行时超时配置（环境变量驱动，可完全关闭）─────────────────────────
 //
@@ -353,6 +354,8 @@ pub struct ExecutionContext {
     /// 项目（租户）级环境变量，执行开始时按 tenant_id 一次性解密装入。
     /// `{{env.X}}` 模板与 Lua `env.get` 同源读取。明文驻留，仅靠手写 Debug impl 封死打印。
     pub env_vars: HashMap<String, String>,
+    /// 项目级凭证，与 `env_vars` 同时装入。`{{cred.名称.字段}}` / `cred.get` / HTTP `credential_id` 同源。
+    pub credentials: crate::workflow_credentials::CredentialStore,
     /// 工作流级依赖声明，在执行开始时从工作流记录快照，供 JavaScript code 节点解析。
     pub workflow_dependencies: JsonValue,
     /// 干跑模式：跳过有副作用的节点（db_execute / http_call / email_send / sse_publish），
@@ -399,6 +402,10 @@ impl std::fmt::Debug for ExecutionContext {
                 "env_vars",
                 &format_args!("<{} vars masked>", self.env_vars.len()),
             )
+            .field(
+                "credentials",
+                &format_args!("<{} credentials masked>", self.credentials.len()),
+            )
             .field("workflow_dependencies", &self.workflow_dependencies)
             .field("dry_run", &self.dry_run)
             .field("prod_readonly", &self.prod_readonly)
@@ -423,6 +430,89 @@ pub struct NodeExecutionResult {
     pub error: Option<String>,
     /// condition 节点使用：选中的分支标签
     pub branch: Option<String>,
+    /// 代码节点调试日志（空则省略）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub logs: Vec<NodeLogLine>,
+}
+
+/// 单节点执行产物。`error` 仅表示代码运行时失败（throw / 非零退出），
+/// 配置缺失等仍走 `Err(AppError)`。
+#[derive(Debug)]
+pub(crate) struct NodeOutcome {
+    pub output: JsonValue,
+    pub branch: Option<String>,
+    pub logs: Vec<NodeLogLine>,
+    pub error: Option<String>,
+}
+
+fn ok_out(output: JsonValue) -> NodeOutcome {
+    NodeOutcome {
+        output,
+        branch: None,
+        logs: vec![],
+        error: None,
+    }
+}
+
+fn ok_branch(output: JsonValue, branch: impl Into<String>) -> NodeOutcome {
+    NodeOutcome {
+        output,
+        branch: Some(branch.into()),
+        logs: vec![],
+        error: None,
+    }
+}
+
+fn code_exec_outcome(
+    prefix: &str,
+    result: std::result::Result<
+        crate::workflow_logs::CodeExecOutput,
+        crate::workflow_logs::CodeExecError,
+    >,
+) -> Result<NodeOutcome> {
+    match result {
+        Ok(o) => Ok(NodeOutcome {
+            output: o.body,
+            branch: None,
+            logs: o.logs,
+            error: None,
+        }),
+        Err(e) if e.message.contains("process exited") => Ok(NodeOutcome {
+            output: JsonValue::Null,
+            branch: None,
+            logs: e.logs,
+            error: Some(format!("{prefix}: {}", e.message)),
+        }),
+        Err(e) => Err(AppError::Internal(format!("{prefix}: {}", e.message))),
+    }
+}
+
+fn mask_code_node_log_message(
+    message: &str,
+    env_vars: &HashMap<String, String>,
+    credentials: &crate::workflow_credentials::CredentialStore,
+) -> String {
+    match mask_env_and_credentials(&json!(message), env_vars, credentials) {
+        JsonValue::String(s) => s,
+        other => other.to_string(),
+    }
+}
+
+fn emit_code_node_logs(
+    node_id: &str,
+    logs: &[NodeLogLine],
+    env_vars: &HashMap<String, String>,
+    credentials: &crate::workflow_credentials::CredentialStore,
+) {
+    for line in logs {
+        let message = mask_code_node_log_message(&line.message, env_vars, credentials);
+        tracing::info!(
+            target: "code_node",
+            node_id = %node_id,
+            log_level = %line.level,
+            "{message}"
+        );
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1148,17 +1238,30 @@ fn is_plain_decimal(s: &str) -> bool {
 ///
 /// 已知边界（文档已注明）：变量值被节点二次加工（base64 / 截断 / 拼接）后，
 /// 精确子串匹配不到 → 漏网。跳过长度 < 4 的值，避免把 "ok"/"id" 误掩成 `***`。
-pub fn mask_env_values(value: &JsonValue, env_vars: &HashMap<String, String>) -> JsonValue {
+pub fn mask_env_and_credentials(
+    value: &JsonValue,
+    env_vars: &HashMap<String, String>,
+    credentials: &crate::workflow_credentials::CredentialStore,
+) -> JsonValue {
     let mut secrets: Vec<&str> = env_vars
         .values()
         .filter(|v| v.len() >= 4)
         .map(|s| s.as_str())
         .collect();
+    secrets.extend(credentials.secret_values());
     if secrets.is_empty() {
         return value.clone();
     }
     secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
     mask_in_value(value, &secrets)
+}
+
+pub fn mask_env_values(value: &JsonValue, env_vars: &HashMap<String, String>) -> JsonValue {
+    mask_env_and_credentials(
+        value,
+        env_vars,
+        &crate::workflow_credentials::CredentialStore::default(),
+    )
 }
 
 /// `mask_env_values` 的递归核心：仅替换字符串叶子节点，结构原样保留。
@@ -1185,6 +1288,28 @@ fn mask_in_value(value: &JsonValue, secrets: &[&str]) -> JsonValue {
     }
 }
 
+fn inject_http_credential(
+    config: &JsonValue,
+    ctx: &ExecutionContext,
+    headers: &mut serde_json::Map<String, JsonValue>,
+) -> std::result::Result<(), String> {
+    let Some(id) = config.get("credential_id").and_then(|v| {
+        v.as_i64()
+            .or_else(|| v.as_u64().map(|n| n as i64))
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    }) else {
+        return Ok(());
+    };
+    let cred = ctx
+        .credentials
+        .get_by_id(id as i32)
+        .ok_or_else(|| format!("凭证 {id} 不存在"))?;
+    if cred.secret.is_none() {
+        return Err(format!("凭证 {} 解密失败", cred.name));
+    }
+    crate::workflow_credentials::apply_http_auth_headers(headers, cred)
+}
+
 fn resolve_path(path: &str, ctx: &ExecutionContext) -> JsonValue {
     // 特殊前缀
     if path.starts_with("trigger.") {
@@ -1204,6 +1329,21 @@ fn resolve_path(path: &str, ctx: &ExecutionContext) -> JsonValue {
                 tracing::warn!(
                     var = var_name,
                     "模板引用了未定义的环境变量 {{env.X}}，已渲染为空串"
+                );
+                JsonValue::String(String::new())
+            }
+        };
+    }
+
+    if let Some(rest) = path.strip_prefix("cred.") {
+        return match crate::workflow_credentials::parse_cred_path(rest)
+            .and_then(|(name, field)| ctx.credentials.get_field(name, field))
+        {
+            Some(v) => JsonValue::String(v),
+            None => {
+                tracing::warn!(
+                    path = rest,
+                    "模板引用了未定义的凭证字段 {{cred.名称.字段}}，已渲染为空串"
                 );
                 JsonValue::String(String::new())
             }
@@ -2040,7 +2180,8 @@ async fn load_datasource_meta(
     let row = sqlx::query(
         r#"
         SELECT d.ds_type, d.host, d.port, d.database,
-               c.username AS cred_username, c.secret_encrypted AS cred_secret
+               c.username AS cred_username, c.secret_encrypted AS cred_secret,
+               c.kind AS cred_kind
         FROM management.wf_datasources d
         LEFT JOIN management.wf_credentials c ON c.id = d.credential_id
         WHERE d.id = $1 AND d.is_active = true
@@ -2059,6 +2200,15 @@ async fn load_datasource_meta(
     let database: Option<String> = row.get("database");
     let username: Option<String> = row.get("cred_username");
     let secret_enc: Option<String> = row.get("cred_secret");
+    let cred_kind: Option<String> = row.get("cred_kind");
+    if let Some(kind) = cred_kind.as_deref() {
+        if !crate::workflow_credentials::datasource_accepts_kind(kind) {
+            return Err(AppError::InvalidQuery(format!(
+                "数据源 {} 绑定的凭证类型是 {kind}，请改绑 basic",
+                ds_id
+            )));
+        }
+    }
 
     if host.trim().is_empty() {
         return Err(AppError::InvalidQuery(format!(
@@ -2264,6 +2414,7 @@ async fn finish_subworkflow_run(
     run_id: i64,
     index_id: Option<i64>,
     env_vars: &HashMap<String, String>,
+    credentials: &crate::workflow_credentials::CredentialStore,
     results: &[NodeExecutionResult],
     returned_output: &JsonValue,
     engine_error: Option<&str>,
@@ -2277,10 +2428,11 @@ async fn finish_subworkflow_run(
             summary.error_message = Some(msg.to_string());
         }
     }
-    let masked_node_results = mask_env_values(&json!(results), env_vars);
-    let masked_final_output = mask_env_values(&summary.final_output, env_vars);
+    let masked_node_results = mask_env_and_credentials(&json!(results), env_vars, credentials);
+    let masked_final_output =
+        mask_env_and_credentials(&summary.final_output, env_vars, credentials);
     let masked_error = summary.error_message.as_ref().map(|m| {
-        mask_env_values(&json!(m), env_vars)
+        mask_env_and_credentials(&json!(m), env_vars, credentials)
             .as_str()
             .unwrap_or(m)
             .to_string()
@@ -2464,6 +2616,7 @@ impl DagEngine {
                         elapsed_ms: 0,
                         error: None,
                         branch: None,
+                        logs: vec![],
                     });
                     continue;
                 }
@@ -2508,98 +2661,75 @@ impl DagEngine {
                 };
                 let elapsed_ms = start.elapsed().as_millis() as u64;
 
-                match exec_result {
-                    Ok((output, branch)) => {
-                        success_count += 1;
-                        tracing::debug!(
-                            target: "workflow",
-                            workflow_id = ctx.workflow_id,
-                            node_id = %node_id,
-                            node_type = ?node.node_type,
-                            elapsed_ms = elapsed_ms,
-                            "节点执行成功"
-                        );
-                        ctx.node_outputs.insert(node_id.clone(), output.clone());
+                let (ok_outcome, fail) = match exec_result {
+                    Ok(o) if o.error.is_none() => (Some(o), None),
+                    Ok(o) => (None, Some((o.error.unwrap(), truncate_logs(o.logs)))),
+                    Err(e) => (None, Some((e.to_string(), vec![]))),
+                };
 
-                        // condition 节点：根据选中分支标记需要跳过的路径
-                        if node.node_type == NodeType::Condition {
-                            if let Some(ref chosen_branch) = branch {
-                                let allowed = get_branch_successors(def, node_id, chosen_branch);
-                                let allowed_reachable = collect_reachable(def, &allowed);
-                                let all_successors: HashSet<String> = def
-                                    .edges
-                                    .iter()
-                                    .filter(|e| e.from == *node_id && e.branch.is_some())
-                                    .map(|e| e.to.clone())
-                                    .collect();
-                                let rejected_starts: HashSet<String> =
-                                    all_successors.difference(&allowed).cloned().collect();
-                                let rejected_reachable = collect_reachable(def, &rejected_starts);
-                                // 只跳过「仅能从未选分支到达」的节点；两条分支共同可达的
-                                // merge 节点继续执行，避免 diamond 汇合点被误杀。
-                                for node_id in rejected_reachable.difference(&allowed_reachable) {
-                                    skipped.insert(node_id.clone());
-                                }
+                if let Some(o) = ok_outcome {
+                    let output = o.output;
+                    let branch = o.branch;
+                    let logs = truncate_logs(o.logs);
+                    emit_code_node_logs(node_id, &logs, &ctx.env_vars, &ctx.credentials);
+                    success_count += 1;
+                    tracing::debug!(
+                        target: "workflow",
+                        workflow_id = ctx.workflow_id,
+                        node_id = %node_id,
+                        node_type = ?node.node_type,
+                        elapsed_ms = elapsed_ms,
+                        "节点执行成功"
+                    );
+                    ctx.node_outputs.insert(node_id.clone(), output.clone());
+
+                    // condition 节点：根据选中分支标记需要跳过的路径
+                    if node.node_type == NodeType::Condition {
+                        if let Some(ref chosen_branch) = branch {
+                            let allowed = get_branch_successors(def, node_id, chosen_branch);
+                            let allowed_reachable = collect_reachable(def, &allowed);
+                            let all_successors: HashSet<String> = def
+                                .edges
+                                .iter()
+                                .filter(|e| e.from == *node_id && e.branch.is_some())
+                                .map(|e| e.to.clone())
+                                .collect();
+                            let rejected_starts: HashSet<String> =
+                                all_successors.difference(&allowed).cloned().collect();
+                            let rejected_reachable = collect_reachable(def, &rejected_starts);
+                            // 只跳过「仅能从未选分支到达」的节点；两条分支共同可达的
+                            // merge 节点继续执行，避免 diamond 汇合点被误杀。
+                            for node_id in rejected_reachable.difference(&allowed_reachable) {
+                                skipped.insert(node_id.clone());
                             }
                         }
-
-                        results.push(NodeExecutionResult {
-                            node_id: node_id.clone(),
-                            node_type: Some(node_type_label(&node.node_type)),
-                            status: NodeStatus::Success,
-                            input: input_snapshot,
-                            output,
-                            elapsed_ms,
-                            error: None,
-                            branch,
-                        });
                     }
-                    Err(e) => {
-                        let err_msg = e.to_string();
-                        // 容错节点（allow_failure: true）：捕获**所有**节点级错误，
-                        // 不区分错误来源（HTTP 4xx/5xx、超时、连接失败、URL 构建失败、
-                        // 内网拦截、参数缺失等都在覆盖范围内），记录失败后继续执行后续节点。
-                        //
-                        // 唯一例外是只读 API Key 护栏：它是权限拒绝，不是"这次调用不巧失败了"。
-                        // 若让 allow_failure 吞掉，工作流会带着"写被拒绝"继续跑完下游并对外
-                        // 返回成功，只读 key 的约束就成了摆设——所以强制不可容错。
-                        let allow_failure = config_allow_failure(&config)
-                            && !is_api_key_readonly_block_message(&err_msg);
-                        if allow_failure {
-                            failed_count += 1;
-                            tracing::warn!(
-                                target: "workflow",
-                                workflow_id = ctx.workflow_id,
-                                run_id = ctx.run_id,
-                                node_id = %node_id,
-                                node_type = ?node.node_type,
-                                elapsed_ms = elapsed_ms,
-                                err = %err_msg,
-                                "节点执行失败，但 allow_failure=true，已容错并继续"
-                            );
-                            // 把错误以结构化对象写入上下文，便于下游通过
-                            // `{{node_id.error}}` / `{{node_id.failed}}` 引用并做条件分支。
-                            let err_output = json!({
-                                "error": err_msg.clone(),
-                                "failed": true,
-                                "allow_failure": true,
-                            });
-                            ctx.node_outputs.insert(node_id.clone(), err_output.clone());
-                            results.push(NodeExecutionResult {
-                                node_id: node_id.clone(),
-                                node_type: Some(node_type_label(&node.node_type)),
-                                status: NodeStatus::FailedAllowed,
-                                input: input_snapshot,
-                                output: err_output,
-                                elapsed_ms,
-                                error: Some(err_msg),
-                                branch: None,
-                            });
-                            continue;
-                        }
 
+                    results.push(NodeExecutionResult {
+                        node_id: node_id.clone(),
+                        node_type: Some(node_type_label(&node.node_type)),
+                        status: NodeStatus::Success,
+                        input: input_snapshot,
+                        output,
+                        elapsed_ms,
+                        error: None,
+                        branch,
+                        logs,
+                    });
+                } else if let Some((err_msg, logs)) = fail {
+                    emit_code_node_logs(node_id, &logs, &ctx.env_vars, &ctx.credentials);
+                    // 容错节点（allow_failure: true）：捕获**所有**节点级错误，
+                    // 不区分错误来源（HTTP 4xx/5xx、超时、连接失败、URL 构建失败、
+                    // 内网拦截、参数缺失等都在覆盖范围内），记录失败后继续执行后续节点。
+                    //
+                    // 唯一例外是只读 API Key 护栏：它是权限拒绝，不是"这次调用不巧失败了"。
+                    // 若让 allow_failure 吞掉，工作流会带着"写被拒绝"继续跑完下游并对外
+                    // 返回成功，只读 key 的约束就成了摆设——所以强制不可容错。
+                    let allow_failure = config_allow_failure(&config)
+                        && !is_api_key_readonly_block_message(&err_msg);
+                    if allow_failure {
                         failed_count += 1;
-                        tracing::error!(
+                        tracing::warn!(
                             target: "workflow",
                             workflow_id = ctx.workflow_id,
                             run_id = ctx.run_id,
@@ -2607,34 +2737,67 @@ impl DagEngine {
                             node_type = ?node.node_type,
                             elapsed_ms = elapsed_ms,
                             err = %err_msg,
-                            "节点执行失败"
+                            "节点执行失败，但 allow_failure=true，已容错并继续"
                         );
+                        // 把错误以结构化对象写入上下文，便于下游通过
+                        // `{{node_id.error}}` / `{{node_id.failed}}` 引用并做条件分支。
+                        let err_output = json!({
+                            "error": err_msg.clone(),
+                            "failed": true,
+                            "allow_failure": true,
+                        });
+                        ctx.node_outputs.insert(node_id.clone(), err_output.clone());
                         results.push(NodeExecutionResult {
                             node_id: node_id.clone(),
                             node_type: Some(node_type_label(&node.node_type)),
-                            status: NodeStatus::Failed,
+                            status: NodeStatus::FailedAllowed,
                             input: input_snapshot,
-                            output: JsonValue::Null,
+                            output: err_output,
                             elapsed_ms,
-                            error: Some(err_msg.clone()),
+                            error: Some(err_msg),
                             branch: None,
+                            logs,
                         });
+                        continue;
+                    }
 
-                        // response 节点失败不中断（只是最终响应丢失）
-                        if node.node_type != NodeType::Response {
-                            tracing::warn!(
-                                target: "workflow",
-                                workflow_id = ctx.workflow_id,
-                                run_id = ctx.run_id,
-                                failed_node = %node_id,
-                                success_count = success_count,
-                                failed_count = failed_count,
-                                skipped_count = skipped_count,
-                                elapsed_ms = workflow_start.elapsed().as_millis() as u64,
-                                "工作流因节点失败而中断"
-                            );
-                            return Ok(results);
-                        }
+                    failed_count += 1;
+                    tracing::error!(
+                        target: "workflow",
+                        workflow_id = ctx.workflow_id,
+                        run_id = ctx.run_id,
+                        node_id = %node_id,
+                        node_type = ?node.node_type,
+                        elapsed_ms = elapsed_ms,
+                        err = %err_msg,
+                        "节点执行失败"
+                    );
+                    results.push(NodeExecutionResult {
+                        node_id: node_id.clone(),
+                        node_type: Some(node_type_label(&node.node_type)),
+                        status: NodeStatus::Failed,
+                        input: input_snapshot,
+                        output: JsonValue::Null,
+                        elapsed_ms,
+                        error: Some(err_msg.clone()),
+                        branch: None,
+                        logs,
+                    });
+
+                    // response 节点失败不中断（只是最终响应丢失）
+                    if node.node_type != NodeType::Response {
+                        tracing::warn!(
+                            target: "workflow",
+                            workflow_id = ctx.workflow_id,
+                            run_id = ctx.run_id,
+                            failed_node = %node_id,
+                            success_count = success_count,
+                            failed_count = failed_count,
+                            skipped_count = skipped_count,
+                            elapsed_ms = workflow_start.elapsed().as_millis() as u64,
+                            "工作流因节点失败而中断"
+                        );
+                        return Ok(results);
                     }
                 }
             }
@@ -2654,14 +2817,14 @@ impl DagEngine {
         })
     }
 
-    /// 执行单个节点，返回 (output, optional_branch)
+    /// 执行单个节点，返回 NodeOutcome
     async fn execute_node(
         &self,
         node: &WorkflowNode,
         config: &JsonValue,
         ctx: &ExecutionContext,
         call_stack: &[i32],
-    ) -> Result<(JsonValue, Option<String>)> {
+    ) -> Result<NodeOutcome> {
         // 副作用拦截（dry_run 与生产只读护栏共用同一收口）：跳过有副作用的节点返回 mock，
         // 避免真实写库/请求/发信。condition / transform / response / db_query / code 仍真实
         // 执行——它们或无副作用、或决定流程走向，跳过会让调试失去意义。
@@ -2671,7 +2834,7 @@ impl DagEngine {
         if ctx.dry_run || ctx.prod_readonly {
             if let Some(mock) = side_effect_mock(&node.node_type, ctx.prod_readonly && !ctx.dry_run)
             {
-                return Ok((mock, None));
+                return Ok(ok_out(mock));
             }
         }
 
@@ -2757,7 +2920,7 @@ impl DagEngine {
         region: &LoopRegion,
         ctx: &ExecutionContext,
         call_stack: &[i32],
-    ) -> Result<(JsonValue, Option<String>)> {
+    ) -> Result<NodeOutcome> {
         let config = &node.config;
         let loop_id = node.id.as_str();
 
@@ -3163,7 +3326,7 @@ impl DagEngine {
         );
 
         // 走 done 出口继续主流程。
-        Ok((output, Some(LOOP_DONE_BRANCH.to_string())))
+        Ok(ok_branch(output, LOOP_DONE_BRANCH))
     }
 
     // ─── CallWorkflow 节点（同步调用子工作流） ─────────────────────────────
@@ -3180,7 +3343,7 @@ impl DagEngine {
         config: &JsonValue,
         ctx: &ExecutionContext,
         call_stack: &[i32],
-    ) -> Result<(JsonValue, Option<String>)> {
+    ) -> Result<NodeOutcome> {
         use sqlx::Row;
 
         const MAX_CALL_DEPTH: usize = 5;
@@ -3202,11 +3365,12 @@ impl DagEngine {
             )));
         }
 
-        // 同租户内按 slug 解析，优先与父节点同库；只取启用中的工作流。
+        // 同租户内按 slug 解析，优先与父节点同库；只取已发布且启用中的工作流。
         let row = sqlx::query(
             "SELECT id, tenant_id, database_id, name, nodes, edges, dependencies \
              FROM management.workflows \
-             WHERE slug = $1 AND tenant_id IS NOT DISTINCT FROM $2 AND is_enabled = true \
+             WHERE slug = $1 AND tenant_id IS NOT DISTINCT FROM $2 \
+               AND is_enabled = true AND published_version IS NOT NULL \
              ORDER BY (database_id IS NOT DISTINCT FROM $3) DESC, id ASC \
              LIMIT 1",
         )
@@ -3286,6 +3450,7 @@ impl DagEngine {
             node_outputs: HashMap::new(),
             // 同租户 ⇒ 项目级环境变量一致，直接继承父级，省一次解密查询。
             env_vars: ctx.env_vars.clone(),
+            credentials: ctx.credentials.clone(),
             workflow_dependencies,
             dry_run: ctx.dry_run,
             prod_readonly: ctx.prod_readonly,
@@ -3310,6 +3475,7 @@ impl DagEngine {
                         run_id,
                         index_id,
                         &sub_ctx.env_vars,
+                        &sub_ctx.credentials,
                         &[],
                         &JsonValue::Null,
                         Some(&msg),
@@ -3347,6 +3513,7 @@ impl DagEngine {
                 run_id,
                 index_id,
                 &sub_ctx.env_vars,
+                &sub_ctx.credentials,
                 &sub_results,
                 &output,
                 None,
@@ -3368,7 +3535,7 @@ impl DagEngine {
             )));
         }
 
-        Ok((output, None))
+        Ok(ok_out(output))
     }
 
     // ─── SSE 推送节点 ─────────────────────────────────────────
@@ -3379,7 +3546,7 @@ impl DagEngine {
         &self,
         config: &JsonValue,
         ctx: &ExecutionContext,
-    ) -> Result<(JsonValue, Option<String>)> {
+    ) -> Result<NodeOutcome> {
         let topic_tpl = config
             .get("topic")
             .and_then(|v| v.as_str())
@@ -3428,9 +3595,8 @@ impl DagEngine {
                     .next()
                     .unwrap_or_else(|| resolve_sse_topic(topic_tpl, ctx));
                 let delivered = crate::sse_publisher::publish(topic.clone(), event.clone(), data);
-                return Ok((
+                return Ok(ok_out(
                     json!({ "topic": topic, "event": event, "delivered": delivered }),
-                    None,
                 ));
             }
 
@@ -3450,16 +3616,13 @@ impl DagEngine {
                     )
                     .await;
                 });
-                return Ok((
-                    json!({
-                        "count": recipients.len(),
-                        "async": true,
-                        "auto_async": auto_async,
-                        "batch_size": batch_size,
-                        "dispatched": true,
-                    }),
-                    None,
-                ));
+                return Ok(ok_out(json!({
+                    "count": recipients.len(),
+                    "async": true,
+                    "auto_async": auto_async,
+                    "batch_size": batch_size,
+                    "dispatched": true,
+                })));
             }
 
             let batches = batch_count(topics.len(), batch_size);
@@ -3471,24 +3634,20 @@ impl DagEngine {
                 settings.batch_delay_ms,
             )
             .await;
-            return Ok((
-                json!({
-                    "count": recipients.len(),
-                    "batches": batches,
-                    "batch_size": batch_size,
-                    "event": event,
-                    "delivered": delivered,
-                }),
-                None,
-            ));
+            return Ok(ok_out(json!({
+                "count": recipients.len(),
+                "batches": batches,
+                "batch_size": batch_size,
+                "event": event,
+                "delivered": delivered,
+            })));
         }
 
         let topic = resolve_sse_topic(topic_tpl, ctx);
         let delivered = crate::sse_publisher::publish(topic.clone(), event.clone(), data);
 
-        Ok((
+        Ok(ok_out(
             json!({ "topic": topic, "event": event, "delivered": delivered }),
-            None,
         ))
     }
 
@@ -3498,7 +3657,7 @@ impl DagEngine {
         &self,
         config: &JsonValue,
         ctx: &ExecutionContext,
-    ) -> Result<(JsonValue, Option<String>)> {
+    ) -> Result<NodeOutcome> {
         use crate::lua_engine::{LuaEngine, PluginContext};
 
         let raw_code = config
@@ -3539,14 +3698,14 @@ impl DagEngine {
                     ..plugin_ctx
                 },
                 env_vars: ctx.env_vars.clone(),
+                credentials: ctx.credentials.clone(),
                 tenant_id: ctx.tenant_id,
                 http_disabled: ctx.prod_readonly,
                 timeout_ms: crate::js_runner::js_timeout_ms(),
                 js_dependencies: crate::js_deps::parse_javascript_deps(&ctx.workflow_dependencies),
             })
-            .await
-            .map_err(|error| AppError::Internal(format!("JavaScript 执行失败: {error}")))?;
-            return Ok((output, None));
+            .await;
+            return code_exec_outcome("JavaScript 执行失败", output);
         }
 
         if language.eq_ignore_ascii_case("python") || language.eq_ignore_ascii_case("py") {
@@ -3558,14 +3717,14 @@ impl DagEngine {
                     ..plugin_ctx
                 },
                 env_vars: ctx.env_vars.clone(),
+                credentials: ctx.credentials.clone(),
                 tenant_id: ctx.tenant_id,
                 http_disabled: ctx.prod_readonly,
                 timeout_ms: crate::py_runner::py_timeout_ms(),
                 py_dependencies: crate::py_deps::parse_python_deps(&ctx.workflow_dependencies),
             })
-            .await
-            .map_err(|error| AppError::Internal(format!("Python 执行失败: {error}")))?;
-            return Ok((output, None));
+            .await;
+            return code_exec_outcome("Python 执行失败", output);
         }
 
         // 将所有上游节点输出注入 ctx.nodes，并将用户代码包裹在 execute(ctx) 中：
@@ -3587,12 +3746,13 @@ end
         // 传入项目环境变量，供 Lua env.get 读取（与 {{env.X}} 模板同源）
         let mut engine = LuaEngine::new(1, lua_node_timeout_ms(), 32 * 1024 * 1024)
             .with_env_vars(ctx.env_vars.clone())
+            .with_credentials(ctx.credentials.clone())
             .with_tenant_id(ctx.tenant_id);
         if ctx.prod_readonly {
             // 生产只读护栏：Lua http 是副作用逃生舱，必须一并禁用
             engine = engine.with_http_disabled();
         }
-        let result = engine
+        match engine
             .execute_plugin(
                 &wrapped_code,
                 "execute",
@@ -3602,13 +3762,23 @@ end
                 },
             )
             .await
-            .map_err(|e| AppError::Internal(format!("Lua 执行失败: {}", e)))?;
-
-        let output = result
-            .modified_body
-            .or(result.response_body)
-            .unwrap_or(JsonValue::Null);
-        Ok((output, None))
+        {
+            Ok(result) => Ok(NodeOutcome {
+                output: result
+                    .modified_body
+                    .or(result.response_body)
+                    .unwrap_or(JsonValue::Null),
+                branch: None,
+                logs: result.logs,
+                error: None,
+            }),
+            Err(e) => Ok(NodeOutcome {
+                output: JsonValue::Null,
+                branch: None,
+                logs: e.logs(),
+                error: Some(format!("Lua 执行失败: {e}")),
+            }),
+        }
     }
 
     // ─── DB Query 节点（只读） ─────────────────────────────────────────
@@ -3619,7 +3789,7 @@ end
         &self,
         config: &JsonValue,
         ctx: &ExecutionContext,
-    ) -> Result<(JsonValue, Option<String>)> {
+    ) -> Result<NodeOutcome> {
         match self.exec_db_query_node(config, ctx).await {
             Err(e) if db_query_stale_retry_allowed(config, &e) => {
                 tracing::warn!(
@@ -3640,7 +3810,7 @@ end
         &self,
         config: &JsonValue,
         ctx: &ExecutionContext,
-    ) -> Result<(JsonValue, Option<String>)> {
+    ) -> Result<NodeOutcome> {
         // 动态 SQL 开关（默认关）：开启后整条 sql 视为模板、先解析成文本再原样执行
         // （不参数化）——用于表名/字段等标识符随上游变化、无法用绑定参数的场景。
         // 关闭时保持原状：sql 原文 + {{}} 走参数化绑定，防注入。开关只对能编辑工作流
@@ -3733,7 +3903,7 @@ end
                 crate::raw_sql_guard::reset_session_guards(&mut conn).await;
                 let rows = rows_result?;
                 let results: Vec<JsonValue> = rows.iter().map(pg_row_to_json).collect();
-                Ok((json!({ "rows": results, "count": results.len() }), None))
+                Ok(ok_out(json!({ "rows": results, "count": results.len() })))
             }
             DatasourceConn::MySql(pool) => {
                 // 文本协议（不预编译），兼容 Doris/StarRocks。动态模式原样执行；
@@ -3745,7 +3915,7 @@ end
                 };
                 let rows = sqlx::raw_sql(&final_sql).fetch_all(&pool).await?;
                 let results: Vec<JsonValue> = rows.iter().map(mysql_row_to_json).collect();
-                Ok((json!({ "rows": results, "count": results.len() }), None))
+                Ok(ok_out(json!({ "rows": results, "count": results.len() })))
             }
         }
     }
@@ -3756,7 +3926,7 @@ end
         &self,
         config: &JsonValue,
         ctx: &ExecutionContext,
-    ) -> Result<(JsonValue, Option<String>)> {
+    ) -> Result<NodeOutcome> {
         // 动态 SQL 开关（默认关）：见 exec_db_query_node 说明。
         let dynamic = config
             .get("dynamic_sql")
@@ -3822,7 +3992,7 @@ end
                 let result = query.execute(&mut *conn).await;
                 crate::raw_sql_guard::reset_session_guards(&mut conn).await;
                 let result = result?;
-                Ok((json!({ "rows_affected": result.rows_affected() }), None))
+                Ok(ok_out(json!({ "rows_affected": result.rows_affected() })))
             }
             DatasourceConn::MySql(pool) => {
                 // 文本协议（不预编译），兼容 Doris/StarRocks。动态模式原样执行；
@@ -3833,7 +4003,7 @@ end
                     mysql_inline_sql(sql, ctx, &explicit_params)
                 };
                 let result = sqlx::raw_sql(&final_sql).execute(&pool).await?;
-                Ok((json!({ "rows_affected": result.rows_affected() }), None))
+                Ok(ok_out(json!({ "rows_affected": result.rows_affected() })))
             }
         }
     }
@@ -3844,7 +4014,7 @@ end
         &self,
         config: &JsonValue,
         ctx: &ExecutionContext,
-    ) -> Result<(JsonValue, Option<String>)> {
+    ) -> Result<NodeOutcome> {
         let statements = config
             .get("statements")
             .and_then(|v| v.as_array())
@@ -3903,13 +4073,10 @@ end
             }
 
             tx.commit().await?;
-            Ok::<_, AppError>((
-                json!({
-                    "rows_affected": total_affected,
-                    "statements_count": statements.len()
-                }),
-                None,
-            ))
+            Ok::<_, AppError>(ok_out(json!({
+                "rows_affected": total_affected,
+                "statements_count": statements.len()
+            })))
         }
         .await;
 
@@ -3923,7 +4090,7 @@ end
         &self,
         config: &JsonValue,
         ctx: &ExecutionContext,
-    ) -> Result<(JsonValue, Option<String>)> {
+    ) -> Result<NodeOutcome> {
         let items_path = config
             .get("items")
             .and_then(|v| v.as_str())
@@ -4001,9 +4168,8 @@ end
                 tx.commit().await?;
             }
 
-            Ok::<_, AppError>((
+            Ok::<_, AppError>(ok_out(
                 json!({ "processed": item_count, "rows_affected": total_affected }),
-                None,
             ))
         }
         .await;
@@ -4124,7 +4290,7 @@ end
         &self,
         config: &JsonValue,
         ctx: &ExecutionContext,
-    ) -> Result<(JsonValue, Option<String>)> {
+    ) -> Result<NodeOutcome> {
         use crate::redis_ds::{client_cache, commands, fetch_active_for_tenant};
 
         let connection_id = config
@@ -4154,7 +4320,7 @@ end
                     obj.insert("dry_run".to_string(), JsonValue::Bool(true));
                 }
             }
-            return Ok((mock, None));
+            return Ok(ok_out(mock));
         }
 
         let tenant_id = ctx.tenant_id.ok_or_else(|| {
@@ -4174,7 +4340,7 @@ end
         let manager = client_cache::get_or_create(&conn).await?;
         let result = commands::execute(&manager, &op, &args).await?;
 
-        Ok((json!({ "op": op, "result": result }), None))
+        Ok(ok_out(json!({ "op": op, "result": result })))
     }
 
     // ─── Kafka 节点 ─────────────────────────────────────────
@@ -4188,7 +4354,7 @@ end
         &self,
         config: &JsonValue,
         ctx: &ExecutionContext,
-    ) -> Result<(JsonValue, Option<String>)> {
+    ) -> Result<NodeOutcome> {
         use crate::kafka_ds::{client_cache, commands, fetch_active_for_tenant};
 
         let connection_id = config
@@ -4217,7 +4383,7 @@ end
                     obj.insert("dry_run".to_string(), JsonValue::Bool(true));
                 }
             }
-            return Ok((mock, None));
+            return Ok(ok_out(mock));
         }
 
         let tenant_id = ctx.tenant_id.ok_or_else(|| {
@@ -4234,7 +4400,7 @@ end
         let producer = client_cache::get_or_create(&conn).await?;
         let result = commands::execute(&producer, &op, &args).await?;
 
-        Ok((json!({ "op": op, "result": result }), None))
+        Ok(ok_out(json!({ "op": op, "result": result })))
     }
 
     // ─── 对象存储节点 ─────────────────────────────────────────
@@ -4246,7 +4412,7 @@ end
         &self,
         config: &JsonValue,
         ctx: &ExecutionContext,
-    ) -> Result<(JsonValue, Option<String>)> {
+    ) -> Result<NodeOutcome> {
         use crate::object_storage_ds::{client_cache, commands, fetch_active_for_tenant};
 
         let connection_id = config
@@ -4281,7 +4447,7 @@ end
                     obj.insert("dry_run".to_string(), JsonValue::Bool(true));
                 }
             }
-            return Ok((mock, None));
+            return Ok(ok_out(mock));
         }
 
         let tenant_id = ctx.tenant_id.ok_or_else(|| {
@@ -4294,7 +4460,7 @@ end
         let handle = client_cache::get_or_create(&conn).await?;
         let result = commands::execute(&handle, &conn.bucket, &op, &args).await?;
 
-        Ok((json!({ "op": op, "result": result }), None))
+        Ok(ok_out(json!({ "op": op, "result": result })))
     }
 
     // ─── HTTP Call 节点 ─────────────────────────────────────────
@@ -4303,7 +4469,7 @@ end
         &self,
         config: &JsonValue,
         ctx: &ExecutionContext,
-    ) -> Result<(JsonValue, Option<String>)> {
+    ) -> Result<NodeOutcome> {
         use crate::http_async_poll::{
             parse_async_poll_config, run_async_poll_loop, HttpExchange, PollRequest,
         };
@@ -4341,9 +4507,20 @@ end
             })
             .unwrap_or_else(http_default_timeout_secs);
 
-        let headers = match config.get("headers") {
-            Some(v) => Some(parse_json_object_field("http_call.headers", v)?),
-            None => None,
+        let mut headers_obj = match config.get("headers") {
+            Some(v) => parse_json_object_field("http_call.headers", v)?
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            None => serde_json::Map::new(),
+        };
+        if let Err(msg) = inject_http_credential(config, ctx, &mut headers_obj) {
+            return Err(AppError::InvalidQuery(msg));
+        }
+        let headers = if headers_obj.is_empty() {
+            None
+        } else {
+            Some(JsonValue::Object(headers_obj))
         };
         let auth_headers: HashMap<String, String> = headers
             .as_ref()
@@ -4460,7 +4637,7 @@ end
             } else {
                 execute.await?
             };
-            return Ok((output, None));
+            return Ok(ok_out(output));
         }
 
         let initial_client = client.clone();
@@ -4524,7 +4701,7 @@ end
 
         let poll_cfg = parse_async_poll_config(config);
         if !poll_cfg.enabled {
-            return Ok((output, None));
+            return Ok(ok_out(output));
         }
         let poll_client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(30))
@@ -4615,36 +4792,27 @@ end
         .await
         .map_err(AppError::Internal)?;
 
-        Ok((
-            json!({
-                "status": final_exchange.status,
-                "headers": final_exchange.headers,
-                "body": final_exchange.body,
-                "async_poll": meta,
-            }),
-            None,
-        ))
+        Ok(ok_out(json!({
+            "status": final_exchange.status,
+            "headers": final_exchange.headers,
+            "body": final_exchange.body,
+            "async_poll": meta,
+        })))
     }
 
     // ─── Email Send 节点 ─────────────────────────────────────────
 
-    async fn exec_email_send_node(
-        &self,
-        config: &JsonValue,
-    ) -> Result<(JsonValue, Option<String>)> {
+    async fn exec_email_send_node(&self, config: &JsonValue) -> Result<NodeOutcome> {
         let config = EmailSendConfig::from_json(config)?;
         let accepted = config.to.len() + config.cc.len() + config.bcc.len();
         let subject = config.subject.clone();
         send_email(config).await?;
 
-        Ok((
-            json!({
-                "sent": true,
-                "accepted": accepted,
-                "subject": subject,
-            }),
-            None,
-        ))
+        Ok(ok_out(json!({
+            "sent": true,
+            "accepted": accepted,
+            "subject": subject,
+        })))
     }
 
     // ─── Condition 节点 ─────────────────────────────────────────
@@ -4653,7 +4821,7 @@ end
         &self,
         config: &JsonValue,
         ctx: &ExecutionContext,
-    ) -> Result<(JsonValue, Option<String>)> {
+    ) -> Result<NodeOutcome> {
         // 形态 A（多分支）：config.conditions = [{ branch, expression }, ...]，按序取首个命中分支，
         // 未命中走 default_branch。程序化创建工作流推荐用这种显式结构。
         if let Some(conditions) = config.get("conditions").and_then(|v| v.as_array()) {
@@ -4665,10 +4833,7 @@ end
                 let expr = cond.get("expression").unwrap_or(&JsonValue::Null);
 
                 if condition_expression_matches(expr, ctx) {
-                    return Ok((
-                        json!({ "matched_branch": branch }),
-                        Some(branch.to_string()),
-                    ));
+                    return Ok(ok_branch(json!({ "matched_branch": branch }), branch));
                 }
             }
 
@@ -4677,9 +4842,9 @@ end
                 .and_then(|v| v.as_str())
                 .unwrap_or("default");
 
-            return Ok((
+            return Ok(ok_branch(
                 json!({ "matched_branch": default_branch }),
-                Some(default_branch.to_string()),
+                default_branch,
             ));
         }
 
@@ -4692,10 +4857,7 @@ end
             } else {
                 "false"
             };
-            return Ok((
-                json!({ "matched_branch": branch }),
-                Some(branch.to_string()),
-            ));
+            return Ok(ok_branch(json!({ "matched_branch": branch }), branch));
         }
 
         Err(AppError::InvalidQuery(
@@ -4709,13 +4871,13 @@ end
         &self,
         config: &JsonValue,
         _ctx: &ExecutionContext,
-    ) -> Result<(JsonValue, Option<String>)> {
+    ) -> Result<NodeOutcome> {
         // transform 节点的 config 就是输出模板，模板变量在外层 resolve_template 已处理
         let output = config
             .get("output")
             .cloned()
             .unwrap_or_else(|| config.clone());
-        Ok((output, None))
+        Ok(ok_out(output))
     }
 
     // ─── Response 节点 ─────────────────────────────────────────
@@ -4724,7 +4886,7 @@ end
         &self,
         config: &JsonValue,
         _ctx: &ExecutionContext,
-    ) -> Result<(JsonValue, Option<String>)> {
+    ) -> Result<NodeOutcome> {
         let status_code = config
             .get("status_code")
             .and_then(|v| v.as_u64())
@@ -4749,7 +4911,7 @@ end
             output["body_base64"] = b64.clone();
         }
 
-        Ok((output, None))
+        Ok(ok_out(output))
     }
 }
 
@@ -5766,6 +5928,7 @@ pub fn validate_definition(def: &WorkflowDefinition) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workflow_logs::NodeLogLevel;
 
     // ── 网关只读 API Key 护栏 ──
 
@@ -5922,10 +6085,11 @@ mod tests {
             ..exec_ctx()
         };
 
-        let (output, _) = lazy_engine()
+        let output = lazy_engine()
             .execute_node(&node, &node.config, &ctx, &[])
             .await
-            .expect("transform 节点不受只读护栏影响");
+            .expect("transform 节点不受只读护栏影响")
+            .output;
         assert_eq!(output, json!({ "ok": true }));
     }
 
@@ -6181,6 +6345,7 @@ mod tests {
             database_id: Some(1),
             node_outputs: HashMap::new(),
             env_vars: HashMap::new(),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
@@ -6252,6 +6417,7 @@ mod tests {
             database_id: Some(1),
             node_outputs: HashMap::new(),
             env_vars: HashMap::new(),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
@@ -6305,6 +6471,7 @@ mod tests {
             database_id: Some(1),
             node_outputs: HashMap::new(),
             env_vars: HashMap::new(),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
@@ -6339,6 +6506,7 @@ mod tests {
             database_id: Some(1),
             node_outputs: HashMap::new(),
             env_vars: HashMap::new(),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
@@ -6364,6 +6532,7 @@ mod tests {
             database_id: Some(1),
             node_outputs: HashMap::new(),
             env_vars: HashMap::new(),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
@@ -6417,6 +6586,7 @@ mod tests {
             database_id: Some(1),
             node_outputs: HashMap::new(),
             env_vars: HashMap::new(),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
@@ -6516,6 +6686,7 @@ mod tests {
             database_id: Some(1),
             node_outputs: HashMap::new(),
             env_vars: HashMap::new(),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
@@ -6585,10 +6756,11 @@ mod tests {
     async fn lua_code_node_accepts_json_escaped_newlines() {
         let code = "local a = 1\\nlocal b = 2\\nreturn { a = a, b = b }";
         assert!(!code.contains('\n'));
-        let (output, _) = lazy_engine()
+        let output = lazy_engine()
             .exec_code_node(&json!({ "code": code }), &exec_ctx())
             .await
-            .expect("JSON-escaped newlines should be restored before lua.load");
+            .expect("JSON-escaped newlines should be restored before lua.load")
+            .output;
         assert_eq!(output, json!({ "a": 1, "b": 2 }));
     }
 
@@ -6621,6 +6793,7 @@ mod tests {
             database_id: Some(1),
             node_outputs: HashMap::new(),
             env_vars: HashMap::new(),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
@@ -6656,6 +6829,7 @@ mod tests {
             database_id: None,
             node_outputs: HashMap::new(),
             env_vars: HashMap::new(),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
@@ -6690,6 +6864,7 @@ mod tests {
             database_id: Some(2),
             node_outputs: HashMap::new(),
             env_vars: HashMap::new(),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
@@ -6758,6 +6933,7 @@ mod tests {
             database_id: Some(2),
             node_outputs: HashMap::new(),
             env_vars: HashMap::new(),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
@@ -6792,12 +6968,53 @@ mod tests {
 
     #[tokio::test]
     async fn code_node_without_language_uses_lua() {
-        let (output, _) = lazy_engine()
+        let output = lazy_engine()
             .exec_code_node(&json!({ "code": "return { ok = true }" }), &exec_ctx())
             .await
-            .expect("missing language should retain Lua execution");
+            .expect("missing language should retain Lua execution")
+            .output;
 
         assert_eq!(output, json!({ "ok": true }));
+    }
+
+    #[tokio::test]
+    async fn code_node_logs_are_truncated_field_and_masked_in_json() {
+        let mut prints = String::from("print(\"token=secret-value-xyz\")\n");
+        for i in 1..=200 {
+            prints.push_str(&format!("print(\"l{i}\")\n"));
+        }
+        prints.push_str("return { ok = true }");
+
+        let def = WorkflowDefinition {
+            nodes: vec![WorkflowNode {
+                id: "n".into(),
+                node_type: NodeType::Code,
+                label: None,
+                config: json!({ "language": "lua", "code": prints }),
+            }],
+            edges: vec![],
+        };
+        let mut ctx = exec_ctx();
+        ctx.env_vars.insert("K".into(), "secret-value-xyz".into());
+
+        let results = lazy_engine().execute(&def, &mut ctx).await.unwrap();
+        let n = results.iter().find(|r| r.node_id == "n").unwrap();
+        assert_eq!(n.status, NodeStatus::Success);
+        assert_eq!(n.output, json!({ "ok": true }));
+        assert_eq!(n.logs.len(), 201);
+        assert_eq!(n.logs[200].message, "日志已截断");
+        assert!(
+            ctx.node_outputs["n"].get("logs").is_none(),
+            "logs must not leak into node output"
+        );
+
+        let masked = mask_env_and_credentials(&json!(results), &ctx.env_vars, &ctx.credentials);
+        let msg = masked[0]["logs"][0]["message"].as_str().unwrap();
+        assert!(msg.contains("***"), "secret should be masked: {msg}");
+        assert!(
+            !msg.contains("secret-value-xyz"),
+            "raw secret leaked: {msg}"
+        );
     }
 
     #[tokio::test]
@@ -6972,6 +7189,7 @@ mod tests {
                 elapsed_ms: 1,
                 error: None,
                 branch: None,
+                logs: vec![],
             },
             NodeExecutionResult {
                 node_id: "b".into(),
@@ -6982,6 +7200,7 @@ mod tests {
                 elapsed_ms: 2,
                 error: Some("boom".into()),
                 branch: None,
+                logs: vec![],
             },
         ];
         let summary = summarize_subworkflow_run(&results, json!({"from": "response"}));
@@ -7002,11 +7221,40 @@ mod tests {
             elapsed_ms: 1,
             error: None,
             branch: None,
+            logs: vec![],
         }];
         let summary = summarize_subworkflow_run(&results, json!(1));
         assert_eq!(summary.status, "completed");
         assert_eq!(summary.index_status, "success");
         assert!(summary.error_message.is_none());
+    }
+
+    #[test]
+    fn node_result_omits_empty_logs() {
+        let r = NodeExecutionResult {
+            node_id: "a".into(),
+            node_type: None,
+            status: NodeStatus::Success,
+            input: JsonValue::Null,
+            output: json!({"ok": true}),
+            elapsed_ms: 1,
+            error: None,
+            branch: None,
+            logs: vec![],
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert!(v.get("logs").is_none());
+        let r2 = NodeExecutionResult {
+            logs: vec![NodeLogLine {
+                level: NodeLogLevel::Info,
+                message: "hi".into(),
+            }],
+            ..r.clone()
+        };
+        assert_eq!(
+            serde_json::to_value(&r2).unwrap()["logs"][0]["message"],
+            "hi"
+        );
     }
 
     #[test]
@@ -7092,6 +7340,7 @@ mod tests {
             database_id: Some(2),
             node_outputs: HashMap::new(),
             env_vars: HashMap::new(),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
@@ -7120,11 +7369,38 @@ mod tests {
             database_id: Some(2),
             node_outputs: HashMap::new(),
             env_vars: HashMap::new(),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
             apikey_write_guard: ApiKeyWriteGuard::Off,
         }
+    }
+
+    #[test]
+    fn merge_http_credential_headers_bearer_overwrites() {
+        let cred = crate::workflow_credentials::CredentialFields {
+            id: 9,
+            name: "crm".into(),
+            kind: "bearer".into(),
+            username: None,
+            header_name: None,
+            secret: Some("tok_new".into()),
+        };
+        let mut headers = serde_json::Map::new();
+        headers.insert("Authorization".into(), json!("Bearer old"));
+        crate::workflow_credentials::apply_http_auth_headers(&mut headers, &cred).unwrap();
+        assert_eq!(headers["Authorization"], json!("Bearer tok_new"));
+    }
+
+    #[test]
+    fn inject_http_credential_missing_id_fails() {
+        let ctx = sample_ctx_with_trigger(json!({}));
+        let mut headers = serde_json::Map::new();
+        let err =
+            inject_http_credential(&json!({"credential_id": 99}), &ctx, &mut headers).unwrap_err();
+        assert!(err.contains("99"));
+        assert!(!err.contains("tok_"));
     }
 
     #[test]
@@ -7348,6 +7624,7 @@ mod tests {
             database_id: Some(1),
             node_outputs: HashMap::new(),
             env_vars: HashMap::new(),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
@@ -7401,6 +7678,16 @@ mod tests {
     }
 
     #[test]
+    fn mask_code_node_log_message_hides_env_secret() {
+        let mut env_vars = HashMap::new();
+        env_vars.insert("K".into(), "secret-value-xyz".into());
+        let creds = crate::workflow_credentials::CredentialStore::default();
+        let out = mask_code_node_log_message("token=secret-value-xyz", &env_vars, &creds);
+        assert!(out.contains("***"), "expected mask, got {out}");
+        assert!(!out.contains("secret-value-xyz"), "secret leaked: {out}");
+    }
+
+    #[test]
     fn test_mask_env_values_substring_ordering() {
         // 短密钥是长密钥的子串：必须先掩长值，否则长值会被打成 ***_2024 泄漏后缀
         let mut env_vars = HashMap::new();
@@ -7423,6 +7710,75 @@ mod tests {
     }
 
     #[test]
+    fn test_cred_template_resolution() {
+        let mut credentials = crate::workflow_credentials::CredentialStore::default();
+        credentials.insert(crate::workflow_credentials::CredentialFields {
+            id: 1,
+            name: "生产库账号".into(),
+            kind: "basic".into(),
+            username: Some("app_ro".into()),
+            header_name: None,
+            secret: Some("s3cret-pass".into()),
+        });
+        let ctx = ExecutionContext {
+            workflow_id: 1,
+            run_id: 1,
+            trigger_type: "manual".into(),
+            trigger_data: json!({}),
+            user_id: None,
+            tenant_id: Some(1),
+            database_id: None,
+            node_outputs: HashMap::new(),
+            env_vars: HashMap::new(),
+            credentials,
+            workflow_dependencies: json!({}),
+            dry_run: false,
+            prod_readonly: false,
+            apikey_write_guard: ApiKeyWriteGuard::Off,
+        };
+        assert_eq!(
+            resolve_template(&json!("{{cred.生产库账号.password}}"), &ctx),
+            json!("s3cret-pass")
+        );
+        assert_eq!(
+            resolve_template(&json!("{{cred.生产库账号.username}}"), &ctx),
+            json!("app_ro")
+        );
+        assert_eq!(
+            resolve_template(&json!("{{cred.生产库账号.token}}"), &ctx),
+            json!("")
+        );
+        assert_eq!(
+            resolve_template(&json!("{{cred.NOT_SET.password}}"), &ctx),
+            json!("")
+        );
+    }
+
+    #[test]
+    fn test_mask_env_and_credentials() {
+        let mut env_vars = HashMap::new();
+        env_vars.insert("K".into(), "envsecret99".into());
+        let mut credentials = crate::workflow_credentials::CredentialStore::default();
+        credentials.insert(crate::workflow_credentials::CredentialFields {
+            id: 1,
+            name: "c".into(),
+            kind: "bearer".into(),
+            username: None,
+            header_name: None,
+            secret: Some("tok_secret_xyz".into()),
+        });
+        let value = json!({
+            "a": "Bearer tok_secret_xyz",
+            "b": "envsecret99",
+            "user": "visible"
+        });
+        let masked = mask_env_and_credentials(&value, &env_vars, &credentials);
+        assert_eq!(masked["a"], json!("Bearer ***"));
+        assert_eq!(masked["b"], json!("***"));
+        assert_eq!(masked["user"], json!("visible"));
+    }
+
+    #[test]
     fn test_condition_evaluation() {
         let mut ctx = ExecutionContext {
             workflow_id: 1,
@@ -7434,6 +7790,7 @@ mod tests {
             database_id: Some(1),
             node_outputs: HashMap::new(),
             env_vars: HashMap::new(),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
             workflow_dependencies: json!({}),
             dry_run: false,
             prod_readonly: false,
@@ -8442,7 +8799,7 @@ mod tests {
                 .connect_lazy("postgres://localhost/onebase")
                 .unwrap(),
         );
-        let (output, _) = engine
+        let output = engine
             .exec_http_call_node(
                 &json!({
                     "url": url,
@@ -8453,7 +8810,8 @@ mod tests {
                 &exec_ctx(),
             )
             .await
-            .unwrap();
+            .unwrap()
+            .output;
 
         assert_eq!(output["status"], 200);
         assert_eq!(output["body"]["result"], 42);
@@ -8530,10 +8888,11 @@ mod tests {
 
         let (bridge, mut rx) = crate::workflow_stream::StreamBridge::pair();
         let engine = lazy_engine().with_stream_bridge(bridge);
-        let (output, _) = engine
+        let output = engine
             .exec_http_call_node(&json!({"url": url, "stream": true}), &exec_ctx())
             .await
-            .unwrap();
+            .unwrap()
+            .output;
 
         assert_eq!(output["status"], 200);
         assert_eq!(output["text"], "Hi");
@@ -8581,10 +8940,11 @@ mod tests {
         let engine = lazy_engine().with_stream_bridge(bridge);
         let mut ctx = exec_ctx();
         ctx.trigger_type = "subworkflow".into();
-        let (output, _) = engine
+        let output = engine
             .exec_http_call_node(&json!({"url": url, "stream": true}), &ctx)
             .await
-            .unwrap();
+            .unwrap()
+            .output;
         assert_eq!(output["body"], "OK");
         assert!(rx.try_recv().is_err(), "child/subworkflow must not Commit");
     }

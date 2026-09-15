@@ -161,7 +161,9 @@ pub(crate) async fn load_active_notify_configs(
     pool: &PgPool,
 ) -> Result<Vec<NotifyTriggerConfig>, sqlx::Error> {
     let workflows = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM management.workflows WHERE is_enabled = true AND trigger_type = 'notify'",
+        "SELECT * FROM management.workflows \
+         WHERE is_enabled = true AND published_version IS NOT NULL \
+           AND trigger_type = 'notify'",
     )
     .fetch_all(pool)
     .await?;
@@ -184,7 +186,9 @@ async fn trigger_matching_workflows(
     trigger_data: Value,
 ) {
     let workflows = match sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM management.workflows WHERE is_enabled = true AND trigger_type = 'notify'",
+        "SELECT * FROM management.workflows \
+         WHERE is_enabled = true AND published_version IS NOT NULL \
+           AND trigger_type = 'notify'",
     )
     .fetch_all(pool)
     .await
@@ -210,22 +214,26 @@ async fn trigger_matching_workflows(
         let pool_clone = pool.clone();
         let trigger_data = trigger_data.clone();
         tokio::spawn(async move {
-            if let Err(e) = workflow_handlers::execute_workflow_internal(
-                &pool_clone,
-                &workflow,
-                "notify",
-                &trigger_data,
-                None,
-                crate::workflow_engine::ApiKeyWriteGuard::Off,
-            )
-            .await
-            {
-                tracing::error!(
-                    workflow_id = workflow.id,
-                    error = %e,
-                    "NOTIFY 触发的工作流执行失败"
-                );
-            }
+            let tid = crate::execution_log::new_trace_id();
+            crate::request_id::scope_with(Some(tid), async move {
+                if let Err(e) = workflow_handlers::execute_workflow_internal(
+                    &pool_clone,
+                    &workflow,
+                    "notify",
+                    &trigger_data,
+                    None,
+                    crate::workflow_engine::ApiKeyWriteGuard::Off,
+                )
+                .await
+                {
+                    tracing::error!(
+                        workflow_id = workflow.id,
+                        error = %e,
+                        "NOTIFY 触发的工作流执行失败"
+                    );
+                }
+            })
+            .await;
         });
     }
 }
@@ -263,6 +271,9 @@ mod tests {
             created_by_email: None,
             created_at: chrono::NaiveDateTime::default(),
             updated_at: chrono::NaiveDateTime::default(),
+            published_version: None,
+            has_unpublished: false,
+            published_slug: None,
         }
     }
 

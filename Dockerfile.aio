@@ -34,6 +34,7 @@ RUN mkdir src && echo "fn main() {}" > src/main.rs && \
 
 # 复制完整源码并编译
 COPY src/ src/
+COPY skills/ skills/
 COPY migrations/ migrations/
 # 清掉 stub 阶段编译出来的同名 crate 产物，避免 cargo 误以为已构建（保留 deps 缓存以加速）
 RUN cargo clean -p onebase --release || true

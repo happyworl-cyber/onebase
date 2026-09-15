@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { usePathname, useParams } from 'next/navigation'
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import SchemaSelector from '@/components/SchemaSelector'
-import { NAV_GROUPS } from '@/components/workspace/workspaceNav'
+import { NAV_GROUPS, isHelpPath } from '@/components/workspace/workspaceNav'
 
 /**
  * 工作空间左侧栏（W1 spec §3.2.6，W4 落地后实际可访问页面集）。
@@ -49,6 +49,9 @@ export default function WorkspaceSidebar() {
   const params = useParams<{ projectId: string }>()
   const caps = useCurrentProjectCapabilities()
   const base = `/workspace/${params.projectId}`
+  const relPath =
+    pathname === base ? '' : pathname.startsWith(base + '/') ? pathname.slice(base.length) : ''
+  const helpActive = isHelpPath(relPath)
 
   // 两层过滤：先过 item，再决定该 group 还要不要显示。
   //  - group 自带 visibleIf → 直接尊重它
@@ -201,6 +204,23 @@ export default function WorkspaceSidebar() {
           )
         })}
       </nav>
+      <div className="border-t border-gray-200 px-2 py-2">
+        <Link
+          href={`${base}/help`}
+          className={`flex items-center gap-2.5 px-2.5 py-2 rounded-md text-[13px] transition-colors ${
+            helpActive
+              ? 'bg-blue-50 text-blue-600 font-medium'
+              : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
+          }`}
+        >
+          <i
+            className={`fas fa-circle-question w-4 text-center text-xs flex-shrink-0 ${
+              helpActive ? 'text-blue-600' : 'text-gray-400'
+            }`}
+          />
+          <span className="truncate">使用帮助</span>
+        </Link>
+      </div>
     </aside>
   )
 }

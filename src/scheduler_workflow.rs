@@ -44,6 +44,9 @@ impl WorkflowKindExecutor for WorkflowExecutor {
         if !wf.is_enabled {
             return Err(format!("工作流 {} 已禁用", wf.slug));
         }
+        if wf.published_version.is_none() {
+            return Err(format!("工作流 {} 尚未发布", wf.slug));
+        }
 
         let fired_at = chrono::Utc::now().to_rfc3339();
         let mut data = match &task.workflow_input {

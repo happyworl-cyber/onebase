@@ -20,6 +20,7 @@ import ReactFlow, {
 } from 'reactflow'
 import { nodeTypes, NODE_TYPE_META } from './NodeTypes'
 import NodeConfigPanel from './NodeConfigPanel'
+import { rewriteNodeIdRefs } from './nodeId'
 import WorkflowEdge from './WorkflowEdge'
 import {
   layoutWorkflow,
@@ -486,6 +487,43 @@ function WorkflowCanvasInner({ initialNodes, initialEdges, workflowSlug, onChang
     setSelectedNode(updated)
   }, [edges, setNodes, syncChange])
 
+  const handleNodeRename = useCallback((oldId: string, newId: string) => {
+    if (oldId === newId) return
+    setNodes((nds) => {
+      const newNodes = nds.map((n) => {
+        const config = rewriteNodeIdRefs(n.data.config, oldId, newId)
+        if (n.id !== oldId) {
+          return { ...n, data: { ...n.data, config } }
+        }
+        return {
+          ...n,
+          id: newId,
+          selected: true,
+          data: { ...n.data, id: newId, config },
+        }
+      })
+      setEdges((eds) => {
+        const newEdges = eds.map((e, i) => {
+          const source = e.source === oldId ? newId : e.source
+          const target = e.target === oldId ? newId : e.target
+          return { ...e, id: `e-${source}-${target}-${i}`, source, target }
+        })
+        setTimeout(() => syncChange(newNodes, newEdges), 0)
+        return newEdges
+      })
+      const renamed = newNodes.find((n) => n.id === newId)
+      if (renamed) {
+        setSelectedNode({
+          id: renamed.id,
+          type: renamed.data.nodeType,
+          label: renamed.data.label,
+          config: renamed.data.config,
+        })
+      }
+      return newNodes
+    })
+  }, [setNodes, setEdges, syncChange])
+
   // 条件节点分支改名时，把该节点上引用旧分支名的连线（sourceHandle/label/branch）同步成新名，
   // 避免出口 handle 改名后旧连线 branch 失配（锚点错位 + 后端路由匹配不到分支）。
   const handleBranchRename = useCallback((nodeId: string, oldBranch: string, newBranch: string) => {
@@ -715,6 +753,8 @@ function WorkflowCanvasInner({ initialNodes, initialEdges, workflowSlug, onChang
           onClose={closePanel}
           onDelete={readOnly ? undefined : handleNodeDelete}
           onBranchRename={readOnly ? undefined : handleBranchRename}
+          usedIds={nodes.map((n) => n.id)}
+          onRenameId={readOnly ? undefined : handleNodeRename}
         />
       )}
     </div>

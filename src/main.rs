@@ -7,6 +7,9 @@ mod auth;
 mod auth_handlers;
 mod auto_api_handlers;
 mod circuit_breaker;
+mod cloud_log;
+mod cloud_log_aliyun;
+mod cloud_log_handlers;
 mod config;
 mod crypto;
 mod crypto_primitives;
@@ -92,6 +95,7 @@ mod scheduler_workflow;
 mod schema_handlers;
 mod session_hooks;
 mod session_rules_handlers;
+mod skill_handlers;
 mod sql_v1_handlers;
 mod sse;
 mod sse_notify_bridge;
@@ -109,12 +113,15 @@ mod transaction;
 mod watchdog;
 mod webhook_handlers;
 mod webhook_manager;
+mod workflow_credentials;
 mod workflow_cron_trigger;
+mod workflow_draft;
 mod workflow_engine;
 mod workflow_folder_handlers;
 mod workflow_handlers;
 mod workflow_input_schema;
 mod workflow_kafka_trigger;
+mod workflow_logs;
 mod workflow_notify_trigger;
 mod workflow_stream;
 mod workflow_taxonomy;
@@ -731,8 +738,17 @@ async fn main() -> anyhow::Result<()> {
             get(public_base_settings::get_project_gateway_settings)
                 .put(public_base_settings::update_project_gateway_settings),
         )
-        // 工作流「数据源 / 凭证」集成模块（admin+）：与环境变量同款惯例，
-        // 路由级 auth_middleware，handler 内 require_tenant_admin。凭证密钥永不回显。
+        // 工作流「数据源 / 凭证」：主路径 /credentials，旧 /wf-credentials 做别名。
+        // 列表 require_tenant_member；写操作 require_tenant_admin。密钥永不回显。
+        .route(
+            "/api/projects/:id/credentials",
+            get(datasource_handlers::list_credentials).post(datasource_handlers::create_credential),
+        )
+        .route(
+            "/api/projects/:id/credentials/:cred_id",
+            axum::routing::put(datasource_handlers::update_credential)
+                .delete(datasource_handlers::delete_credential),
+        )
         .route(
             "/api/projects/:id/wf-credentials",
             get(datasource_handlers::list_credentials).post(datasource_handlers::create_credential),
@@ -741,6 +757,27 @@ async fn main() -> anyhow::Result<()> {
             "/api/projects/:id/wf-credentials/:cred_id",
             axum::routing::put(datasource_handlers::update_credential)
                 .delete(datasource_handlers::delete_credential),
+        )
+        .route(
+            "/api/projects/:id/log-sources",
+            get(cloud_log_handlers::list_log_sources).post(cloud_log_handlers::create_log_source),
+        )
+        .route(
+            "/api/projects/:id/log-sources/:sid",
+            axum::routing::put(cloud_log_handlers::update_log_source)
+                .delete(cloud_log_handlers::delete_log_source),
+        )
+        .route(
+            "/api/projects/:id/log-sources/:sid/query",
+            post(cloud_log_handlers::query_log_source),
+        )
+        .route(
+            "/api/projects/:id/log-sources/:sid/console-url",
+            get(cloud_log_handlers::get_log_source_console_url),
+        )
+        .route(
+            "/api/projects/:id/log-sources/:sid/test",
+            post(cloud_log_handlers::test_log_source),
         )
         .route(
             "/api/projects/:id/wf-datasources",
@@ -1547,6 +1584,14 @@ async fn main() -> anyhow::Result<()> {
             "/api/admin/workflows/:id/versions/:version/restore",
             post(workflow_handlers::restore_workflow_version),
         )
+        .route(
+            "/api/admin/workflows/:id/publish",
+            post(workflow_handlers::publish_workflow),
+        )
+        .route(
+            "/api/admin/workflows/:id/discard-draft",
+            post(workflow_handlers::discard_workflow_draft),
+        )
         // 平台令牌 scope 校验（按方法/路径细分 read/write/run）。必须排在 auth 之内层：
         // auth_middleware（更外层、后注册）先注入 PlatformTokenContext，本层再据此校验。
         .layer(axum_middleware::from_fn(
@@ -1604,6 +1649,14 @@ async fn main() -> anyhow::Result<()> {
     // 都会查不到记录而 401。这是设计如此（两套各自独立），不是 bug。
     //
     // PAT 管理 API（个人访问令牌）：普通登录态即可管理自己的令牌。
+    let skill_routes = Router::new()
+        .route("/api/admin/skills", get(skill_handlers::list_skills))
+        .route("/api/admin/skills/:name", get(skill_handlers::get_skill))
+        .layer(axum_middleware::from_fn_with_state(
+            pool.clone(),
+            middleware::auth_middleware,
+        ));
+
     let pat_routes = Router::new()
         .route(
             "/api/admin/pats",
@@ -2172,6 +2225,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(es_app_routes)
         .merge(workflow_routes)
         .merge(workflow_folder_routes)
+        .merge(skill_routes)
         .merge(pat_routes)
         .merge(mcp_routes)
         .merge(ai_config_routes)

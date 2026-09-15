@@ -3,6 +3,7 @@
 use crate::js_deps::{self, DepsStatusKind, JsDependencies};
 use crate::js_host_bridge::{start_bridge, HostBridgeConfig};
 use crate::lua_engine::PluginContext;
+use crate::workflow_logs::{logs_from_json, CodeExecError, CodeExecOutput};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -15,6 +16,7 @@ pub struct JsExecRequest {
     pub code: String,
     pub plugin_ctx: PluginContext,
     pub env_vars: HashMap<String, String>,
+    pub credentials: crate::workflow_credentials::CredentialStore,
     pub tenant_id: Option<i32>,
     pub http_disabled: bool,
     pub timeout_ms: u64,
@@ -45,12 +47,13 @@ pub fn js_timeout_ms() -> u64 {
         .unwrap_or(30_000)
 }
 
-/// Execute user-supplied JavaScript and return its final `ctx.body`.
-pub async fn execute_javascript(req: JsExecRequest) -> Result<Value, String> {
+/// Execute user-supplied JavaScript and return its final `ctx.body` plus logs.
+pub async fn execute_javascript(req: JsExecRequest) -> Result<CodeExecOutput, CodeExecError> {
     if !js_enabled() {
         return Err(
             "JavaScript workflow code nodes are disabled（JavaScript 工作流代码节点已禁用）；set WORKFLOW_JS_CODE_ENABLED=true to enable them"
-                .to_string(),
+                .to_string()
+                .into(),
         );
     }
 
@@ -63,10 +66,13 @@ pub async fn execute_javascript(req: JsExecRequest) -> Result<Value, String> {
                 status
                     .error
                     .unwrap_or_else(|| "npm install failed".to_string())
-            ));
+            )
+            .into());
         }
         if status.status == DepsStatusKind::Installing {
-            return Err("JavaScript dependencies are still installing".to_string());
+            return Err("JavaScript dependencies are still installing"
+                .to_string()
+                .into());
         }
         let dir = js_deps::javascript_dir(req.workflow_id);
         dir.is_dir().then_some(dir)
@@ -85,7 +91,7 @@ async fn execute_in_dir(
     req: &JsExecRequest,
     deps_dir: Option<&Path>,
     temp_dir: &Path,
-) -> Result<Value, String> {
+) -> Result<CodeExecOutput, CodeExecError> {
     let ctx_path = temp_dir.join("ctx.json");
     let user_path = temp_dir.join("user.js");
     let entry_path = temp_dir.join("entry.js");
@@ -95,6 +101,7 @@ async fn execute_in_dir(
     let socket_path = temp_dir.join("bridge.sock");
     let bridge = start_bridge(HostBridgeConfig {
         env_vars: req.env_vars.clone(),
+        credentials: req.credentials.clone(),
         tenant_id: req.tenant_id,
         http_disabled: req.http_disabled,
         socket_path: socket_path.clone(),
@@ -116,14 +123,32 @@ async fn execute_in_dir(
     )
     .await;
     bridge.shutdown().await;
-    run_result?;
 
-    let raw = tokio::fs::read_to_string(&result_path)
-        .await
-        .map_err(|error| format!("JavaScript execution did not write result.json: {error}"))?;
-    let result: Value = serde_json::from_str(&raw)
-        .map_err(|error| format!("invalid JavaScript result.json: {error}"))?;
-    Ok(result.get("body").cloned().unwrap_or(Value::Null))
+    match run_result {
+        Ok(()) => {
+            let raw = tokio::fs::read_to_string(&result_path)
+                .await
+                .map_err(|error| {
+                    format!("JavaScript execution did not write result.json: {error}")
+                })?;
+            let result: Value = serde_json::from_str(&raw)
+                .map_err(|error| format!("invalid JavaScript result.json: {error}"))?;
+            Ok(CodeExecOutput {
+                body: result.get("body").cloned().unwrap_or(Value::Null),
+                logs: logs_from_json(result.get("logs").unwrap_or(&Value::Null)),
+            })
+        }
+        Err(message) => {
+            let logs = match tokio::fs::read_to_string(&result_path).await.ok() {
+                Some(raw) => serde_json::from_str::<Value>(&raw)
+                    .ok()
+                    .map(|result| logs_from_json(result.get("logs").unwrap_or(&Value::Null)))
+                    .unwrap_or_default(),
+                None => vec![],
+            };
+            Err(CodeExecError { message, logs })
+        }
+    }
 }
 
 fn write_execution_files(
@@ -325,6 +350,37 @@ pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 const ENTRY_JS: &str = r#"'use strict';
 const fs = require('fs');
 const path = require('path');
+const util = require('util');
+
+const __logs = [];
+function __push(level, args) {
+  __logs.push({
+    level,
+    message: Array.from(args).map((a) => typeof a === 'string' ? a : util.inspect(a, { depth: 4 })).join(' '),
+  });
+}
+
+const __origError = console.error.bind(console);
+console.log = (...args) => { __push('info', args); };
+console.info = (...args) => { __push('info', args); };
+console.warn = (...args) => { __push('warn', args); };
+console.error = (...args) => { __push('error', args); };
+console.debug = (...args) => { __push('debug', args); };
+
+if (global.log) {
+  for (const level of ['info', 'warn', 'error', 'debug']) {
+    const orig = global.log[level] && global.log[level].bind(global.log);
+    if (!orig) continue;
+    global.log[level] = (message, ...rest) => {
+      __push(level, [message, ...rest]);
+      return orig(message, ...rest);
+    };
+  }
+}
+
+function __flush(body) {
+  fs.writeFileSync(path.join(__dirname, 'result.json'), JSON.stringify({ body: body ?? null, logs: __logs }));
+}
 
 (async () => {
   const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, 'ctx.json'), 'utf8'));
@@ -339,9 +395,10 @@ const path = require('path');
   const execute = fn(require, mod, mod.exports, ctx);
   const returned = typeof execute === 'function' ? await execute(ctx) : undefined;
   if (returned !== undefined && returned !== null) ctx.body = returned;
-  fs.writeFileSync(path.join(__dirname, 'result.json'), JSON.stringify({ body: ctx.body ?? null }));
+  __flush(ctx.body);
 })().catch((error) => {
-  console.error(error && error.stack ? error.stack : String(error));
+  __flush(null);
+  __origError(error && error.stack ? error.stack : String(error));
   process.exitCode = 1;
 });
 "#;
@@ -375,6 +432,7 @@ mod tests {
             code: code.to_string(),
             plugin_ctx: plugin_ctx(json!({"x": 7})),
             env_vars: HashMap::new(),
+            credentials: crate::workflow_credentials::CredentialStore::default(),
             tenant_id: None,
             http_disabled: false,
             timeout_ms: 1_000,
@@ -407,8 +465,9 @@ mod tests {
 
         std::env::remove_var("WORKFLOW_JS_CODE_ENABLED");
         assert!(
-            error.contains("disabled") || error.contains("禁用"),
-            "unexpected error: {error}"
+            error.message.contains("disabled") || error.message.contains("禁用"),
+            "unexpected error: {}",
+            error.message
         );
     }
 
@@ -433,6 +492,56 @@ mod tests {
 
         std::env::remove_var("WORKFLOW_JS_CODE_ENABLED");
         std::env::remove_var("WORKFLOW_JS_SANDBOX");
-        assert_eq!(result, json!({"ok": true, "n": 7}));
+        assert_eq!(result.body, json!({"ok": true, "n": 7}));
+    }
+
+    #[tokio::test]
+    async fn execute_collects_console_and_log_and_survives_throw() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        if std::process::Command::new("node")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        std::env::set_var("WORKFLOW_JS_CODE_ENABLED", "true");
+        std::env::set_var("WORKFLOW_JS_SANDBOX", "direct");
+        let ok = execute_javascript(request(
+            r#"
+console.log("hello", 1);
+log.warn("w");
+ctx.body = { ok: true };
+"#,
+        ))
+        .await
+        .expect("js ok");
+        std::env::remove_var("WORKFLOW_JS_CODE_ENABLED");
+        std::env::remove_var("WORKFLOW_JS_SANDBOX");
+        assert_eq!(ok.body, json!({"ok": true}));
+        assert!(ok
+            .logs
+            .iter()
+            .any(|l| l.level == crate::workflow_logs::NodeLogLevel::Info
+                && l.message.contains("hello")));
+        assert!(ok
+            .logs
+            .iter()
+            .any(|l| l.level == crate::workflow_logs::NodeLogLevel::Warn && l.message == "w"));
+
+        std::env::set_var("WORKFLOW_JS_CODE_ENABLED", "true");
+        std::env::set_var("WORKFLOW_JS_SANDBOX", "direct");
+        let err = execute_javascript(request(
+            r#"
+console.log("before");
+throw new Error("boom");
+"#,
+        ))
+        .await
+        .expect_err("must fail");
+        std::env::remove_var("WORKFLOW_JS_CODE_ENABLED");
+        std::env::remove_var("WORKFLOW_JS_SANDBOX");
+        assert!(err.message.to_lowercase().contains("boom") || err.message.contains("Error"));
+        assert!(err.logs.iter().any(|l| l.message.contains("before")));
     }
 }

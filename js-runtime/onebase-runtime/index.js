@@ -90,6 +90,7 @@ function installGlobal(name, value) {
 }
 
 installGlobal('env', { get: (key) => call('env.get', { key }) });
+installGlobal('cred', { get: (name, field) => call('cred.get', { name, field }) });
 installGlobal('http', {
   get: (url, options) => request('get', url, options),
   post: (url, body, options) => request('post', url, body, options),
@@ -115,6 +116,7 @@ installGlobal('crypto', {
   rsa_encrypt_oaep: (...args) => call('crypto.rsa_encrypt_oaep', { args }),
   rsa_decrypt: (...args) => call('crypto.rsa_decrypt', { args }),
   rsa_sign_sha256: (...args) => call('crypto.rsa_sign_sha256', { args }),
+  rsa_verify_sha256: (...args) => call('crypto.rsa_verify_sha256', { args }),
   base64url_encode: (...args) => call('crypto.base64url_encode', { args }),
 });
 installGlobal('log', ['info', 'warn', 'error', 'debug'].reduce((api, level) => {

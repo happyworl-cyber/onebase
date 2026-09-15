@@ -1,11 +1,11 @@
 //! 工作流「数据源 / 凭证」集成模块 CRUD。
 //!
 //! 路由挂在项目路径下（与环境变量 `/api/projects/:id/env-vars` 同款惯例）：
-//!   凭证：
-//!     - GET    /api/projects/:id/wf-credentials
-//!     - POST   /api/projects/:id/wf-credentials
-//!     - PUT    /api/projects/:id/wf-credentials/:cred_id
-//!     - DELETE /api/projects/:id/wf-credentials/:cred_id
+//!   凭证（主路径 /credentials，旧 /wf-credentials 为别名）：
+//!     - GET    /api/projects/:id/credentials          （项目成员）
+//!     - POST   /api/projects/:id/credentials          （admin+）
+//!     - PUT    /api/projects/:id/credentials/:cred_id
+//!     - DELETE /api/projects/:id/credentials/:cred_id
 //!   数据源：
 //!     - GET    /api/projects/:id/wf-datasources
 //!     - POST   /api/projects/:id/wf-datasources
@@ -13,10 +13,8 @@
 //!     - DELETE /api/projects/:id/wf-datasources/:ds_id
 //!     - POST   /api/projects/:id/wf-datasources/:ds_id/test  （测试连接，仅 postgresql）
 //!
-//! 权限：路由级 `auth_middleware` 注入 Claims；handler 内统一
-//! `require_tenant_admin(pool, claims, project_id)`（Claims 无 tenant_id，
-//! 租户上下文只能来自路径参数），并且所有写查询都 `WHERE ... AND tenant_id = $project`
-//! 防越权。
+//! 权限：列表 `require_tenant_member`；写操作 `require_tenant_admin`。
+//! 所有写查询都 `WHERE ... AND tenant_id = $project` 防越权。
 //!
 //! 凭证密钥入库前 `crypto::encrypt_secret`，**永不回显**（列表 / 详情只给
 //! `has_secret: true`）。更新时密钥可空——空表示保持原密文不变（COALESCE）。
@@ -34,9 +32,10 @@ use sqlx::{PgPool, Row};
 use crate::auth::Claims;
 use crate::crypto;
 use crate::error::{AppError, Result};
+use crate::operation_log::{self, Actor, OperationLogInput, Source, Status};
 use crate::permissions;
+use crate::workflow_credentials;
 
-const ALLOWED_KINDS: [&str; 2] = ["basic", "bearer"];
 const ALLOWED_DS_TYPES: [&str; 2] = ["postgresql", "mysql"];
 const MAX_NAME_LEN: usize = 100;
 
@@ -54,6 +53,61 @@ fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+fn map_cred_err(msg: String) -> AppError {
+    AppError::InvalidQuery(msg)
+}
+
+fn resolve_credential_fields(
+    req: &CredentialRequest,
+) -> Result<(String, Option<String>, Option<String>)> {
+    let kind = workflow_credentials::validate_kind(req.kind.as_deref().unwrap_or("basic"))
+        .map_err(map_cred_err)?;
+    workflow_credentials::validate_kind_fields(&kind, req.username.as_deref())
+        .map_err(map_cred_err)?;
+    let username = if kind == "basic" || kind == "aliyun_ak" {
+        req.username
+            .as_deref()
+            .map(str::trim)
+            .map(|s| s.to_string())
+    } else {
+        None
+    };
+    let header_name = if kind == "api_key" {
+        workflow_credentials::validate_header_name(req.header_name.as_deref().unwrap_or(""))
+            .map_err(map_cred_err)?
+    } else {
+        None
+    };
+    Ok((kind, username, header_name))
+}
+
+fn record_credential_op(
+    pool: &PgPool,
+    claims: &Claims,
+    tenant_id: i32,
+    action: &str,
+    cred_id: i32,
+    cred_name: &str,
+    summary: String,
+    change: serde_json::Value,
+) {
+    let input = OperationLogInput::new(
+        tenant_id,
+        Actor::from_claims(claims),
+        Source::Console,
+        action,
+        summary,
+        Status::Success,
+    )
+    .resource(
+        operation_log::resource_type::CREDENTIAL,
+        cred_name.to_string(),
+        Some(cred_id.to_string()),
+    )
+    .change(change);
+    operation_log::record(pool, input);
+}
+
 // ─────────────────────────────── 凭证 ───────────────────────────────
 
 #[derive(Deserialize)]
@@ -68,6 +122,8 @@ pub struct CredentialRequest {
     #[serde(default)]
     pub secret: Option<String>,
     #[serde(default)]
+    pub header_name: Option<String>,
+    #[serde(default)]
     pub description: Option<String>,
 }
 
@@ -77,6 +133,7 @@ fn credential_row_to_json(row: &sqlx::postgres::PgRow, ref_count: i64) -> serde_
         "name": row.get::<String, _>("name"),
         "kind": row.get::<String, _>("kind"),
         "username": row.get::<Option<String>, _>("username"),
+        "header_name": row.get::<Option<String>, _>("header_name"),
         "description": row.get::<Option<String>, _>("description"),
         // 密钥永不回显；仅告知「已配置」，供前端渲染 •••• 占位
         "has_secret": true,
@@ -92,11 +149,11 @@ pub async fn list_credentials(
     Extension(claims): Extension<Claims>,
     Path(project_id): Path<i32>,
 ) -> Result<Json<Vec<serde_json::Value>>> {
-    permissions::require_tenant_admin(&pool, &claims, project_id).await?;
+    permissions::require_tenant_member(&pool, &claims, project_id).await?;
 
     let rows = sqlx::query(
         r#"
-        SELECT id, name, kind, username, description, created_at, updated_at
+        SELECT id, name, kind, username, header_name, description, created_at, updated_at
         FROM management.wf_credentials
         WHERE tenant_id = $1
         ORDER BY name ASC
@@ -106,12 +163,16 @@ pub async fn list_credentials(
     .fetch_all(&pool)
     .await?;
 
-    // 引用计数：每个凭证被多少个数据源引用
+    // 引用计数：数据源 + 云日志源
     let ref_rows = sqlx::query(
         r#"
-        SELECT credential_id, COUNT(*)::bigint AS cnt
-        FROM management.wf_datasources
-        WHERE tenant_id = $1 AND credential_id IS NOT NULL
+        SELECT credential_id, COUNT(*)::bigint AS cnt FROM (
+            SELECT credential_id FROM management.wf_datasources
+             WHERE tenant_id = $1 AND credential_id IS NOT NULL
+            UNION ALL
+            SELECT credential_id FROM management.project_log_sources
+             WHERE tenant_id = $1
+        ) t
         GROUP BY credential_id
         "#,
     )
@@ -142,14 +203,7 @@ pub async fn create_credential(
 ) -> Result<Json<serde_json::Value>> {
     permissions::require_tenant_admin(&pool, &claims, project_id).await?;
     validate_name(&req.name)?;
-
-    let kind = req.kind.as_deref().unwrap_or("basic").trim().to_string();
-    if !ALLOWED_KINDS.contains(&kind.as_str()) {
-        return Err(AppError::InvalidQuery(format!(
-            "非法凭证类型：{}（仅支持 basic / bearer）",
-            kind
-        )));
-    }
+    let (kind, username, header_name) = resolve_credential_fields(&req)?;
 
     let secret = req
         .secret
@@ -161,21 +215,33 @@ pub async fn create_credential(
     let row = sqlx::query(
         r#"
         INSERT INTO management.wf_credentials
-            (tenant_id, name, kind, username, secret_encrypted, description, created_by, updated_by)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-        RETURNING id, name, kind, username, description, created_at, updated_at
+            (tenant_id, name, kind, username, header_name, secret_encrypted, description, created_by, updated_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+        RETURNING id, name, kind, username, header_name, description, created_at, updated_at
         "#,
     )
     .bind(project_id)
     .bind(req.name.trim())
     .bind(&kind)
-    .bind(req.username.as_deref().map(str::trim))
+    .bind(username.as_deref())
+    .bind(header_name.as_deref())
     .bind(&secret_encrypted)
     .bind(req.description.as_deref())
     .bind(claims.sub)
     .fetch_one(&pool)
     .await?;
 
+    let id: i32 = row.get("id");
+    record_credential_op(
+        &pool,
+        &claims,
+        project_id,
+        operation_log::action::CREATE,
+        id,
+        req.name.trim(),
+        format!("创建凭证 {}", req.name.trim()),
+        json!({ "kind": kind }),
+    );
     tracing::info!(user_id = claims.sub, tenant_id = project_id, name = %req.name, "wf credential created");
     Ok(Json(credential_row_to_json(&row, 0)))
 }
@@ -189,14 +255,7 @@ pub async fn update_credential(
 ) -> Result<Json<serde_json::Value>> {
     permissions::require_tenant_admin(&pool, &claims, project_id).await?;
     validate_name(&req.name)?;
-
-    let kind = req.kind.as_deref().unwrap_or("basic").trim().to_string();
-    if !ALLOWED_KINDS.contains(&kind.as_str()) {
-        return Err(AppError::InvalidQuery(format!(
-            "非法凭证类型：{}（仅支持 basic / bearer）",
-            kind
-        )));
-    }
+    let (kind, username, header_name) = resolve_credential_fields(&req)?;
 
     // 密钥留空表示保持原密文不变；填了才重新加密。
     let secret_encrypted = match req.secret.as_deref().filter(|s| !s.is_empty()) {
@@ -210,16 +269,18 @@ pub async fn update_credential(
         SET name = $1,
             kind = $2,
             username = $3,
-            secret_encrypted = COALESCE($4, secret_encrypted),
-            description = $5,
-            updated_by = $6
-        WHERE id = $7 AND tenant_id = $8
-        RETURNING id, name, kind, username, description, created_at, updated_at
+            header_name = $4,
+            secret_encrypted = COALESCE($5, secret_encrypted),
+            description = $6,
+            updated_by = $7
+        WHERE id = $8 AND tenant_id = $9
+        RETURNING id, name, kind, username, header_name, description, created_at, updated_at
         "#,
     )
     .bind(req.name.trim())
     .bind(&kind)
-    .bind(req.username.as_deref().map(str::trim))
+    .bind(username.as_deref())
+    .bind(header_name.as_deref())
     .bind(secret_encrypted.as_deref())
     .bind(req.description.as_deref())
     .bind(claims.sub)
@@ -229,9 +290,18 @@ pub async fn update_credential(
     .await?
     .ok_or_else(|| AppError::NotFound(format!("凭证 {} 不存在", cred_id)))?;
 
-    // 凭证连接信息可能变化：淘汰所有引用该凭证的数据源的内存池，下次执行按新配置重建。
     evict_pools_for_credential(&pool, project_id, cred_id).await;
 
+    record_credential_op(
+        &pool,
+        &claims,
+        project_id,
+        operation_log::action::UPDATE,
+        cred_id,
+        req.name.trim(),
+        format!("更新凭证 {}", req.name.trim()),
+        json!({ "kind": kind, "secret_rotated": secret_encrypted.is_some() }),
+    );
     tracing::info!(
         user_id = claims.sub,
         tenant_id = project_id,
@@ -252,18 +322,21 @@ pub async fn delete_credential(
 ) -> Result<Json<serde_json::Value>> {
     permissions::require_tenant_admin(&pool, &claims, project_id).await?;
 
-    let ref_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM management.wf_datasources WHERE tenant_id = $1 AND credential_id = $2",
+    let (ds_refs, log_refs): (i64, i64) = sqlx::query_as(
+        r#"
+        SELECT
+            (SELECT COUNT(*) FROM management.wf_datasources
+              WHERE tenant_id = $1 AND credential_id = $2),
+            (SELECT COUNT(*) FROM management.project_log_sources
+              WHERE tenant_id = $1 AND credential_id = $2)
+        "#,
     )
     .bind(project_id)
     .bind(cred_id)
     .fetch_one(&pool)
     .await?;
-    if ref_count > 0 {
-        return Err(AppError::InvalidQuery(format!(
-            "该凭证仍被 {} 个数据源引用，请先解绑后再删除",
-            ref_count
-        )));
+    if let Some(msg) = credential_in_use_message(ds_refs, log_refs) {
+        return Err(AppError::InvalidQuery(msg));
     }
 
     let affected =
@@ -277,6 +350,16 @@ pub async fn delete_credential(
         return Err(AppError::NotFound(format!("凭证 {} 不存在", cred_id)));
     }
 
+    record_credential_op(
+        &pool,
+        &claims,
+        project_id,
+        operation_log::action::DELETE,
+        cred_id,
+        &format!("#{cred_id}"),
+        format!("删除凭证 {cred_id}"),
+        json!({}),
+    );
     tracing::info!(
         user_id = claims.sub,
         tenant_id = project_id,
@@ -404,15 +487,20 @@ async fn ensure_credential_in_project(
     credential_id: Option<i32>,
 ) -> Result<()> {
     if let Some(cid) = credential_id {
-        let ok: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM management.wf_credentials WHERE id = $1 AND tenant_id = $2)",
+        let kind: Option<String> = sqlx::query_scalar(
+            "SELECT kind FROM management.wf_credentials WHERE id = $1 AND tenant_id = $2",
         )
         .bind(cid)
         .bind(project_id)
-        .fetch_one(pool)
+        .fetch_optional(pool)
         .await?;
-        if !ok {
+        let Some(kind) = kind else {
             return Err(AppError::InvalidQuery(format!("凭证 {} 不存在", cid)));
+        };
+        if !workflow_credentials::datasource_accepts_kind(&kind) {
+            return Err(AppError::InvalidQuery(
+                "数据源只能绑定 basic 凭证".to_string(),
+            ));
         }
     }
     Ok(())
@@ -613,5 +701,70 @@ async fn evict_pools_for_credential(pool: &PgPool, project_id: i32, cred_id: i32
     .unwrap_or_default();
     for ds_id in ids {
         crate::workflow_engine::evict_datasource_pool(ds_id).await;
+    }
+}
+
+fn credential_in_use_message(ds_refs: i64, log_refs: i64) -> Option<String> {
+    if ds_refs <= 0 && log_refs <= 0 {
+        return None;
+    }
+    let mut bits = Vec::new();
+    if ds_refs > 0 {
+        bits.push(format!("{ds_refs} 个数据源"));
+    }
+    if log_refs > 0 {
+        bits.push(format!("{log_refs} 个云日志源"));
+    }
+    Some(format!(
+        "该凭证仍被 {}引用，请先解绑后再删除",
+        bits.join("、")
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credential_in_use_mentions_log_sources() {
+        assert_eq!(
+            credential_in_use_message(0, 2).as_deref(),
+            Some("该凭证仍被 2 个云日志源引用，请先解绑后再删除")
+        );
+        assert_eq!(
+            credential_in_use_message(1, 1).as_deref(),
+            Some("该凭证仍被 1 个数据源、1 个云日志源引用，请先解绑后再删除")
+        );
+        assert!(credential_in_use_message(0, 0).is_none());
+    }
+
+    #[test]
+    fn aliyun_ak_keeps_access_key_id_as_username() {
+        let req = CredentialRequest {
+            name: "阿里云生产".into(),
+            kind: Some("aliyun_ak".into()),
+            username: Some("  LTAI5tExample  ".into()),
+            secret: Some("sk".into()),
+            header_name: None,
+            description: None,
+        };
+        let (kind, username, header) = resolve_credential_fields(&req).unwrap();
+        assert_eq!(kind, "aliyun_ak");
+        assert_eq!(username.as_deref(), Some("LTAI5tExample"));
+        assert!(header.is_none());
+    }
+
+    #[test]
+    fn bearer_still_drops_username() {
+        let req = CredentialRequest {
+            name: "token".into(),
+            kind: Some("bearer".into()),
+            username: Some("should-drop".into()),
+            secret: Some("tok".into()),
+            header_name: None,
+            description: None,
+        };
+        let (_, username, _) = resolve_credential_fields(&req).unwrap();
+        assert!(username.is_none());
     }
 }

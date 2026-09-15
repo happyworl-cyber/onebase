@@ -216,10 +216,10 @@ server.registerTool(
   {
     title: "创建工作流",
     description:
-      "创建一个工作流（DAG）。需指定 database_id 把工作流绑定到某项目库。需要 workflow:write scope。",
+      "创建一个工作流（DAG）并保存为草稿；调用 publish_workflow 后才会进入运行时。需指定 database_id 把工作流绑定到某项目库。需要 workflow:write scope。",
     inputSchema: {
       name: z.string().describe("工作流名称"),
-      slug: z.string().describe("工作流唯一标识，小写/数字/连字符，≤64"),
+      slug: z.string().describe("工作流唯一标识，小写/数字/下划线/连字符/斜杠，≤64"),
       database_id: z.number().int().describe("绑定的项目库 id（来自 create_project）"),
       description: z.string().optional(),
       category: z.string().optional().describe("分类标签，便于管理"),
@@ -236,7 +236,7 @@ server.registerTool(
       is_enabled: z.boolean().optional(),
       timeout_ms: z.number().int().optional().describe("整体超时，默认 30000"),
       max_retries: z.number().int().optional(),
-      version_note: z.string().optional().describe("初始版本备注"),
+      version_note: z.string().optional().describe("草稿版本备注，发布时写入版本历史"),
     },
   },
   async (args): Promise<ToolResult> => {
@@ -253,7 +253,7 @@ server.registerTool(
   {
     title: "更新工作流",
     description:
-      "按 id 局部更新工作流（仅传需要改的字段）。同时传 nodes+edges 或 input_schema 会触发版本快照。需要 workflow:write scope。",
+      "按 id 局部更新工作流草稿（仅传需要改的字段），不进入运行时、不打版本。version_note 暂存在草稿，发布时写入版本历史。需要 workflow:write scope。",
     inputSchema: {
       id: z.number().int().describe("工作流 id"),
       name: z.string().optional(),
@@ -269,7 +269,6 @@ server.registerTool(
       ),
       nodes: z.array(z.any()).optional().describe(NODES_DESC),
       edges: z.array(z.any()).optional().describe(EDGES_DESC),
-      is_enabled: z.boolean().optional(),
       timeout_ms: z.number().int().optional(),
       max_retries: z.number().int().optional(),
       version_note: z.string().optional(),
@@ -279,6 +278,53 @@ server.registerTool(
     try {
       const { id, ...body } = args;
       return toResult(await api("PATCH", `/api/admin/workflows/${id}`, body));
+    } catch (e) {
+      return errResult(e);
+    }
+  }
+);
+
+server.registerTool(
+  "publish_workflow",
+  {
+    title: "发布工作流",
+    description:
+      "把工作流的未发布草稿发布为线上定义。无草稿则失败。发布后运行时才会使用新图。",
+    inputSchema: {
+      id: z.number().int(),
+      version_note: z.string().optional(),
+    },
+  },
+  async (args): Promise<ToolResult> => {
+    try {
+      const { id, ...body } = args;
+      return toResult(
+        await api("POST", `/api/admin/workflows/${id}/publish`, body)
+      );
+    } catch (e) {
+      return errResult(e);
+    }
+  }
+);
+
+server.registerTool(
+  "discard_workflow_draft",
+  {
+    title: "丢弃工作流草稿",
+    description:
+      "丢弃未发布草稿，编辑稿回到当前已发布定义。从未发布过的丢弃后画布为空。",
+    inputSchema: {
+      id: z.number().int(),
+    },
+  },
+  async (args): Promise<ToolResult> => {
+    try {
+      return toResult(
+        await api(
+          "POST",
+          `/api/admin/workflows/${args.id}/discard-draft`
+        )
+      );
     } catch (e) {
       return errResult(e);
     }

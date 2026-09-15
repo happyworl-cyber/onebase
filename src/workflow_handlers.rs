@@ -7,7 +7,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sqlx::{PgPool, Row};
+use sqlx::{Executor, PgPool, Postgres, Row};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -353,6 +353,15 @@ pub struct Workflow {
     pub created_by_name: Option<String>,
     #[sqlx(default)]
     pub created_by_email: Option<String>,
+    #[serde(default)]
+    #[sqlx(default)]
+    pub published_version: Option<i32>,
+    #[serde(default)]
+    #[sqlx(default)]
+    pub has_unpublished: bool,
+    #[serde(default)]
+    #[sqlx(default)]
+    pub published_slug: Option<String>,
 }
 
 /// 数据库 `TIMESTAMP` 列以 UTC 存储但不带时区信息，直接序列化会丢失时区标记，
@@ -497,7 +506,12 @@ pub struct UpdateWorkflowRequest {
     #[serde(default)]
     pub alert_webhook_template: Option<Option<Value>>,
     pub alert_throttle_hours: Option<i32>,
-    /// 版本备注（可选）：仅在本次保存改动了定义（含 nodes/edges/input_schema）时记录到新版本快照。
+    /// 版本备注（可选）：写入草稿 note，发布时再落到版本快照。
+    pub version_note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PublishWorkflowRequest {
     pub version_note: Option<String>,
 }
 
@@ -565,7 +579,11 @@ async fn require_admin_for_workflow(
     crate::permissions::require_platform_superadmin(claims)
 }
 
-async fn fetch_workflow_for_admin(pool: &PgPool, claims: &Claims, id: i32) -> Result<Workflow> {
+pub(crate) async fn fetch_workflow_for_admin(
+    pool: &PgPool,
+    claims: &Claims,
+    id: i32,
+) -> Result<Workflow> {
     let workflow =
         sqlx::query_as::<_, Workflow>("SELECT * FROM management.workflows WHERE id = $1")
             .bind(id)
@@ -579,14 +597,17 @@ async fn fetch_workflow_for_admin(pool: &PgPool, claims: &Claims, id: i32) -> Re
 /// 给 workflow 当前定义打一份版本快照（version 自增）。
 ///
 /// version 用 `MAX(version)+1` 子查询在单条 INSERT 内原子计算；并发保存同一 workflow 时，
-/// `UNIQUE(workflow_id, version)` 兜底保证不会出现重复版本号（极少数撞号的那次保存会报错，
-/// 由调用方决定是否致命——这里作为非阻断的"尽力而为"，失败仅记日志）。
-async fn snapshot_workflow_version(
-    pool: &PgPool,
+/// `UNIQUE(workflow_id, version)` 兜底保证不会出现重复版本号。发布路径必须在同一事务内
+/// 调用，失败则回滚整次发布。
+async fn snapshot_workflow_version<'e, E>(
+    executor: E,
     workflow: &Workflow,
     note: Option<&str>,
     created_by: Option<i32>,
-) -> Result<i32> {
+) -> Result<i32>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     let note = note.map(str::trim).filter(|s| !s.is_empty());
     let row = sqlx::query(
         r#"INSERT INTO management.workflow_versions
@@ -612,9 +633,32 @@ async fn snapshot_workflow_version(
     .bind(workflow.max_retries)
     .bind(note)
     .bind(created_by)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
     Ok(row.get::<i32, _>("version"))
+}
+
+fn publish_version_note(req_note: Option<&str>, draft_note: Option<&str>) -> Option<String> {
+    req_note
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| draft_note.map(str::to_string))
+}
+
+fn publish_missing_draft_error(published_version: Option<i32>) -> AppError {
+    if published_version.is_none() {
+        AppError::Conflict("没有可发布的定义".into())
+    } else {
+        AppError::Conflict("没有未发布的修改".into())
+    }
+}
+
+fn require_published_to_trigger(published_version: Option<i32>) -> Result<()> {
+    if published_version.is_none() {
+        return Err(AppError::Conflict("工作流尚未发布".into()));
+    }
+    Ok(())
 }
 
 async fn resolve_tenant_for_workflow_input(
@@ -1000,6 +1044,15 @@ pub async fn list_workflows(
     };
 
     let workflows = qb.build_query_as::<Workflow>().fetch_all(&pool).await?;
+    let ids: Vec<i32> = workflows.iter().map(|w| w.id).collect();
+    let drafts = crate::workflow_draft::fetch_drafts_for(&pool, &ids).await?;
+    let workflows: Vec<Workflow> = workflows
+        .into_iter()
+        .map(|wf| {
+            let draft = drafts.get(&wf.id).cloned();
+            crate::workflow_draft::editor_view(wf, draft)
+        })
+        .collect();
 
     let mut out = json!({
         "workflows": workflows,
@@ -1504,6 +1557,8 @@ pub async fn get_workflow(
     axum::Extension(claims): axum::Extension<Claims>,
 ) -> Result<Json<Value>> {
     let workflow = fetch_workflow_for_admin(&pool, &claims, id).await?;
+    let draft = crate::workflow_draft::fetch_draft(&pool, id).await?;
+    let workflow = crate::workflow_draft::editor_view(workflow, draft);
 
     Ok(Json(json!({
         "workflow": workflow,
@@ -1593,7 +1648,7 @@ pub async fn create_workflow(
     }
     if !is_valid_slug(&req.slug) {
         return Err(AppError::InvalidQuery(
-            "slug 只能包含小写字母、数字、连字符和斜杠（/）".to_string(),
+            "slug 只能包含小写字母、数字、下划线、连字符和斜杠（/）".to_string(),
         ));
     }
 
@@ -1627,6 +1682,10 @@ pub async fn create_workflow(
     let def = parse_definition(&req.nodes, &req.edges)?;
     workflow_engine::validate_definition(&def)?;
 
+    if crate::workflow_draft::draft_slug_taken(&pool, req.database_id, &req.slug, None).await? {
+        return Err(AppError::Conflict("slug 已被占用".into()));
+    }
+
     let resolved_tenant_id =
         resolve_tenant_for_workflow_input(&pool, &claims, req.database_id, req.tenant_id).await?;
 
@@ -1635,6 +1694,14 @@ pub async fn create_workflow(
         req.category.as_deref(),
     );
 
+    let trigger_config = req.trigger_config.unwrap_or(json!({}));
+    let dependencies = req.dependencies.unwrap_or_else(|| json!({}));
+    let timeout_ms = req.timeout_ms.unwrap_or(120_000);
+    let max_retries = req.max_retries.unwrap_or(0);
+    let empty_graph = json!([]);
+
+    // 主表 INSERT 与草稿 upsert 必须共享事务，避免草稿失败时残留占用 slug 的空工作流。
+    let mut tx = pool.begin().await?;
     let workflow = sqlx::query_as::<_, Workflow>(
         r#"INSERT INTO management.workflows
            (tenant_id, database_id, name, slug, description, category, department,
@@ -1651,31 +1718,47 @@ pub async fn create_workflow(
     .bind(&taxonomy.category)
     .bind(&taxonomy.department)
     .bind(&trigger_type)
-    .bind(req.trigger_config.unwrap_or(json!({})))
+    .bind(&trigger_config)
     .bind(&input_schema)
-    .bind(&req.nodes)
-    .bind(&req.edges)
-    .bind(req.dependencies.unwrap_or_else(|| json!({})))
+    .bind(&empty_graph)
+    .bind(&empty_graph)
+    .bind(&dependencies)
     .bind(req.is_enabled.unwrap_or(true))
-    .bind(req.timeout_ms.unwrap_or(120_000))
-    .bind(req.max_retries.unwrap_or(0))
+    .bind(timeout_ms)
+    .bind(max_retries)
     .bind(alert_webhook_url)
     .bind(req.alert_webhook_template)
     .bind(req.alert_throttle_hours.unwrap_or(24))
     .bind(claims.sub)
-    .fetch_one(&pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(map_workflow_write_err)?;
 
-    tracing::info!(workflow_id = workflow.id, slug = %workflow.slug, "工作流已创建");
-    spawn_javascript_deps_install(&workflow);
-    spawn_python_deps_install(&workflow);
+    let draft = crate::workflow_draft::WorkflowDraft {
+        workflow_id: workflow.id,
+        name: req.name,
+        slug: req.slug,
+        description: req.description,
+        category: taxonomy.category,
+        department: taxonomy.department,
+        trigger_type,
+        trigger_config,
+        input_schema,
+        nodes: req.nodes,
+        edges: req.edges,
+        dependencies,
+        timeout_ms,
+        max_retries,
+        note: req.version_note,
+        updated_by: Some(claims.sub),
+        updated_at: chrono::Utc::now().naive_utc(),
+    };
+    crate::workflow_draft::upsert_draft(&mut *tx, &draft).await?;
+    tx.commit().await?;
 
-    // 初始版本快照（v1）。失败不阻断创建，仅记日志。
-    let note = req.version_note.as_deref().or(Some("初始版本"));
-    if let Err(e) = snapshot_workflow_version(&pool, &workflow, note, Some(claims.sub)).await {
-        tracing::warn!(workflow_id = workflow.id, error = %e, "创建工作流的初始版本快照失败");
-    }
+    tracing::info!(workflow_id = workflow.id, slug = %draft.slug, "工作流已创建");
+
+    let workflow = crate::workflow_draft::editor_view(workflow, Some(draft));
 
     audit_workflow(
         &audit_sink,
@@ -1704,6 +1787,23 @@ pub async fn create_workflow(
     Ok((StatusCode::CREATED, Json(json!({ "workflow": workflow }))))
 }
 
+fn request_has_definition(req: &UpdateWorkflowRequest) -> bool {
+    req.name.is_some()
+        || req.slug.is_some()
+        || req.description.is_some()
+        || req.trigger_type.is_some()
+        || req.trigger_config.is_some()
+        || req.input_schema.is_some()
+        || req.nodes.is_some()
+        || req.edges.is_some()
+        || req.dependencies.is_some()
+        || req.node_patch.is_some()
+        || crate::workflow_draft::has_remove_node_ids(req.remove_node_ids.as_deref())
+        || req.timeout_ms.is_some()
+        || req.max_retries.is_some()
+        || req.version_note.is_some()
+}
+
 /// PATCH /api/admin/workflows/:id
 pub async fn update_workflow(
     State(pool): State<PgPool>,
@@ -1714,10 +1814,13 @@ pub async fn update_workflow(
     Json(mut req): Json<UpdateWorkflowRequest>,
 ) -> Result<Json<Value>> {
     let existing = fetch_workflow_for_admin(&pool, &claims, id).await?;
+    let existing_draft = crate::workflow_draft::fetch_draft(&pool, id).await?;
+    let base = crate::workflow_draft::editor_view(existing.clone(), existing_draft.clone());
+
     if let Some(ref slug) = req.slug {
         if !is_valid_slug(slug) {
             return Err(AppError::InvalidQuery(
-                "slug 只能包含小写字母、数字、连字符和斜杠（/）".to_string(),
+                "slug 只能包含小写字母、数字、下划线、连字符和斜杠（/）".to_string(),
             ));
         }
     }
@@ -1735,13 +1838,16 @@ pub async fn update_workflow(
     let effective_trigger_type = req
         .trigger_type
         .clone()
-        .unwrap_or_else(|| existing.trigger_type.clone());
+        .unwrap_or_else(|| base.trigger_type.clone());
     if effective_trigger_type == "cron" && req.trigger_config.is_some() {
         validate_cron_in_trigger_config(req.trigger_config.as_ref())?;
     }
 
-    // 增量节点补丁：按 id upsert / 删除，产出合并后的完整 nodes，
-    // 交给下游统一走 DAG 校验 + COALESCE 落库 + 版本快照（与全量路径共用）。
+    let taxonomy_provided = req.category.is_some() || req.department.is_some();
+    let kind =
+        crate::workflow_draft::classify_update(request_has_definition(&req), taxonomy_provided);
+
+    // 增量节点补丁：按 id upsert / 删除，相对当前编辑稿（草稿优先）合并。
     let has_patch = req.node_patch.is_some()
         || req
             .remove_node_ids
@@ -1755,7 +1861,7 @@ pub async fn update_workflow(
             ));
         }
         let merged = merge_node_patch(
-            &existing.nodes,
+            &base.nodes,
             req.node_patch.as_ref(),
             req.remove_node_ids.as_deref().unwrap_or(&[]),
         )?;
@@ -1765,8 +1871,8 @@ pub async fn update_workflow(
     // 校验 DAG：nodes 或 edges 任一变更，都用「最终生效」的 nodes+edges 组合整体校验。
     // patch 只改 nodes、edges 沿用旧值也要跑——兜住「删了节点但旧边还引用它」这类断链。
     if req.nodes.is_some() || req.edges.is_some() {
-        let eff_nodes = req.nodes.as_ref().unwrap_or(&existing.nodes);
-        let eff_edges = req.edges.as_ref().unwrap_or(&existing.edges);
+        let eff_nodes = req.nodes.as_ref().unwrap_or(&base.nodes);
+        let eff_edges = req.edges.as_ref().unwrap_or(&base.edges);
         let def = parse_definition(eff_nodes, eff_edges)?;
         workflow_engine::validate_definition(&def)?;
     }
@@ -1777,11 +1883,17 @@ pub async fn update_workflow(
         None
     };
 
-    let existing_taxonomy = WorkflowTaxonomy {
-        department: existing.department.clone(),
-        category: existing.category.clone(),
+    let taxonomy_base = if kind.taxonomy_only {
+        WorkflowTaxonomy {
+            department: existing.department.clone(),
+            category: existing.category.clone(),
+        }
+    } else {
+        WorkflowTaxonomy {
+            department: base.department.clone(),
+            category: base.category.clone(),
+        }
     };
-    let taxonomy_provided = req.category.is_some() || req.department.is_some();
     let taxonomy = if taxonomy_provided {
         let dept_field = if req.department.is_some() {
             Some(req.department.as_deref())
@@ -1793,107 +1905,150 @@ pub async fn update_workflow(
         } else {
             None
         };
-        workflow_taxonomy::resolve_taxonomy_update(&existing_taxonomy, dept_field, cat_field)
+        workflow_taxonomy::resolve_taxonomy_update(&taxonomy_base, dept_field, cat_field)
     } else {
-        existing_taxonomy
+        taxonomy_base
     };
+
+    let alert_url_provided = req.alert_webhook_url.is_some();
+    let alert_template_provided = req.alert_webhook_template.is_some();
+    let alert_throttle_provided = req.alert_throttle_hours.is_some();
+    let alerts_present = alert_url_provided || alert_template_provided || alert_throttle_provided;
     let alert_webhook_url = match req.alert_webhook_url.as_ref() {
         Some(Some(url)) => normalize_alert_webhook_url(Some(url))?,
-        Some(None) => None,
-        None => existing.alert_webhook_url.clone(),
+        Some(None) | None => None,
     };
     let alert_webhook_template = match req.alert_webhook_template.clone() {
         Some(template) => template,
-        None => existing.alert_webhook_template.clone(),
+        None => None,
     };
-    validate_alert_webhook_template(alert_webhook_template.as_ref())?;
-    let alert_throttle_hours = req
-        .alert_throttle_hours
-        .unwrap_or(existing.alert_throttle_hours);
-    validate_alert_throttle_hours(Some(alert_throttle_hours))?;
-
-    let input_schema_provided = req.input_schema.is_some();
-    let input_schema_value = match req.input_schema.as_ref() {
-        None => existing.input_schema.clone(),
-        Some(None) => None,
-        Some(Some(v)) => crate::workflow_input_schema::validate_input_schema(Some(v))?,
-    };
-
-    let workflow = sqlx::query_as::<_, Workflow>(
-        r#"UPDATE management.workflows SET
-            name = COALESCE($2, name),
-            slug = COALESCE($3, slug),
-            description = COALESCE($4, description),
-            database_id = COALESCE($5, database_id),
-            trigger_type = COALESCE($6, trigger_type),
-            trigger_config = COALESCE($7, trigger_config),
-            nodes = COALESCE($8, nodes),
-            edges = COALESCE($9, edges),
-            dependencies = COALESCE($10, dependencies),
-            is_enabled = COALESCE($11, is_enabled),
-            timeout_ms = COALESCE($12, timeout_ms),
-            max_retries = COALESCE($13, max_retries),
-            tenant_id = COALESCE($14, tenant_id),
-            category = CASE WHEN $15 THEN $16 ELSE category END,
-            department = CASE WHEN $15 THEN $17 ELSE department END,
-            alert_webhook_url = $18,
-            alert_webhook_template = $19,
-            alert_throttle_hours = $20,
-            input_schema = CASE WHEN $21 THEN $22 ELSE input_schema END
-           WHERE id = $1
-           RETURNING *"#,
-    )
-    .bind(id)
-    .bind(&req.name)
-    .bind(&req.slug)
-    .bind(&req.description)
-    .bind(req.database_id)
-    .bind(&req.trigger_type)
-    .bind(&req.trigger_config)
-    .bind(&req.nodes)
-    .bind(&req.edges)
-    .bind(&req.dependencies)
-    .bind(req.is_enabled)
-    .bind(req.timeout_ms)
-    .bind(req.max_retries)
-    .bind(tenant_id_update)
-    .bind(taxonomy_provided)
-    .bind(&taxonomy.category)
-    .bind(&taxonomy.department)
-    .bind(alert_webhook_url)
-    .bind(alert_webhook_template)
-    .bind(alert_throttle_hours)
-    .bind(input_schema_provided)
-    .bind(&input_schema_value)
-    .fetch_optional(&pool)
-    .await
-    .map_err(map_workflow_write_err)?
-    .ok_or_else(|| AppError::NotFound(format!("工作流 {} 不存在", id)))?;
-
-    tracing::info!(workflow_id = workflow.id, "工作流已更新");
-    if req.dependencies.is_some() {
-        spawn_javascript_deps_install(&workflow);
-        spawn_python_deps_install(&workflow);
+    if alert_template_provided {
+        validate_alert_webhook_template(alert_webhook_template.as_ref())?;
+    }
+    if alert_throttle_provided {
+        validate_alert_throttle_hours(req.alert_throttle_hours)?;
     }
 
-    // 仅在本次保存改动了定义（编辑器保存会带 nodes+edges）时打版本快照，
-    // 避免列表里的启用/禁用、改名等局部更新也刷出一堆版本。
-    if req.nodes.is_some()
-        || req.edges.is_some()
-        || req.dependencies.is_some()
-        || req.input_schema.is_some()
-    {
-        if let Err(e) = snapshot_workflow_version(
-            &pool,
-            &workflow,
-            req.version_note.as_deref(),
-            Some(claims.sub),
-        )
-        .await
-        {
-            tracing::warn!(workflow_id = workflow.id, error = %e, "更新工作流的版本快照失败");
+    let live_meta = req.is_enabled.is_some() || req.database_id.is_some() || alerts_present;
+    if kind.definition {
+        if let Some(ref slug) = req.slug {
+            if slug != &base.slug {
+                let database_id = req.database_id.or(existing.database_id);
+                if crate::workflow_draft::draft_slug_taken(&pool, database_id, slug, Some(id))
+                    .await?
+                {
+                    return Err(AppError::Conflict("slug 已被占用".into()));
+                }
+            }
         }
     }
+
+    let mut tx = pool.begin().await?;
+
+    if kind.definition {
+        let input_schema = match req.input_schema.as_ref() {
+            None => base.input_schema.clone(),
+            Some(None) => None,
+            Some(Some(v)) => crate::workflow_input_schema::validate_input_schema(Some(v))?,
+        };
+
+        let draft = crate::workflow_draft::WorkflowDraft {
+            workflow_id: id,
+            name: req.name.clone().unwrap_or_else(|| base.name.clone()),
+            slug: req.slug.clone().unwrap_or_else(|| base.slug.clone()),
+            description: req.description.clone().or_else(|| base.description.clone()),
+            category: if taxonomy_provided {
+                taxonomy.category.clone()
+            } else {
+                base.category.clone()
+            },
+            department: if taxonomy_provided {
+                taxonomy.department.clone()
+            } else {
+                base.department.clone()
+            },
+            trigger_type: req
+                .trigger_type
+                .clone()
+                .unwrap_or_else(|| base.trigger_type.clone()),
+            trigger_config: req
+                .trigger_config
+                .clone()
+                .unwrap_or_else(|| base.trigger_config.clone()),
+            input_schema,
+            nodes: req.nodes.clone().unwrap_or_else(|| base.nodes.clone()),
+            edges: req.edges.clone().unwrap_or_else(|| base.edges.clone()),
+            dependencies: req
+                .dependencies
+                .clone()
+                .unwrap_or_else(|| base.dependencies.clone()),
+            timeout_ms: req.timeout_ms.unwrap_or(base.timeout_ms),
+            max_retries: req.max_retries.unwrap_or(base.max_retries),
+            note: req
+                .version_note
+                .clone()
+                .or_else(|| existing_draft.as_ref().and_then(|d| d.note.clone())),
+            updated_by: Some(claims.sub),
+            updated_at: chrono::Utc::now().naive_utc(),
+        };
+        crate::workflow_draft::upsert_draft(&mut *tx, &draft).await?;
+    }
+
+    if kind.taxonomy_only {
+        sqlx::query(
+            r#"UPDATE management.workflows
+               SET category = $2, department = $3
+               WHERE id = $1"#,
+        )
+        .bind(id)
+        .bind(&taxonomy.category)
+        .bind(&taxonomy.department)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            r#"UPDATE management.workflow_drafts
+               SET category = $2, department = $3
+               WHERE workflow_id = $1"#,
+        )
+        .bind(id)
+        .bind(&taxonomy.category)
+        .bind(&taxonomy.department)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    if live_meta {
+        sqlx::query(
+            r#"UPDATE management.workflows SET
+                is_enabled = COALESCE($2, is_enabled),
+                database_id = COALESCE($3, database_id),
+                tenant_id = COALESCE($4, tenant_id),
+                alert_webhook_url = CASE WHEN $5 THEN $6 ELSE alert_webhook_url END,
+                alert_webhook_template = CASE WHEN $7 THEN $8 ELSE alert_webhook_template END,
+                alert_throttle_hours = COALESCE($9, alert_throttle_hours)
+               WHERE id = $1"#,
+        )
+        .bind(id)
+        .bind(req.is_enabled)
+        .bind(req.database_id)
+        .bind(tenant_id_update)
+        .bind(alert_url_provided)
+        .bind(&alert_webhook_url)
+        .bind(alert_template_provided)
+        .bind(&alert_webhook_template)
+        .bind(req.alert_throttle_hours)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_workflow_write_err)?;
+    }
+
+    tx.commit().await?;
+
+    tracing::info!(workflow_id = id, "工作流已更新");
+
+    let workflow = fetch_workflow_for_admin(&pool, &claims, id).await?;
+    let draft = crate::workflow_draft::fetch_draft(&pool, id).await?;
+    let workflow = crate::workflow_draft::editor_view(workflow, draft);
 
     audit_workflow(
         &audit_sink,
@@ -1901,25 +2056,19 @@ pub async fn update_workflow(
         workflow.id,
         &workflow.name,
         &workflow.slug,
-        json!({
-            "definition_changed": req.nodes.is_some()
-                || req.edges.is_some()
-                || req.dependencies.is_some()
-                || req.input_schema.is_some(),
-        }),
+        json!({ "definition_changed": kind.definition }),
     );
 
-    // 变更事实：定义（nodes/edges）改动走节点级 diff；否则走配置级 diff（启用状态/名称/超时/重试/描述）。
-    // 这样 enable/disable、改名等列表页局部更新也有可读的变更内容，不再是空详情。
-    let def_changed = req.nodes.is_some() || req.edges.is_some();
-    let change = if def_changed {
-        workflow_change_diff(&existing, &workflow)
+    // 变更事实：图改动走节点级 diff；否则走配置级 diff（启用状态/名称/超时/重试/描述）。
+    let graph_changed = req.nodes.is_some() || req.edges.is_some();
+    let change = if graph_changed {
+        workflow_change_diff(&base, &workflow)
     } else {
-        workflow_config_diff(&existing, &workflow)
+        workflow_config_diff(&base, &workflow)
     };
     let source = op_source_of(&op_source);
-    // 摘要：定义改动=「修改」；纯启用/停用切换=「启用/停用」；其余配置改动=「更新配置」。
-    let summary = if def_changed {
+    // 摘要：写了草稿=「修改」；纯启用/停用切换=「启用/停用」；其余=「更新配置」。
+    let summary = if kind.definition {
         format!("修改工作流「{}」", workflow.name)
     } else if existing.is_enabled != workflow.is_enabled {
         format!(
@@ -2096,7 +2245,8 @@ pub async fn batch_workflows(
             .map_err(map_workflow_write_err)?,
             "move" => {
                 let target = move_target.as_ref().expect("move_target set for move");
-                sqlx::query_scalar::<_, i32>(
+                let mut tx = pool.begin().await?;
+                let moved = sqlx::query_scalar::<_, i32>(
                     "UPDATE management.workflows \
                      SET department = $1, category = $2, updated_at = NOW() \
                      WHERE id = ANY($3) RETURNING id",
@@ -2104,9 +2254,22 @@ pub async fn batch_workflows(
                 .bind(target.department.as_deref())
                 .bind(target.category.as_deref())
                 .bind(&allowed)
-                .fetch_all(&pool)
+                .fetch_all(&mut *tx)
                 .await
-                .map_err(map_workflow_write_err)?
+                .map_err(map_workflow_write_err)?;
+                sqlx::query(
+                    "UPDATE management.workflow_drafts \
+                     SET department = $1, category = $2, updated_at = NOW() \
+                     WHERE workflow_id = ANY($3)",
+                )
+                .bind(target.department.as_deref())
+                .bind(target.category.as_deref())
+                .bind(&moved)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_workflow_write_err)?;
+                tx.commit().await?;
+                moved
             }
             _ => unreachable!(),
         };
@@ -2207,6 +2370,16 @@ pub async fn batch_workflows(
 /// 单次批量导入允许的最大文件数。
 const IMPORT_MAX_ITEMS: usize = 200;
 
+fn deserialize_present_option<'de, D, T>(
+    deserializer: D,
+) -> std::result::Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ImportWorkflowDef {
     pub name: String,
@@ -2221,9 +2394,17 @@ pub struct ImportWorkflowDef {
     pub dependencies: Option<Value>,
     pub timeout_ms: Option<i32>,
     pub max_retries: Option<i32>,
-    pub alert_webhook_url: Option<String>,
-    pub alert_webhook_template: Option<Value>,
+    #[serde(default, deserialize_with = "deserialize_present_option")]
+    pub alert_webhook_url: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_present_option")]
+    pub alert_webhook_template: Option<Option<Value>>,
     pub alert_throttle_hours: Option<i32>,
+}
+
+fn import_alerts_present(wf: &ImportWorkflowDef) -> bool {
+    wf.alert_webhook_url.is_some()
+        || wf.alert_webhook_template.is_some()
+        || wf.alert_throttle_hours.is_some()
 }
 
 #[derive(Debug, Deserialize)]
@@ -2244,11 +2425,13 @@ pub struct ImportWorkflowsRequest {
 /// POST /api/admin/workflows/import — 批量导入工作流。
 ///
 /// 设计：先在前端预检（解析 / 冲突 / 选择处理方式），此处按每条 item 的 action 落库。
-/// - create / rename：新建，默认 `is_enabled=true`（与前端手工新建一致；如需禁用可
-///   在列表页操作）。注意：MCP 通道创建仍强制禁用，见 `mcp_tools.rs`。
-/// - overwrite：按 (database_id, slug) 覆盖既有定义，**保留原 is_enabled 与 id**，并
+/// - create / rename：新建未发布工作流（主表空图 + 草稿），默认 `is_enabled=true`
+///   （与前端手工新建一致；如需禁用可在列表页操作）。注意：MCP 通道创建仍强制禁用，见 `mcp_tools.rs`。
+/// - overwrite：按 (database_id, slug) 覆盖**草稿**，**保留原 is_enabled / id /
+///   published_version 与线上 nodes/edges**；导入文件含告警字段时只更新主表告警列，并
 ///   **保留目标环境的连接类配置**（节点里的数据源 `datasource_id`/`datasource_ref`、
-///   Redis `connection_id`），避免用导入文件（测试环境）的连接改掉线上连接；文件里
+///   Redis `connection_id`），连接基准取当前编辑态（主表叠加草稿），避免用导入文件
+///   （测试环境）的连接改掉线上连接；文件里
 ///   新增的节点则连接字段留空，交给用户手动选择（见 `merge_connection_for_overwrite`）。
 /// best-effort：单条失败不影响其余，返回逐条结果。
 pub async fn import_workflows(
@@ -2601,7 +2784,7 @@ async fn import_one_workflow(
     }
     if !is_valid_slug(&item.slug) {
         return Err(AppError::InvalidQuery(
-            "slug 只能包含小写字母、数字、连字符和斜杠（/）".to_string(),
+            "slug 只能包含小写字母、数字、下划线、连字符和斜杠（/）".to_string(),
         ));
     }
     let trigger_type = wf
@@ -2628,7 +2811,11 @@ async fn import_one_workflow(
         .map_err(map_workflow_write_err)?
         .ok_or_else(|| AppError::NotFound(format!("待覆盖的工作流 slug='{}' 不存在", item.slug)))?;
         require_admin_for_workflow(pool, claims, &ex).await?;
-        Some(ex)
+        let editor = crate::workflow_draft::editor_view(
+            ex.clone(),
+            crate::workflow_draft::fetch_draft(pool, ex.id).await?,
+        );
+        Some((ex, editor))
     } else {
         None
     };
@@ -2638,7 +2825,7 @@ async fn import_one_workflow(
     // - overwrite：数据源 / Redis 连接等「连接类配置」保留目标库现值（测试/线上集成不同），
     //   文件里新增的节点则连接字段留空，交给用户手动选择。
     let (mut remapped_nodes, ds_warnings) = match existing_for_overwrite.as_ref() {
-        Some(existing) => merge_connection_for_overwrite(&wf.nodes, &existing.nodes),
+        Some((_, editor)) => merge_connection_for_overwrite(&wf.nodes, &editor.nodes),
         None => remap_datasource_refs(pool, tenant_id, &wf.nodes).await,
     };
     // 导入文件里 code 节点若把换行存成字面 `\n`，还原成真换行再落库。
@@ -2653,67 +2840,84 @@ async fn import_one_workflow(
     let trigger_config = wf.trigger_config.clone().unwrap_or_else(|| json!({}));
     let timeout_ms = wf.timeout_ms.unwrap_or(30_000);
     let max_retries = wf.max_retries.unwrap_or(0);
-    validate_alert_webhook_template(wf.alert_webhook_template.as_ref())?;
+    let alert_url_provided = wf.alert_webhook_url.is_some();
+    let alert_template_provided = wf.alert_webhook_template.is_some();
+    let alerts_present = import_alerts_present(wf);
+    let alert_webhook_url = match wf.alert_webhook_url.as_ref() {
+        Some(Some(url)) => normalize_alert_webhook_url(Some(url))?,
+        Some(None) | None => None,
+    };
+    let alert_webhook_template = wf.alert_webhook_template.clone().flatten();
+    if alert_template_provided {
+        validate_alert_webhook_template(alert_webhook_template.as_ref())?;
+    }
     validate_alert_throttle_hours(wf.alert_throttle_hours)?;
-    let alert_webhook_url = normalize_alert_webhook_url(wf.alert_webhook_url.as_deref())?;
     let alert_throttle_hours = wf.alert_throttle_hours.unwrap_or(24);
     let dependencies = wf.dependencies.clone().unwrap_or_else(|| json!({}));
     let input_schema =
         crate::workflow_input_schema::validate_input_schema(wf.input_schema.as_ref())?;
 
+    let import_draft = |workflow_id: i32| crate::workflow_draft::WorkflowDraft {
+        workflow_id,
+        name: wf.name.clone(),
+        slug: item.slug.clone(),
+        description: wf.description.clone(),
+        category: taxonomy.category.clone(),
+        department: taxonomy.department.clone(),
+        trigger_type: trigger_type.clone(),
+        trigger_config: trigger_config.clone(),
+        input_schema: input_schema.clone(),
+        nodes: remapped_nodes.clone(),
+        edges: wf.edges.clone(),
+        dependencies: dependencies.clone(),
+        timeout_ms,
+        max_retries,
+        note: None,
+        updated_by: Some(claims.sub),
+        updated_at: chrono::Utc::now().naive_utc(),
+    };
+
     match item.action.as_str() {
         "overwrite" => {
-            // 按 (database_id, slug) 覆盖既有定义，保留 id 与 is_enabled。
-            let workflow = sqlx::query_as::<_, Workflow>(
-                r#"UPDATE management.workflows SET
-                    name = $3, description = $4, category = $5, department = $6,
-                    trigger_type = $7, trigger_config = $8, input_schema = $9, nodes = $10, edges = $11,
-                    dependencies = $12, timeout_ms = $13, max_retries = $14,
-                    alert_webhook_url = $15, alert_webhook_template = $16, alert_throttle_hours = $17
-                   WHERE database_id IS NOT DISTINCT FROM $1 AND slug = $2
-                   RETURNING *"#,
-            )
-            .bind(database_id)
-            .bind(&item.slug)
-            .bind(&wf.name)
-            .bind(&wf.description)
-            .bind(&taxonomy.category)
-            .bind(&taxonomy.department)
-            .bind(&trigger_type)
-            .bind(&trigger_config)
-            .bind(&input_schema)
-            .bind(&remapped_nodes)
-            .bind(&wf.edges)
-            .bind(&dependencies)
-            .bind(timeout_ms)
-            .bind(max_retries)
-            .bind(&alert_webhook_url)
-            .bind(&wf.alert_webhook_template)
-            .bind(alert_throttle_hours)
-            .fetch_optional(pool)
-            .await
-            .map_err(map_workflow_write_err)?
-            .ok_or_else(|| {
+            // 定义只写草稿；告警若随文件提供则即时写主表。线上 nodes/edges /
+            // is_enabled / published_version / id 保持不变，且不打版本快照。
+            let (existing, _) = existing_for_overwrite.ok_or_else(|| {
                 AppError::NotFound(format!("待覆盖的工作流 slug='{}' 不存在", item.slug))
             })?;
-            // 权限已在改动前基于既有工作流校验（见 existing_for_overwrite）。
-
-            if let Err(e) =
-                snapshot_workflow_version(pool, &workflow, Some("批量导入覆盖"), Some(claims.sub))
-                    .await
-            {
-                tracing::warn!(workflow_id = workflow.id, error = %e, "导入覆盖的版本快照失败");
+            let draft = import_draft(existing.id);
+            let mut tx = pool.begin().await?;
+            if alerts_present {
+                sqlx::query(
+                    r#"UPDATE management.workflows SET
+                        alert_webhook_url = CASE WHEN $2 THEN $3 ELSE alert_webhook_url END,
+                        alert_webhook_template = CASE WHEN $4 THEN $5 ELSE alert_webhook_template END,
+                        alert_throttle_hours = COALESCE($6, alert_throttle_hours)
+                       WHERE id = $1"#,
+                )
+                .bind(existing.id)
+                .bind(alert_url_provided)
+                .bind(&alert_webhook_url)
+                .bind(alert_template_provided)
+                .bind(&alert_webhook_template)
+                .bind(wf.alert_throttle_hours)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_workflow_write_err)?;
             }
+            crate::workflow_draft::upsert_draft(&mut *tx, &draft).await?;
+            tx.commit().await?;
             Ok(json!({
                 "action": "overwrite",
-                "id": workflow.id,
-                "slug": workflow.slug,
-                "name": workflow.name,
+                "id": existing.id,
+                "slug": draft.slug,
+                "name": draft.name,
                 "warnings": ds_warnings,
             }))
         }
         "create" | "rename" => {
-            // 默认启用：与前端手工新建行为一致；MCP 通道另行强制禁用（见 mcp_tools.rs）。
+            // 与手工新建一致：主表空图 + 未发布，定义进草稿；默认启用开关但不打快照。
+            let empty_graph = json!([]);
+            let mut tx = pool.begin().await?;
             let workflow = sqlx::query_as::<_, Workflow>(
                 r#"INSERT INTO management.workflows
                    (tenant_id, database_id, name, slug, description, category, department,
@@ -2732,29 +2936,27 @@ async fn import_one_workflow(
             .bind(&trigger_type)
             .bind(&trigger_config)
             .bind(&input_schema)
-            .bind(&remapped_nodes)
-            .bind(&wf.edges)
+            .bind(&empty_graph)
+            .bind(&empty_graph)
             .bind(&dependencies)
             .bind(timeout_ms)
             .bind(max_retries)
             .bind(&alert_webhook_url)
-            .bind(&wf.alert_webhook_template)
+            .bind(&alert_webhook_template)
             .bind(alert_throttle_hours)
             .bind(claims.sub)
-            .fetch_one(pool)
+            .fetch_one(&mut *tx)
             .await
             .map_err(map_workflow_write_err)?;
 
-            if let Err(e) =
-                snapshot_workflow_version(pool, &workflow, Some("批量导入"), Some(claims.sub)).await
-            {
-                tracing::warn!(workflow_id = workflow.id, error = %e, "导入新建的版本快照失败");
-            }
+            let draft = import_draft(workflow.id);
+            crate::workflow_draft::upsert_draft(&mut *tx, &draft).await?;
+            tx.commit().await?;
             Ok(json!({
                 "action": item.action,
                 "id": workflow.id,
-                "slug": workflow.slug,
-                "name": workflow.name,
+                "slug": draft.slug,
+                "name": draft.name,
                 "warnings": ds_warnings,
             }))
         }
@@ -2770,6 +2972,7 @@ async fn import_one_workflow(
 /// 在同库内自动生成唯一 slug（`<slug>-copy`、冲突再 `-copy-2`…），名字加「(副本)」后缀，
 /// 并**默认禁用**（is_enabled=false）：复制出来先让人改完再启用，避免新副本立刻接管
 /// endpoint / hook 触发造成意外执行。tenant_id / database_id 跟随源工作流。
+/// 副本未发布（`published_version` NULL、主表空图），定义写入草稿。
 pub async fn duplicate_workflow(
     State(pool): State<PgPool>,
     Path(id): Path<i32>,
@@ -2778,11 +2981,17 @@ pub async fn duplicate_workflow(
     op_source: Option<axum::Extension<OpSourceHint>>,
 ) -> Result<(StatusCode, Json<Value>)> {
     let src = fetch_workflow_for_admin(&pool, &claims, id).await?;
+    let src_editor = crate::workflow_draft::editor_view(
+        src.clone(),
+        crate::workflow_draft::fetch_draft(&pool, src.id).await?,
+    );
 
     let new_slug =
-        generate_unique_slug(&pool, src.database_id, &format!("{}-copy", src.slug)).await?;
-    let new_name = format!("{} (副本)", src.name);
+        generate_unique_slug(&pool, src.database_id, &format!("{}-copy", src_editor.slug)).await?;
+    let new_name = crate::workflow_draft::duplicate_copy_name(&src_editor.name);
+    let empty_graph = json!([]);
 
+    let mut tx = pool.begin().await?;
     let workflow = sqlx::query_as::<_, Workflow>(
         r#"INSERT INTO management.workflows
            (tenant_id, database_id, name, slug, description, category, department,
@@ -2795,24 +3004,37 @@ pub async fn duplicate_workflow(
     .bind(src.database_id)
     .bind(&new_name)
     .bind(&new_slug)
-    .bind(&src.description)
-    .bind(&src.category)
-    .bind(&src.department)
-    .bind(&src.trigger_type)
-    .bind(&src.trigger_config)
-    .bind(&src.input_schema)
-    .bind(&src.nodes)
-    .bind(&src.edges)
-    .bind(&src.dependencies)
-    .bind(src.timeout_ms)
-    .bind(src.max_retries)
+    .bind(&src_editor.description)
+    .bind(&src_editor.category)
+    .bind(&src_editor.department)
+    .bind(&src_editor.trigger_type)
+    .bind(&src_editor.trigger_config)
+    .bind(&src_editor.input_schema)
+    .bind(&empty_graph)
+    .bind(&empty_graph)
+    .bind(&src_editor.dependencies)
+    .bind(src_editor.timeout_ms)
+    .bind(src_editor.max_retries)
     .bind(&src.alert_webhook_url)
     .bind(&src.alert_webhook_template)
     .bind(src.alert_throttle_hours)
     .bind(claims.sub)
-    .fetch_one(&pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(map_workflow_write_err)?;
+
+    let draft = crate::workflow_draft::draft_from_editor(
+        &src_editor,
+        workflow.id,
+        new_name,
+        new_slug,
+        None,
+        Some(claims.sub),
+    );
+    crate::workflow_draft::upsert_draft(&mut *tx, &draft).await?;
+    tx.commit().await?;
+
+    let workflow = crate::workflow_draft::editor_view(workflow, Some(draft));
 
     tracing::info!(
         workflow_id = workflow.id,
@@ -2851,10 +3073,10 @@ pub async fn trigger_workflow(
     Json(trigger_data): Json<Option<Value>>,
 ) -> Result<(StatusCode, Json<Value>)> {
     let workflow = fetch_workflow_for_admin(&pool, &claims, id).await?;
-
     if !workflow.is_enabled {
         return Err(AppError::InvalidQuery("工作流已禁用，无法触发".to_string()));
     }
+    require_published_to_trigger(workflow.published_version)?;
 
     // 手动触发打点（source=console）。cron 自动触发的打点在调度侧另行接入。
     record_workflow_op(
@@ -2871,19 +3093,23 @@ pub async fn trigger_workflow(
     let pool_clone = pool.clone();
     let wf = workflow.clone();
 
+    let req_id = crate::request_id::current();
     tokio::spawn(async move {
-        if let Err(e) = execute_workflow_internal(
-            &pool_clone,
-            &wf,
-            "manual",
-            &data,
-            Some(claims.sub),
-            ApiKeyWriteGuard::Off,
-        )
-        .await
-        {
-            tracing::error!(workflow_id = wf.id, error = %e, "手动触发工作流执行失败");
-        }
+        crate::request_id::scope_with(req_id, async move {
+            if let Err(e) = execute_workflow_internal(
+                &pool_clone,
+                &wf,
+                "manual",
+                &data,
+                Some(claims.sub),
+                ApiKeyWriteGuard::Off,
+            )
+            .await
+            {
+                tracing::error!(workflow_id = wf.id, error = %e, "手动触发工作流执行失败");
+            }
+        })
+        .await;
     });
 
     audit_workflow(
@@ -2926,6 +3152,8 @@ pub struct QaWorkflowRequest {
     pub tenant_id: Option<i32>,
     pub trigger_type: Option<String>,
     pub input_schema: Option<Value>,
+    pub id: Option<i32>,
+    pub slug: Option<String>,
 }
 
 /// POST /api/admin/workflows/qa — 保存前本地规则预检（未保存定义）
@@ -2937,12 +3165,26 @@ pub async fn qa_workflow(
     axum::Extension(claims): axum::Extension<Claims>,
     Json(req): Json<QaWorkflowRequest>,
 ) -> Result<Json<Value>> {
-    let _ =
+    let tenant_id =
         resolve_tenant_for_workflow_input(&pool, &claims, req.database_id, req.tenant_id).await?;
     let trigger = req.trigger_type.as_deref().unwrap_or("manual");
     let schema = req.input_schema.as_ref().filter(|v| !v.is_null());
-    let findings = onebase::workflow_qa::lint_unsaved(trigger, schema, &req.nodes, &req.edges)
+    let mut findings = onebase::workflow_qa::lint_unsaved(trigger, schema, &req.nodes, &req.edges)
         .map_err(AppError::InvalidQuery)?;
+    let slug = req.slug.as_deref().unwrap_or("").trim();
+    if !slug.is_empty() {
+        let wf = onebase::workflow_qa::WorkflowSnapshot {
+            id: req.id.unwrap_or(0),
+            slug: slug.to_string(),
+            name: String::new(),
+            department: None,
+            trigger_type: trigger.to_string(),
+            input_schema: schema.cloned(),
+            nodes: req.nodes,
+            edges: req.edges,
+        };
+        onebase::workflow_qa::attach_call_graph(&pool, &wf, tenant_id, None, &mut findings).await;
+    }
     Ok(Json(json!({ "findings": findings })))
 }
 
@@ -2971,6 +3213,11 @@ pub async fn debug_workflow(
 
     // 调试同样按 tenant_id 加载环境变量，保证 {{env.X}} / env.get 在调试态可解析
     let env_vars = load_env_vars(&pool, resolved_tenant_id, req.database_id).await;
+    let credentials =
+        match resolve_effective_tenant(&pool, resolved_tenant_id, req.database_id).await {
+            Some(tid) => crate::workflow_credentials::load_credential_store(&pool, tid).await,
+            None => crate::workflow_credentials::CredentialStore::default(),
+        };
 
     let mut exec_ctx = ExecutionContext {
         workflow_id: 0,
@@ -2982,6 +3229,7 @@ pub async fn debug_workflow(
         database_id: req.database_id,
         node_outputs: HashMap::new(),
         env_vars,
+        credentials,
         workflow_dependencies: json!({}),
         dry_run: req.dry_run.unwrap_or(false),
         prod_readonly: req.prod_readonly,
@@ -3032,15 +3280,25 @@ pub async fn debug_workflow(
 
             // 脱敏边界②：调试响应同样掩码——页面调试与 MCP tool_debug_workflow 共用此返回点，
             // 一处掩码两处覆盖。逐节点结果 / final_output / error_message 全过 mask_env_values。
-            let masked_node_results =
-                workflow_engine::mask_env_values(&json!(node_results), &exec_ctx.env_vars);
-            let masked_final_output =
-                workflow_engine::mask_env_values(&final_output, &exec_ctx.env_vars);
+            let masked_node_results = workflow_engine::mask_env_and_credentials(
+                &json!(node_results),
+                &exec_ctx.env_vars,
+                &exec_ctx.credentials,
+            );
+            let masked_final_output = workflow_engine::mask_env_and_credentials(
+                &final_output,
+                &exec_ctx.env_vars,
+                &exec_ctx.credentials,
+            );
             let masked_error_message = error_message.as_ref().map(|m| {
-                workflow_engine::mask_env_values(&json!(m), &exec_ctx.env_vars)
-                    .as_str()
-                    .unwrap_or(m)
-                    .to_string()
+                workflow_engine::mask_env_and_credentials(
+                    &json!(m),
+                    &exec_ctx.env_vars,
+                    &exec_ctx.credentials,
+                )
+                .as_str()
+                .unwrap_or(m)
+                .to_string()
             });
 
             Ok(Json(json!({
@@ -3053,11 +3311,14 @@ pub async fn debug_workflow(
         }
         Err(e) => {
             // 错误文本也可能携带密钥，掩码后再返回
-            let masked_err =
-                workflow_engine::mask_env_values(&json!(e.to_string()), &exec_ctx.env_vars)
-                    .as_str()
-                    .unwrap_or("执行失败")
-                    .to_string();
+            let masked_err = workflow_engine::mask_env_and_credentials(
+                &json!(e.to_string()),
+                &exec_ctx.env_vars,
+                &exec_ctx.credentials,
+            )
+            .as_str()
+            .unwrap_or("执行失败")
+            .to_string();
             Ok(Json(json!({
                 "status": "failed",
                 "elapsed_ms": elapsed_ms,
@@ -3199,11 +3460,11 @@ pub async fn get_workflow_version(
     Ok(Json(json!({ "version": v })))
 }
 
-/// POST /api/admin/workflows/:id/versions/:version/restore — 把某历史版本恢复为当前定义。
+/// POST /api/admin/workflows/:id/versions/:version/restore — 恢复写入草稿，发布后才上线。
 ///
 /// 只恢复"定义"字段（name/slug/description/category/trigger_*/nodes/edges/timeout/retries），
-/// **不动** is_enabled / database_id / tenant_id 等绑定与开关。恢复后会自动追加一条新版本
-/// 快照（note 记为"恢复自 vN"），保持历史线性、可再次回滚。
+/// **不动** is_enabled / database_id / tenant_id 等绑定与开关。dependencies 取自当前主表行
+/// （版本表无此列）。不打版本快照，也不改 `published_version`。
 pub async fn restore_workflow_version(
     State(pool): State<PgPool>,
     Path((id, version)): Path<(i32, i32)>,
@@ -3222,42 +3483,37 @@ pub async fn restore_workflow_version(
     .await?
     .ok_or_else(|| AppError::NotFound(format!("工作流 {} 不存在版本 {}", id, version)))?;
 
-    let workflow = sqlx::query_as::<_, Workflow>(
-        r#"UPDATE management.workflows SET
-            name = $2, slug = $3, description = $4, category = $5, department = $6,
-            trigger_type = $7, trigger_config = $8, input_schema = $9, nodes = $10, edges = $11,
-            timeout_ms = $12, max_retries = $13
-           WHERE id = $1
-           RETURNING *"#,
-    )
-    .bind(id)
-    .bind(&snapshot.name)
-    .bind(&snapshot.slug)
-    .bind(&snapshot.description)
-    .bind(&snapshot.category)
-    .bind(&snapshot.department)
-    .bind(&snapshot.trigger_type)
-    .bind(&snapshot.trigger_config)
-    .bind(&snapshot.input_schema)
-    .bind(&snapshot.nodes)
-    .bind(&snapshot.edges)
-    .bind(snapshot.timeout_ms)
-    .bind(snapshot.max_retries)
-    .fetch_optional(&pool)
-    .await
-    .map_err(map_workflow_write_err)?
-    .ok_or_else(|| AppError::NotFound(format!("工作流 {} 不存在", id)))?;
-
-    let note = format!("恢复自 v{}", version);
-    let new_version = snapshot_workflow_version(&pool, &workflow, Some(&note), Some(claims.sub))
-        .await
-        .unwrap_or(0);
+    let d = crate::workflow_draft::WorkflowDraft {
+        workflow_id: id,
+        name: snapshot.name,
+        slug: snapshot.slug,
+        description: snapshot.description,
+        category: snapshot.category,
+        department: snapshot.department,
+        trigger_type: snapshot.trigger_type,
+        trigger_config: snapshot.trigger_config,
+        input_schema: snapshot.input_schema,
+        nodes: snapshot.nodes,
+        edges: snapshot.edges,
+        dependencies: existing.dependencies.clone(),
+        timeout_ms: snapshot.timeout_ms,
+        max_retries: snapshot.max_retries,
+        note: Some(format!("恢复自 v{}", version)),
+        updated_by: Some(claims.sub),
+        updated_at: chrono::Utc::now().naive_utc(),
+    };
+    if crate::workflow_draft::draft_slug_taken(&pool, existing.database_id, &d.slug, Some(id))
+        .await?
+    {
+        return Err(AppError::Conflict("slug 已被占用".into()));
+    }
+    crate::workflow_draft::upsert_draft(&pool, &d).await?;
+    let workflow = crate::workflow_draft::editor_view(existing.clone(), Some(d));
 
     tracing::info!(
         workflow_id = id,
         restored_from = version,
-        new_version = new_version,
-        "工作流已恢复到历史版本"
+        "工作流历史版本已写入草稿"
     );
 
     audit_workflow(
@@ -3266,10 +3522,9 @@ pub async fn restore_workflow_version(
         workflow.id,
         &workflow.name,
         &workflow.slug,
-        json!({ "restored_from": version, "new_version": new_version }),
+        json!({ "restored_from": version }),
     );
 
-    // 操作日志打点：恢复版本本质是把定义覆盖为历史快照，记为 UPDATE，并 diff 出实际变化。
     let change = workflow_change_diff(&existing, &workflow);
     record_workflow_op(
         &pool,
@@ -3281,11 +3536,134 @@ pub async fn restore_workflow_version(
         change,
     );
 
-    Ok(Json(json!({
-        "workflow": workflow,
-        "restored_from": version,
-        "new_version": new_version
-    })))
+    Ok(Json(json!({ "workflow": workflow })))
+}
+
+/// POST /api/admin/workflows/:id/publish — 把草稿发布到主表并打版本快照。
+pub async fn publish_workflow(
+    State(pool): State<PgPool>,
+    Path(id): Path<i32>,
+    axum::Extension(claims): axum::Extension<Claims>,
+    audit_sink: Option<axum::Extension<AuditDetailSink>>,
+    Json(req): Json<PublishWorkflowRequest>,
+) -> Result<Json<Value>> {
+    fetch_workflow_for_admin(&pool, &claims, id).await?;
+
+    let mut tx = pool.begin().await?;
+    let existing = sqlx::query_as::<_, Workflow>(
+        "SELECT * FROM management.workflows WHERE id = $1 FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("工作流 {} 不存在", id)))?;
+    let draft = crate::workflow_draft::fetch_draft_for_update(&mut *tx, id)
+        .await?
+        .ok_or_else(|| publish_missing_draft_error(existing.published_version))?;
+
+    let def = parse_definition(&draft.nodes, &draft.edges)?;
+    workflow_engine::validate_definition(&def)?;
+
+    let workflow = sqlx::query_as::<_, Workflow>(
+        r#"UPDATE management.workflows SET
+            name = $2, slug = $3, description = $4, category = $5, department = $6,
+            trigger_type = $7, trigger_config = $8, input_schema = $9, nodes = $10, edges = $11,
+            dependencies = $12, timeout_ms = $13, max_retries = $14
+           WHERE id = $1
+           RETURNING *"#,
+    )
+    .bind(id)
+    .bind(&draft.name)
+    .bind(&draft.slug)
+    .bind(&draft.description)
+    .bind(&draft.category)
+    .bind(&draft.department)
+    .bind(&draft.trigger_type)
+    .bind(&draft.trigger_config)
+    .bind(&draft.input_schema)
+    .bind(&draft.nodes)
+    .bind(&draft.edges)
+    .bind(&draft.dependencies)
+    .bind(draft.timeout_ms)
+    .bind(draft.max_retries)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(map_workflow_write_err)?
+    .ok_or_else(|| AppError::NotFound(format!("工作流 {} 不存在", id)))?;
+
+    let note = publish_version_note(req.version_note.as_deref(), draft.note.as_deref());
+    let version =
+        snapshot_workflow_version(&mut *tx, &workflow, note.as_deref(), Some(claims.sub)).await?;
+
+    sqlx::query("UPDATE management.workflows SET published_version = $2 WHERE id = $1")
+        .bind(id)
+        .bind(version)
+        .execute(&mut *tx)
+        .await?;
+
+    crate::workflow_draft::delete_draft(&mut *tx, id).await?;
+    tx.commit().await?;
+
+    spawn_javascript_deps_install(&workflow);
+    spawn_python_deps_install(&workflow);
+
+    let mut published = workflow;
+    published.published_version = Some(version);
+    let workflow = crate::workflow_draft::editor_view(published, None);
+
+    tracing::info!(
+        workflow_id = id,
+        published_version = version,
+        "工作流已发布"
+    );
+
+    audit_workflow(
+        &audit_sink,
+        "workflow.publish",
+        workflow.id,
+        &workflow.name,
+        &workflow.slug,
+        json!({ "published_version": version }),
+    );
+
+    record_workflow_op(
+        &pool,
+        &claims,
+        Source::Console,
+        operation_log::action::UPDATE,
+        &workflow,
+        format!("发布工作流「{}」为 v{}", workflow.name, version),
+        Some(workflow_snapshot_fields(&workflow, "published")),
+    );
+
+    Ok(Json(json!({ "workflow": workflow })))
+}
+
+/// POST /api/admin/workflows/:id/discard-draft — 丢弃未发布草稿。
+pub async fn discard_workflow_draft(
+    State(pool): State<PgPool>,
+    Path(id): Path<i32>,
+    axum::Extension(claims): axum::Extension<Claims>,
+    audit_sink: Option<axum::Extension<AuditDetailSink>>,
+) -> Result<Json<Value>> {
+    fetch_workflow_for_admin(&pool, &claims, id).await?;
+    let n = crate::workflow_draft::delete_draft(&pool, id).await?;
+    if n == 0 {
+        return Err(AppError::Conflict("没有可丢弃的草稿".into()));
+    }
+    let workflow = fetch_workflow_for_admin(&pool, &claims, id).await?;
+    let workflow = crate::workflow_draft::editor_view(workflow, None);
+
+    audit_workflow(
+        &audit_sink,
+        "workflow.discard_draft",
+        workflow.id,
+        &workflow.name,
+        &workflow.slug,
+        json!({}),
+    );
+
+    Ok(Json(json!({ "workflow": workflow })))
 }
 
 // ─── Endpoint 触发器 ─────────────────────────────────────────
@@ -3798,16 +4176,20 @@ fn spawn_workflow_detached(
     apikey_write_guard: ApiKeyWriteGuard,
     stream_bridge: Option<crate::workflow_stream::StreamBridge>,
 ) -> tokio::task::JoinHandle<Result<Vec<NodeExecutionResult>>> {
+    let req_id = crate::request_id::current();
     tokio::spawn(async move {
-        execute_workflow_with_bridge(
-            &pool,
-            &workflow,
-            trigger_type,
-            &trigger_data,
-            user_id,
-            apikey_write_guard,
-            stream_bridge,
-        )
+        crate::request_id::scope_with(req_id, async move {
+            execute_workflow_with_bridge(
+                &pool,
+                &workflow,
+                trigger_type,
+                &trigger_data,
+                user_id,
+                apikey_write_guard,
+                stream_bridge,
+            )
+            .await
+        })
         .await
     })
 }
@@ -3955,7 +4337,8 @@ pub async fn endpoint_trigger(
 
     let workflow = sqlx::query_as::<_, Workflow>(
         r#"SELECT * FROM management.workflows
-           WHERE database_id = $1 AND slug = $2 AND trigger_type = 'endpoint' AND is_enabled = true"#,
+           WHERE database_id = $1 AND slug = $2 AND trigger_type = 'endpoint'
+             AND is_enabled = true AND published_version IS NOT NULL"#,
     )
     .bind(resolved_database_id)
     .bind(&workflow_slug)
@@ -4040,7 +4423,8 @@ pub async fn endpoint_trigger_get(
 
     let workflow = sqlx::query_as::<_, Workflow>(
         r#"SELECT * FROM management.workflows
-           WHERE database_id = $1 AND slug = $2 AND trigger_type = 'endpoint' AND is_enabled = true"#,
+           WHERE database_id = $1 AND slug = $2 AND trigger_type = 'endpoint'
+             AND is_enabled = true AND published_version IS NOT NULL"#,
     )
     .bind(resolved_database_id)
     .bind(&workflow_slug)
@@ -4102,7 +4486,8 @@ pub async fn endpoint_trigger_public(
 
     let workflow = sqlx::query_as::<_, Workflow>(
         r#"SELECT * FROM management.workflows
-           WHERE database_id = $1 AND slug = $2 AND trigger_type = 'endpoint' AND is_enabled = true"#,
+           WHERE database_id = $1 AND slug = $2 AND trigger_type = 'endpoint'
+             AND is_enabled = true AND published_version IS NOT NULL"#,
     )
     .bind(resolved_database_id)
     .bind(&workflow_slug)
@@ -4170,12 +4555,12 @@ pub async fn endpoint_trigger_public(
 ///
 /// 租户解析：环境变量按 tenant 隔离，但工作流可能只绑 `database_id`、`tenant_id` 为 NULL
 /// （如 Stripe 工作流挂在库上）。此时从 database_id 反查所属租户，否则变量永远读不到。
-async fn load_env_vars(
+async fn resolve_effective_tenant(
     pool: &PgPool,
     tenant_id: Option<i32>,
     database_id: Option<i32>,
-) -> HashMap<String, String> {
-    let effective_tenant = match tenant_id {
+) -> Option<i32> {
+    match tenant_id {
         Some(id) => Some(id),
         None => match database_id {
             Some(db_id) => crate::permissions::lookup_tenant_for_database(pool, db_id)
@@ -4183,8 +4568,15 @@ async fn load_env_vars(
                 .ok(),
             None => None,
         },
-    };
-    let tenant_id = match effective_tenant {
+    }
+}
+
+async fn load_env_vars(
+    pool: &PgPool,
+    tenant_id: Option<i32>,
+    database_id: Option<i32>,
+) -> HashMap<String, String> {
+    let tenant_id = match resolve_effective_tenant(pool, tenant_id, database_id).await {
         Some(id) => id,
         None => return HashMap::new(),
     };
@@ -4270,7 +4662,24 @@ pub async fn execute_workflow_with_bridge(
 
     // 统一关联键：endpoint 触发时复用本次 HTTP 请求的 x-request-id（让工作流 run 与
     // access log 串到同一条链路）；cron / notify 等无请求上下文时生成新 UUID。
+    // spawn / cron 进来时 task_local 可能是空的：先定好 id，再包进 scope，后续 tracing
+    // 与 workflow_runs.trace_id 用同一条。
     let trace_id = crate::request_id::current().unwrap_or_else(crate::execution_log::new_trace_id);
+    if crate::request_id::current().as_deref() != Some(trace_id.as_str()) {
+        return crate::request_id::scope_with(
+            Some(trace_id),
+            Box::pin(execute_workflow_with_bridge(
+                pool,
+                workflow,
+                trigger_type,
+                trigger_data,
+                user_id,
+                apikey_write_guard,
+                stream_bridge,
+            )),
+        )
+        .await;
+    }
 
     // 创建执行记录
     let run = sqlx::query_as::<_, WorkflowRun>(
@@ -4308,6 +4717,11 @@ pub async fn execute_workflow_with_bridge(
 
     // 执行开始一次性加载项目环境变量（单一数据源，供 {{env.X}} 与 Lua env.get 读取）
     let env_vars = load_env_vars(pool, workflow.tenant_id, workflow.database_id).await;
+    let credentials =
+        match resolve_effective_tenant(pool, workflow.tenant_id, workflow.database_id).await {
+            Some(tid) => crate::workflow_credentials::load_credential_store(pool, tid).await,
+            None => crate::workflow_credentials::CredentialStore::default(),
+        };
 
     let mut exec_ctx = ExecutionContext {
         workflow_id: workflow.id,
@@ -4319,6 +4733,7 @@ pub async fn execute_workflow_with_bridge(
         database_id: workflow.database_id,
         node_outputs: HashMap::new(),
         env_vars,
+        credentials,
         workflow_dependencies: workflow.dependencies.clone(),
         dry_run: false,
         prod_readonly: false,
@@ -4362,12 +4777,13 @@ pub async fn execute_workflow_with_bridge(
         Err(timeout_ms) => {
             let elapsed_ms = start.elapsed().as_millis() as i64;
             // 超时文案为固定文本、本不含密钥，仍统一过掩码以防未来漂移引入泄漏
-            let msg = workflow_engine::mask_env_values(
+            let msg = workflow_engine::mask_env_and_credentials(
                 &json!(format!(
                     "工作流执行超时（超过 {} ms 未完成，已强制中止）",
                     timeout_ms
                 )),
                 &exec_ctx.env_vars,
+                &exec_ctx.credentials,
             )
             .as_str()
             .unwrap_or("工作流执行超时")
@@ -4434,15 +4850,27 @@ pub async fn execute_workflow_with_bridge(
 
             // 脱敏边界①：落 workflow_runs 前对 node_results / final_output / error_message
             // 三字段全量掩码，防止密钥经执行历史泄漏
-            let masked_node_results =
-                workflow_engine::mask_env_values(&json!(node_results), &exec_ctx.env_vars);
-            let masked_final_output =
-                final_output.map(|o| workflow_engine::mask_env_values(o, &exec_ctx.env_vars));
+            let masked_node_results = workflow_engine::mask_env_and_credentials(
+                &json!(node_results),
+                &exec_ctx.env_vars,
+                &exec_ctx.credentials,
+            );
+            let masked_final_output = final_output.map(|o| {
+                workflow_engine::mask_env_and_credentials(
+                    o,
+                    &exec_ctx.env_vars,
+                    &exec_ctx.credentials,
+                )
+            });
             let masked_error_msg = error_msg.as_ref().map(|m| {
-                workflow_engine::mask_env_values(&json!(m), &exec_ctx.env_vars)
-                    .as_str()
-                    .unwrap_or(m)
-                    .to_string()
+                workflow_engine::mask_env_and_credentials(
+                    &json!(m),
+                    &exec_ctx.env_vars,
+                    &exec_ctx.credentials,
+                )
+                .as_str()
+                .unwrap_or(m)
+                .to_string()
             });
 
             sqlx::query(
@@ -4506,11 +4934,14 @@ pub async fn execute_workflow_with_bridge(
         Err(e) => {
             // 脱敏边界①（Err 分支）：e.to_string() 直接入库，SMTP / 网络错误文本可能携带
             // 解析后的密钥，必须先掩码再落库
-            let masked_err =
-                workflow_engine::mask_env_values(&json!(e.to_string()), &exec_ctx.env_vars)
-                    .as_str()
-                    .unwrap_or("执行失败")
-                    .to_string();
+            let masked_err = workflow_engine::mask_env_and_credentials(
+                &json!(e.to_string()),
+                &exec_ctx.env_vars,
+                &exec_ctx.credentials,
+            )
+            .as_str()
+            .unwrap_or("执行失败")
+            .to_string();
             sqlx::query(
                 r#"UPDATE management.workflow_runs
                    SET status = 'failed', error_message = $2, elapsed_ms = $3, completed_at = NOW()
@@ -4823,23 +5254,25 @@ fn is_valid_slug(slug: &str) -> bool {
         && slug.len() <= 64
         // 允许用 `/` 做分段（如 `public/kop-callback`）——HTTP Endpoint 触发路由
         // 用 `/workflow/:db/*workflow_slug` 通配捕获，多段 slug 可正常路由。
-        && slug
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '/')
+        && slug.chars().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_' || c == '/'
+        })
         && !slug.starts_with('-')
         && !slug.ends_with('-')
+        && !slug.starts_with('_')
+        && !slug.ends_with('_')
         // `/` 不能出现在首尾，也不能连续（避免空段 / 与路由前缀混淆）。
         && !slug.starts_with('/')
         && !slug.ends_with('/')
         && !slug.contains("//")
 }
 
-/// 把任意字符串规整成合法 slug（小写字母 / 数字 / 连字符，<=64，不以连字符开头结尾）。
+/// 把任意字符串规整成合法 slug（小写字母 / 数字 / 下划线 / 连字符，<=64，不以连字符或下划线开头结尾）。
 /// 给「复制 / 导入」用——源 slug 或导入文件里的 slug 不一定合法，先兜一道。
 fn slugify(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for c in input.to_lowercase().chars() {
-        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+        if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' {
             out.push(c);
         } else {
             out.push('-');
@@ -4848,8 +5281,8 @@ fn slugify(input: &str) -> String {
     while out.contains("--") {
         out = out.replace("--", "-");
     }
-    let out: String = out.trim_matches('-').chars().take(64).collect();
-    let out = out.trim_matches('-').to_string();
+    let out: String = out.trim_matches(['-', '_']).chars().take(64).collect();
+    let out = out.trim_matches(['-', '_']).to_string();
     if out.is_empty() {
         "workflow".to_string()
     } else {
@@ -4876,14 +5309,8 @@ async fn generate_unique_slug(
         };
         // database_id 为 NULL 时 UNIQUE 约束不生效（PG 多 NULL 视为不同），这里用
         // IS NOT DISTINCT FROM 把 NULL 也当作一个作用域，避免平台级工作流 slug 重名。
-        let exists = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM management.workflows \
-             WHERE database_id IS NOT DISTINCT FROM $1 AND slug = $2)",
-        )
-        .bind(database_id)
-        .bind(&candidate)
-        .fetch_one(pool)
-        .await?;
+        let exists =
+            crate::workflow_draft::draft_slug_taken(pool, database_id, &candidate, None).await?;
         if !exists {
             return Ok(candidate);
         }
@@ -5162,6 +5589,27 @@ pub async fn public_workflow_doc(
 mod tests {
     use super::*;
 
+    fn import_workflow_json() -> Value {
+        json!({
+            "name": "imported",
+            "nodes": [],
+            "edges": []
+        })
+    }
+
+    #[test]
+    fn import_alert_fields_distinguish_absent_from_explicit_null() {
+        let without_alerts: ImportWorkflowDef =
+            serde_json::from_value(import_workflow_json()).unwrap();
+        assert!(!import_alerts_present(&without_alerts));
+
+        let mut with_alerts = import_workflow_json();
+        with_alerts["alert_webhook_url"] = Value::Null;
+        let with_alerts: ImportWorkflowDef = serde_json::from_value(with_alerts).unwrap();
+        assert!(import_alerts_present(&with_alerts));
+        assert_eq!(with_alerts.alert_webhook_url, Some(None));
+    }
+
     #[test]
     fn apikey_write_guard_composition() {
         let ro = json!({ "read": true, "write": false, "delete": false });
@@ -5243,6 +5691,40 @@ mod tests {
         ));
         assert!(!is_api_key_readonly_block(""));
     }
+
+    #[test]
+    fn publish_note_prefers_trimmed_request_then_draft() {
+        assert_eq!(
+            publish_version_note(Some("  v2  "), Some("draft")),
+            Some("v2".into())
+        );
+        assert_eq!(
+            publish_version_note(Some("   "), Some("draft")),
+            Some("draft".into())
+        );
+        assert_eq!(publish_version_note(None, None), None);
+    }
+
+    #[test]
+    fn publish_without_draft_messages() {
+        match publish_missing_draft_error(None) {
+            AppError::Conflict(m) => assert_eq!(m, "没有可发布的定义"),
+            other => panic!("{other:?}"),
+        }
+        match publish_missing_draft_error(Some(1)) {
+            AppError::Conflict(m) => assert_eq!(m, "没有未发布的修改"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn trigger_unpublished_is_conflict() {
+        match require_published_to_trigger(None) {
+            Err(AppError::Conflict(m)) => assert_eq!(m, "工作流尚未发布"),
+            other => panic!("{other:?}"),
+        }
+        assert!(require_published_to_trigger(Some(1)).is_ok());
+    }
 }
 
 #[cfg(test)]
@@ -5283,6 +5765,9 @@ mod endpoint_response_tests {
             created_by_email: None,
             created_at: chrono::NaiveDateTime::default(),
             updated_at: chrono::NaiveDateTime::default(),
+            published_version: None,
+            has_unpublished: false,
+            published_slug: None,
         }
     }
 
@@ -5296,6 +5781,7 @@ mod endpoint_response_tests {
             elapsed_ms: 1,
             error: None,
             branch: None,
+            logs: vec![],
         }
     }
 
@@ -5542,5 +6028,35 @@ mod batch_action_tests {
     fn parse_batch_action_rejects_unknown() {
         let err = parse_batch_action("archive").unwrap_err().to_string();
         assert!(err.contains("enable / disable / delete / move"));
+    }
+}
+
+#[cfg(test)]
+mod slug_tests {
+    use super::*;
+
+    #[test]
+    fn valid_slug_allows_underscore_and_slash() {
+        assert!(is_valid_slug("pay_info"));
+        assert!(is_valid_slug("api/order/pay_info/query"));
+        assert!(is_valid_slug("public/kop-callback"));
+        assert!(is_valid_slug("my-api"));
+    }
+
+    #[test]
+    fn valid_slug_rejects_edge_and_case() {
+        assert!(!is_valid_slug("_pay"));
+        assert!(!is_valid_slug("pay_"));
+        assert!(!is_valid_slug("Pay_Info"));
+        assert!(!is_valid_slug("/pay_info"));
+        assert!(!is_valid_slug("pay_info/"));
+        assert!(!is_valid_slug("pay//info"));
+    }
+
+    #[test]
+    fn slugify_keeps_underscore() {
+        assert_eq!(slugify("Pay Info"), "pay-info");
+        assert_eq!(slugify("pay_info"), "pay_info");
+        assert_eq!(slugify("_pay_info_"), "pay_info");
     }
 }

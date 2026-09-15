@@ -65,6 +65,7 @@ def _request(method, url, body_or_options=None, maybe_options=None):
 
 
 env = SimpleNamespace(get=lambda key: _call("env.get", {"key": key}))
+cred = SimpleNamespace(get=lambda name, field: _call("cred.get", {"name": name, "field": field}))
 
 http = SimpleNamespace(
     get=lambda url, options=None: _request("get", url, options),

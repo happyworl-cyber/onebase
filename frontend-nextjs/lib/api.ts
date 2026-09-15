@@ -2848,14 +2848,15 @@ export const aiProviderAPI = {
 //
 // 凭证密钥永不回显：列表只给 has_secret；更新时 secret 留空表示保持原密文不变。
 
-/** 凭证类型：用户名/密码 或 Bearer 令牌 */
-export type WfCredentialKind = 'basic' | 'bearer'
+/** 凭证类型：用户名/密码、Bearer 令牌、API Key 或阿里云 AccessKey */
+export type WfCredentialKind = 'basic' | 'bearer' | 'api_key' | 'aliyun_ak'
 
 export interface WfCredential {
   id: number
   name: string
   kind: WfCredentialKind
   username: string | null
+  header_name: string | null
   description: string | null
   /** 恒为 true——密钥已加密存储、永不回显 */
   has_secret: boolean
@@ -2869,6 +2870,7 @@ export interface WfCredentialWriteBody {
   name: string
   kind: WfCredentialKind
   username?: string | null
+  header_name?: string | null
   /** 明文密码/令牌；新建必填，更新留空表示不改 */
   secret?: string | null
   description?: string | null
@@ -2910,13 +2912,83 @@ export interface WfDatasourceWriteBody {
 
 export const wfCredentialAPI = {
   list: (projectId: number) =>
-    api.get<WfCredential[]>(`/api/projects/${projectId}/wf-credentials`),
+    api.get<WfCredential[]>(`/api/projects/${projectId}/credentials`),
   create: (projectId: number, body: WfCredentialWriteBody) =>
-    api.post<WfCredential>(`/api/projects/${projectId}/wf-credentials`, body),
+    api.post<WfCredential>(`/api/projects/${projectId}/credentials`, body),
   update: (projectId: number, credId: number, body: WfCredentialWriteBody) =>
-    api.put<WfCredential>(`/api/projects/${projectId}/wf-credentials/${credId}`, body),
+    api.put<WfCredential>(`/api/projects/${projectId}/credentials/${credId}`, body),
   remove: (projectId: number, credId: number) =>
-    api.delete(`/api/projects/${projectId}/wf-credentials/${credId}`),
+    api.delete(`/api/projects/${projectId}/credentials/${credId}`),
+}
+
+export type CloudLogProvider = 'aliyun_sls'
+
+export interface ProjectLogSource {
+  id: number
+  name: string
+  provider: CloudLogProvider
+  credential_id: number
+  credential_name: string
+  region: string
+  sls_project: string
+  logstore: string
+  endpoint: string | null
+  query_prefix: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectLogSourceWriteBody {
+  name: string
+  provider?: CloudLogProvider
+  credential_id: number
+  region: string
+  sls_project: string
+  logstore: string
+  endpoint?: string | null
+  query_prefix?: string | null
+}
+
+export interface CloudLogQueryBody {
+  from?: number
+  to?: number
+  query?: string
+  x_request_id?: string
+  line?: number
+  offset?: number
+}
+
+export interface CloudLogLine {
+  time: number
+  contents: Record<string, unknown>
+}
+
+export interface CloudLogPage {
+  logs: CloudLogLine[]
+  count: number
+  console_url: string
+}
+
+export const projectLogSourceAPI = {
+  list: (projectId: number) =>
+    api.get<ProjectLogSource[]>(`/api/projects/${projectId}/log-sources`),
+  create: (projectId: number, body: ProjectLogSourceWriteBody) =>
+    api.post<ProjectLogSource>(`/api/projects/${projectId}/log-sources`, body),
+  update: (projectId: number, sid: number, body: ProjectLogSourceWriteBody) =>
+    api.put<ProjectLogSource>(`/api/projects/${projectId}/log-sources/${sid}`, body),
+  remove: (projectId: number, sid: number) =>
+    api.delete(`/api/projects/${projectId}/log-sources/${sid}`),
+  query: (projectId: number, sid: number, body: CloudLogQueryBody) =>
+    api.post<CloudLogPage>(`/api/projects/${projectId}/log-sources/${sid}/query`, body),
+  consoleUrl: (projectId: number, sid: number, params: CloudLogQueryBody) =>
+    api.get<{ console_url: string }>(
+      `/api/projects/${projectId}/log-sources/${sid}/console-url`,
+      { params },
+    ),
+  test: (projectId: number, sid: number) =>
+    api.post<{ ok: boolean; count: number }>(
+      `/api/projects/${projectId}/log-sources/${sid}/test`,
+    ),
 }
 
 export const wfDatasourceAPI = {
@@ -3373,6 +3445,15 @@ export const partnerAPI = {
     api.get<PaginatedResponse<PartnerStatement>>(
       '/api/partner/statements',
       { params }
+    ),
+}
+
+export const skillAPI = {
+  list: () =>
+    api.get<{ skills: { name: string; description: string }[] }>('/api/admin/skills'),
+  get: (name: string) =>
+    api.get<{ name: string; description: string; content: string }>(
+      `/api/admin/skills/${encodeURIComponent(name)}`,
     ),
 }
 
