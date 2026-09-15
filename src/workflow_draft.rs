@@ -175,53 +175,63 @@ pub async fn fetch_drafts_for(pool: &PgPool, ids: &[i32]) -> Result<HashMap<i32,
     Ok(rows.into_iter().map(|d| (d.workflow_id, d)).collect())
 }
 
+pub fn upsert_draft_sql() -> &'static str {
+    r#"WITH d AS (
+            INSERT INTO management.workflow_drafts
+            (workflow_id, name, slug, description, category, department,
+             trigger_type, trigger_config, input_schema, nodes, edges, dependencies,
+             timeout_ms, max_retries, note, updated_by, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+            ON CONFLICT (workflow_id) DO UPDATE SET
+              name = EXCLUDED.name,
+              slug = EXCLUDED.slug,
+              description = EXCLUDED.description,
+              category = EXCLUDED.category,
+              department = EXCLUDED.department,
+              trigger_type = EXCLUDED.trigger_type,
+              trigger_config = EXCLUDED.trigger_config,
+              input_schema = EXCLUDED.input_schema,
+              nodes = EXCLUDED.nodes,
+              edges = EXCLUDED.edges,
+              dependencies = EXCLUDED.dependencies,
+              timeout_ms = EXCLUDED.timeout_ms,
+              max_retries = EXCLUDED.max_retries,
+              note = EXCLUDED.note,
+              updated_by = EXCLUDED.updated_by,
+              updated_at = EXCLUDED.updated_at
+            RETURNING workflow_id, updated_by
+        )
+        UPDATE management.workflows w
+        SET updated_by = d.updated_by
+        FROM d
+        WHERE w.id = d.workflow_id
+          AND d.updated_by IS NOT NULL"#
+}
+
 pub async fn upsert_draft<'e, E>(executor: E, draft: &WorkflowDraft) -> Result<()>
 where
     E: Executor<'e, Database = Postgres>,
 {
-    sqlx::query(
-        r#"INSERT INTO management.workflow_drafts
-           (workflow_id, name, slug, description, category, department,
-            trigger_type, trigger_config, input_schema, nodes, edges, dependencies,
-            timeout_ms, max_retries, note, updated_by, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-           ON CONFLICT (workflow_id) DO UPDATE SET
-             name = EXCLUDED.name,
-             slug = EXCLUDED.slug,
-             description = EXCLUDED.description,
-             category = EXCLUDED.category,
-             department = EXCLUDED.department,
-             trigger_type = EXCLUDED.trigger_type,
-             trigger_config = EXCLUDED.trigger_config,
-             input_schema = EXCLUDED.input_schema,
-             nodes = EXCLUDED.nodes,
-             edges = EXCLUDED.edges,
-             dependencies = EXCLUDED.dependencies,
-             timeout_ms = EXCLUDED.timeout_ms,
-             max_retries = EXCLUDED.max_retries,
-             note = EXCLUDED.note,
-             updated_by = EXCLUDED.updated_by,
-             updated_at = EXCLUDED.updated_at"#,
-    )
-    .bind(draft.workflow_id)
-    .bind(&draft.name)
-    .bind(&draft.slug)
-    .bind(&draft.description)
-    .bind(&draft.category)
-    .bind(&draft.department)
-    .bind(&draft.trigger_type)
-    .bind(&draft.trigger_config)
-    .bind(&draft.input_schema)
-    .bind(&draft.nodes)
-    .bind(&draft.edges)
-    .bind(&draft.dependencies)
-    .bind(draft.timeout_ms)
-    .bind(draft.max_retries)
-    .bind(&draft.note)
-    .bind(draft.updated_by)
-    .bind(draft.updated_at)
-    .execute(executor)
-    .await?;
+    sqlx::query(upsert_draft_sql())
+        .bind(draft.workflow_id)
+        .bind(&draft.name)
+        .bind(&draft.slug)
+        .bind(&draft.description)
+        .bind(&draft.category)
+        .bind(&draft.department)
+        .bind(&draft.trigger_type)
+        .bind(&draft.trigger_config)
+        .bind(&draft.input_schema)
+        .bind(&draft.nodes)
+        .bind(&draft.edges)
+        .bind(&draft.dependencies)
+        .bind(draft.timeout_ms)
+        .bind(draft.max_retries)
+        .bind(&draft.note)
+        .bind(draft.updated_by)
+        .bind(draft.updated_at)
+        .execute(executor)
+        .await?;
     Ok(())
 }
 
@@ -285,10 +295,13 @@ mod tests {
             alert_throttle_hours: 24,
             last_alert_sent_at: None,
             created_by: None,
+            updated_by: None,
             created_at: timestamp(0),
             updated_at: timestamp(0),
             created_by_name: None,
             created_by_email: None,
+            updated_by_name: None,
+            updated_by_email: None,
             published_version: Some(3),
             has_unpublished: false,
             published_slug: None,
@@ -418,5 +431,16 @@ mod tests {
     #[test]
     fn duplicate_copy_name_appends_suffix() {
         assert_eq!(duplicate_copy_name("草稿名"), "草稿名 (副本)");
+    }
+
+    #[test]
+    fn upsert_draft_sql_updates_workflow_when_updated_by_present() {
+        let sql = upsert_draft_sql();
+        assert!(
+            sql.contains("INSERT INTO management.workflow_drafts"),
+            "{sql}"
+        );
+        assert!(sql.contains("UPDATE management.workflows w"), "{sql}");
+        assert!(sql.contains("AND d.updated_by IS NOT NULL"), "{sql}");
     }
 }

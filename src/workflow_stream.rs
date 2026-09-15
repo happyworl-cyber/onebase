@@ -50,14 +50,17 @@ pub fn stream_enabled(config: &Value) -> bool {
         .unwrap_or(false)
 }
 
+/// 统计会占用 StreamBridge 的节点：`http_call.stream` 或 `llm.stream`。
 pub fn count_stream_http_calls_json(nodes: &Value) -> usize {
     nodes
         .as_array()
         .map(|arr| {
             arr.iter()
                 .filter(|n| {
-                    n.get("type").and_then(|t| t.as_str()) == Some("http_call")
-                        && n.get("config").map(stream_enabled).unwrap_or(false)
+                    matches!(
+                        n.get("type").and_then(|t| t.as_str()),
+                        Some("http_call") | Some("llm")
+                    ) && n.get("config").map(stream_enabled).unwrap_or(false)
                 })
                 .count()
         })
@@ -182,6 +185,15 @@ mod tests {
             {"id":"a","type":"http_call","config":{"url":"https://x","stream":true}},
             {"id":"b","type":"http_call","config":{"url":"https://y"}},
             {"id":"c","type":"response","config":{"stream":true}}
+        ]);
+        assert_eq!(count_stream_http_calls_json(&nodes), 1);
+    }
+
+    #[test]
+    fn count_stream_http_calls_json_counts_llm_stream() {
+        let nodes = json!([
+            {"id":"a","type":"llm","config":{"stream":true}},
+            {"id":"b","type":"http_call","config":{"stream":false}}
         ]);
         assert_eq!(count_stream_http_calls_json(&nodes), 1);
     }

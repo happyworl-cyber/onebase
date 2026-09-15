@@ -33,6 +33,7 @@ export interface WorkflowListPageState {
   status: WorkflowListStatus
   trigs: Set<string>
   author: string | null
+  updater: string | null
   sort: WorkflowListSort
   view: WorkflowListView
   search: string
@@ -66,6 +67,9 @@ export interface WorkflowListItem {
   created_by: number | null
   created_by_name: string | null
   created_by_email: string | null
+  updated_by: number | null
+  updated_by_name: string | null
+  updated_by_email: string | null
   created_at: string
   updated_at: string
   /** 线上已发布版本号；null 表示从未发布 */

@@ -82,6 +82,7 @@ async fn main() -> anyhow::Result<()> {
             timeout_ms INTEGER NOT NULL DEFAULT 30000,
             max_retries INTEGER NOT NULL DEFAULT 0,
             created_by INTEGER,
+            updated_by INTEGER,
             created_at TIMESTAMP NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
             CONSTRAINT workflows_slug_db_unique UNIQUE (database_id, slug)

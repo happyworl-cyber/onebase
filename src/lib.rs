@@ -42,6 +42,8 @@ pub mod kafka_ds;
 /// 商用离线 License（授权 / 续保控制）。服务端中间件与 `license_tool` CLI 共用，
 /// 只依赖 rsa / sha2 / serde / chrono / axum，保持 lib-safe。
 pub mod license;
+/// LLM 连接：登记表 + 按租户取用。随 `workflow_engine` 编进 lib crate。
+pub mod llm_ds;
 pub mod lua_builtins;
 pub mod lua_engine;
 pub mod migrate;
@@ -66,6 +68,7 @@ pub mod sse_batch_config;
 pub mod sse_publisher;
 pub mod workflow_credentials;
 pub mod workflow_engine;
+pub mod workflow_llm;
 pub mod workflow_logs;
 pub mod workflow_qa;
 pub mod workflow_stream;

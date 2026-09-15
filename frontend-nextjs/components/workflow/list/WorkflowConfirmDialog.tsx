@@ -28,11 +28,10 @@ export default function WorkflowConfirmDialog({
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={loading ? undefined : onCancel}>
-      <div className="absolute inset-0 bg-black/40" />
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40" onMouseDown={loading ? undefined : onCancel} />
       <div
         className="relative bg-white rounded-xl shadow-xl w-full max-w-sm p-5"
-        onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-labelledby="workflow-confirm-title"

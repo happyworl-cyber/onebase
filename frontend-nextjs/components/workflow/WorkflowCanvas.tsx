@@ -91,7 +91,7 @@ function isReachableByNormalEdges(
 const NODE_PALETTE_GROUPS: { label: string; types: string[] }[] = [
   { label: '数据操作', types: ['db_query', 'db_execute', 'db_transaction', 'foreach', 'transform', 'code'] },
   { label: '控制流', types: ['condition', 'loop'] },
-  { label: '集成', types: ['http_call', 'email_send', 'sse_publish', 'call_workflow', 'redis', 'kafka', 'object_storage'] },
+  { label: '集成', types: ['http_call', 'llm', 'email_send', 'sse_publish', 'call_workflow', 'redis', 'kafka', 'object_storage'] },
   { label: '输出', types: ['response'] },
 ]
 
@@ -777,6 +777,17 @@ function getDefaultConfig(type: string): Record<string, unknown> {
     case 'db_transaction': return { statements: [{ sql: '', params: [] }] }
     case 'foreach': return { items: '', item_var: 'item', statements: [{ sql: '', params: [] }] }
     case 'http_call': return { method: 'GET', url: '', headers: '', body: '' }
+    case 'llm': return {
+      connection_id: 0,
+      model: '',
+      system_prompt: '',
+      user_prompt: '',
+      messages: '',
+      temperature: 0.7,
+      json_mode: false,
+      stream: false,
+      skip_llm: false,
+    }
     case 'email_send': return { from: '', to: '', cc: '', bcc: '', subject: '', text_body: '', html_body: '', smtp_host: '', smtp_port: 587, smtp_username: '', smtp_password: '', smtp_starttls: true }
     case 'condition': return { expression: '' }
     case 'transform': return { output: '' }

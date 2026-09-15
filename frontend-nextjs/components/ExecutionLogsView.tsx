@@ -480,12 +480,10 @@ export default function ExecutionLogsView({
         <div
           className="fixed inset-0 z-40 flex justify-end"
           style={{ paddingRight: aiOffset }}
-          onClick={() => setDetail(null)}
         >
-          <div className="absolute inset-0 bg-black/30" />
+          <div className="absolute inset-0 bg-black/30" onMouseDown={() => setDetail(null)} />
           <div
             className="relative w-full max-w-2xl h-full bg-white shadow-xl overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
           >
             <div className="sticky top-0 bg-white border-b px-5 py-4 flex items-center justify-between">
               <div>

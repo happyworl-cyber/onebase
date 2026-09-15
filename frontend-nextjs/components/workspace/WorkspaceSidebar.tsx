@@ -100,7 +100,7 @@ export default function WorkspaceSidebar() {
   }
 
   return (
-    <aside className="w-[200px] flex-shrink-0 bg-white border-r border-gray-200 flex flex-col">
+    <aside className="w-[200px] flex-shrink-0 min-h-0 bg-white border-r border-gray-200 flex flex-col">
       {/* Schema 选择器 —— 几乎所有"数据库 / 自动化"页面都隐含一个 currentSchema
           上下文（表 / 函数 / 触发器 / 索引 / 关系图等）。放在主栏顶部常驻：
           1) 切到本工作区就能立刻看到当前 schema；

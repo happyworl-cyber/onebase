@@ -265,6 +265,10 @@ pub enum NodeType {
     /// config: `{ "connection_id": <i64>, "op": "put|get|delete|list|presign", ...templated args... }`
     /// 连接按 `ctx.tenant_id` 校验，杜绝跨租户取数。
     ObjectStorage,
+    /// OpenAI 兼容 Chat Completions。
+    /// config: `{ connection_id, model, system_prompt?, user_prompt?, messages?,
+    ///            temperature?, max_tokens?, json_mode?, stream?, timeout_secs?, skip_llm? }`
+    Llm,
     /// 循环节点：反复执行「循环体子图」直到退出，再走 `done` 出口。
     /// config: `{ "loop_mode": "while|until|count|for_each", "expression": "...",
     ///            "max_iterations": <u64>, "delay_ms": <u64>, "count": <u64|template>,
@@ -2894,6 +2898,7 @@ impl DagEngine {
             NodeType::Redis => self.exec_redis_node(config, ctx).await,
             NodeType::Kafka => self.exec_kafka_node(config, ctx).await,
             NodeType::ObjectStorage => self.exec_object_storage_node(config, ctx).await,
+            NodeType::Llm => self.exec_llm_node(config, ctx).await,
             // loop 节点由 execute_dag 特殊分发（run_loop），需要访问整图以界定循环体，
             // 不经此逐节点 dispatch。走到这里说明循环体识别有误（如循环体内又嵌了未被
             // 拥有的 loop），属于内部不变量被破坏，直接报错而非静默。
@@ -4463,6 +4468,108 @@ end
         Ok(ok_out(json!({ "op": op, "result": result })))
     }
 
+    async fn exec_llm_node(
+        &self,
+        config: &JsonValue,
+        ctx: &ExecutionContext,
+    ) -> Result<NodeOutcome> {
+        let connection_id = config
+            .get("connection_id")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| AppError::InvalidQuery("llm 节点缺少 connection_id".into()))?;
+        let model = config
+            .get("model")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| AppError::InvalidQuery("llm 节点缺少 model".into()))?
+            .to_string();
+        let tenant_id = ctx.tenant_id.ok_or_else(|| {
+            AppError::InvalidQuery("llm 节点需要 workflow.tenant_id 才能解析连接".into())
+        })?;
+        let conn =
+            crate::llm_ds::fetch_active_for_tenant(&self.pool, connection_id, tenant_id).await?;
+        if !crate::workflow_llm::model_allowed(&conn.models, &model) {
+            return Err(AppError::InvalidQuery(format!(
+                "模型 {model} 不在连接 {} 的列表中",
+                conn.connection_name
+            )));
+        }
+        let json_mode = config
+            .get("json_mode")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let skip = config
+            .get("skip_llm")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let system = config.get("system_prompt").and_then(|v| v.as_str());
+        let user = config.get("user_prompt").and_then(|v| v.as_str());
+        let messages_v = config.get("messages").cloned().unwrap_or(JsonValue::Null);
+        let assembled = crate::workflow_llm::assemble_messages(system, &messages_v, user)
+            .map_err(AppError::InvalidQuery)?;
+        if skip {
+            return Ok(ok_out(crate::workflow_llm::skip_llm_mock(
+                &model, json_mode,
+            )));
+        }
+        let temperature =
+            crate::workflow_llm::parse_temperature(config).map_err(AppError::InvalidQuery)?;
+        let max_tokens =
+            crate::workflow_llm::parse_max_tokens(config).map_err(AppError::InvalidQuery)?;
+        let stream = crate::workflow_stream::stream_enabled(config);
+        let timeout_secs = config
+            .get("timeout_secs")
+            .or_else(|| config.get("timeout"))
+            .and_then(|v| {
+                v.as_u64()
+                    .or_else(|| v.as_i64().filter(|n| *n >= 0).map(|n| n as u64))
+                    .or_else(|| v.as_str().and_then(|s| s.trim().parse::<u64>().ok()))
+            })
+            .unwrap_or_else(http_default_timeout_secs);
+        let mut headers_obj = serde_json::Map::new();
+        if let Some(cid) = conn.credential_id {
+            let cred = ctx
+                .credentials
+                .get_by_id(cid)
+                .ok_or_else(|| AppError::InvalidQuery(format!("连接凭证 {cid} 不存在")))?;
+            crate::workflow_credentials::apply_http_auth_headers(&mut headers_obj, cred)
+                .map_err(AppError::InvalidQuery)?;
+        }
+        let headers: Vec<(String, String)> = headers_obj
+            .iter()
+            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+            .collect();
+        let body = crate::workflow_llm::build_chat_body(
+            &model,
+            &assembled,
+            temperature,
+            max_tokens,
+            json_mode,
+            stream,
+        );
+        let sink = if stream && ctx.trigger_type == "endpoint" {
+            self.stream_bridge.clone()
+        } else {
+            None
+        };
+        let url = crate::workflow_llm::chat_completions_url(&conn.base_url);
+        let output = crate::workflow_llm::execute_chat_request(
+            crate::workflow_llm::LlmCallRequest {
+                url,
+                headers,
+                body,
+                timeout_secs,
+                json_mode,
+                stream,
+                requested_model: model,
+            },
+            sink,
+        )
+        .await?;
+        Ok(ok_out(output))
+    }
+
     // ─── HTTP Call 节点 ─────────────────────────────────────────
 
     async fn exec_http_call_node(
@@ -5901,24 +6008,65 @@ pub fn validate_definition(def: &WorkflowDefinition) -> Result<()> {
     // 检测是否有环（loop 回边已在 topological_sort 内被剔除，不会误报）。
     topological_sort(def)?;
 
-    let mut stream_http_calls = 0usize;
+    let mut stream_sources = 0usize;
     for node in &def.nodes {
-        if node.node_type != NodeType::HttpCall {
-            continue;
+        if node.node_type == NodeType::Llm {
+            let has_conn = node
+                .config
+                .get("connection_id")
+                .and_then(|v| v.as_i64())
+                .is_some();
+            let has_model = node
+                .config
+                .get("model")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .is_some_and(|s| !s.is_empty());
+            if !has_conn {
+                return Err(AppError::InvalidQuery("llm 节点缺少 connection_id".into()));
+            }
+            if !has_model {
+                return Err(AppError::InvalidQuery("llm 节点缺少 model".into()));
+            }
+            let system = node
+                .config
+                .get("system_prompt")
+                .cloned()
+                .unwrap_or(JsonValue::Null);
+            let user = node
+                .config
+                .get("user_prompt")
+                .cloned()
+                .unwrap_or(JsonValue::Null);
+            let messages = node
+                .config
+                .get("messages")
+                .cloned()
+                .unwrap_or(JsonValue::Null);
+            if crate::workflow_llm::is_statically_empty_prompts(&system, &user, &messages) {
+                return Err(AppError::InvalidQuery("llm 节点组完 messages 为空".into()));
+            }
+            if let Err(e) = crate::workflow_llm::parse_temperature(&node.config) {
+                return Err(AppError::InvalidQuery(e));
+            }
         }
-        let streaming = crate::workflow_stream::stream_enabled(&node.config);
+        let streaming = matches!(node.node_type, NodeType::HttpCall | NodeType::Llm)
+            && crate::workflow_stream::stream_enabled(&node.config);
         if streaming {
-            stream_http_calls += 1;
+            stream_sources += 1;
         }
-        if streaming && crate::http_async_poll::parse_async_poll_config(&node.config).enabled {
+        if node.node_type == NodeType::HttpCall
+            && streaming
+            && crate::http_async_poll::parse_async_poll_config(&node.config).enabled
+        {
             return Err(AppError::InvalidQuery(
                 "http_call 不能同时开启 stream 与 async_poll".to_string(),
             ));
         }
     }
-    if stream_http_calls > 1 {
+    if stream_sources > 1 {
         return Err(AppError::InvalidQuery(
-            "工作流最多只能有一个 stream: true 的 http_call 节点".to_string(),
+            "工作流最多只能有一个 stream: true 的 http_call 或 llm 节点".to_string(),
         ));
     }
 
@@ -8826,6 +8974,60 @@ mod tests {
             label: None,
             config,
         }
+    }
+
+    fn llm_node(id: &str, config: JsonValue) -> WorkflowNode {
+        WorkflowNode {
+            id: id.into(),
+            node_type: NodeType::Llm,
+            label: None,
+            config,
+        }
+    }
+
+    #[test]
+    fn validate_rejects_llm_and_http_stream() {
+        let def = WorkflowDefinition {
+            nodes: vec![
+                llm_node(
+                    "a",
+                    json!({"connection_id":1,"model":"m","user_prompt":"q","stream":true}),
+                ),
+                http_node("b", json!({"url":"https://y","stream":true})),
+            ],
+            edges: vec![],
+        };
+        let err = validate_definition(&def).unwrap_err().to_string();
+        assert!(err.contains("最多只能有一个 stream"));
+    }
+
+    #[test]
+    fn validate_rejects_statically_empty_llm_prompts() {
+        let def = WorkflowDefinition {
+            nodes: vec![llm_node("a", json!({"connection_id":1,"model":"m"}))],
+            edges: vec![],
+        };
+        let err = validate_definition(&def).unwrap_err().to_string();
+        assert!(err.contains("messages"));
+    }
+
+    #[test]
+    fn validate_allows_templated_llm_user_prompt() {
+        let def = WorkflowDefinition {
+            nodes: vec![llm_node(
+                "a",
+                json!({"connection_id":1,"model":"m","user_prompt":"{{trigger.q}}"}),
+            )],
+            edges: vec![],
+        };
+        assert!(validate_definition(&def).is_ok());
+    }
+
+    #[test]
+    fn skip_llm_mock_shape() {
+        let out = crate::workflow_llm::skip_llm_mock("m", false);
+        assert_eq!(out["finish_reason"], "stop");
+        assert_eq!(out["streamed"], false);
     }
 
     #[test]

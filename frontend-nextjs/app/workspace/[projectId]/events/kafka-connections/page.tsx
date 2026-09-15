@@ -18,6 +18,7 @@ import { useAppStore } from '@/lib/store'
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import { useNotification } from '@/hooks/useNotification'
 import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
+import { closeOnBackdropPress } from '@/lib/utils'
 
 const KAFKA_TOKEN_OPS: KafkaTokenOp[] = ['produce', 'list_topics', 'health']
 
@@ -1356,11 +1357,10 @@ function Dialog({
   return (
     <div
       className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
-      onClick={onClose}
+      onMouseDown={closeOnBackdropPress(onClose)}
     >
       <div
         className="bg-white rounded shadow-lg w-full max-w-xl max-h-[90vh] overflow-y-auto"
-        onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b">
           <div className="font-semibold">{title}</div>

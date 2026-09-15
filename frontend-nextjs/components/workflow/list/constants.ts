@@ -50,7 +50,7 @@ export function customFoldersStorageKey(databaseId?: number | null) {
 
 /** 紧凑列表：表头与数据行共用同一 grid（固定操作列宽度，避免 flex 挤压导致列错位） */
 export const COMPACT_LIST_GRID_CLASS =
-  'grid gap-x-3 px-5 [grid-template-columns:28px_minmax(0,1fr)_6.5rem_9.75rem] sm:[grid-template-columns:28px_minmax(0,1fr)_6.5rem_3.5rem_9.75rem] md:[grid-template-columns:28px_minmax(0,1fr)_6.5rem_3.5rem_minmax(0,5rem)_5.5rem_9.75rem]'
+  'grid gap-x-3 px-5 [grid-template-columns:28px_minmax(0,1fr)_6.5rem_9.75rem] sm:[grid-template-columns:28px_minmax(0,1fr)_6.5rem_3.5rem_9.75rem] md:[grid-template-columns:28px_minmax(0,1fr)_6.5rem_3.5rem_minmax(0,4.5rem)_minmax(0,4.5rem)_5.5rem_9.75rem]'
 
 /** 数据行：名称列顶对齐，其余列在整行高度内垂直居中 */
 export const COMPACT_LIST_ROW_GRID_CLASS = `${COMPACT_LIST_GRID_CLASS} items-start`

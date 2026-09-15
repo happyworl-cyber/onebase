@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { cn } from '@/lib/utils'
+import { cn, closeOnBackdropPress } from '@/lib/utils'
 import { showToast } from '@/components/Toast'
 import { TRIGGER_META } from './constants'
 import { parseImportedWorkflowFile } from './exportUtils'
@@ -375,9 +375,7 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !importing) onClose()
-      }}
+      onMouseDown={closeOnBackdropPress(() => { if (!importing) onClose() })}
     >
       <input
         ref={fileInputRef}

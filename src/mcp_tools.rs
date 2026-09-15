@@ -58,7 +58,7 @@ code 节点直接读请求 body、节点里没有 `{{trigger.x}}` 时必须声�
 ## 助手技能
 先 `list_skills`；名称对得上就 `get_skill` 再按正文做。检测 / 审查 / 改子流影响父流用 `workflow-qa`。新能力加 `skills/<name>/SKILL.md` 并在 `src/ai_skills.rs` 注册。
 
-## 节点类型（15 种）
+## 节点类型（16 种）
 
 ### db_query（只读查询）
 config: `{ "sql": "SELECT ...", "params": [可选绑定参数], "datasource_id": 可选整数, "dynamic_sql": 可选布尔 }`
@@ -119,7 +119,20 @@ config: `{ "method": "GET|POST|PUT|PATCH|DELETE", "url": "https://...", "headers
 - 禁止内网地址；超时由 timeout_secs / 默认 120s / 工作流 timeout_ms 兜底
 - `credential_id`：引用项目凭证。basic → Authorization Basic；bearer → Authorization Bearer；api_key → `{header_name}`（默认 X-API-Key）。覆盖节点 Headers 同名头
 - 默认输出 `{ "status", "headers", "body" }`
-- `stream: true`：按上游字节流读取。endpoint 触发时把上游 status + Content-Type/Cache-Control/Content-Disposition 原样写入本次 HTTP 响应（其余头丢弃），调用方收到的 body 与上游一致。节点同时输出 `{ status, headers, body, text, streamed: true }`：`body` 为上游原文（UTF-8 有损，上限 8MiB，超出加 body_truncated），`text` 仅从 OpenAI 兼容 SSE（choices[0].delta.content|delta.text|text）和 Claude content_block_delta.delta.text 抽取，认不出则为空串。全图最多一个 stream http_call；不可与 async_poll 同开。上游流结束后才跑下游；调用方断开不停工作流。非 endpoint / 子工作流只缓冲+抽文本，不占用父 HTTP。
+- `stream: true`：按上游字节流读取。endpoint 触发时把上游 status + Content-Type/Cache-Control/Content-Disposition 原样写入本次 HTTP 响应（其余头丢弃），调用方收到的 body 与上游一致。节点同时输出 `{ status, headers, body, text, streamed: true }`：`body` 为上游原文（UTF-8 有损，上限 8MiB，超出加 body_truncated），`text` 仅从 OpenAI 兼容 SSE（choices[0].delta.content|delta.text|text）和 Claude content_block_delta.delta.text 抽取，认不出则为空串。全图最多一个 stream http_call 或 llm；不可与 async_poll 同开。上游流结束后才跑下游；调用方断开不停工作流。非 endpoint / 子工作流只缓冲+抽文本，不占用父 HTTP。
+
+### llm（大模型 Chat Completions）
+config: `{ "connection_id": 整数, "model": "连接 models 列表中的字面量",
+          "system_prompt": "可选", "user_prompt": "可选",
+          "messages": "可选数组或 {{trigger.messages}}",
+          "temperature": 0.7, "max_tokens": 可选正整数,
+          "json_mode": false, "stream": false, "timeout_secs": 120, "skip_llm": false }`
+- 先 `list_llm_connections` 再填 `connection_id`，不要猜 id
+- 只 POST `{base_url}/chat/completions`（OpenAI 兼容）；密钥来自连接上的 credential_id
+- 组消息：system_prompt → messages → user_prompt；content 只允许字符串
+- 输出 `{ text, json?, usage, model, finish_reason, streamed? }`；json 仅 json_mode 成功时出现
+- dry_run 默认真调；`skip_llm: true` 才 mock
+- stream: true 与 http_call.stream 合计全图最多一个
 
 ### email_send（邮件）
 config: `{ "from": "Name <a@b.c>", "to": "x@y.z 或逗号分隔", "cc"/"bcc" 可选, "subject", "body" }`
@@ -303,8 +316,19 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "node_spec",
-            "description": "获取工作流节点规范：15 种节点的 config 格式、模板变量语法、条件表达式、循环、触发类型与约束。编写任何工作流定义前必读。",
+            "description": "获取工作流节点规范：16 种节点的 config 格式、模板变量语法、条件表达式、循环、触发类型与约束。编写任何工作流定义前必读。",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        },
+        {
+            "name": "list_llm_connections",
+            "description": "列出当前项目已登记的 LLM 连接（id/name/base_url/models/is_active/credential_id，无密钥）。编写 llm 节点前必调。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tenant_id": { "type": "integer", "description": "项目/租户 ID" }
+                },
+                "required": ["tenant_id"]
+            }
         },
         {
             "name": "list_workflows",
@@ -392,7 +416,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "debug_workflow",
-            "description": "调试运行一套（可未保存的）工作流定义，返回逐节点 output/status/耗时。默认 dry_run=true（跳过写库/HTTP/邮件/SSE）。dry_run=false 真实执行：非生产实例（RUST_ENV=development/staging/test）放开全部节点；生产实例自动进入只读护栏——仅 db_query 真实执行（READ ONLY 事务），副作用节点返回 blocked_by=production_readonly，Lua http 报错。",
+            "description": "调试运行一套（可未保存的）工作流定义，返回逐节点 output/status/耗时。默认 dry_run=true：跳过写库/http_call/邮件/SSE；llm 节点仍真调（除非节点 skip_llm）。dry_run=false 真实执行：非生产实例（RUST_ENV=development/staging/test）放开全部节点；生产实例自动进入只读护栏——仅 db_query 真实执行（READ ONLY 事务），副作用节点返回 blocked_by=production_readonly，llm 仍真调，Lua http 报错。",
             "inputSchema": { "type": "object", "properties": {
                 "nodes": { "type": "array" },
                 "edges": { "type": "array" },
@@ -485,6 +509,7 @@ pub async fn call_tool(pool: &PgPool, claims: &Claims, name: &str, args: &Value)
                 .ok_or_else(|| AppError::NotFound(format!("技能「{name}」不存在")))?;
             Ok(onebase::ai_skills::skill_json(&skill))
         }
+        "list_llm_connections" => tool_list_llm_connections(pool, claims, args).await,
         "list_workflows" => tool_list_workflows(pool, claims, args).await,
         "list_env_vars" => tool_list_env_vars(pool, claims, args).await,
         "get_workflow" => {
@@ -707,6 +732,17 @@ async fn tool_list_env_vars(pool: &PgPool, claims: &Claims, args: &Value) -> Res
     }))
 }
 
+async fn tool_list_llm_connections(pool: &PgPool, claims: &Claims, args: &Value) -> Result<Value> {
+    let tenant_id = args
+        .get("tenant_id")
+        .and_then(|v| v.as_i64())
+        .and_then(|v| i32::try_from(v).ok())
+        .ok_or_else(|| AppError::InvalidQuery("缺少 tenant_id".into()))?;
+    crate::permissions::require_tenant_membership_any(pool, claims, tenant_id).await?;
+    let rows = crate::llm_ds::list_for_tenant(pool, tenant_id).await?;
+    Ok(serde_json::to_value(rows).unwrap_or(json!([])))
+}
+
 async fn tool_list_workflows(pool: &PgPool, claims: &Claims, args: &Value) -> Result<Value> {
     let mut params: HashMap<String, String> = HashMap::new();
     for key in [
@@ -914,7 +950,7 @@ async fn tool_workflow_api_doc(pool: &PgPool, claims: &Claims, args: &Value) -> 
     ) > 0;
     let mut note = if streaming {
         format!(
-            "{note}\n本工作流含 stream: true 的 http_call：成功时 HTTP 响应是上游字节流（通常 text/event-stream），不是 JSON。请按上游 Content-Type 解析；curl 加 --no-buffer 以便边收边看。"
+            "{note}\n本工作流含 stream: true 的 http_call 或 llm：成功时 HTTP 响应是上游字节流（通常 text/event-stream），不是 JSON。请按上游 Content-Type 解析；curl 加 --no-buffer 以便边收边看。"
         )
     } else {
         note.to_string()
@@ -974,9 +1010,10 @@ mod tests {
     fn test_tool_definitions_shape() {
         let defs = tool_definitions();
         let arr = defs.as_array().expect("tools 应为数组");
-        assert_eq!(arr.len(), 18);
+        assert_eq!(arr.len(), 19);
         let names: Vec<_> = arr.iter().filter_map(|t| t["name"].as_str()).collect();
         assert!(names.contains(&"list_env_vars"));
+        assert!(names.contains(&"list_llm_connections"));
         assert!(names.contains(&"publish_workflow"));
         assert!(names.contains(&"discard_workflow_draft"));
         assert!(names.contains(&"review_workflow"));

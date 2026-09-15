@@ -26,6 +26,7 @@ import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import { useNotification } from '@/hooks/useNotification'
 import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
 import Drawer from '@/components/Drawer'
+import { closeOnBackdropPress } from '@/lib/utils'
 
 const ROLE_OPTIONS = ['owner', 'admin', 'member', 'viewer'] as const
 type RoleOption = typeof ROLE_OPTIONS[number]
@@ -651,11 +652,10 @@ export default function ProjectMembersPage() {
       {showAddDrawer && (
         <div
           className="fixed inset-0 bg-black/40 z-40 flex items-end justify-center sm:items-center"
-          onClick={closeAddDrawer}
+          onMouseDown={closeOnBackdropPress(closeAddDrawer)}
         >
           <div
             className="bg-white w-full max-w-lg rounded-xl shadow-xl p-6 m-4"
-            onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-lg font-semibold text-gray-900 mb-3">
               添加项目成员

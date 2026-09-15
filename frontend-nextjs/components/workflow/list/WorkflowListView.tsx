@@ -69,6 +69,7 @@ import {
   type ApiWorkflowFolder,
 } from './folderApi'
 import { fetchWorkflowList, fetchWorkflowSummary } from './listApi'
+import { WORKFLOW_GRAPH_ENTRY_VISIBLE } from '@/lib/featureFlags'
 
 export interface WorkflowListViewProps {
   cleaning: boolean
@@ -154,6 +155,7 @@ export default function WorkflowListView({
   const [workflows, setWorkflows] = useState<WorkflowListItem[]>([])
   const [listTotal, setListTotal] = useState(0)
   const [authors, setAuthors] = useState<string[]>([])
+  const [updaters, setUpdaters] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [selectedMap, setSelectedMap] = useState<Map<number, WorkflowListItem>>(new Map())
@@ -200,6 +202,7 @@ export default function WorkflowListView({
       status: 'all',
       trigs: new Set(),
       author: null,
+      updater: null,
       sort: prefs.sort ?? DEFAULT_LIST_SORT,
       view: prefs.view ?? 'compact',
       search: '',
@@ -283,6 +286,7 @@ export default function WorkflowListView({
       setWorkflows(result.workflows)
       setListTotal(result.total)
       setAuthors(result.authors ?? [])
+      setUpdaters(result.updaters ?? [])
     } catch (err) {
       console.error('加载工作流列表失败:', err)
     } finally {
@@ -307,6 +311,7 @@ export default function WorkflowListView({
     state.status,
     state.trigs,
     state.author,
+    state.updater,
     state.sort,
     state.perPage,
     debouncedSearch,
@@ -380,6 +385,7 @@ export default function WorkflowListView({
       globalSearch: false,
       trigs: new Set(),
       author: null,
+      updater: null,
       status: 'all',
       search: '',
       expanded: expandFolderPath(folders, folderId, s.expanded),
@@ -433,6 +439,7 @@ export default function WorkflowListView({
     state.status === 'all' &&
     state.trigs.size === 0 &&
     !state.author &&
+    !state.updater &&
     listTotal === 0 &&
     countInFolderFromGroups(summaryGroups, state.folderId) === 0
 
@@ -767,7 +774,7 @@ export default function WorkflowListView({
                 <i className="fas fa-layer-group text-[10px]" />
                 批量导入
               </button>
-              {projectId != null && (
+              {WORKFLOW_GRAPH_ENTRY_VISIBLE && projectId != null && (
                 <button
                   type="button"
                   data-alt="open-dependency-graph-button"
@@ -793,6 +800,7 @@ export default function WorkflowListView({
           <WorkflowListToolbar
             state={state}
             authors={authors}
+            updaters={updaters}
             onSearch={(search) => setState((s) => ({ ...s, search, page: 1 }))}
             onToggleGlobalSearch={() =>
               setState((s) => ({ ...s, globalSearch: !s.globalSearch, page: 1 }))
@@ -808,6 +816,7 @@ export default function WorkflowListView({
             }
             onClearTrigs={() => setState((s) => ({ ...s, trigs: new Set(), page: 1 }))}
             onSetAuthor={(author) => setState((s) => ({ ...s, author, page: 1 }))}
+            onSetUpdater={(updater) => setState((s) => ({ ...s, updater, page: 1 }))}
             onSetSort={(sort) => setState((s) => ({ ...s, sort, page: 1 }))}
             onSetView={(view) => setState((s) => ({ ...s, view, page: 1 }))}
             onResetFilters={() =>
@@ -817,6 +826,7 @@ export default function WorkflowListView({
                 globalSearch: false,
                 trigs: new Set(),
                 author: null,
+                updater: null,
                 status: 'all',
                 page: 1,
               }))
@@ -884,7 +894,7 @@ export default function WorkflowListView({
                       setBatchModal('move')
                     }}
                     onDelete={() => onDelete(wf)}
-                    onOpenGraph={projectId != null ? () => openWorkflowInGraph(wf) : undefined}
+                    onOpenGraph={WORKFLOW_GRAPH_ENTRY_VISIBLE && projectId != null ? () => openWorkflowInGraph(wf) : undefined}
                     selected={selectedMap.has(wf.id)}
                     onSelectToggle={() => toggleSelect(wf)}
                   />
@@ -915,7 +925,7 @@ export default function WorkflowListView({
                       setBatchModal('move')
                     }}
                     onDelete={() => onDelete(wf)}
-                    onOpenGraph={projectId != null ? () => openWorkflowInGraph(wf) : undefined}
+                    onOpenGraph={WORKFLOW_GRAPH_ENTRY_VISIBLE && projectId != null ? () => openWorkflowInGraph(wf) : undefined}
                     selected={selectedMap.has(wf.id)}
                     onSelectToggle={() => toggleSelect(wf)}
                   />

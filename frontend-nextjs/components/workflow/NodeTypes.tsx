@@ -20,6 +20,7 @@ export const NODE_TYPE_META: Record<string, { label: string; icon: string; color
   redis: { label: 'Redis 操作', icon: '⚡', color: 'bg-red-50', borderColor: 'border-red-300', accent: 'bg-red-300', minimapColor: '#fca5a5' },
   kafka: { label: 'Kafka 消息', icon: '📨', color: 'bg-lime-50', borderColor: 'border-lime-300', accent: 'bg-lime-300', minimapColor: '#bef264' },
   object_storage: { label: '对象存储', icon: '☁', color: 'bg-sky-50', borderColor: 'border-sky-300', accent: 'bg-sky-300', minimapColor: '#7dd3fc' },
+  llm: { label: '大模型', icon: '✦', color: 'bg-violet-50', borderColor: 'border-violet-400', accent: 'bg-violet-400', minimapColor: '#a78bfa' },
   loop: { label: '循环', icon: '↺', color: 'bg-fuchsia-50', borderColor: 'border-fuchsia-300', accent: 'bg-fuchsia-400', minimapColor: '#e879f9' },
 }
 

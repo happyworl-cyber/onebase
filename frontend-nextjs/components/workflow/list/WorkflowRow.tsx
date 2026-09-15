@@ -232,6 +232,17 @@ export default function WorkflowRow({
         className={cn(
           COMPACT_LIST_META_CELL_CLASS,
           LIST_BODY_TEXT_CLASS,
+          'text-slate-500 hidden md:flex truncate justify-self-start min-w-0',
+        )}
+        title={w.updated_by_email || w.updated_by_name || '未知'}
+      >
+        {w.updated_by_name || '未知'}
+      </span>
+
+      <span
+        className={cn(
+          COMPACT_LIST_META_CELL_CLASS,
+          LIST_BODY_TEXT_CLASS,
           'text-slate-400 hidden md:flex justify-self-start whitespace-nowrap tabular-nums',
         )}
       >
@@ -338,6 +349,8 @@ export function WorkflowCard({
             <span>{w.nodes?.length || 0} 节点</span>
             <span>·</span>
             <span>{w.created_by_name || '未知'}</span>
+            <span>·</span>
+            <span>{w.updated_by_name || '未知'}</span>
             <span>·</span>
             <span>{formatRelativeTime(w.updated_at)}</span>
           </div>

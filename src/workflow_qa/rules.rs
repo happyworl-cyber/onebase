@@ -316,6 +316,36 @@ pub fn scan_rules(wf: &WorkflowSnapshot) -> Vec<Finding> {
                 evidence(n),
             ));
         }
+
+        if ty == "llm" {
+            let cfg = n.get("config").cloned().unwrap_or(Value::Null);
+            let has_conn = cfg.get("connection_id").and_then(|v| v.as_i64()).is_some();
+            let has_model = cfg
+                .get("model")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .is_some_and(|s| !s.is_empty());
+            if !has_conn {
+                out.push(hit(
+                    Severity::High,
+                    "llm.missing_connection",
+                    "llm 节点缺少 connection_id",
+                    "先在集成 → LLM 登记连接，再填 connection_id",
+                    Some(n),
+                    evidence(n),
+                ));
+            }
+            if !has_model {
+                out.push(hit(
+                    Severity::High,
+                    "llm.missing_model",
+                    "llm 节点缺少 model",
+                    "model 必须是该连接 models 列表中的字面量",
+                    Some(n),
+                    evidence(n),
+                ));
+            }
+        }
     }
 
     out
@@ -518,5 +548,29 @@ mod tests {
             json!([{ "id": "c", "type": "code", "config": { "code": "http.post(url, {})" } }]);
         assert!(codes(&snap_full("manual", None, nodes, json!([])))
             .contains(&"style.http_in_code".to_string()));
+    }
+
+    #[test]
+    fn llm_missing_connection_and_model() {
+        let wf = snap(
+            "endpoint",
+            json!([{"id":"a","type":"llm","config":{}}]),
+            json!([]),
+        );
+        let c = codes(&wf);
+        assert!(c.contains(&"llm.missing_connection".to_string()));
+        assert!(c.contains(&"llm.missing_model".to_string()));
+    }
+
+    #[test]
+    fn llm_complete_config_skips_those_rules() {
+        let wf = snap(
+            "manual",
+            json!([{"id":"a","type":"llm","config":{"connection_id":1,"model":"m","user_prompt":"q"}}]),
+            json!([]),
+        );
+        let c = codes(&wf);
+        assert!(!c.contains(&"llm.missing_connection".to_string()));
+        assert!(!c.contains(&"llm.missing_model".to_string()));
     }
 }

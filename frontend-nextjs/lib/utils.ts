@@ -1,3 +1,4 @@
+import type { MouseEvent } from 'react'
 import { type ClassValue, clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
 
@@ -101,3 +102,16 @@ export function pgFunctionIdentity(fn: {
   return `${fn.schema_name}.${fn.function_name}(${fn.argument_types ?? ''})`
 }
 
+
+/**
+ * 弹窗遮罩的关闭处理：只有鼠标"按下"点落在遮罩本身时才关闭。
+ *
+ * 之所以用 mousedown 而不是 click：click 触发在按下点与松开点的最近公共祖先上，
+ * 用户在输入框里拖选文字、松手落到遮罩，click 就会打在遮罩上把弹窗误关掉。
+ * 用法：<div className="fixed inset-0 ..." onMouseDown={closeOnBackdropPress(onClose)}>
+ */
+export function closeOnBackdropPress(close: () => void) {
+  return (e: MouseEvent<HTMLElement>) => {
+    if (e.target === e.currentTarget) close()
+  }
+}

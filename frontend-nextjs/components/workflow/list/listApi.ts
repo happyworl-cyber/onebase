@@ -34,6 +34,7 @@ export interface PaginatedWorkflowList {
   page: number
   page_size: number
   authors?: string[]
+  updaters?: string[]
 }
 
 export function buildListQueryParams(
@@ -45,6 +46,7 @@ export function buildListQueryParams(
     page_size: state.perPage,
     sort: state.sort,
     include_authors: '1',
+    include_updaters: '1',
   }
 
   if (defaultDatabaseId != null) {
@@ -75,6 +77,7 @@ export function buildListQueryParams(
   }
 
   if (state.author) params.author = state.author
+  if (state.updater) params.updater = state.updater
 
   const q = state.search.trim()
   if (q) params.search = q
@@ -96,6 +99,7 @@ export async function fetchWorkflowList(
     page: data.page ?? state.page,
     page_size: data.page_size ?? state.perPage,
     authors: data.authors,
+    updaters: data.updaters,
   }
 }
 

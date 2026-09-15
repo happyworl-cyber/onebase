@@ -8,12 +8,14 @@ import type { WorkflowListPageState, WorkflowListSort, WorkflowListView } from '
 interface WorkflowListToolbarProps {
   state: WorkflowListPageState
   authors: string[]
+  updaters: string[]
   onSearch: (value: string) => void
   onToggleGlobalSearch: () => void
   onSetStatus: (status: WorkflowListPageState['status']) => void
   onToggleTrig: (key: string, checked: boolean) => void
   onClearTrigs: () => void
   onSetAuthor: (author: string | null) => void
+  onSetUpdater: (updater: string | null) => void
   onSetSort: (sort: WorkflowListSort) => void
   onSetView: (view: WorkflowListView) => void
   onResetFilters: () => void
@@ -76,21 +78,26 @@ function ChipClear({ label, onClear }: { label: string; onClear: () => void }) {
 export default function WorkflowListToolbar({
   state,
   authors,
+  updaters,
   onSearch,
   onToggleGlobalSearch,
   onSetStatus,
   onToggleTrig,
   onClearTrigs,
   onSetAuthor,
+  onSetUpdater,
   onSetSort,
   onSetView,
   onResetFilters,
 }: WorkflowListToolbarProps) {
-  const [openDrop, setOpenDrop] = useState<'trig' | 'author' | 'sort' | null>(null)
+  const [openDrop, setOpenDrop] = useState<'trig' | 'author' | 'updater' | 'sort' | null>(null)
   const [authorSearch, setAuthorSearch] = useState('')
+  const [updaterSearch, setUpdaterSearch] = useState('')
   const authorInputRef = useRef<HTMLInputElement>(null)
+  const updaterInputRef = useRef<HTMLInputElement>(null)
   const trigDropRef = useRef<HTMLDivElement>(null)
   const authorDropRef = useRef<HTMLDivElement>(null)
+  const updaterDropRef = useRef<HTMLDivElement>(null)
   const sortDropRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -98,6 +105,7 @@ export default function WorkflowListToolbar({
     const dropRefs = {
       trig: trigDropRef,
       author: authorDropRef,
+      updater: updaterDropRef,
       sort: sortDropRef,
     } as const
     const onPointerDown = (e: PointerEvent) => {
@@ -115,11 +123,19 @@ export default function WorkflowListToolbar({
       setAuthorSearch('')
       setTimeout(() => authorInputRef.current?.focus(), 50)
     }
+    if (openDrop === 'updater') {
+      setUpdaterSearch('')
+      setTimeout(() => updaterInputRef.current?.focus(), 50)
+    }
   }, [openDrop])
 
   const filteredAuthors = authorSearch.trim()
     ? authors.filter((a) => a.toLowerCase().includes(authorSearch.toLowerCase()))
     : authors
+
+  const filteredUpdaters = updaterSearch.trim()
+    ? updaters.filter((a) => a.toLowerCase().includes(updaterSearch.toLowerCase()))
+    : updaters
 
   const sortLabel = { updated_at: '最近修改', created_at: '创建时间', name: '名称 A→Z' }[state.sort]
 
@@ -128,6 +144,7 @@ export default function WorkflowListToolbar({
     state.globalSearch ||
     state.trigs.size > 0 ||
     !!state.author ||
+    !!state.updater ||
     state.status !== 'all'
 
   return (
@@ -290,6 +307,90 @@ export default function WorkflowListToolbar({
                       {a}
                     </span>
                     {state.author === a && <i className="fas fa-check text-indigo-600 text-[10px]" />}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Updater dropdown */}
+      <div className="relative" ref={updaterDropRef}>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            setOpenDrop(openDrop === 'updater' ? null : 'updater')
+          }}
+          className={cn(
+            'flex items-center gap-1.5 px-2.5 py-2 text-sm border rounded-lg font-medium',
+            state.updater
+              ? 'border-indigo-400 bg-indigo-50 text-indigo-700'
+              : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
+          )}
+        >
+          <i className="fas fa-user-pen text-slate-400 text-[10px]" />
+          {state.updater || '最近修改人'}
+          {state.updater ? (
+            <ChipClear label="清除最近修改人筛选" onClear={() => onSetUpdater(null)} />
+          ) : (
+            <i className="fas fa-chevron-down text-slate-300 text-[9px]" />
+          )}
+        </button>
+        {openDrop === 'updater' && (
+          <div
+            className="absolute top-full mt-1 left-0 bg-white border border-slate-200 rounded-xl py-1.5 z-30 w-36 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-2 pt-2 pb-1">
+              <div className="relative">
+                <i className="fas fa-search text-slate-300 absolute left-2 top-1/2 -translate-y-1/2 text-[9px]" />
+                <input
+                  ref={updaterInputRef}
+                  type="text"
+                  value={updaterSearch}
+                  onChange={(e) => setUpdaterSearch(e.target.value)}
+                  placeholder="搜索最近修改人…"
+                  className="w-full pl-6 pr-2 py-1.5 border border-slate-200 rounded-md text-sm placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                />
+              </div>
+            </div>
+            <div className="h-px bg-slate-100 mx-2 mb-1" />
+            <div className="overflow-y-auto max-h-40">
+              {!updaterSearch.trim() && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSetUpdater(null)
+                    setOpenDrop(null)
+                  }}
+                  className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center justify-between"
+                >
+                  全部
+                  {!state.updater && <i className="fas fa-check text-indigo-600 text-[10px]" />}
+                </button>
+              )}
+              {filteredUpdaters.length === 0 ? (
+                <div className="px-3 py-2 text-sm text-slate-400">无匹配</div>
+              ) : (
+                filteredUpdaters.map((a) => (
+                  <button
+                    key={a}
+                    type="button"
+                    onClick={() => {
+                      onSetUpdater(a)
+                      setOpenDrop(null)
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center justify-between"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-[10px] font-bold flex items-center justify-center">
+                        {a[0]}
+                      </span>
+                      {a}
+                    </span>
+                    {state.updater === a && <i className="fas fa-check text-indigo-600 text-[10px]" />}
                   </button>
                 ))
               )}

@@ -358,6 +358,14 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "071 workflow drafts",
         include_str!("../migrations/071_workflow_drafts.sql"),
     ),
+    (
+        "072 llm connections",
+        include_str!("../migrations/072_llm_connections.sql"),
+    ),
+    (
+        "073 workflow updated by",
+        include_str!("../migrations/073_workflow_updated_by.sql"),
+    ),
 ];
 
 /// API Keys 表（内联 SQL，历史上由独立的 migrate_api_keys 维护，这里随主序列一起跑）。

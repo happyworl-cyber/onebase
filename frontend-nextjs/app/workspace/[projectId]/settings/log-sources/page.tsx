@@ -17,6 +17,7 @@ import {
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import { useNotification } from '@/hooks/useNotification'
 import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
+import { closeOnBackdropPress } from '@/lib/utils'
 
 interface SourceForm {
   editing: ProjectLogSource | null
@@ -241,11 +242,10 @@ export default function ProjectLogSourcesPage() {
       {form && (
         <div
           className="fixed inset-0 bg-black/40 z-40 flex items-center justify-center p-4"
-          onClick={() => !saving && setForm(null)}
+          onMouseDown={closeOnBackdropPress(() => { if (!saving) setForm(null) })}
         >
           <div
             className="bg-white w-full max-w-lg rounded-xl shadow-xl p-6 max-h-[88vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-lg font-semibold text-gray-900 mb-4">
               {form.editing ? `编辑 ${form.editing.name}` : '新建日志源'}

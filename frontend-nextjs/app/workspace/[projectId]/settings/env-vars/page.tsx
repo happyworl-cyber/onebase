@@ -18,7 +18,7 @@ import { useParams } from 'next/navigation'
 import { projectEnvVarsAPI, type ProjectEnvVar } from '@/lib/api'
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import { useNotification } from '@/hooks/useNotification'
-import { copyToClipboard } from '@/lib/utils'
+import { copyToClipboard, closeOnBackdropPress } from '@/lib/utils'
 import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
 
 /** 变量名规则：字母/下划线开头，后续字母数字下划线（与后端校验一致）。 */
@@ -306,12 +306,11 @@ export default function ProjectEnvVarsPage() {
         <div
           data-alt="env-var-modal-backdrop"
           className="fixed inset-0 bg-black/40 z-40 flex items-end justify-center sm:items-center"
-          onClick={closeModal}
+          onMouseDown={closeOnBackdropPress(closeModal)}
         >
           <div
             data-alt="env-var-modal"
             className="bg-white w-full max-w-lg rounded-xl shadow-xl p-6 m-4"
-            onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-lg font-semibold text-gray-900 mb-4">
               {isCreate ? '新建环境变量' : `编辑 ${form.editing?.name}`}

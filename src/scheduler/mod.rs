@@ -10,6 +10,7 @@ pub mod cron_parser;
 pub mod executors;
 pub mod models;
 pub mod runner;
+pub mod stats;
 
 // 对外稳定 re-export；crate 内多从子模块路径直接引用，故允许 unused_imports。
 #[allow(unused_imports)]
