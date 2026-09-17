@@ -80,6 +80,9 @@ su - postgres -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname='$PG_DB'\" 
 export DATABASE_URL="postgresql://$PG_USER:$PG_PASS@127.0.0.1:5432/$PG_DB"
 # 主进程 supervisord 会读 AUTO_MIGRATE；缺省 on（与 app 镜像一致）
 export AUTO_MIGRATE="${AUTO_MIGRATE:-on}"
+# 代码默认预算 300 面向独立 RDS。AIO 同机 PG max_connections 默认 120，
+# 未显式设置时钉 60，避免多租户库把实例打满。
+export TENANT_POOL_GLOBAL_MAX_CONNECTIONS="${TENANT_POOL_GLOBAL_MAX_CONNECTIONS:-60}"
 
 # ─── 3. 运行数据库迁移（统一入口）───
 echo "[3/5] 运行数据库迁移 (AUTO_MIGRATE=${AUTO_MIGRATE})..."

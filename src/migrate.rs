@@ -366,6 +366,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "073 workflow updated by",
         include_str!("../migrations/073_workflow_updated_by.sql"),
     ),
+    (
+        "074 workflow updated_at no blind trigger",
+        include_str!("../migrations/074_workflow_updated_at_no_blind_trigger.sql"),
+    ),
 ];
 
 /// API Keys 表（内联 SQL，历史上由独立的 migrate_api_keys 维护，这里随主序列一起跑）。
@@ -679,5 +683,16 @@ mod tests {
         let s = MigrationStats::default();
         assert!(!s.has_error());
         assert_eq!(s.ok, 0);
+    }
+
+    #[test]
+    fn workflow_updated_at_fix_splits_as_one_shot_backfill() {
+        let sql = include_str!("../migrations/074_workflow_updated_at_no_blind_trigger.sql");
+        let parts = split_sql_statements(sql);
+        assert_eq!(parts.len(), 3, "{parts:?}");
+        assert!(parts[0].contains("IF EXISTS"));
+        assert!(parts[0].contains("GREATEST"));
+        assert!(parts[1].contains("DROP TRIGGER"));
+        assert!(parts[2].contains("DROP FUNCTION"));
     }
 }

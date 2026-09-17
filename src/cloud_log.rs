@@ -40,6 +40,25 @@ pub fn looks_like_trace_id(s: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+pub fn is_plain_sls_keyword(q: &str) -> bool {
+    let t = q.trim();
+    if t.is_empty() {
+        return false;
+    }
+    if t.chars()
+        .any(|c| matches!(c, ':' | '"' | '\'' | '(' | ')' | '|'))
+    {
+        return false;
+    }
+    !t.split_whitespace()
+        .any(|w| matches!(w.to_ascii_lowercase().as_str(), "and" | "or" | "not"))
+}
+
+pub fn expand_plain_sls_keyword(q: &str) -> String {
+    let esc = q.replace('\\', "\\\\").replace('"', "\\\"");
+    format!(r#"(content: "{esc}" or message: "{esc}" or "{esc}")"#)
+}
+
 pub fn compose_sls_query(
     prefix: Option<&str>,
     user_query: Option<&str>,
@@ -50,7 +69,11 @@ pub fn compose_sls_query(
         parts.push(p.to_string());
     }
     if let Some(q) = user_query.map(str::trim).filter(|s| !s.is_empty()) {
-        parts.push(q.to_string());
+        if is_plain_sls_keyword(q) {
+            parts.push(expand_plain_sls_keyword(q));
+        } else {
+            parts.push(q.to_string());
+        }
     }
     if let Some(id) = request_id.map(str::trim).filter(|s| !s.is_empty()) {
         if !looks_like_trace_id(id) {
@@ -146,7 +169,32 @@ mod tests {
         .unwrap();
         assert_eq!(
             q,
-            r#"app:pay and error and x_request_id: "98753d7e-3bdb-4c00-bcf7-4a697606b88b""#
+            r#"app:pay and (content: "error" or message: "error" or "error") and x_request_id: "98753d7e-3bdb-4c00-bcf7-4a697606b88b""#
+        );
+    }
+
+    #[test]
+    fn plain_keyword_expands_to_content_and_message() {
+        assert!(is_plain_sls_keyword("超时"));
+        assert!(is_plain_sls_keyword("android"));
+        assert!(!is_plain_sls_keyword("level: ERROR"));
+        assert!(!is_plain_sls_keyword("foo and bar"));
+        assert!(!is_plain_sls_keyword("a|b"));
+        assert_eq!(
+            compose_sls_query(None, Some("超时"), None).unwrap(),
+            r#"(content: "超时" or message: "超时" or "超时")"#
+        );
+        assert_eq!(
+            compose_sls_query(None, Some("level: ERROR"), None).unwrap(),
+            "level: ERROR"
+        );
+    }
+
+    #[test]
+    fn expand_escapes_backslash_and_quotes() {
+        assert_eq!(
+            expand_plain_sls_keyword(r#"a\b"c"#),
+            r#"(content: "a\\b\"c" or message: "a\\b\"c" or "a\\b\"c")"#
         );
     }
 

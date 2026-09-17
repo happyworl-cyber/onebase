@@ -11,6 +11,7 @@ import {
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import { useNotification } from '@/hooks/useNotification'
 import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
+import { shouldSubmitOnKeyDown } from './enterSubmit'
 import { oversizeWindowError } from './window'
 
 function toLocalInput(unix: number): string {
@@ -149,6 +150,7 @@ export default function ProjectCloudLogsPage() {
   const consoleLabel = consoleLabelFor(selectedSource?.provider)
 
   const handleQuery = async () => {
+    if (loading) return
     if (sourceId === '') return notify.warning('请选择日志源')
     const spanErr = oversizeWindowError(queryBody.from, queryBody.to)
     if (spanErr) return notify.error(spanErr)
@@ -259,8 +261,14 @@ export default function ProjectCloudLogsPage() {
               <input
                 value={keyword}
                 onChange={(e) => setKeyword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (shouldSubmitOnKeyDown(e)) {
+                    e.preventDefault()
+                    void handleQuery()
+                  }
+                }}
                 className="w-full input-base mt-1 font-mono"
-                placeholder="error"
+                placeholder="搜日志内容，如 超时 / error"
               />
             </label>
             <label className="block text-sm">
@@ -268,6 +276,12 @@ export default function ProjectCloudLogsPage() {
               <input
                 value={requestId}
                 onChange={(e) => setRequestId(e.target.value)}
+                onKeyDown={(e) => {
+                  if (shouldSubmitOnKeyDown(e)) {
+                    e.preventDefault()
+                    void handleQuery()
+                  }
+                }}
                 className="w-full input-base mt-1 font-mono"
                 placeholder="与执行日志 trace_id 相同"
               />

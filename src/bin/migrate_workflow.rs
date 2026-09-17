@@ -149,35 +149,13 @@ async fn main() -> anyhow::Result<()> {
 
     println!("  ✅ 索引已创建");
 
-    // ===== updated_at 触发器 =====
-    sqlx::query(
-        r#"
-        CREATE OR REPLACE FUNCTION management.update_workflows_updated_at()
-        RETURNS TRIGGER AS $$
-        BEGIN
-            NEW.updated_at = NOW();
-            RETURN NEW;
-        END;
-        $$ LANGUAGE plpgsql
-    "#,
-    )
-    .execute(&pool)
-    .await?;
-
     sqlx::query("DROP TRIGGER IF EXISTS trigger_workflows_updated_at ON management.workflows")
         .execute(&pool)
         .await?;
-
-    sqlx::query(
-        r#"
-        CREATE TRIGGER trigger_workflows_updated_at
-            BEFORE UPDATE ON management.workflows
-            FOR EACH ROW EXECUTE FUNCTION management.update_workflows_updated_at()
-    "#,
-    )
-    .execute(&pool)
-    .await?;
-    println!("  ✅ updated_at 触发器");
+    sqlx::query("DROP FUNCTION IF EXISTS management.update_workflows_updated_at()")
+        .execute(&pool)
+        .await?;
+    println!("  ✅ 不自动 stamp updated_at（由保存草稿 / 发布 SQL 显式写入）");
 
     println!("\n✅ Workflow DAG 引擎迁移完成！");
     println!("\n触发器类型:");

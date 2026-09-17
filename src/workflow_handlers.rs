@@ -347,7 +347,9 @@ pub struct Workflow {
     pub last_alert_sent_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: Option<i32>,
     pub updated_by: Option<i32>,
+    #[serde(serialize_with = "serialize_naive_as_utc")]
     pub created_at: chrono::NaiveDateTime,
+    #[serde(serialize_with = "serialize_naive_as_utc")]
     pub updated_at: chrono::NaiveDateTime,
     // 创建者账号信息：仅在列表/详情查询里 JOIN users 填充；其它 SELECT * 查询缺列时默认 None。
     #[sqlx(default)]
@@ -413,19 +415,22 @@ pub struct WorkflowRun {
     pub completed_at: Option<chrono::NaiveDateTime>,
 }
 
-/// 运行列表一行的摘要视图——不含 trigger_data（可能携带用户敏感入参，列表页不需要展示）。
+/// 运行列表一行。不含 `node_results` / `trigger_data`（大 JSON 与敏感入参）。
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct WorkflowRunSummary {
     pub id: i64,
     pub workflow_id: i32,
     pub trigger_type: String,
     pub status: String,
-    pub node_results: Value,
     pub elapsed_ms: Option<i64>,
     #[serde(serialize_with = "serialize_naive_as_utc")]
     pub started_at: chrono::NaiveDateTime,
     #[serde(serialize_with = "serialize_naive_as_utc_opt")]
     pub completed_at: Option<chrono::NaiveDateTime>,
+    pub error_message: Option<String>,
+    pub node_count: i32,
+    pub executed_count: i32,
+    pub failed_count: i32,
 }
 
 /// 工作流定义快照（版本控制）。只含定义相关字段，不含 is_enabled / 绑定信息。
@@ -721,7 +726,8 @@ fn publish_live_update_sql() -> &'static str {
     r#"UPDATE management.workflows SET
             name = $2, slug = $3, description = $4, category = $5, department = $6,
             trigger_type = $7, trigger_config = $8, input_schema = $9, nodes = $10, edges = $11,
-            dependencies = $12, timeout_ms = $13, max_retries = $14, updated_by = $15
+            dependencies = $12, timeout_ms = $13, max_retries = $14, updated_by = $15,
+            updated_at = NOW()
            WHERE id = $1
            RETURNING *"#
 }
@@ -3382,6 +3388,34 @@ pub async fn debug_workflow(
     }
 }
 
+// 列表绝不能投影 node_results：20 行 × 节点 I/O blob 曾把 payload 拖到约 10s。
+// 子查询用 CASE WHEN r.node_results IS NULL THEN '[]'::jsonb ELSE r.node_results END，
+// 不用 COALESCE(r.node_results, '[]'::jsonb)：单测禁止子串 `r.node_results,`，
+// COALESCE 即便不是列投影也会命中该断言。
+fn workflow_runs_list_sql() -> &'static str {
+    r#"SELECT r.id, r.workflow_id, r.trigger_type, r.status, r.elapsed_ms,
+              r.started_at, r.completed_at, r.error_message,
+              COALESCE(jsonb_array_length(r.node_results), 0) AS node_count,
+              (
+                SELECT COUNT(*)::int
+                FROM jsonb_array_elements(
+                  CASE WHEN r.node_results IS NULL THEN '[]'::jsonb ELSE r.node_results END
+                ) e
+                WHERE COALESCE(e->>'status', '') IS DISTINCT FROM 'skipped'
+              ) AS executed_count,
+              (
+                SELECT COUNT(*)::int
+                FROM jsonb_array_elements(
+                  CASE WHEN r.node_results IS NULL THEN '[]'::jsonb ELSE r.node_results END
+                ) e
+                WHERE e->>'status' = 'failed'
+              ) AS failed_count
+       FROM management.workflow_runs r
+       WHERE r.workflow_id = $1
+       ORDER BY r.started_at DESC
+       LIMIT $2"#
+}
+
 /// GET /api/admin/workflows/:id/runs
 pub async fn get_workflow_runs(
     State(pool): State<PgPool>,
@@ -3396,17 +3430,11 @@ pub async fn get_workflow_runs(
         .unwrap_or(20)
         .min(100);
 
-    let runs = sqlx::query_as::<_, WorkflowRunSummary>(
-        r#"SELECT id, workflow_id, trigger_type, status, node_results, elapsed_ms, started_at, completed_at
-           FROM management.workflow_runs
-           WHERE workflow_id = $1
-           ORDER BY started_at DESC
-           LIMIT $2"#,
-    )
-    .bind(id)
-    .bind(limit)
-    .fetch_all(&pool)
-    .await?;
+    let runs = sqlx::query_as::<_, WorkflowRunSummary>(workflow_runs_list_sql())
+        .bind(id)
+        .bind(limit)
+        .fetch_all(&pool)
+        .await?;
 
     Ok(Json(json!({ "runs": runs, "total": runs.len() })))
 }
@@ -5801,6 +5829,26 @@ mod tests {
         let sql = publish_live_update_sql();
         assert!(sql.contains("updated_by = $15"), "{sql}");
         assert!(sql.contains("name = $2"), "{sql}");
+        assert!(
+            sql.contains("updated_at = NOW()"),
+            "publish must stamp updated_at itself; the row trigger no longer auto-bumps it: {sql}"
+        );
+    }
+
+    #[test]
+    fn workflow_runs_list_sql_is_summary_without_node_results_blob() {
+        let sql = workflow_runs_list_sql();
+        assert!(sql.contains("r.error_message"), "{sql}");
+        assert!(sql.contains("AS node_count"), "{sql}");
+        assert!(sql.contains("AS executed_count"), "{sql}");
+        assert!(sql.contains("AS failed_count"), "{sql}");
+        assert!(sql.contains("jsonb_array_length(r.node_results)"), "{sql}");
+        assert!(
+            !sql.contains("r.node_results,")
+                && !sql.contains(", r.node_results")
+                && !sql.contains("SELECT r.node_results"),
+            "must not project node_results as a column: {sql}"
+        );
     }
 }
 
@@ -5869,6 +5917,23 @@ mod endpoint_response_tests {
         axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("read body")
+    }
+
+    #[test]
+    fn workflow_timestamps_serialize_as_utc() {
+        let mut wf = dummy_workflow(false);
+        wf.created_at =
+            chrono::NaiveDateTime::parse_from_str("2026-09-10 08:49:46", "%Y-%m-%d %H:%M:%S")
+                .unwrap();
+        wf.updated_at = wf.created_at;
+        let v = serde_json::to_value(&wf).unwrap();
+        for key in ["created_at", "updated_at"] {
+            let s = v[key].as_str().expect(key);
+            assert!(
+                s.starts_with("2026-09-10T08:49:46") && (s.ends_with('Z') || s.contains('+')),
+                "{key}={s}"
+            );
+        }
     }
 
     #[test]

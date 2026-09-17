@@ -527,13 +527,17 @@ export function countInFolder(
   return workflowsInFolder(workflows, folders, folderId, true).length
 }
 
-export function formatRelativeTime(iso: string): string {
+function startOfLocalDay(ms: number): number {
+  const d = new Date(ms)
+  d.setHours(0, 0, 0, 0)
+  return d.getTime()
+}
+
+export function formatRelativeTime(iso: string, nowMs: number = Date.now()): string {
   if (!iso) return '—'
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return '—'
-  const then = d.getTime()
-  const now = Date.now()
-  const days = Math.floor((now - then) / (1000 * 60 * 60 * 24))
+  const days = Math.round((startOfLocalDay(nowMs) - startOfLocalDay(d.getTime())) / (1000 * 60 * 60 * 24))
   if (days <= 0) return '今天'
   if (days === 1) return '昨天'
   if (days === 2) return '2天前'
