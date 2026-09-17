@@ -54,18 +54,5 @@ CREATE INDEX IF NOT EXISTS idx_workflows_trigger ON management.workflows(trigger
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_wid    ON management.workflow_runs(workflow_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON management.workflow_runs(status) WHERE status = 'running';
 
--- updated_at 自动维护触发器：函数 CREATE OR REPLACE 幂等；触发器先 DROP 再建（PG 的
--- CREATE TRIGGER 不支持 IF NOT EXISTS，DROP IF EXISTS + CREATE 是标准幂等写法）。
-CREATE OR REPLACE FUNCTION management.update_workflows_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS trigger_workflows_updated_at ON management.workflows;
-
-CREATE TRIGGER trigger_workflows_updated_at
-    BEFORE UPDATE ON management.workflows
-    FOR EACH ROW EXECUTE FUNCTION management.update_workflows_updated_at();
+-- 不再在本文件建 BEFORE UPDATE 自动 NOW() 触发器。旧库若已有，由 074 在回填
+-- updated_at 之后再拆掉；此处不能 DROP，否则 074 看不到触发器会跳过回填。

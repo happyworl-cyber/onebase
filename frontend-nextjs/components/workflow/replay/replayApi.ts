@@ -22,6 +22,10 @@ export interface ReplayRunSummary {
   elapsed_ms: number | null
   started_at: string
   completed_at: string | null
+  error_message?: string | null
+  node_count?: number
+  executed_count?: number
+  failed_count?: number
   node_results?: ReplayNodeResult[]
 }
 

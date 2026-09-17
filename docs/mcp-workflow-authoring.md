@@ -13,7 +13,7 @@ claude mcp add --transport http onebase https://你的OneBase地址/mcp \
   --header "Authorization: Bearer obm_xxxxxxxx"
 ```
 
-## 工具集（11 个）
+## 工具集
 
 | 工具 | 用途 |
 |------|------|
@@ -24,7 +24,7 @@ claude mcp add --transport http onebase https://你的OneBase地址/mcp \
 | `duplicate_workflow` | 复制为新副本（**强制 is_enabled=false**，自动唯一 slug）：基于现有工作流改造时先克隆再 update |
 | `debug_workflow` | 调试未保存定义，逐节点结果；**默认 dry_run=true** |
 | `workflow_api_doc` | 扫描 `{{trigger.X}}` 生成入参清单 + curl 示例 |
-| `get_workflow_runs` | 执行历史排错 |
+| `get_workflow_runs` / `get_workflow_run_detail` | 执行历史摘要（次数统计 + `error_message`，不含节点结果） / 单次运行节点级 I/O |
 | `list_workflow_versions` / `get_workflow_version` | 版本历史（每次保存 nodes/edges 自动产生版本）：查列表 / 取某版本完整快照；恢复版本由人在页面操作 |
 
 ## 安全模型

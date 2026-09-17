@@ -42,13 +42,17 @@ fn decrypt_password(encrypted: &str) -> String {
 /// 单库连接池 API 上限（存量更大值可读，新写入须落入此区间）。
 const TENANT_MAX_CONNECTIONS_CAP: i32 = 50;
 
+/// 同一 `(db_host, db_port)` 上各库 `max_connections` 之和的默认上限。
+/// 面向独立 RDS；AIO 同机 PG 在 `docker/entrypoint.sh` 钉 `60`。
+const TENANT_POOL_GLOBAL_BUDGET_DEFAULT: i32 = 300;
+
 fn tenant_pool_global_budget_from_env_map<F>(mut get: F) -> i32
 where
     F: FnMut(&str) -> Option<String>,
 {
     get("TENANT_POOL_GLOBAL_MAX_CONNECTIONS")
         .and_then(|s| s.parse().ok())
-        .unwrap_or(60)
+        .unwrap_or(TENANT_POOL_GLOBAL_BUDGET_DEFAULT)
         .max(1)
 }
 
@@ -4400,7 +4404,7 @@ mod connection_budget_tests {
 
     #[test]
     fn tenant_pool_global_budget_defaults_and_env() {
-        assert_eq!(tenant_pool_global_budget_from_env_map(|_| None), 60);
+        assert_eq!(tenant_pool_global_budget_from_env_map(|_| None), 300);
         assert_eq!(
             tenant_pool_global_budget_from_env_map(|k| {
                 if k == "TENANT_POOL_GLOBAL_MAX_CONNECTIONS" {

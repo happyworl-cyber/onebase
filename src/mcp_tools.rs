@@ -437,11 +437,19 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "get_workflow_runs",
-            "description": "查询工作流执行历史（含每次的节点结果与错误信息），用于排错。",
+            "description": "查询工作流执行历史摘要：次数统计（node_count / executed_count / failed_count）与 error_message，不含逐节点 I/O。节点级输入输出请调 get_workflow_run_detail。",
             "inputSchema": { "type": "object", "properties": {
                 "id": { "type": "integer", "description": "工作流 ID" },
                 "limit": { "type": "integer", "description": "默认 20，最大 100" }
             }, "required": ["id"] }
+        },
+        {
+            "name": "get_workflow_run_detail",
+            "description": "查询单次工作流运行的完整明细（含逐节点输入输出与错误），用于排错。run_id 来自 get_workflow_runs。",
+            "inputSchema": { "type": "object", "properties": {
+                "id": { "type": "integer", "description": "工作流 ID" },
+                "run_id": { "type": "integer", "description": "运行记录 ID（来自 get_workflow_runs）" }
+            }, "required": ["id", "run_id"] }
         },
         {
             "name": "list_workflow_versions",
@@ -563,6 +571,19 @@ pub async fn call_tool(pool: &PgPool, claims: &Claims, name: &str, args: &Value)
                 State(pool.clone()),
                 Path(id),
                 Query(params),
+                axum::Extension(claims.clone()),
+            )
+            .await?;
+            Ok(resp.0)
+        }
+        "get_workflow_run_detail" => {
+            let id = require_id(args)?;
+            let run_id = args.get("run_id").and_then(|v| v.as_i64()).ok_or_else(|| {
+                AppError::InvalidQuery("缺少必填参数 run_id 或 run_id 超出范围".to_string())
+            })?;
+            let resp = workflow_handlers::get_workflow_run_detail(
+                State(pool.clone()),
+                Path((id, run_id)),
                 axum::Extension(claims.clone()),
             )
             .await?;
@@ -1010,7 +1031,7 @@ mod tests {
     fn test_tool_definitions_shape() {
         let defs = tool_definitions();
         let arr = defs.as_array().expect("tools 应为数组");
-        assert_eq!(arr.len(), 19);
+        assert_eq!(arr.len(), 20);
         let names: Vec<_> = arr.iter().filter_map(|t| t["name"].as_str()).collect();
         assert!(names.contains(&"list_env_vars"));
         assert!(names.contains(&"list_llm_connections"));
@@ -1025,5 +1046,25 @@ mod tests {
             assert!(t.get("description").is_some());
             assert!(t.get("inputSchema").is_some());
         }
+    }
+
+    #[test]
+    fn get_workflow_runs_is_summary_and_detail_tool_exists() {
+        let defs = tool_definitions();
+        let arr = defs.as_array().expect("tools 应为数组");
+        let names: Vec<_> = arr.iter().filter_map(|t| t["name"].as_str()).collect();
+        assert!(
+            names.contains(&"get_workflow_run_detail"),
+            "MCP 须提供 get_workflow_run_detail 供客户端取节点级 I/O"
+        );
+        let runs = arr
+            .iter()
+            .find(|t| t["name"] == "get_workflow_runs")
+            .expect("get_workflow_runs 须存在");
+        let desc = runs["description"].as_str().unwrap_or("");
+        assert!(
+            !desc.contains("节点结果"),
+            "get_workflow_runs 是摘要列表，不得声称含节点结果: {desc}"
+        );
     }
 }

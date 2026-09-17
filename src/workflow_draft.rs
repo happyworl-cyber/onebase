@@ -44,6 +44,8 @@ pub fn apply_draft(wf: &mut Workflow, draft: &WorkflowDraft) {
     wf.dependencies.clone_from(&draft.dependencies);
     wf.timeout_ms = draft.timeout_ms;
     wf.max_retries = draft.max_retries;
+    wf.updated_by = draft.updated_by;
+    wf.updated_at = draft.updated_at;
     wf.has_unpublished = true;
 }
 
@@ -199,10 +201,11 @@ pub fn upsert_draft_sql() -> &'static str {
               note = EXCLUDED.note,
               updated_by = EXCLUDED.updated_by,
               updated_at = EXCLUDED.updated_at
-            RETURNING workflow_id, updated_by
+            RETURNING workflow_id, updated_by, updated_at
         )
         UPDATE management.workflows w
-        SET updated_by = d.updated_by
+        SET updated_by = d.updated_by,
+            updated_at = d.updated_at
         FROM d
         WHERE w.id = d.workflow_id
           AND d.updated_by IS NOT NULL"#
@@ -356,6 +359,8 @@ mod tests {
         assert_eq!(wf.alert_webhook_url.as_deref(), Some("https://example.com"));
         assert!(wf.has_unpublished);
         assert_eq!(wf.published_slug.as_deref(), Some("live"));
+        assert_eq!(wf.updated_at, timestamp(1));
+        assert_eq!(wf.updated_by, Some(1));
     }
 
     #[test]
@@ -442,5 +447,6 @@ mod tests {
         );
         assert!(sql.contains("UPDATE management.workflows w"), "{sql}");
         assert!(sql.contains("AND d.updated_by IS NOT NULL"), "{sql}");
+        assert!(sql.contains("updated_at = d.updated_at"), "{sql}");
     }
 }

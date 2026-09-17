@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { cn } from '@/lib/utils'
+import { cn, formatDateTime } from '@/lib/utils'
 import {
   COMPACT_LIST_ACTIONS_CLASS,
   COMPACT_LIST_META_CELL_CLASS,
@@ -245,6 +245,7 @@ export default function WorkflowRow({
           LIST_BODY_TEXT_CLASS,
           'text-slate-400 hidden md:flex justify-self-start whitespace-nowrap tabular-nums',
         )}
+        title={w.updated_at ? formatDateTime(w.updated_at) : undefined}
       >
         {formatRelativeTime(w.updated_at)}
       </span>
@@ -352,7 +353,9 @@ export function WorkflowCard({
             <span>·</span>
             <span>{w.updated_by_name || '未知'}</span>
             <span>·</span>
-            <span>{formatRelativeTime(w.updated_at)}</span>
+            <span title={w.updated_at ? formatDateTime(w.updated_at) : undefined}>
+              {formatRelativeTime(w.updated_at)}
+            </span>
           </div>
         </div>
         <div className="shrink-0" onClick={(e) => e.stopPropagation()}>

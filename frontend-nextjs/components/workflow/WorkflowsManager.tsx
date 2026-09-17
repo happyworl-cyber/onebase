@@ -33,6 +33,12 @@ import WorkflowDocContent, {
 } from '@/components/workflow/WorkflowDocContent'
 import WorkflowListView from '@/components/workflow/list/WorkflowListView'
 import ExecutionReplayView from '@/components/workflow/replay/ExecutionReplayView'
+import {
+  fetchReplayRunDetail,
+  type ReplayRunDetail,
+  type ReplayRunSummary,
+} from '@/components/workflow/replay/replayApi'
+import { runDetailFetchId } from '@/components/workflow/runDetailLoad'
 import WorkflowConfirmDialog from '@/components/workflow/list/WorkflowConfirmDialog'
 import { showToast } from '@/components/Toast'
 import Modal from '@/components/Modal'
@@ -186,19 +192,6 @@ function clearEditorDraft(databaseId?: number | null): void {
   } catch {
     /* ignore */
   }
-}
-
-interface WorkflowRun {
-  id: number
-  workflow_id: number
-  trigger_type: string
-  status: string
-  node_results: any[]
-  final_output: any
-  error_message: string | null
-  elapsed_ms: number | null
-  started_at: string
-  completed_at: string | null
 }
 
 const TRIGGER_TYPES = [
@@ -435,7 +428,8 @@ const MCP_TOOLS: ReadonlyArray<readonly [string, string]> = [
   ['debug_workflow', '调试试跑，不依赖发布；默认干跑，真实执行受环境护栏约束'],
   ['review_workflow / review_workflows', '单个 / 批量质量检查，只出报告不改工作流'],
   ['workflow_api_doc', '按已发布定义生成入参清单 + curl 示例；未发布则按草稿预览'],
-  ['get_workflow_runs', '查执行历史排错'],
+  ['get_workflow_runs', '查执行历史摘要（次数统计 + error_message，不含节点 I/O）'],
+  ['get_workflow_run_detail', '查单次运行节点级输入输出'],
   ['list_workflow_versions', '查询版本历史（仅元信息，只含已发布快照）'],
   ['get_workflow_version', '获取历史版本完整快照（含 nodes/edges），恢复归人'],
 ]
@@ -793,8 +787,12 @@ export default function WorkflowsManager({
   const [cleaning, setCleaning] = useState(false)
   const [view, setView] = useState<'list' | 'editor'>(initialDraft ? 'editor' : 'list')
   const [editing, setEditing] = useState<Workflow | null>(initialDraft?.editing ?? null)
-  const [runs, setRuns] = useState<WorkflowRun[]>([])
+  const [runs, setRuns] = useState<ReplayRunSummary[]>([])
   const [showRuns, setShowRuns] = useState<number | null>(null)
+  const [runDetails, setRunDetails] = useState<Record<number, ReplayRunDetail>>({})
+  const [runDetailLoading, setRunDetailLoading] = useState<Record<number, boolean>>({})
+  const [runDetailError, setRunDetailError] = useState<Record<number, string>>({})
+  const [openRunDetails, setOpenRunDetails] = useState<Record<number, boolean>>({})
   const [connections, setConnections] = useState<ConnRow[]>([])
 
   // 编辑器内：使用说明 + 调试
@@ -1668,14 +1666,42 @@ export default function WorkflowsManager({
       const res = await api.get(`/api/admin/workflows/${id}/runs?limit=20`)
       setRuns(res.data.runs || [])
       setShowRuns(id)
+      setRunDetails({})
+      setRunDetailLoading({})
+      setRunDetailError({})
+      setOpenRunDetails({})
     } catch {}
+  }
+
+  const ensureRunDetail = async (workflowId: number, runId: number) => {
+    const loaded = new Set(Object.keys(runDetails).map(Number))
+    if (runDetailFetchId(runId, true, loaded) == null) return
+    if (runDetailLoading[runId]) return
+    setRunDetailLoading((s) => ({ ...s, [runId]: true }))
+    setRunDetailError((s) => {
+      const next = { ...s }
+      delete next[runId]
+      return next
+    })
+    try {
+      const detail = await fetchReplayRunDetail(workflowId, runId)
+      setRunDetails((s) => ({ ...s, [runId]: detail }))
+    } catch (err: unknown) {
+      const ax = err as { response?: { data?: { error?: string } }; message?: string }
+      setRunDetailError((s) => ({
+        ...s,
+        [runId]: ax.response?.data?.error || ax.message || '加载失败',
+      }))
+    } finally {
+      setRunDetailLoading((s) => ({ ...s, [runId]: false }))
+    }
   }
 
   // "执行记录"某一行点"查看执行回放"：预选这次 run 并打开回放层。回放图要画节点/连线结构，
   // 而"执行记录"弹层可能是从列表直接打开的（没进编辑器、editorNodes/editorEdges 是空的）——
   // 此时借用 openEditor 把该工作流的最新定义拉进编辑器状态，和"编辑"按钮走的是同一条路径，
   // 不重复发明一套加载逻辑；已经在编辑同一个工作流时跳过这一步，避免多余的网络请求。
-  const handleViewReplay = async (run: WorkflowRun) => {
+  const handleViewReplay = async (run: ReplayRunSummary) => {
     setReplayInitialRunId(run.id)
     if (editing?.id !== run.workflow_id) {
       await openEditor({ id: run.workflow_id } as Workflow)
@@ -2123,8 +2149,8 @@ export default function WorkflowsManager({
               ) : (
                 <div className="space-y-4">
                   {runs.map(run => {
-                    const executed = (run.node_results || []).filter((nr: NodeResultItem) => nr.status !== 'skipped')
-                    const failed = (run.node_results || []).filter((nr: NodeResultItem) => nr.status === 'failed')
+                    const executed = run.executed_count ?? 0
+                    const failed = run.failed_count ?? 0
                     return (
                       <div key={run.id} className="border rounded-lg p-4">
                         <div className="flex items-center justify-between gap-3">
@@ -2137,10 +2163,10 @@ export default function WorkflowsManager({
                               <span className="text-xs text-gray-400">{run.trigger_type}</span>
                             )}
                             {run.elapsed_ms != null && <span className="text-xs text-gray-400">{run.elapsed_ms}ms</span>}
-                            {executed.length > 0 && (
+                            {executed > 0 && (
                               <span className="text-xs text-gray-400">
-                                {executed.length} 个节点执行
-                                {failed.length > 0 && <span className="text-red-500 ml-1">· {failed.length} 失败</span>}
+                                {executed} 个节点执行
+                                {failed > 0 && <span className="text-red-500 ml-1">· {failed} 失败</span>}
                               </span>
                             )}
                           </div>
@@ -2161,22 +2187,43 @@ export default function WorkflowsManager({
                             {run.error_message}
                           </div>
                         )}
-                        {run.node_results && run.node_results.length > 0 && (
-                          <details className="mt-3" open={failed.length > 0}>
-                            <summary className="text-xs font-medium text-gray-500 cursor-pointer hover:text-gray-700 select-none">
-                              逐节点详情 ({run.node_results.length})
-                            </summary>
-                            <div className="mt-2">
-                              <NodeResultList results={run.node_results} />
-                            </div>
-                          </details>
-                        )}
-                        {run.final_output && (
-                          <details className="mt-2">
-                            <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-600">最终输出</summary>
-                            <JsonLogBlock value={run.final_output} />
-                          </details>
-                        )}
+                        <details
+                          className="mt-3"
+                          open={!!openRunDetails[run.id]}
+                          onToggle={(e) => {
+                            const open = (e.currentTarget as HTMLDetailsElement).open
+                            setOpenRunDetails((s) => ({ ...s, [run.id]: open }))
+                            if (open && showRuns != null) void ensureRunDetail(showRuns, run.id)
+                          }}
+                        >
+                          <summary className="text-xs font-medium text-gray-500 cursor-pointer hover:text-gray-700 select-none">
+                            逐节点详情 ({run.node_count ?? 0})
+                          </summary>
+                          <div className="mt-2">
+                            {runDetailLoading[run.id] && <p className="text-xs text-gray-400">加载中…</p>}
+                            {runDetailError[run.id] && (
+                              <p className="text-xs text-red-600">
+                                {runDetailError[run.id]}{' '}
+                                <button
+                                  type="button"
+                                  className="underline"
+                                  onClick={() => showRuns != null && void ensureRunDetail(showRuns, run.id)}
+                                >
+                                  重试
+                                </button>
+                              </p>
+                            )}
+                            {runDetails[run.id]?.node_results && (
+                              <NodeResultList results={runDetails[run.id].node_results as NodeResultItem[]} />
+                            )}
+                            {runDetails[run.id]?.final_output != null && (
+                              <details className="mt-2">
+                                <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-600">最终输出</summary>
+                                <JsonLogBlock value={runDetails[run.id].final_output} />
+                              </details>
+                            )}
+                          </div>
+                        </details>
                       </div>
                     )
                   })}
