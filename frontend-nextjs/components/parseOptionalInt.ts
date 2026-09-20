@@ -2,9 +2,10 @@ export type OptionalInt = number | ''
 
 /** 数字输入：允许清空后再键入；空串不回落到默认值。 */
 export function parseOptionalInt(raw: string): OptionalInt {
-  if (raw.trim() === '') return ''
-  const n = Number.parseInt(raw, 10)
-  return Number.isFinite(n) ? n : ''
+  const text = raw.trim()
+  if (text === '' || !/^-?\d+$/.test(text)) return ''
+  const n = Number(text)
+  return Number.isSafeInteger(n) ? n : ''
 }
 
 export function parsePoolSettings(

@@ -142,6 +142,94 @@ const RETIRE_ORG_NOTIFY_BRIDGES_SQL: &str = r#"
     WHERE b.database_id = td.id AND t.organization_id = $1 AND b.is_active = true
 "#;
 
+const RETIRE_ORG_ES_TOKENS_SQL: &str = r#"
+    UPDATE management.es_access_tokens tok
+    SET is_active = false, revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP)
+    FROM management.es_connections c
+    JOIN management.tenants t ON t.id = c.tenant_id
+    WHERE tok.connection_id = c.id AND t.organization_id = $1 AND tok.is_active = true
+"#;
+
+const RETIRE_ORG_ES_CONNECTIONS_SQL: &str = r#"
+    UPDATE management.es_connections c
+    SET is_active = false, updated_at = CURRENT_TIMESTAMP
+    FROM management.tenants t
+    WHERE t.id = c.tenant_id AND t.organization_id = $1 AND c.is_active = true
+"#;
+
+const RETIRE_ORG_KAFKA_TOKENS_SQL: &str = r#"
+    UPDATE management.kafka_access_tokens tok
+    SET is_active = false, revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP)
+    FROM management.kafka_connections c
+    JOIN management.tenants t ON t.id = c.tenant_id
+    WHERE tok.connection_id = c.id AND t.organization_id = $1 AND tok.is_active = true
+"#;
+
+const RETIRE_ORG_KAFKA_CONNECTIONS_SQL: &str = r#"
+    UPDATE management.kafka_connections c
+    SET is_active = false, updated_at = CURRENT_TIMESTAMP
+    FROM management.tenants t
+    WHERE t.id = c.tenant_id AND t.organization_id = $1 AND c.is_active = true
+"#;
+
+const RETIRE_ORG_OBJECT_STORAGE_TOKENS_SQL: &str = r#"
+    UPDATE management.object_storage_access_tokens tok
+    SET is_active = false, revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP)
+    FROM management.object_storage_connections c
+    JOIN management.tenants t ON t.id = c.tenant_id
+    WHERE tok.connection_id = c.id AND t.organization_id = $1 AND tok.is_active = true
+"#;
+
+const RETIRE_ORG_OBJECT_STORAGE_CONNECTIONS_SQL: &str = r#"
+    UPDATE management.object_storage_connections c
+    SET is_active = false, updated_at = CURRENT_TIMESTAMP
+    FROM management.tenants t
+    WHERE t.id = c.tenant_id AND t.organization_id = $1 AND c.is_active = true
+"#;
+
+const RETIRE_ORG_REDIS_CONNECTIONS_SQL: &str = r#"
+    UPDATE management.redis_connections c
+    SET is_active = false, updated_at = CURRENT_TIMESTAMP
+    FROM management.tenants t
+    WHERE t.id = c.tenant_id AND t.organization_id = $1 AND c.is_active = true
+"#;
+
+const RETIRE_ORG_AI_PROVIDERS_SQL: &str = r#"
+    UPDATE management.ai_providers p
+    SET is_active = false, is_default = false, updated_at = CURRENT_TIMESTAMP
+    FROM management.tenants t
+    WHERE t.id = p.tenant_id AND t.organization_id = $1 AND p.is_active = true
+"#;
+
+const RETIRE_ORG_LLM_CONNECTIONS_SQL: &str = r#"
+    UPDATE management.llm_connections c
+    SET is_active = false, updated_at = CURRENT_TIMESTAMP
+    FROM management.tenants t
+    WHERE t.id = c.tenant_id AND t.organization_id = $1 AND c.is_active = true
+"#;
+
+const RETIRE_ORG_WORKFLOW_DATASOURCES_SQL: &str = r#"
+    UPDATE management.wf_datasources d
+    SET is_active = false, updated_at = CURRENT_TIMESTAMP
+    FROM management.tenants t
+    WHERE t.id = d.tenant_id AND t.organization_id = $1 AND d.is_active = true
+"#;
+
+const RETIRE_ORG_SESSION_RULES_SQL: &str = r#"
+    UPDATE management.session_rules r
+    SET is_active = false, updated_at = CURRENT_TIMESTAMP
+    FROM management.tenant_databases td
+    JOIN management.tenants t ON t.id = td.tenant_id
+    WHERE r.database_id = td.id AND t.organization_id = $1 AND r.is_active = true
+"#;
+
+const RETIRE_ORG_RATE_LIMIT_RULES_SQL: &str = r#"
+    UPDATE management.rate_limit_rules r
+    SET is_active = false, updated_at = CURRENT_TIMESTAMP
+    FROM management.tenants t
+    WHERE t.id = r.tenant_id AND t.organization_id = $1 AND r.is_active = true
+"#;
+
 const RETIRE_ORG_DATABASE_IDS_SQL: &str = r#"
     SELECT td.id
     FROM management.tenant_databases td
@@ -166,6 +254,18 @@ async fn retire_organization_resources_in_tx(
         RETIRE_ORG_IDP_SQL,
         RETIRE_ORG_OAUTH_CLIENTS_SQL,
         RETIRE_ORG_NOTIFY_BRIDGES_SQL,
+        RETIRE_ORG_ES_TOKENS_SQL,
+        RETIRE_ORG_ES_CONNECTIONS_SQL,
+        RETIRE_ORG_KAFKA_TOKENS_SQL,
+        RETIRE_ORG_KAFKA_CONNECTIONS_SQL,
+        RETIRE_ORG_OBJECT_STORAGE_TOKENS_SQL,
+        RETIRE_ORG_OBJECT_STORAGE_CONNECTIONS_SQL,
+        RETIRE_ORG_REDIS_CONNECTIONS_SQL,
+        RETIRE_ORG_AI_PROVIDERS_SQL,
+        RETIRE_ORG_LLM_CONNECTIONS_SQL,
+        RETIRE_ORG_WORKFLOW_DATASOURCES_SQL,
+        RETIRE_ORG_SESSION_RULES_SQL,
+        RETIRE_ORG_RATE_LIMIT_RULES_SQL,
     ] {
         sqlx::query(sql)
             .bind(organization_id)
@@ -1632,11 +1732,16 @@ mod tests {
     use super::{
         organization_member_upsert_sql, released_slug, ORGANIZATION_MATRIX_CELLS_SQL,
         ORGANIZATION_MATRIX_MEMBERS_SQL, ORGANIZATION_MATRIX_PROJECTS_SQL,
-        ORGANIZATION_SECURITY_OVERVIEW_SQL, RETIRE_ORG_API_KEYS_SQL, RETIRE_ORG_DATABASES_SQL,
-        RETIRE_ORG_IDP_SQL, RETIRE_ORG_NOTIFY_BRIDGES_SQL, RETIRE_ORG_OAUTH_CLIENTS_SQL,
-        RETIRE_ORG_PROJECTS_SQL, RETIRE_ORG_SCHEDULED_TASKS_SQL, RETIRE_ORG_SSE_ENDPOINTS_SQL,
+        ORGANIZATION_SECURITY_OVERVIEW_SQL, RETIRE_ORG_AI_PROVIDERS_SQL, RETIRE_ORG_API_KEYS_SQL,
+        RETIRE_ORG_DATABASES_SQL, RETIRE_ORG_ES_CONNECTIONS_SQL, RETIRE_ORG_ES_TOKENS_SQL,
+        RETIRE_ORG_IDP_SQL, RETIRE_ORG_KAFKA_CONNECTIONS_SQL, RETIRE_ORG_KAFKA_TOKENS_SQL,
+        RETIRE_ORG_LLM_CONNECTIONS_SQL, RETIRE_ORG_NOTIFY_BRIDGES_SQL,
+        RETIRE_ORG_OAUTH_CLIENTS_SQL, RETIRE_ORG_OBJECT_STORAGE_CONNECTIONS_SQL,
+        RETIRE_ORG_OBJECT_STORAGE_TOKENS_SQL, RETIRE_ORG_PROJECTS_SQL,
+        RETIRE_ORG_RATE_LIMIT_RULES_SQL, RETIRE_ORG_REDIS_CONNECTIONS_SQL,
+        RETIRE_ORG_SCHEDULED_TASKS_SQL, RETIRE_ORG_SESSION_RULES_SQL, RETIRE_ORG_SSE_ENDPOINTS_SQL,
         RETIRE_ORG_SSE_ROUTES_SQL, RETIRE_ORG_SSO_SQL, RETIRE_ORG_WEBHOOKS_SQL,
-        RETIRE_ORG_WORKFLOWS_SQL,
+        RETIRE_ORG_WORKFLOWS_SQL, RETIRE_ORG_WORKFLOW_DATASOURCES_SQL,
     };
 
     #[test]
@@ -1664,6 +1769,18 @@ mod tests {
             RETIRE_ORG_IDP_SQL,
             RETIRE_ORG_OAUTH_CLIENTS_SQL,
             RETIRE_ORG_NOTIFY_BRIDGES_SQL,
+            RETIRE_ORG_ES_TOKENS_SQL,
+            RETIRE_ORG_ES_CONNECTIONS_SQL,
+            RETIRE_ORG_KAFKA_TOKENS_SQL,
+            RETIRE_ORG_KAFKA_CONNECTIONS_SQL,
+            RETIRE_ORG_OBJECT_STORAGE_TOKENS_SQL,
+            RETIRE_ORG_OBJECT_STORAGE_CONNECTIONS_SQL,
+            RETIRE_ORG_REDIS_CONNECTIONS_SQL,
+            RETIRE_ORG_AI_PROVIDERS_SQL,
+            RETIRE_ORG_LLM_CONNECTIONS_SQL,
+            RETIRE_ORG_WORKFLOW_DATASOURCES_SQL,
+            RETIRE_ORG_SESSION_RULES_SQL,
+            RETIRE_ORG_RATE_LIMIT_RULES_SQL,
         ]
         .join("\n");
         assert!(RETIRE_ORG_PROJECTS_SQL.contains("status = 'deleted'"));
@@ -1678,6 +1795,20 @@ mod tests {
         assert!(sqls.contains("management.project_idp_providers"));
         assert!(sqls.contains("management.oauth2_clients"));
         assert!(sqls.contains("management.sse_notify_bridges"));
+        assert!(sqls.contains("management.es_access_tokens"));
+        assert!(sqls.contains("management.es_connections"));
+        assert!(sqls.contains("management.kafka_access_tokens"));
+        assert!(sqls.contains("management.kafka_connections"));
+        assert!(sqls.contains("management.object_storage_access_tokens"));
+        assert!(sqls.contains("management.object_storage_connections"));
+        assert!(sqls.contains("management.redis_connections"));
+        assert!(sqls.contains("management.ai_providers"));
+        assert!(sqls.contains("is_default = false"));
+        assert!(sqls.contains("management.llm_connections"));
+        assert!(sqls.contains("management.wf_datasources"));
+        assert!(sqls.contains("management.session_rules"));
+        assert!(sqls.contains("management.rate_limit_rules"));
+        assert!(sqls.contains("revoked_at = COALESCE"));
     }
 
     #[test]
