@@ -6,6 +6,7 @@
 use crate::auth::Claims;
 use crate::error::{AppError, Result};
 use crate::permissions;
+use crate::pool_manager::POOL_MANAGER;
 use crate::redis_manager::RedisManager;
 use crate::tenant_handlers::{self, ProvisionRequest};
 use axum::{
@@ -38,6 +39,222 @@ fn validate_org_role(role: &str) -> Result<()> {
             "无效组织角色 '{}'，必须是 owner / admin / member 之一",
             role
         ))),
+    }
+}
+
+/// 软删除后释放 slug，避免重建同名租户撞 UNIQUE。幂等：已带 `-d{id}` 后缀则不改。
+fn released_slug(slug: &str, id: i32) -> String {
+    let suffix = format!("-d{id}");
+    if slug.ends_with(&suffix) {
+        return slug.to_string();
+    }
+    let max_base = 50usize.saturating_sub(suffix.len()).max(1);
+    let base: String = slug.chars().take(max_base).collect();
+    format!("{base}{suffix}")
+}
+
+const RETIRE_ORG_PROJECTS_SQL: &str = r#"
+    UPDATE management.tenants
+    SET status = 'deleted',
+        slug = CASE
+            WHEN right(slug, char_length('-d' || id::text)) = '-d' || id::text THEN slug
+            ELSE left(slug, GREATEST(1, 50 - char_length('-d' || id::text))) || '-d' || id::text
+        END,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE organization_id = $1
+"#;
+
+const RETIRE_ORG_DATABASES_SQL: &str = r#"
+    UPDATE management.tenant_databases td
+    SET is_active = false, updated_at = CURRENT_TIMESTAMP
+    FROM management.tenants t
+    WHERE t.id = td.tenant_id AND t.organization_id = $1 AND td.is_active = true
+"#;
+
+const RETIRE_ORG_SCHEDULED_TASKS_SQL: &str = r#"
+    UPDATE management.scheduled_tasks st
+    SET is_active = false
+    FROM management.tenants t
+    WHERE t.id = st.tenant_id AND t.organization_id = $1 AND st.is_active = true
+"#;
+
+const RETIRE_ORG_WORKFLOWS_SQL: &str = r#"
+    UPDATE management.workflows w
+    SET is_enabled = false, updated_at = CURRENT_TIMESTAMP
+    FROM management.tenants t
+    WHERE t.id = w.tenant_id AND t.organization_id = $1 AND w.is_enabled = true
+"#;
+
+const RETIRE_ORG_WEBHOOKS_SQL: &str = r#"
+    UPDATE management.webhooks w
+    SET is_active = false, updated_at = CURRENT_TIMESTAMP
+    FROM management.tenants t
+    WHERE t.id = w.tenant_id AND t.organization_id = $1 AND w.is_active = true
+"#;
+
+const RETIRE_ORG_SSO_SQL: &str = r#"
+    UPDATE management.sso_providers s
+    SET is_active = false, updated_at = CURRENT_TIMESTAMP
+    FROM management.tenants t
+    WHERE t.id = s.tenant_id AND t.organization_id = $1 AND s.is_active = true
+"#;
+
+const RETIRE_ORG_API_KEYS_SQL: &str = r#"
+    UPDATE management.api_keys k
+    SET is_active = false
+    FROM management.tenants t
+    WHERE t.id = k.tenant_id AND t.organization_id = $1 AND k.is_active = true
+"#;
+
+const RETIRE_ORG_SSE_ROUTES_SQL: &str = r#"
+    UPDATE management.sse_routes r
+    SET is_active = false, updated_at = CURRENT_TIMESTAMP
+    FROM management.tenants t
+    WHERE t.id = r.tenant_id AND t.organization_id = $1 AND r.is_active = true
+"#;
+
+const RETIRE_ORG_SSE_ENDPOINTS_SQL: &str = r#"
+    UPDATE management.sse_public_endpoints e
+    SET is_active = false, updated_at = CURRENT_TIMESTAMP
+    FROM management.tenants t
+    WHERE t.id = e.tenant_id AND t.organization_id = $1 AND e.is_active = true
+"#;
+
+const RETIRE_ORG_IDP_SQL: &str = r#"
+    UPDATE management.project_idp_providers p
+    SET is_enabled = false, updated_at = CURRENT_TIMESTAMP
+    FROM management.tenants t
+    WHERE t.id = p.tenant_id AND t.organization_id = $1 AND p.is_enabled = true
+"#;
+
+const RETIRE_ORG_OAUTH_CLIENTS_SQL: &str = r#"
+    UPDATE management.oauth2_clients c
+    SET is_active = false
+    FROM management.tenants t
+    WHERE t.id = c.tenant_id AND t.organization_id = $1 AND c.is_active = true
+"#;
+
+const RETIRE_ORG_NOTIFY_BRIDGES_SQL: &str = r#"
+    UPDATE management.sse_notify_bridges b
+    SET is_active = false, updated_at = CURRENT_TIMESTAMP
+    FROM management.tenant_databases td
+    JOIN management.tenants t ON t.id = td.tenant_id
+    WHERE b.database_id = td.id AND t.organization_id = $1 AND b.is_active = true
+"#;
+
+const RETIRE_ORG_DATABASE_IDS_SQL: &str = r#"
+    SELECT td.id
+    FROM management.tenant_databases td
+    JOIN management.tenants t ON t.id = td.tenant_id
+    WHERE t.organization_id = $1
+"#;
+
+async fn retire_organization_resources_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    organization_id: i32,
+) -> Result<Vec<i32>> {
+    for sql in [
+        RETIRE_ORG_PROJECTS_SQL,
+        RETIRE_ORG_DATABASES_SQL,
+        RETIRE_ORG_SCHEDULED_TASKS_SQL,
+        RETIRE_ORG_WORKFLOWS_SQL,
+        RETIRE_ORG_WEBHOOKS_SQL,
+        RETIRE_ORG_SSO_SQL,
+        RETIRE_ORG_API_KEYS_SQL,
+        RETIRE_ORG_SSE_ROUTES_SQL,
+        RETIRE_ORG_SSE_ENDPOINTS_SQL,
+        RETIRE_ORG_IDP_SQL,
+        RETIRE_ORG_OAUTH_CLIENTS_SQL,
+        RETIRE_ORG_NOTIFY_BRIDGES_SQL,
+    ] {
+        sqlx::query(sql)
+            .bind(organization_id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    let db_ids: Vec<i32> = sqlx::query_scalar(RETIRE_ORG_DATABASE_IDS_SQL)
+        .bind(organization_id)
+        .fetch_all(&mut **tx)
+        .await?;
+    Ok(db_ids)
+}
+
+async fn close_retired_pools(database_ids: Vec<i32>) {
+    for database_id in database_ids {
+        POOL_MANAGER.remove_pool(database_id).await;
+    }
+}
+
+/// 启动时收口已经 `status=deleted` 的租户（历史软删除没有级联停资源）。
+pub async fn retire_already_deleted_organizations(pool: &PgPool) {
+    let ids: Vec<i32> = match sqlx::query_scalar(
+        "SELECT id FROM management.organizations WHERE status = 'deleted' ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("扫描已删除租户失败，跳过历史收口: {}", e);
+            return;
+        }
+    };
+    if ids.is_empty() {
+        return;
+    }
+    tracing::info!("开始收口 {} 个已删除租户的残留资源", ids.len());
+    for organization_id in ids {
+        match sqlx::query_scalar::<_, String>(
+            "SELECT slug FROM management.organizations WHERE id = $1",
+        )
+        .bind(organization_id)
+        .fetch_optional(pool)
+        .await
+        {
+            Ok(Some(slug)) => {
+                let new_slug = released_slug(&slug, organization_id);
+                if new_slug != slug {
+                    if let Err(e) = sqlx::query(
+                        "UPDATE management.organizations SET slug = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+                    )
+                    .bind(organization_id)
+                    .bind(&new_slug)
+                    .execute(pool)
+                    .await
+                    {
+                        tracing::warn!(
+                            organization_id,
+                            error = %e,
+                            "已删除租户释放 slug 失败"
+                        );
+                    }
+                }
+            }
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!(organization_id, error = %e, "读取已删除租户 slug 失败");
+                continue;
+            }
+        }
+        match pool.begin().await {
+            Ok(mut tx) => match retire_organization_resources_in_tx(&mut tx, organization_id).await
+            {
+                Ok(db_ids) => match tx.commit().await {
+                    Ok(()) => close_retired_pools(db_ids).await,
+                    Err(e) => tracing::warn!(
+                        organization_id,
+                        error = %e,
+                        "提交已删除租户收口失败"
+                    ),
+                },
+                Err(e) => tracing::warn!(
+                    organization_id,
+                    error = %e,
+                    "已删除租户资源收口失败"
+                ),
+            },
+            Err(e) => tracing::warn!(organization_id, error = %e, "已删除租户收口开事务失败"),
+        }
     }
 }
 
@@ -270,6 +487,60 @@ pub async fn patch_organization(
                 "status 必须是 active / suspended / deleted".to_string(),
             ));
         }
+    }
+
+    if req.status.as_deref() == Some("deleted") {
+        let mut tx = pool.begin().await?;
+        let row = sqlx::query(
+            r#"
+            UPDATE management.organizations
+            SET
+              name = COALESCE($2, name),
+              contact_email = COALESCE($3, contact_email),
+              status = 'deleted',
+              updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1 AND status <> 'deleted'
+            RETURNING id, name, slug, status, contact_email
+            "#,
+        )
+        .bind(organization_id)
+        .bind(req.name.as_deref().map(|s| s.trim()))
+        .bind(req.contact_email.as_deref())
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("组织 {} 不存在", organization_id)))?;
+
+        let current_slug: String = row.get("slug");
+        let new_slug = released_slug(&current_slug, organization_id);
+        let row = if new_slug != current_slug {
+            sqlx::query(
+                r#"
+                UPDATE management.organizations
+                SET slug = $2, updated_at = CURRENT_TIMESTAMP
+                WHERE id = $1
+                RETURNING id, name, slug, status, contact_email
+                "#,
+            )
+            .bind(organization_id)
+            .bind(&new_slug)
+            .fetch_one(&mut *tx)
+            .await?
+        } else {
+            row
+        };
+
+        let db_ids = retire_organization_resources_in_tx(&mut tx, organization_id).await?;
+        tx.commit().await?;
+        close_retired_pools(db_ids).await;
+
+        let role = if claims.is_superadmin {
+            "superadmin".to_string()
+        } else {
+            "owner".to_string()
+        };
+        return Ok(Json(json!({
+            "organization": org_row_json(&row, &role),
+        })));
     }
 
     let row = sqlx::query(
@@ -1359,10 +1630,55 @@ pub async fn organization_stats(
 #[cfg(test)]
 mod tests {
     use super::{
-        organization_member_upsert_sql, ORGANIZATION_MATRIX_CELLS_SQL,
+        organization_member_upsert_sql, released_slug, ORGANIZATION_MATRIX_CELLS_SQL,
         ORGANIZATION_MATRIX_MEMBERS_SQL, ORGANIZATION_MATRIX_PROJECTS_SQL,
-        ORGANIZATION_SECURITY_OVERVIEW_SQL,
+        ORGANIZATION_SECURITY_OVERVIEW_SQL, RETIRE_ORG_API_KEYS_SQL, RETIRE_ORG_DATABASES_SQL,
+        RETIRE_ORG_IDP_SQL, RETIRE_ORG_NOTIFY_BRIDGES_SQL, RETIRE_ORG_OAUTH_CLIENTS_SQL,
+        RETIRE_ORG_PROJECTS_SQL, RETIRE_ORG_SCHEDULED_TASKS_SQL, RETIRE_ORG_SSE_ENDPOINTS_SQL,
+        RETIRE_ORG_SSE_ROUTES_SQL, RETIRE_ORG_SSO_SQL, RETIRE_ORG_WEBHOOKS_SQL,
+        RETIRE_ORG_WORKFLOWS_SQL,
     };
+
+    #[test]
+    fn released_slug_appends_id_and_is_idempotent() {
+        assert_eq!(released_slug("acme", 14), "acme-d14");
+        assert_eq!(released_slug("acme-d14", 14), "acme-d14");
+        let long = "abcdefghijklmnopqrstuvwxyz0123456789abcdefghij";
+        let out = released_slug(long, 9);
+        assert!(out.ends_with("-d9"));
+        assert!(out.len() <= 50);
+    }
+
+    #[test]
+    fn org_delete_retires_live_resources() {
+        let sqls = [
+            RETIRE_ORG_PROJECTS_SQL,
+            RETIRE_ORG_DATABASES_SQL,
+            RETIRE_ORG_SCHEDULED_TASKS_SQL,
+            RETIRE_ORG_WORKFLOWS_SQL,
+            RETIRE_ORG_WEBHOOKS_SQL,
+            RETIRE_ORG_SSO_SQL,
+            RETIRE_ORG_API_KEYS_SQL,
+            RETIRE_ORG_SSE_ROUTES_SQL,
+            RETIRE_ORG_SSE_ENDPOINTS_SQL,
+            RETIRE_ORG_IDP_SQL,
+            RETIRE_ORG_OAUTH_CLIENTS_SQL,
+            RETIRE_ORG_NOTIFY_BRIDGES_SQL,
+        ]
+        .join("\n");
+        assert!(RETIRE_ORG_PROJECTS_SQL.contains("status = 'deleted'"));
+        assert!(RETIRE_ORG_DATABASES_SQL.contains("is_active = false"));
+        assert!(RETIRE_ORG_WORKFLOWS_SQL.contains("is_enabled = false"));
+        assert!(sqls.contains("management.scheduled_tasks"));
+        assert!(sqls.contains("management.webhooks"));
+        assert!(sqls.contains("management.sso_providers"));
+        assert!(sqls.contains("management.api_keys"));
+        assert!(sqls.contains("management.sse_routes"));
+        assert!(sqls.contains("management.sse_public_endpoints"));
+        assert!(sqls.contains("management.project_idp_providers"));
+        assert!(sqls.contains("management.oauth2_clients"));
+        assert!(sqls.contains("management.sse_notify_bridges"));
+    }
 
     #[test]
     fn org_member_reactivation_only_updates_explicit_role() {

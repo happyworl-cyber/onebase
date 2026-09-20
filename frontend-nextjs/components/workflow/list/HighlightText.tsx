@@ -7,11 +7,11 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/** 把搜索关键词按空格拆成去重后的 term 列表（与后端多关键词 AND 分词一致）。 */
+/** 把搜索关键词拆成去重后的 term 列表；分隔符须与后端 split_search_terms 保持一致。 */
 export function searchTerms(query?: string | null): string[] {
   const q = (query ?? '').trim()
   if (!q) return []
-  return Array.from(new Set(q.split(/\s+/).filter(Boolean)))
+  return Array.from(new Set(q.split(/[\s,，]+/).filter(Boolean)))
 }
 
 interface HighlightTextProps {

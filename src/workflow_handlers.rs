@@ -894,6 +894,24 @@ fn escape_like(term: &str) -> String {
         .replace('_', "\\_")
 }
 
+/// 搜索关键词拆词：空白与中英文逗号都算分隔符——从表格 / 文档里粘出来的编号常带逗号。
+/// 必须过滤空串：`split` 遇到连续分隔符会产出空片段（`split_whitespace` 不会）。
+fn split_search_terms(kw: &str) -> Vec<&str> {
+    kw.split(|c: char| c.is_whitespace() || c == ',' || c == '，')
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// 多编号批量搜索：关键词全为纯数字且不止一个时，返回这组 ID，交由调用方按并集查询。
+/// 单个数字返回 None——它仍应走常规跨字段匹配（名称 / slug 里含该数字的也要命中）。
+fn parse_multi_id_search(kw: &str) -> Option<Vec<i32>> {
+    let terms = split_search_terms(kw);
+    if terms.len() < 2 {
+        return None;
+    }
+    terms.iter().map(|t| t.parse::<i32>().ok()).collect()
+}
+
 fn push_list_filters(qb: &mut sqlx::QueryBuilder<'_, sqlx::Postgres>, p: &ParsedListParams) {
     // 文件夹层过滤：全局搜索开启时整段跳过，让搜索/浏览横跨该库（权限 scope）下的所有文件夹。
     if !p.global_search {
@@ -946,25 +964,32 @@ fn push_list_filters(qb: &mut sqlx::QueryBuilder<'_, sqlx::Postgres>, p: &Parsed
         }
     }
 
-    // 关键词搜索：按空格拆分为多个 term，每个 term 都需命中（AND），单个 term 内跨字段（OR）。
-    // 支持 ID（纯数字精确匹配）/ 名称 / slug / 描述 / 部门 / 分类。
+    // 关键词搜索分两种语义：
+    // - 多个纯数字（如「597 598」「597,598」）：按 ID 取并集——多编号在 AND 语义下必然互斥，
+    //   只能是并集意图。
+    // - 其余情况：拆分为多个 term，每个 term 都需命中（AND），单个 term 内跨字段（OR）。
+    //   支持 ID（纯数字精确匹配）/ 名称 / slug / 描述 / 部门 / 分类。
     if let Some(kw) = &p.search {
-        for term in kw.split_whitespace() {
-            let like = format!("%{}%", escape_like(term));
-            qb.push(" AND (w.name ILIKE ")
-                .push_bind(like.clone())
-                .push(" OR w.slug ILIKE ")
-                .push_bind(like.clone())
-                .push(" OR w.description ILIKE ")
-                .push_bind(like.clone())
-                .push(" OR w.department ILIKE ")
-                .push_bind(like.clone())
-                .push(" OR w.category ILIKE ")
-                .push_bind(like);
-            if let Ok(id) = term.parse::<i32>() {
-                qb.push(" OR w.id = ").push_bind(id);
+        if let Some(ids) = parse_multi_id_search(kw) {
+            qb.push(" AND w.id = ANY(").push_bind(ids).push(")");
+        } else {
+            for term in split_search_terms(kw) {
+                let like = format!("%{}%", escape_like(term));
+                qb.push(" AND (w.name ILIKE ")
+                    .push_bind(like.clone())
+                    .push(" OR w.slug ILIKE ")
+                    .push_bind(like.clone())
+                    .push(" OR w.description ILIKE ")
+                    .push_bind(like.clone())
+                    .push(" OR w.department ILIKE ")
+                    .push_bind(like.clone())
+                    .push(" OR w.category ILIKE ")
+                    .push_bind(like);
+                if let Ok(id) = term.parse::<i32>() {
+                    qb.push(" OR w.id = ").push_bind(id);
+                }
+                qb.push(")");
             }
-            qb.push(")");
         }
     }
 }

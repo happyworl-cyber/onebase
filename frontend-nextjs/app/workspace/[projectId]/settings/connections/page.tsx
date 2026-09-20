@@ -12,6 +12,7 @@ import {
   TENANT_MAX_CONNECTIONS_CAP,
   TenantPoolSettingsForm,
 } from '@/components/TenantPoolSettings'
+import { parseOptionalInt, parsePoolSettings, type OptionalInt } from '@/components/parseOptionalInt'
 
 export default function ConnectionsPage() {
   // W2：项目维度的连接管理。tenant_id 来自 URL 而不再来自 currentTenant
@@ -38,8 +39,8 @@ export default function ConnectionsPage() {
     db_name: '',
     db_user: '',
     db_password: '',
-    max_connections: DEFAULT_TENANT_MAX_CONNECTIONS,
-    connection_timeout: DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS,
+    max_connections: DEFAULT_TENANT_MAX_CONNECTIONS as OptionalInt,
+    connection_timeout: DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS as OptionalInt,
   })
   const [editTestResult, setEditTestResult] = useState<any>(null)
   const [editTesting, setEditTesting] = useState(false)
@@ -58,8 +59,8 @@ export default function ConnectionsPage() {
     is_primary: false,
     db_role: 'primary' as 'primary' | 'replica',
     primary_id: null as number | null,
-    max_connections: DEFAULT_TENANT_MAX_CONNECTIONS,
-    connection_timeout: DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS,
+    max_connections: DEFAULT_TENANT_MAX_CONNECTIONS as OptionalInt,
+    connection_timeout: DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS as OptionalInt,
   })
 
   useEffect(() => {
@@ -143,9 +144,18 @@ export default function ConnectionsPage() {
       alert('Replica 必须选择对应的 Primary 连接')
       return
     }
+    const pool = parsePoolSettings(formData.max_connections, formData.connection_timeout, TENANT_MAX_CONNECTIONS_CAP)
+    if (!pool.ok) {
+      alert(pool.text)
+      return
+    }
     setLoading(true)
     try {
-      await tenantAPI.createConnection(formData)
+      await tenantAPI.createConnection({
+        ...formData,
+        max_connections: pool.max,
+        connection_timeout: pool.timeout,
+      })
       alert('连接创建成功！')
       setShowForm(false)
       resetForm()
@@ -263,6 +273,11 @@ export default function ConnectionsPage() {
       alert('主机、数据库名、用户名不能为空')
       return
     }
+    const pool = parsePoolSettings(editForm.max_connections, editForm.connection_timeout, TENANT_MAX_CONNECTIONS_CAP)
+    if (!pool.ok) {
+      alert(pool.text)
+      return
+    }
     setEditSaving(true)
     setUpdatingId(editConn.database_id)
     try {
@@ -275,8 +290,8 @@ export default function ConnectionsPage() {
         db_user: editForm.db_user.trim(),
         // 留空 = 不修改密码（后端 COALESCE 语义）
         ...(editForm.db_password ? { db_password: editForm.db_password } : {}),
-        max_connections: editForm.max_connections,
-        connection_timeout: editForm.connection_timeout,
+        max_connections: pool.max,
+        connection_timeout: pool.timeout,
       })
       setEditConn(null)
       await loadConnections()
@@ -465,7 +480,7 @@ export default function ConnectionsPage() {
                 <input
                   type="number"
                   value={formData.max_connections}
-                  onChange={(e) => setFormData({ ...formData, max_connections: parseInt(e.target.value) })}
+                  onChange={(e) => setFormData({ ...formData, max_connections: parseOptionalInt(e.target.value) })}
                   className="input-base w-full"
                   min="1"
                   max={TENANT_MAX_CONNECTIONS_CAP}
@@ -479,7 +494,7 @@ export default function ConnectionsPage() {
                 <input
                   type="number"
                   value={formData.connection_timeout}
-                  onChange={(e) => setFormData({ ...formData, connection_timeout: parseInt(e.target.value) })}
+                  onChange={(e) => setFormData({ ...formData, connection_timeout: parseOptionalInt(e.target.value) })}
                   className="input-base w-full"
                   min="1"
                   max="600"
@@ -782,7 +797,7 @@ export default function ConnectionsPage() {
                   <input
                     type="number"
                     value={editForm.max_connections}
-                    onChange={(e) => setEditForm({ ...editForm, max_connections: parseInt(e.target.value) || 1 })}
+                    onChange={(e) => setEditForm({ ...editForm, max_connections: parseOptionalInt(e.target.value) })}
                     className="input-base w-full"
                     min="1"
                     max={TENANT_MAX_CONNECTIONS_CAP}
@@ -796,7 +811,7 @@ export default function ConnectionsPage() {
                   <input
                     type="number"
                     value={editForm.connection_timeout}
-                    onChange={(e) => setEditForm({ ...editForm, connection_timeout: parseInt(e.target.value) || 1 })}
+                    onChange={(e) => setEditForm({ ...editForm, connection_timeout: parseOptionalInt(e.target.value) })}
                     className="input-base w-full"
                     min="1"
                     max="600"

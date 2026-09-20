@@ -495,18 +495,33 @@ pub async fn get_system_stats(
         .fetch_one(&pool)
         .await?;
 
-    let total_tenants = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM management.tenants")
-        .fetch_one(&pool)
-        .await?;
+    let total_tenants = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*) FROM management.tenants t
+        JOIN management.organizations o ON o.id = t.organization_id
+        WHERE o.status <> 'deleted'
+        "#,
+    )
+    .fetch_one(&pool)
+    .await?;
 
     let active_tenants = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM management.tenants WHERE status = 'active'",
+        r#"
+        SELECT COUNT(*) FROM management.tenants t
+        JOIN management.organizations o ON o.id = t.organization_id
+        WHERE t.status = 'active' AND o.status <> 'deleted'
+        "#,
     )
     .fetch_one(&pool)
     .await?;
 
     let total_databases = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM management.tenant_databases WHERE is_active = true",
+        r#"
+        SELECT COUNT(*) FROM management.tenant_databases td
+        JOIN management.tenants t ON t.id = td.tenant_id
+        JOIN management.organizations o ON o.id = t.organization_id
+        WHERE td.is_active = true AND t.status = 'active' AND o.status <> 'deleted'
+        "#,
     )
     .fetch_one(&pool)
     .await?;

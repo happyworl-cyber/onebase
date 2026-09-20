@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { tenantAPI } from '@/lib/api'
+import { parseOptionalInt, parsePoolSettings, type OptionalInt } from '@/components/parseOptionalInt'
 
 /** 与 `pool_manager::DEFAULT_TENANT_MAX_CONNECTIONS` 对齐。 */
 export const DEFAULT_TENANT_MAX_CONNECTIONS = 20
@@ -28,8 +29,8 @@ export function TenantPoolSettingsForm({
   liveTimeout?: number | null
   onSaved?: (max: number, timeout: number) => void
 }) {
-  const [maxConn, setMaxConn] = useState(initialMax)
-  const [timeoutSecs, setTimeoutSecs] = useState(initialTimeout)
+  const [maxConn, setMaxConn] = useState<OptionalInt>(initialMax)
+  const [timeoutSecs, setTimeoutSecs] = useState<OptionalInt>(initialTimeout)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
@@ -40,16 +41,12 @@ export function TenantPoolSettingsForm({
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
-    const max = Number(maxConn)
-    const timeout = Number(timeoutSecs)
-    if (!Number.isFinite(max) || max < 1 || max > TENANT_MAX_CONNECTIONS_CAP) {
-      setMsg({ ok: false, text: `最大连接数必须在 1–${TENANT_MAX_CONNECTIONS_CAP}` })
+    const pool = parsePoolSettings(maxConn, timeoutSecs, TENANT_MAX_CONNECTIONS_CAP)
+    if (!pool.ok) {
+      setMsg({ ok: false, text: pool.text })
       return
     }
-    if (!Number.isFinite(timeout) || timeout < 1 || timeout > 600) {
-      setMsg({ ok: false, text: '获取超时必须在 1–600 秒' })
-      return
-    }
+    const { max, timeout } = pool
     setSaving(true)
     setMsg(null)
     try {
@@ -80,7 +77,7 @@ export function TenantPoolSettingsForm({
             min={1}
             max={TENANT_MAX_CONNECTIONS_CAP}
             value={maxConn}
-            onChange={(e) => setMaxConn(parseInt(e.target.value, 10) || 1)}
+            onChange={(e) => setMaxConn(parseOptionalInt(e.target.value))}
             className="input-base w-full"
           />
           <p className="text-xs text-gray-400 mt-1">
@@ -94,7 +91,7 @@ export function TenantPoolSettingsForm({
             min={1}
             max={600}
             value={timeoutSecs}
-            onChange={(e) => setTimeoutSecs(parseInt(e.target.value, 10) || 1)}
+            onChange={(e) => setTimeoutSecs(parseOptionalInt(e.target.value))}
             className="input-base w-full"
           />
           <p className="text-xs text-gray-400 mt-1">

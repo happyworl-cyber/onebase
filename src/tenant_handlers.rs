@@ -89,6 +89,19 @@ fn connection_budget_ok(
     }
 }
 
+/// 同一 host:port 上其他库的 `max_connections` 合计。
+/// 已删除租户 / 已删除项目的库不占预算（软删除后行仍在）。
+const CONNECTION_BUDGET_SUM_SQL: &str = r#"
+    SELECT COALESCE(SUM(COALESCE(td.max_connections, 20)), 0)::bigint
+    FROM management.tenant_databases td
+    JOIN management.tenants t ON t.id = td.tenant_id
+    JOIN management.organizations o ON o.id = t.organization_id
+    WHERE td.db_host = $1 AND td.db_port = $2
+      AND ($3::int IS NULL OR td.id <> $3)
+      AND t.status <> 'deleted'
+      AND o.status <> 'deleted'
+"#;
+
 /// 创建/更新前：单库上限 + 按 (db_host, db_port) 聚合的全局预算。
 async fn ensure_connection_budget(
     pool: &PgPool,
@@ -99,19 +112,12 @@ async fn ensure_connection_budget(
 ) -> Result<()> {
     validate_tenant_max_connections(requested).map_err(AppError::InvalidQuery)?;
     let budget = tenant_pool_global_budget();
-    let sum_others: i64 = sqlx::query_scalar(
-        r#"
-        SELECT COALESCE(SUM(COALESCE(max_connections, 20)), 0)::bigint
-        FROM management.tenant_databases
-        WHERE db_host = $1 AND db_port = $2
-          AND ($3::int IS NULL OR id <> $3)
-        "#,
-    )
-    .bind(host)
-    .bind(port)
-    .bind(exclude_id)
-    .fetch_one(pool)
-    .await?;
+    let sum_others: i64 = sqlx::query_scalar(CONNECTION_BUDGET_SUM_SQL)
+        .bind(host)
+        .bind(port)
+        .bind(exclude_id)
+        .fetch_one(pool)
+        .await?;
     connection_budget_ok(sum_others, requested, budget).map_err(AppError::InvalidQuery)?;
     Ok(())
 }
@@ -202,7 +208,8 @@ pub async fn get_my_connections(
                 FROM management.tenants t
                 CROSS JOIN users u
                 JOIN management.tenant_databases td ON td.tenant_id = t.id AND td.is_active = true
-                WHERE u.id = $1 AND t.status = 'active' AND t.id = $2
+                JOIN management.organizations o ON o.id = t.organization_id
+                WHERE u.id = $1 AND t.status = 'active' AND t.id = $2 AND o.status <> 'deleted'
                 ORDER BY t.name, td.sort_order ASC, td.is_primary DESC, td.connection_name
                 "#,
             )
@@ -232,7 +239,8 @@ pub async fn get_my_connections(
                 FROM management.tenants t
                 CROSS JOIN users u
                 JOIN management.tenant_databases td ON td.tenant_id = t.id AND td.is_active = true
-                WHERE u.id = $1 AND t.status = 'active'
+                JOIN management.organizations o ON o.id = t.organization_id
+                WHERE u.id = $1 AND t.status = 'active' AND o.status <> 'deleted'
                 ORDER BY t.name, td.sort_order ASC, td.is_primary DESC, td.connection_name
                 "#,
             )
@@ -2160,8 +2168,8 @@ pub async fn assign_user_to_tenant(
 /// GET /api/projects
 ///
 /// 返回当前登录用户可见的项目列表。
-/// - 超管：返回所有 status='active' 的 tenants
-/// - 普通用户：返回自己加入的项目，以及自己管理的组织下全部 active 项目
+/// - 超管：返回所有 status='active' 且所属租户未删除的项目
+/// - 普通用户：返回自己加入的项目，以及自己管理的组织下全部 active 项目（不含已删除租户）
 ///
 /// 返回字段：id, name, slug, status, kind, contact_email, user_role, via_organization
 /// user_role 取值：
@@ -2172,6 +2180,18 @@ pub async fn assign_user_to_tenant(
 pub struct ListProjectsQuery {
     pub organization_id: Option<i32>,
 }
+
+const LIST_PROJECTS_FOR_SUPERADMIN_SQL: &str = r#"
+    SELECT t.id, t.name, t.slug, t.status, t.kind, t.contact_email,
+           t.organization_id, o.name AS organization_name,
+           false AS via_organization
+    FROM management.tenants t
+    JOIN management.organizations o ON o.id = t.organization_id
+    WHERE t.status = 'active'
+      AND o.status <> 'deleted'
+      AND ($1::int IS NULL OR t.organization_id = $1)
+    ORDER BY t.id DESC
+"#;
 
 const LIST_PROJECTS_FOR_USER_SQL: &str = r#"
     SELECT id, name, slug, status, kind, contact_email,
@@ -2188,6 +2208,7 @@ const LIST_PROJECTS_FOR_USER_SQL: &str = r#"
           ON om.organization_id = t.organization_id
          AND om.user_id = ut.user_id AND om.is_active = true
         WHERE t.status = 'active'
+          AND o.status <> 'deleted'
           AND ($2::int IS NULL OR t.organization_id = $2)
 
         UNION ALL
@@ -2202,6 +2223,7 @@ const LIST_PROJECTS_FOR_USER_SQL: &str = r#"
          AND om.user_id = $1 AND om.is_active = true
          AND om.role IN ('owner', 'admin')
         WHERE t.status = 'active'
+          AND o.status <> 'deleted'
           AND ($2::int IS NULL OR t.organization_id = $2)
           AND NOT EXISTS (
               SELECT 1
@@ -2220,21 +2242,10 @@ pub async fn list_projects(
     Query(q): Query<ListProjectsQuery>,
 ) -> Result<Json<serde_json::Value>> {
     let rows = if claims.is_superadmin {
-        sqlx::query(
-            r#"
-            SELECT t.id, t.name, t.slug, t.status, t.kind, t.contact_email,
-                   t.organization_id, o.name AS organization_name,
-                   false AS via_organization
-            FROM management.tenants t
-            JOIN management.organizations o ON o.id = t.organization_id
-            WHERE t.status = 'active'
-              AND ($1::int IS NULL OR t.organization_id = $1)
-            ORDER BY t.id DESC
-            "#,
-        )
-        .bind(q.organization_id)
-        .fetch_all(&pool)
-        .await
+        sqlx::query(LIST_PROJECTS_FOR_SUPERADMIN_SQL)
+            .bind(q.organization_id)
+            .fetch_all(&pool)
+            .await
     } else {
         sqlx::query(LIST_PROJECTS_FOR_USER_SQL)
             .bind(claims.sub)
@@ -2294,7 +2305,7 @@ pub async fn get_project(
                t.organization_id, o.name AS organization_name
         FROM management.tenants t
         JOIN management.organizations o ON o.id = t.organization_id
-        WHERE t.id = $1 AND t.status = 'active'
+        WHERE t.id = $1 AND t.status = 'active' AND o.status <> 'deleted'
         "#,
     )
     .bind(project_id)
@@ -4365,6 +4376,26 @@ pub async fn public_rest_api_doc(
 }
 
 #[cfg(test)]
+mod list_projects_visibility_tests {
+    use super::*;
+
+    #[test]
+    fn superadmin_project_list_excludes_deleted_organizations() {
+        assert!(LIST_PROJECTS_FOR_SUPERADMIN_SQL.contains("o.status <> 'deleted'"));
+    }
+
+    #[test]
+    fn user_project_list_excludes_deleted_organizations_in_both_branches() {
+        assert_eq!(
+            LIST_PROJECTS_FOR_USER_SQL
+                .matches("o.status <> 'deleted'")
+                .count(),
+            2
+        );
+    }
+}
+
+#[cfg(test)]
 mod member_admin_tests {
     use super::*;
 
@@ -4400,6 +4431,14 @@ mod connection_budget_tests {
         assert!(connection_budget_ok(51, 10, 60).is_err());
         assert!(connection_budget_ok(0, 60, 60).is_ok());
         assert!(connection_budget_ok(0, 61, 60).is_err());
+    }
+
+    #[test]
+    fn connection_budget_sum_excludes_deleted_orgs_and_projects() {
+        assert!(CONNECTION_BUDGET_SUM_SQL.contains("JOIN management.tenants t"));
+        assert!(CONNECTION_BUDGET_SUM_SQL.contains("JOIN management.organizations o"));
+        assert!(CONNECTION_BUDGET_SUM_SQL.contains("t.status <> 'deleted'"));
+        assert!(CONNECTION_BUDGET_SUM_SQL.contains("o.status <> 'deleted'"));
     }
 
     #[test]

@@ -87,17 +87,19 @@
 
 仍走 `compose_sls_query(prefix, user_query, request_id)`。对 `user_query`：
 
-**普通词**（trim 后非空，且不含 `:` `"` `'` `(` `)` `|`，也不含作为独立词的 `and` / `or` / `not`，大小写不敏感）编成一条：
+**普通词**（trim 后非空，且不含 `:` `"` `'` `(` `)` `|`，也不含作为独立词的 `and` / `or` / `not`，大小写不敏感）编成全文短语：
 
 ```text
-(content: "<escaped>" or message: "<escaped>" or "<escaped>")
+"<escaped>"
 ```
 
 `<escaped>`：把 `\` 和 `"` 转义，整段作为短语，不按空格拆成多个 AND。
 
+不要编 `content: "..."` / `message: "..."`。SLS 对未建键值索引的字段做 `field:value` 会直接 400（`key (...) is not config as key value config`），后端再收成 500，而不是 0 命中。搜正文靠全文索引的短语；要按字段搜仍走下面的高级语法。
+
 **否则**原样拼进去（与今天一致），方便写 `level: ERROR` 等。
 
-`x_request_id` 仍只接受现有 `looks_like_trace_id`；非法继续 400。prefix 不变。控制台深链用拼好后的同一 `queryString`。
+`x_request_id` 仍只接受现有 `looks_like_trace_id`；非法继续 400。合法值同样编成全文短语 `"{id}"`，不用 `x_request_id: "..."`（未建键值索引时 SLS 会 400）。prefix 不变。控制台深链用拼好后的同一 `queryString`。
 
 ### 2.5 前端
 
@@ -108,12 +110,13 @@
 ## 3. 测试
 
 - `get_workflow_runs` 的 SELECT 不含 `node_results`，含 `node_count` / `executed_count` / `failed_count` / `error_message`。
-- `compose_sls_query(None, Some("超时"), None)` 得到带 `content` / `message` 的短语式；`Some("level: ERROR")` 仍为 `level: ERROR`。
+- `compose_sls_query(None, Some("超时"), None)` 得到全文短语 `"超时"`，不含 `content:` / `message:`；`Some("level: ERROR")` 仍为 `level: ERROR`。
+- `compose_sls_query(None, None, Some(uuid))` 得到 `"uuid"`，不含 `x_request_id:`。
 - 关键字含引号时转义后仍能拼成合法查询。
 - 前端：展开详情才请求 `/runs/:id`；云日志输入框回车会走查询（能测的抽成纯函数则测纯函数）。
 
 ## 4. 风险
 
 - 计数子查询扫 JSONB：20 行、每行数十节点，远小于把 JSON 序列化出网。
-- SLS 若既无 `content`/`message` 字段也无全文，短语 `"kw"` 仍可能 0 命中；高级语法兜底。
+- SLS 若无全文索引，短语 `"kw"` 可能 0 命中；高级语法兜底。不要用未建索引的 `field:value` 去「增强」普通词，SLS 会 400。
 - 明细按展开按需请求；不在打开弹层时预拉。

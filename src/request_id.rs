@@ -14,13 +14,17 @@
 use std::time::Instant;
 
 use axum::{
+    body::{to_bytes, Body},
     extract::Request,
-    http::{HeaderName, HeaderValue, Method},
+    http::{header, HeaderName, HeaderValue, Method},
     middleware::Next,
     response::Response,
 };
 use uuid::Uuid;
 
+use crate::access_log_body::{
+    prepare_request_body_for_log, should_capture_json_body, REQUEST_BODY_CAPTURE_MAX_BYTES,
+};
 use crate::logging::REQUEST_ID;
 
 /// 认证中间件把当前请求的用户 ID 通过响应扩展回传给最外层 access log 用。
@@ -58,7 +62,19 @@ pub async fn scope_with<F: std::future::Future>(req_id: Option<String>, fut: F) 
 
 pub const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 
-pub async fn request_id_middleware(req: Request, next: Next) -> Response {
+async fn copy_request_body(req: &mut Request) -> Option<Vec<u8>> {
+    let body = std::mem::replace(req.body_mut(), Body::empty());
+    match to_bytes(body, REQUEST_BODY_CAPTURE_MAX_BYTES).await {
+        Ok(bytes) => {
+            let v = bytes.to_vec();
+            *req.body_mut() = Body::from(v.clone());
+            Some(v)
+        }
+        Err(_) => None,
+    }
+}
+
+pub async fn request_id_middleware(mut req: Request, next: Next) -> Response {
     // 1) 选 ID：上游传的 + 校验通过 → 复用；否则现场生成。
     let incoming = req
         .headers()
@@ -77,6 +93,30 @@ pub async fn request_id_middleware(req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
     let start = Instant::now();
 
+    let ct = req
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .map(str::to_string);
+    // 只复制 Content-Length 明确且较小的 JSON。chunked/大请求直接透传，避免 access log
+    // 在最外层中间件里无上限缓冲请求体。
+    let content_length = req
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<usize>().ok());
+    let request_body_log = if should_capture_json_body(&method, ct.as_deref())
+        && content_length.is_some_and(|n| n <= REQUEST_BODY_CAPTURE_MAX_BYTES)
+    {
+        match copy_request_body(&mut req).await {
+            Some(bytes) => prepare_request_body_for_log(&bytes),
+            None => None,
+        }
+    } else {
+        None
+    };
+
     // 3) scope 包 future：scope 内所有 tracing event 都能从 task_local 拿到 ID。
     //    access log 必须在 scope **内部** 打，否则 task_local 已退栈，x_request_id 会是 null。
     let mut response = REQUEST_ID
@@ -89,7 +129,14 @@ pub async fn request_id_middleware(req: Request, next: Next) -> Response {
                 .get::<AccessLogUser>()
                 .map(|u| u.0)
                 .unwrap_or(-1);
-            emit_access_log(&method, &path, status, elapsed_ms, user_id);
+            emit_access_log(
+                &method,
+                &path,
+                status,
+                elapsed_ms,
+                user_id,
+                request_body_log.as_deref(),
+            );
             response
         })
         .await;
@@ -107,7 +154,14 @@ pub async fn request_id_middleware(req: Request, next: Next) -> Response {
 /// - `OPTIONS` 预检请求量大且无业务价值，降到 debug，避免污染 info 主日志；
 /// - 其余请求走 info，字段平铺到 JSON 根（见 `crate::logging`），方便按
 ///   `status` / `elapsed_ms` / `path` / `user_id` 检索与告警。
-fn emit_access_log(method: &Method, path: &str, status: u16, elapsed_ms: u64, user_id: i32) {
+fn emit_access_log(
+    method: &Method,
+    path: &str,
+    status: u16,
+    elapsed_ms: u64,
+    user_id: i32,
+    request_body: Option<&str>,
+) {
     if *method == Method::OPTIONS {
         tracing::debug!(
             target: "access_log",
@@ -116,6 +170,19 @@ fn emit_access_log(method: &Method, path: &str, status: u16, elapsed_ms: u64, us
             status = status,
             elapsed_ms = elapsed_ms,
             user_id = user_id,
+            "HTTP request completed"
+        );
+        return;
+    }
+    if let Some(request_body) = request_body {
+        tracing::info!(
+            target: "access_log",
+            method = %method,
+            path = %path,
+            status = status,
+            elapsed_ms = elapsed_ms,
+            user_id = user_id,
+            request_body = %request_body,
             "HTTP request completed"
         );
     } else {
@@ -196,5 +263,20 @@ mod tests {
                 assert_eq!(handle.await.unwrap().as_deref(), Some("abc12345"));
             })
             .await;
+    }
+
+    #[tokio::test]
+    async fn copy_request_body_restores_full_bytes() {
+        use axum::body::{to_bytes, Body};
+        let payload = vec![b'x'; 5000];
+        let mut req = Request::builder()
+            .method("POST")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.clone()))
+            .unwrap();
+        let copied = copy_request_body(&mut req).await.expect("copy");
+        assert_eq!(copied.as_slice(), payload.as_slice());
+        let restored = to_bytes(req.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(restored.as_ref(), payload.as_slice());
     }
 }

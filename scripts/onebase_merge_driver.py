@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Three-way merge driver for syncing Crestrail into OneBase.
+"""Three-way merge driver for syncing Crestrail into PlaneOS.
 
 The repositories do not share Git history.  This driver therefore uses the
-last upstream snapshot synchronized into OneBase as the logical merge base,
-then applies OneBase's forward-only branding rules to upstream content.
+last upstream snapshot synchronized into PlaneOS as the logical merge base,
+then applies PlaneOS's forward-only compatibility and branding rules.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import tempfile
 from pathlib import Path
 
 
-UPSTREAM_BASE = "776d3714dfbebd2831b0982b039ce8acc6909418"
+UPSTREAM_BASE = "441a359805d5a21c9c706488f6dcf1762038e13c"
 UPSTREAM_HEAD = "crestrail/develop"
 
 RENAMED_PATHS = {
@@ -37,8 +37,8 @@ BYTE_REPLACEMENTS = (
     (b"crp_", b"obp_"),
     (b"crm_", b"obm_"),
     (b"CRESTRAIL", b"ONEBASE"),
-    (b"CrestRail", b"OneBase"),
-    (b"Crestrail", b"Onebase"),
+    (b"CrestRail", b"PlaneOS"),
+    (b"Crestrail", b"PlaneOS"),
     (b"crestrail", b"onebase"),
     (b"SHIREHUB", b"ACME"),
     (b"ShireHub", b"Acme"),
@@ -83,7 +83,7 @@ def merge_bytes(current: bytes, base: bytes, incoming: bytes) -> tuple[bytes, in
                 "merge-file",
                 "-p",
                 "-L",
-                "OneBase",
+                "PlaneOS",
                 "-L",
                 f"Crestrail base {UPSTREAM_BASE[:7]}",
                 "-L",

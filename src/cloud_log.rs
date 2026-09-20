@@ -56,7 +56,8 @@ pub fn is_plain_sls_keyword(q: &str) -> bool {
 
 pub fn expand_plain_sls_keyword(q: &str) -> String {
     let esc = q.replace('\\', "\\\\").replace('"', "\\\"");
-    format!(r#"(content: "{esc}" or message: "{esc}" or "{esc}")"#)
+    // 全文短语。不用 content:/message:：字段未建键值索引时 SLS 会 400，而不是 0 命中。
+    format!(r#""{esc}""#)
 }
 
 pub fn compose_sls_query(
@@ -79,7 +80,8 @@ pub fn compose_sls_query(
         if !looks_like_trace_id(id) {
             return Err("非法 x_request_id".into());
         }
-        parts.push(format!(r#"x_request_id: "{id}""#));
+        // 与普通关键词相同：全文短语。x_request_id: 在字段未建键值索引时 SLS 会 400。
+        parts.push(expand_plain_sls_keyword(id));
     }
     if parts.is_empty() {
         Ok("*".into())
@@ -169,20 +171,38 @@ mod tests {
         .unwrap();
         assert_eq!(
             q,
-            r#"app:pay and (content: "error" or message: "error" or "error") and x_request_id: "98753d7e-3bdb-4c00-bcf7-4a697606b88b""#
+            r#"app:pay and "error" and "98753d7e-3bdb-4c00-bcf7-4a697606b88b""#
         );
     }
 
     #[test]
-    fn plain_keyword_expands_to_content_and_message() {
+    fn request_id_expands_to_quoted_phrase_without_field_query() {
+        let q =
+            compose_sls_query(None, None, Some("98753d7e-3bdb-4c00-bcf7-4a697606b88b")).unwrap();
+        assert_eq!(q, r#""98753d7e-3bdb-4c00-bcf7-4a697606b88b""#);
+        assert!(!q.contains("x_request_id:"));
+        assert_eq!(
+            compose_sls_query(None, None, Some("743650000001")).unwrap(),
+            r#""743650000001""#
+        );
+    }
+
+    #[test]
+    fn plain_keyword_expands_to_quoted_phrase_without_field_queries() {
         assert!(is_plain_sls_keyword("超时"));
         assert!(is_plain_sls_keyword("android"));
+        assert!(is_plain_sls_keyword("123"));
         assert!(!is_plain_sls_keyword("level: ERROR"));
         assert!(!is_plain_sls_keyword("foo and bar"));
         assert!(!is_plain_sls_keyword("a|b"));
+        let q = compose_sls_query(None, Some("超时"), None).unwrap();
+        assert_eq!(q, r#""超时""#);
+        // SLS 对未建键值索引的字段做 field:value 会 400，不能编进 content:/message:
+        assert!(!q.contains("content:"));
+        assert!(!q.contains("message:"));
         assert_eq!(
-            compose_sls_query(None, Some("超时"), None).unwrap(),
-            r#"(content: "超时" or message: "超时" or "超时")"#
+            compose_sls_query(None, Some("123"), None).unwrap(),
+            r#""123""#
         );
         assert_eq!(
             compose_sls_query(None, Some("level: ERROR"), None).unwrap(),
@@ -192,10 +212,7 @@ mod tests {
 
     #[test]
     fn expand_escapes_backslash_and_quotes() {
-        assert_eq!(
-            expand_plain_sls_keyword(r#"a\b"c"#),
-            r#"(content: "a\\b\"c" or message: "a\\b\"c" or "a\\b\"c")"#
-        );
+        assert_eq!(expand_plain_sls_keyword(r#"a\b"c"#), r#""a\\b\"c""#);
     }
 
     #[test]

@@ -86,6 +86,7 @@ const TENANT_ADMIN_IDS_SQL: &str = r#"
       SELECT ut.tenant_id AS tid
       FROM management.user_tenants ut
       JOIN management.tenants t ON t.id = ut.tenant_id
+      JOIN management.organizations o ON o.id = t.organization_id AND o.status = 'active'
       JOIN management.organization_members om
         ON om.organization_id = t.organization_id
        AND om.user_id = ut.user_id AND om.is_active = true
@@ -94,6 +95,7 @@ const TENANT_ADMIN_IDS_SQL: &str = r#"
       UNION
       SELECT t.id AS tid
       FROM management.tenants t
+      JOIN management.organizations o ON o.id = t.organization_id AND o.status = 'active'
       JOIN management.organization_members om
         ON om.organization_id = t.organization_id
        AND om.user_id = $1 AND om.is_active = true
@@ -119,23 +121,27 @@ pub async fn tenant_admin_ids(pool: &PgPool, claims: &Claims) -> Result<Vec<i32>
 /// 也纳入。用于"业务级资产"（如工作流）的默认列表作用域：开发者（member）应能看到
 /// 自己所在租户的工作流。viewer 不含。
 /// 须同时是项目所属组织的 active 成员。
+const TENANT_MEMBER_IDS_SQL: &str = r#"
+    SELECT ut.tenant_id
+    FROM management.user_tenants ut
+    JOIN management.tenants t ON t.id = ut.tenant_id
+    JOIN management.organizations o ON o.id = t.organization_id AND o.status = 'active'
+    JOIN management.organization_members om
+      ON om.organization_id = t.organization_id
+     AND om.user_id = ut.user_id AND om.is_active = true
+    WHERE ut.user_id = $1 AND ut.is_active = true
+      AND ut.role IN ('owner', 'admin', 'member')
+      AND t.status = 'active'
+"#;
+
 pub async fn tenant_member_ids(pool: &PgPool, claims: &Claims) -> Result<Vec<i32>> {
     if claims.is_superadmin {
         return Ok(vec![]);
     }
-    let rows = sqlx::query_scalar::<_, i32>(
-        "SELECT ut.tenant_id \
-         FROM management.user_tenants ut \
-         JOIN management.tenants t ON t.id = ut.tenant_id \
-         JOIN management.organization_members om \
-           ON om.organization_id = t.organization_id \
-          AND om.user_id = ut.user_id AND om.is_active = true \
-         WHERE ut.user_id = $1 AND ut.is_active = true \
-           AND ut.role IN ('owner', 'admin', 'member')",
-    )
-    .bind(claims.sub)
-    .fetch_all(pool)
-    .await?;
+    let rows = sqlx::query_scalar::<_, i32>(TENANT_MEMBER_IDS_SQL)
+        .bind(claims.sub)
+        .fetch_all(pool)
+        .await?;
     Ok(rows)
 }
 
@@ -148,11 +154,12 @@ pub async fn is_tenant_admin(pool: &PgPool, user_id: i32, tenant_id: i32) -> Res
         "SELECT EXISTS( \
             SELECT 1 FROM management.user_tenants ut \
             JOIN management.tenants t ON t.id = ut.tenant_id \
+            JOIN management.organizations o ON o.id = t.organization_id AND o.status = 'active' \
             JOIN management.organization_members om \
               ON om.organization_id = t.organization_id \
              AND om.user_id = ut.user_id AND om.is_active = true \
             WHERE ut.user_id = $1 AND ut.tenant_id = $2 AND ut.is_active = true \
-              AND ut.role IN ('owner', 'admin'))",
+              AND ut.role IN ('owner', 'admin') AND t.status = 'active')",
     )
     .bind(user_id)
     .bind(tenant_id)
@@ -192,11 +199,12 @@ pub async fn is_tenant_member(pool: &PgPool, user_id: i32, tenant_id: i32) -> Re
         "SELECT EXISTS( \
             SELECT 1 FROM management.user_tenants ut \
             JOIN management.tenants t ON t.id = ut.tenant_id \
+            JOIN management.organizations o ON o.id = t.organization_id AND o.status = 'active' \
             JOIN management.organization_members om \
               ON om.organization_id = t.organization_id \
              AND om.user_id = ut.user_id AND om.is_active = true \
             WHERE ut.user_id = $1 AND ut.tenant_id = $2 AND ut.is_active = true \
-              AND ut.role IN ('owner', 'admin', 'member'))",
+              AND ut.role IN ('owner', 'admin', 'member') AND t.status = 'active')",
     )
     .bind(user_id)
     .bind(tenant_id)
@@ -214,10 +222,12 @@ pub async fn is_tenant_membership_any(pool: &PgPool, user_id: i32, tenant_id: i3
         "SELECT EXISTS( \
             SELECT 1 FROM management.user_tenants ut \
             JOIN management.tenants t ON t.id = ut.tenant_id \
+            JOIN management.organizations o ON o.id = t.organization_id AND o.status = 'active' \
             JOIN management.organization_members om \
               ON om.organization_id = t.organization_id \
              AND om.user_id = ut.user_id AND om.is_active = true \
-            WHERE ut.user_id = $1 AND ut.tenant_id = $2 AND ut.is_active = true)",
+            WHERE ut.user_id = $1 AND ut.tenant_id = $2 AND ut.is_active = true \
+              AND t.status = 'active')",
     )
     .bind(user_id)
     .bind(tenant_id)
@@ -274,11 +284,12 @@ pub async fn is_tenant_owner(pool: &PgPool, user_id: i32, tenant_id: i32) -> Res
         "SELECT EXISTS( \
             SELECT 1 FROM management.user_tenants ut \
             JOIN management.tenants t ON t.id = ut.tenant_id \
+            JOIN management.organizations o ON o.id = t.organization_id AND o.status = 'active' \
             JOIN management.organization_members om \
               ON om.organization_id = t.organization_id \
              AND om.user_id = ut.user_id AND om.is_active = true \
             WHERE ut.user_id = $1 AND ut.tenant_id = $2 AND ut.is_active = true \
-              AND ut.role = 'owner')",
+              AND ut.role = 'owner' AND t.status = 'active')",
     )
     .bind(user_id)
     .bind(tenant_id)
@@ -297,6 +308,8 @@ const IS_ORG_ADMIN_FOR_PROJECT_SQL: &str = r#"
     SELECT EXISTS(
         SELECT 1
         FROM management.tenants t
+        JOIN management.organizations o
+          ON o.id = t.organization_id AND o.status = 'active'
         JOIN management.organization_members om
           ON om.organization_id = t.organization_id
          AND om.user_id = $1
@@ -373,11 +386,49 @@ pub async fn is_organization_owner(
     Ok(exists)
 }
 
+fn reject_unusable_organization(
+    status: &str,
+    is_superadmin: bool,
+    organization_id: i32,
+) -> Result<()> {
+    match status {
+        "deleted" => Err(AppError::NotFound(format!(
+            "组织 {} 不存在",
+            organization_id
+        ))),
+        "suspended" if !is_superadmin => Err(AppError::Forbidden(format!(
+            "租户 {} 已停用，请联系平台管理员",
+            organization_id
+        ))),
+        "active" | "suspended" => Ok(()),
+        _ => Err(AppError::NotFound(format!(
+            "组织 {} 不存在",
+            organization_id
+        ))),
+    }
+}
+
+async fn require_live_organization(
+    pool: &PgPool,
+    claims: &Claims,
+    organization_id: i32,
+) -> Result<()> {
+    let status: Option<String> =
+        sqlx::query_scalar("SELECT status FROM management.organizations WHERE id = $1")
+            .bind(organization_id)
+            .fetch_optional(pool)
+            .await?;
+    let status =
+        status.ok_or_else(|| AppError::NotFound(format!("组织 {} 不存在", organization_id)))?;
+    reject_unusable_organization(&status, claims.is_superadmin, organization_id)
+}
+
 pub async fn require_organization_admin(
     pool: &PgPool,
     claims: &Claims,
     organization_id: i32,
 ) -> Result<()> {
+    require_live_organization(pool, claims, organization_id).await?;
     if claims.is_superadmin {
         return Ok(());
     }
@@ -396,6 +447,7 @@ pub async fn require_organization_member(
     claims: &Claims,
     organization_id: i32,
 ) -> Result<()> {
+    require_live_organization(pool, claims, organization_id).await?;
     if claims.is_superadmin {
         return Ok(());
     }
@@ -414,6 +466,7 @@ pub async fn require_organization_owner(
     claims: &Claims,
     organization_id: i32,
 ) -> Result<()> {
+    require_live_organization(pool, claims, organization_id).await?;
     if claims.is_superadmin {
         return Ok(());
     }
@@ -546,8 +599,13 @@ pub async fn count_tenant_owners(pool: &PgPool, tenant_id: i32) -> Result<i64> {
 /// （API Key 管理、监控、导出等）。
 pub async fn lookup_tenant_for_database(pool: &PgPool, database_id: i32) -> Result<i32> {
     let row: Option<i32> = sqlx::query_scalar(
-        "SELECT tenant_id FROM management.tenant_databases \
-         WHERE id = $1 AND is_active = true",
+        r#"
+        SELECT td.tenant_id
+        FROM management.tenant_databases td
+        JOIN management.tenants t ON t.id = td.tenant_id AND t.status = 'active'
+        JOIN management.organizations o ON o.id = t.organization_id AND o.status <> 'deleted'
+        WHERE td.id = $1 AND td.is_active = true
+        "#,
     )
     .bind(database_id)
     .fetch_optional(pool)
@@ -565,6 +623,7 @@ const ORG_ADMIN_DATABASE_IDS_BY_SLUG_SQL: &str = r#"
     SELECT td.id
     FROM management.tenant_databases td
     JOIN management.tenants t ON t.id = td.tenant_id AND t.status = 'active'
+    JOIN management.organizations o ON o.id = t.organization_id AND o.status = 'active'
     JOIN management.organization_members om
       ON om.organization_id = t.organization_id
      AND om.user_id = $1 AND om.is_active = true
@@ -1244,6 +1303,7 @@ mod tests {
     #[test]
     fn org_admin_project_query_requires_active_project_and_admin_role() {
         assert!(IS_ORG_ADMIN_FOR_PROJECT_SQL.contains("t.status = 'active'"));
+        assert!(IS_ORG_ADMIN_FOR_PROJECT_SQL.contains("o.status = 'active'"));
         assert!(IS_ORG_ADMIN_FOR_PROJECT_SQL.contains("om.is_active = true"));
         assert!(IS_ORG_ADMIN_FOR_PROJECT_SQL.contains("om.role IN ('owner', 'admin')"));
     }
@@ -1254,6 +1314,23 @@ mod tests {
         assert!(TENANT_ADMIN_IDS_SQL.contains("ut.role IN ('owner', 'admin')"));
         assert!(TENANT_ADMIN_IDS_SQL.contains("om.role IN ('owner', 'admin')"));
         assert!(TENANT_ADMIN_IDS_SQL.contains("t.status = 'active'"));
+        assert!(TENANT_ADMIN_IDS_SQL.contains("o.status = 'active'"));
+    }
+
+    #[test]
+    fn tenant_member_ids_query_excludes_deleted_orgs() {
+        assert!(TENANT_MEMBER_IDS_SQL.contains("t.status = 'active'"));
+        assert!(TENANT_MEMBER_IDS_SQL.contains("o.status = 'active'"));
+        assert!(TENANT_MEMBER_IDS_SQL.contains("ut.role IN ('owner', 'admin', 'member')"));
+    }
+
+    #[test]
+    fn reject_unusable_organization_hides_deleted() {
+        assert!(reject_unusable_organization("deleted", true, 1).is_err());
+        assert!(reject_unusable_organization("deleted", false, 1).is_err());
+        assert!(reject_unusable_organization("active", false, 1).is_ok());
+        assert!(reject_unusable_organization("suspended", true, 1).is_ok());
+        assert!(reject_unusable_organization("suspended", false, 1).is_err());
     }
 
     #[test]
@@ -1274,6 +1351,7 @@ mod tests {
     #[test]
     fn org_admin_database_slug_query_is_active_and_bounded() {
         assert!(ORG_ADMIN_DATABASE_IDS_BY_SLUG_SQL.contains("t.status = 'active'"));
+        assert!(ORG_ADMIN_DATABASE_IDS_BY_SLUG_SQL.contains("o.status = 'active'"));
         assert!(ORG_ADMIN_DATABASE_IDS_BY_SLUG_SQL.contains("td.is_active = true"));
         assert!(ORG_ADMIN_DATABASE_IDS_BY_SLUG_SQL.contains("om.role IN ('owner', 'admin')"));
         assert!(ORG_ADMIN_DATABASE_IDS_BY_SLUG_SQL.contains("LIMIT 2"));

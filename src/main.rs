@@ -1,3 +1,4 @@
+mod access_log_body;
 mod admin_handlers;
 mod ai;
 mod alert_webhook;
@@ -2477,6 +2478,9 @@ async fn main() -> anyhow::Result<()> {
     let wd = watchdog::Watchdog::new(pool.clone(), redis.clone());
     let wd_shutdown = wd.shutdown_handle();
     wd.start();
+
+    // 历史软删除租户：先停掉残留连接池 / 任务，再预热，避免已删租户占连接。
+    organization_handlers::retire_already_deleted_organizations(&pool).await;
 
     // 租户池预热 / 保活：把「创建连接池」移出首个用户请求（见
     // docs/superpowers/specs/2026-07-27-tenant-pool-keepalive-design.md）。

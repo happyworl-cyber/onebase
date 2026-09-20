@@ -501,6 +501,19 @@ fn env_flag_enabled(name: &str, default: bool) -> bool {
     }
 }
 
+const TENANT_POOL_PREWARM_SQL: &str = r#"
+            SELECT td.id
+            FROM management.tenant_databases td
+            JOIN management.tenants t ON t.id = td.tenant_id
+            JOIN management.organizations o ON o.id = t.organization_id
+            WHERE td.is_active = true
+              AND COALESCE(td.db_role, 'primary') = 'primary'
+              AND t.status = 'active'
+              AND o.status <> 'deleted'
+            ORDER BY td.id
+            LIMIT $1
+"#;
+
 /// 启动后后台预热活跃 primary 租户池，把「创建连接池」移出首个用户请求。
 ///
 /// - `TENANT_POOL_PREWARM` 默认 true；false/0/no/off 关闭
@@ -529,19 +542,10 @@ pub fn spawn_tenant_pool_prewarm(main_pool: PgPool) -> tokio::task::JoinHandle<(
             return;
         }
 
-        let ids: Vec<i32> = match sqlx::query_scalar(
-            r#"
-            SELECT id
-            FROM management.tenant_databases
-            WHERE is_active = true
-              AND COALESCE(db_role, 'primary') = 'primary'
-            ORDER BY id
-            LIMIT $1
-            "#,
-        )
-        .bind(limit)
-        .fetch_all(&main_pool)
-        .await
+        let ids: Vec<i32> = match sqlx::query_scalar(TENANT_POOL_PREWARM_SQL)
+            .bind(limit)
+            .fetch_all(&main_pool)
+            .await
         {
             Ok(v) => v,
             Err(e) => {
@@ -3132,6 +3136,13 @@ pub async fn delete_api_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tenant_pool_prewarm_skips_deleted_orgs() {
+        assert!(TENANT_POOL_PREWARM_SQL.contains("td.is_active = true"));
+        assert!(TENANT_POOL_PREWARM_SQL.contains("t.status = 'active'"));
+        assert!(TENANT_POOL_PREWARM_SQL.contains("o.status <> 'deleted'"));
+    }
 
     fn obj(json: serde_json::Value) -> serde_json::Map<String, Value> {
         json.as_object().unwrap().clone()

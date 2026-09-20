@@ -223,6 +223,8 @@ async fn resolve_database_id_from_slug(
             SELECT k.database_id, td.slug AS bound_slug
             FROM management.api_keys k
             JOIN management.tenant_databases td ON td.id = k.database_id
+            JOIN management.tenants t ON t.id = td.tenant_id AND t.status = 'active'
+            JOIN management.organizations o ON o.id = t.organization_id AND o.status <> 'deleted'
             WHERE k.key_hash = encode(sha256($1::bytea), 'hex')
               AND k.is_active = true
               AND (k.expires_at IS NULL OR k.expires_at > NOW())
@@ -746,12 +748,14 @@ pub async fn dynamic_db_middleware(
 
             let db_config_row = sqlx::query(
                 r#"
-                SELECT 
-                    id, connection_name, db_host, db_port, db_name,
-                    db_user, db_password_encrypted, max_connections, connection_timeout,
-                    tenant_id
-                FROM management.tenant_databases
-                WHERE id = $1 AND is_active = true
+                SELECT
+                    td.id, td.connection_name, td.db_host, td.db_port, td.db_name,
+                    td.db_user, td.db_password_encrypted, td.max_connections, td.connection_timeout,
+                    td.tenant_id
+                FROM management.tenant_databases td
+                JOIN management.tenants t ON t.id = td.tenant_id AND t.status = 'active'
+                JOIN management.organizations o ON o.id = t.organization_id AND o.status <> 'deleted'
+                WHERE td.id = $1 AND td.is_active = true
                 "#,
             )
             .bind(database_id)

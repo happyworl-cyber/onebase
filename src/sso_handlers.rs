@@ -59,7 +59,9 @@ pub async fn list_public_providers(
             SELECT p.tenant_id, p.provider_type, p.display_name, t.name AS tenant_name
             FROM management.sso_providers p
             JOIN management.tenants t ON t.id = p.tenant_id
+            JOIN management.organizations o ON o.id = t.organization_id
             WHERE p.tenant_id = $1 AND p.is_active = true
+              AND t.status = 'active' AND o.status <> 'deleted'
             ORDER BY p.display_name
             "#,
         )
@@ -73,7 +75,9 @@ pub async fn list_public_providers(
                    p.tenant_id, p.provider_type, p.display_name, t.name AS tenant_name
             FROM management.sso_providers p
             JOIN management.tenants t ON t.id = p.tenant_id
+            JOIN management.organizations o ON o.id = t.organization_id
             WHERE p.is_active = true
+              AND t.status = 'active' AND o.status <> 'deleted'
             ORDER BY p.provider_type, p.tenant_id
             "#,
         )

@@ -413,6 +413,8 @@ fn build_query(src: &SourceExec, body: &LogQueryBody, now: i64) -> Result<(Cloud
 fn map_sls_err(e: String) -> AppError {
     if e.contains("凭证无效") || e.contains("读权限") {
         AppError::InvalidQuery(e)
+    } else if e.contains("SLS 返回 4") {
+        AppError::InvalidQuery(e)
     } else {
         AppError::Internal(e)
     }
@@ -526,6 +528,17 @@ pub async fn test_log_source(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn sls_4xx_is_validation_not_internal() {
+        match map_sls_err("SLS 返回 400: key (content) is not config as key value config".into())
+        {
+            AppError::InvalidQuery(m) => assert!(m.contains("400"), "{m}"),
+            other => panic!("expected InvalidQuery, got {other:?}"),
+        }
+    }
+
     #[test]
     fn log_source_row_json_has_no_secret_keys() {
         let v = serde_json::json!({
