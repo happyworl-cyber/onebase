@@ -11,7 +11,7 @@
 排障过程中打开 `/workspace/[projectId]/monitor` 页面，**完全无法定位问题**：
 
 - 页面只展示 PG 服务端指标（`pg_stat_activity` 126 / `max_connections` 1600），
-  看起来一切健康 —— 而真正打满的是 OneBase 进程内的 sqlx 租户池（50/50）。
+  看起来一切健康 —— 而真正打满的是 PlaneOS 进程内的 sqlx 租户池（50/50）。
 - 应用侧连接池水位（`size` / `num_idle` / `max`）在页面上**根本不存在**。
 - LISTEN 会话被 `state IS DISTINCT FROM 'idle'` 过滤掉，看不见它们占了多少连接。
 - `pool timed out` 的发生次数 / 时间只存在于日志里，页面无任何计数。
@@ -23,7 +23,7 @@
 
 ### 目标
 
-1. 打开页面 3 秒内能看到结论：瓶颈在 OneBase 应用池，还是 PG 服务端。
+1. 打开页面 3 秒内能看到结论：瓶颈在 PlaneOS 应用池，还是 PG 服务端。
 2. 暴露应用侧 sqlx 池的精确水位（来自 `PgPool::size()` / `num_idle()`，非估算）。
 3. 暴露 LISTEN 独立连接数，确认 LISTEN 隔离改造生效。
 4. 暴露 `PoolTimedOut` 计数与最近发生时间，把日志里的信号搬到页面上。
@@ -180,7 +180,7 @@ notify 工作流按 `(database_id, channel)` 去重计数，复用
 | — | 其它 | ok | 一切正常 |
 
 规则 1 是本次事故的正解：应用池 50/50 而 PG 126/1600，必须一句话说明
-「瓶颈在 OneBase 池，不是数据库」，并给出可执行 hints：
+「瓶颈在 PlaneOS 池，不是数据库」，并给出可执行 hints：
 
 - 调大 `TENANT_DB_MAX_CONNECTIONS`（当前 env 值一并回显）
 - 去「PG 会话」页找 `idle in transaction` / 长查询

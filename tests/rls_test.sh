@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# OneBase PostgreSQL RLS 端到端验证
+# PlaneOS PostgreSQL RLS 端到端验证
 #
 # RLS 在 PostgreSQL 里对 SUPERUSER 永远不生效（即便 FORCE ROW LEVEL
 # SECURITY 也无法约束 super）。因此本测试会先建一个非 super 的应用

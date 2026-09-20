@@ -1,4 +1,4 @@
-# OneBase Next.js 快速启动指南
+# PlaneOS Next.js 快速启动指南
 
 ## 🚀 启动步骤
 

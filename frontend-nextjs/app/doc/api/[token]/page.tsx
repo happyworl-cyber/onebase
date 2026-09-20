@@ -96,7 +96,7 @@ export default function PublicRestApiDocPage() {
               </p>
             </div>
             <RestApiDocContent apiBaseUrl={resolvePublicApiBase(state.model.api_base_url)} databaseSlug={state.model.database_slug} schema={state.model.schema} gatewayMode={!!state.model.gateway_mode} />
-            <div className="text-center text-[11px] text-gray-300">OneBase · REST API 接口文档</div>
+            <div className="text-center text-[11px] text-gray-300">PlaneOS · REST API 接口文档</div>
           </div>
         )}
       </div>

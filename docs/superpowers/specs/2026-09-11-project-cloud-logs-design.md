@@ -16,7 +16,7 @@
 
 ## 1. 目标与非目标
 
-OneBase 项目内的「执行日志」来自库表；生产日志在各云（目前主要是阿里云 SLS）。排障要把同一次请求的 `x_request_id` / `trace_id` 在两边对上。密钥不能进浏览器。
+PlaneOS 项目内的「执行日志」来自库表；生产日志在各云（目前主要是阿里云 SLS）。排障要把同一次请求的 `x_request_id` / `trace_id` 在两边对上。密钥不能进浏览器。
 
 **目标**
 
@@ -54,7 +54,7 @@ OneBase 项目内的「执行日志」来自库表；生产日志在各云（目
 | 工作流装载 | `load_credential_store` **排除** `aliyun_ak` | 即使模板不解析，也不把 SK 装进执行上下文 |
 | HTTP / 数据源 | `apply_http_auth_headers` 与 `datasource_accepts_kind` 都不接受 `aliyun_ak` | 避免当普通登录头用 |
 | 日志源表 | 新表 `management.project_log_sources` | 多源 CRUD，不塞 `workspace_config` |
-| 检索字段 | 固定拼 `x_request_id: "..."` | 与 OneBase stdout JSON 字段一致 |
+| 检索字段 | 固定拼 `x_request_id: "..."` | 与 PlaneOS stdout JSON 字段一致 |
 | 时间窗 | 默认最近 1 小时；单次最长 24 小时 | 控 SLS 费用与超时 |
 | 行数 | 默认 50，上限 100，最新在前 | 与执行日志列表量级接近 |
 | Provider | trait + `aliyun_sls` 一档实现 | 以后加云不用改表结构 |

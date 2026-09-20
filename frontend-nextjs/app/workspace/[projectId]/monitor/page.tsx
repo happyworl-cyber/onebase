@@ -3,7 +3,7 @@
 /**
  * `/workspace/[projectId]/monitor` — 项目维度的数据库 / 连接池监控。
  *
- * 首屏优先展示 OneBase 应用侧连接池健康（上次雪崩时缺的那一层），
+ * 首屏优先展示 PlaneOS 应用侧连接池健康（上次雪崩时缺的那一层），
  * PG 服务端指标下沉；时序靠前端轮询本地攒点（不落库）。
  */
 
@@ -249,7 +249,7 @@ export default function MonitorPage() {
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">连接池与数据库监控</h1>
           <p className="text-sm text-gray-500 mt-1">
-            优先诊断 OneBase 应用侧连接池；PG 服务端指标作对照
+            优先诊断 PlaneOS 应用侧连接池；PG 服务端指标作对照
           </p>
         </div>
         <div className="flex items-center space-x-3">

@@ -31,7 +31,7 @@ interface QueryParams {
 }
 
 // API 封装
-class OneBaseAPI {
+class PlaneOSAPI {
   constructor(private schema: string = 'public') {}
 
   // 查询
@@ -105,7 +105,7 @@ function useUsers() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const db = new OneBaseAPI('public');
+  const db = new PlaneOSAPI('public');
 
   // 获取用户列表
   const fetchUsers = async (params?: QueryParams) => {

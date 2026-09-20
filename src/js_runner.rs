@@ -311,7 +311,7 @@ fn runtime_path() -> Result<PathBuf, String> {
         .join("index.js");
     path.is_file()
         .then_some(path)
-        .ok_or_else(|| "OneBase JavaScript runtime index.js is missing".to_string())
+        .ok_or_else(|| "PlaneOS JavaScript runtime index.js is missing".to_string())
 }
 
 fn execution_dir() -> Result<PathBuf, String> {

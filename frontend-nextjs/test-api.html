@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OneBase API 测试工具</title>
+    <title>PlaneOS API 测试工具</title>
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.2/dist/axios.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -100,7 +100,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>🚀 OneBase API 测试工具</h1>
+        <h1>🚀 PlaneOS API 测试工具</h1>
         
         <div class="test-section">
             <h2>0. 后端状态检查</h2>
@@ -167,7 +167,7 @@
                 statusEl.className = 'status offline';
                 resultEl.style.display = 'block';
                 resultEl.className = 'result error';
-                resultEl.textContent = `错误: ${error.message}\n\n请确保后端正在运行:\ncd D:\\code\\onebase\ncargo run`;
+                resultEl.textContent = `错误: ${error.message}\n\n请确保 PlaneOS 后端正在运行:\ncd <PlaneOS 项目目录>\ncargo run`;
             }
         }
 

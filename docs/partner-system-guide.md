@@ -1,8 +1,8 @@
-# OneBase 代理商分销系统使用指南
+# PlaneOS 代理商分销系统使用指南
 
 ## 概述
 
-OneBase 代理商分销系统已完成实施，支持三方关系：**原厂 → 代理商 → 企业客户（self-hosted）**
+PlaneOS 代理商分销系统已完成实施，支持三方关系：**原厂 → 代理商 → 企业客户（self-hosted）**
 
 ### 核心能力
 - ✅ 单层代理体系（所有代理商平级）
@@ -221,8 +221,8 @@ curl -X POST http://localhost:3010/api/partner/licenses \
 # 保存为 license.lic
 echo '<license_file JSON>' > license.lic
 
-# 客户部署时放到指定路径
-cp license.lic /etc/onebase/license.lic
+# 客户部署时放到容器或主机运行目录
+cp /交付路径/license.lic ./license.lic
 ```
 
 ### 3.3 续费 License
@@ -322,7 +322,7 @@ curl -X POST http://localhost:3010/api/admin/statements/1/paid \
 
 ```
 1. 原厂私钥签名 → License 文件（JSON）
-2. 客户部署时，OneBase 用内嵌公钥验证签名
+2. 客户部署时，PlaneOS 用内嵌公钥验证签名
 3. 签名不匹配 → License 无效，系统拒绝启动
 ```
 

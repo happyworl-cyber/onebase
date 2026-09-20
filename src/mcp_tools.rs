@@ -27,7 +27,7 @@ fn unpublished_api_doc_note() -> &'static str {
 /// 内容与引擎实际行为对齐（workflow_engine.rs 各 exec_*_node + NodeType 定义）。
 /// !!! 红线：新增/修改节点类型（NodeType 变体、exec_*_node 的 config 字段）
 /// 必须同步更新此常量，否则 AI 编写工作流会依据过时规范产生错误定义。 !!!
-const NODE_SPEC: &str = r#"# OneBase 工作流节点规范
+const NODE_SPEC: &str = r#"# PlaneOS 工作流节点规范
 
 工作流 = nodes[] + edges[] 组成的 DAG（有向无环图），引擎按拓扑序执行。
 例外：loop 节点的「回边」(edge_type=loop_back) 允许成环，该回边不参与拓扑排序（见 loop 节点）。

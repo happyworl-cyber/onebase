@@ -3,7 +3,7 @@
 -- 目标：
 -- - 支撑 authorize -> upstream callback -> token 授权码流
 -- - 支撑 RS256 签名与 JWKS 暴露
--- - 维持“OneBase 仅保存最小身份数据”的边界
+-- - 维持“PlaneOS 仅保存最小身份数据”的边界
 
 CREATE TABLE IF NOT EXISTS management.idp_identities (
     id         SERIAL PRIMARY KEY,

@@ -2583,7 +2583,7 @@ async fn main() -> anyhow::Result<()> {
         request_timeout_secs = config.request_timeout_secs,
         workflow_timeout_disabled = workflow_engine::workflow_timeout_disabled(),
         workflow_http_default_secs = workflow_engine::http_default_timeout_secs(),
-        "OneBase 构建标记（含工作流超时根治改动）"
+        "PlaneOS 构建标记（含工作流超时根治改动）"
     );
     tracing::info!("服务器启动在 http://{}", addr);
     tracing::info!("API 端点: http://{}/api/:schema/:table", addr);
@@ -2613,7 +2613,7 @@ async fn root_handler() -> Result<Json<Value>, AppError> {
     use serde_json::json;
 
     Ok(Json(json!({
-        "name": "OneBase API",
+        "name": "PlaneOS API",
         "version": env!("CARGO_PKG_VERSION"),
         "status": "running",
         "endpoints": {

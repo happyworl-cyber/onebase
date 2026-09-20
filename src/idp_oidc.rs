@@ -1,4 +1,4 @@
-//! OIDC / OAuth2 runtime handlers for OneBase acting as an IdP.
+//! OIDC / OAuth2 runtime handlers for PlaneOS acting as an IdP.
 //!
 //! This slice wires up:
 //! - OIDC discovery

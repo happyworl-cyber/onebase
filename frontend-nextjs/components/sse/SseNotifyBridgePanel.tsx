@@ -225,7 +225,7 @@ export default function SseNotifyBridgePanel({ tenantId, defaultDatabaseId }: Pr
       <div className="flex items-start justify-between gap-4">
         <p className="text-sm text-gray-600">
           监听业务库的 PG <code className="font-mono text-xs">NOTIFY</code>，按 topic 模板（占位符取
-          payload 字段）推成 SSE。适用于触发器 / RPC 内部产生、不经 OneBase API 的事件（如成长动画）。
+          payload 字段）推成 SSE。适用于触发器 / RPC 内部产生、不经 PlaneOS API 的事件（如成长动画）。
         </p>
         <button onClick={openCreate} className="btn-primary whitespace-nowrap flex-shrink-0">
           <i className="fas fa-plus mr-2"></i>

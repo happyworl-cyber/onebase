@@ -98,7 +98,7 @@ pub async fn mcp_endpoint(
                         "name": "onebase-workflow-mcp",
                         "version": env!("CARGO_PKG_VERSION")
                     },
-                    "instructions": "OneBase 工作流创作工作台：先 list_skills 看有没有匹配能力，命中则 get_skill 按正文执行。编写工作流：node_spec → create_workflow（创建即启用）→ debug_workflow（默认干跑）→ workflow_api_doc；检测/审查走 workflow-qa。已启用工作流的启停由人在页面操作。"
+                    "instructions": "PlaneOS 工作流创作工作台：先 list_skills 看有没有匹配能力，命中则 get_skill 按正文执行。编写工作流：node_spec → create_workflow（创建即启用）→ debug_workflow（默认干跑）→ workflow_api_doc；检测/审查走 workflow-qa。已启用工作流的启停由人在页面操作。"
                 }),
             )
         }

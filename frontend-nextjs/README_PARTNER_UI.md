@@ -175,8 +175,8 @@ http://localhost:3006/partner
 
 6. **交付客户**
    - 将 `.lic` 文件发送给客户
-   - 客户放置到 `/etc/onebase/license.lic`
-   - 重启 OneBase 服务激活
+   - 客户放置到容器或主机运行目录的 `./license.lic`
+   - 重启 PlaneOS 服务激活
 
 ### 配额管理
 

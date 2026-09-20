@@ -1,15 +1,15 @@
-# OneBase 平台化产品规划（v1 + v2 路线图）
+# PlaneOS 平台化产品规划（v1 + v2 路线图）
 
 - **撰写日期**：2026-05-13
 - **作者**：Product Planning（AI 协作）
-- **范围**：OneBase 从「Rust 数据网关 + Next.js 控制台」演进为「企业内部可自助使用的零代码后端平台」，并预留「数据 API 资产平台」的扩展路径
+- **范围**：PlaneOS 从「Rust 数据网关 + Next.js 控制台」演进为「企业内部可自助使用的零代码后端平台」，并预留「数据 API 资产平台」的扩展路径
 - **状态**：Draft，待评审
 
 ---
 
 ## 0. 一句话定位
 
-> 在客户私有 Kubernetes 集群里，把 OneBase 升级成一个"开发者建表 → 30 分钟拿到完整后端 + 自带 AI 助手 + 自带运维大盘"的内部平台；运维同事只管 PG / Redis / 集群本身，不参与任何业务后端开发。
+> 在客户私有 Kubernetes 集群里，把 PlaneOS 升级成一个"开发者建表 → 30 分钟拿到完整后端 + 自带 AI 助手 + 自带运维大盘"的内部平台；运维同事只管 PG / Redis / 集群本身，不参与任何业务后端开发。
 
 ---
 
@@ -172,7 +172,7 @@
 
 #### M8. 私有化交付包
 
-- **Helm Chart**：包含 Deployment（OneBase 后端 + Next.js 前端）、Service、Ingress、ConfigMap、Secret 模板
+- **Helm Chart**：包含 Deployment（PlaneOS 后端 + Next.js 前端）、Service、Ingress、ConfigMap、Secret 模板
 - **License 模块**（软性）：
   - 表 `management.licenses`：max_projects / max_users / valid_until / signature
   - 启动校验 + 每天定时校验；过期进入"只读告警模式"，不阻断登录

@@ -1,4 +1,4 @@
-# OneBase 架构设计文档
+# PlaneOS 架构设计文档
 
 ## 📐 整体架构
 
@@ -10,7 +10,7 @@
        │ HTTP REST API
        │
 ┌──────▼──────────────────────────────────────┐
-│           OneBase API Server              │
+│           PlaneOS API Server              │
 │         (Rust + Axum + SQLx)                │
 │                                             │
 │  ┌─────────────────────────────────────┐   │

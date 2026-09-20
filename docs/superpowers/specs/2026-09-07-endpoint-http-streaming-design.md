@@ -37,14 +37,14 @@
 | 流来源 | 只透传上游 HTTP；code 节点 yield 预留接口、不实现 |
 | 流结束后 | 边推边拼，继续下游；下游拿到全文 |
 | 调用方断开 | 停写，工作流跑完（与现 detach 一致） |
-| 线上字节 | 原样透传上游，不套 OneBase SSE 信封 |
+| 线上字节 | 原样透传上游，不套 PlaneOS SSE 信封 |
 | 声明方式 | `http_call.config.stream === true`；全图最多一个 |
 | 下游输出 | `body`（原文）+ `text`（抽出的纯文本） |
 
 ### 非目标（第一期）
 
 - code / Lua / JS / Python 往这次连接 yield。
-- OneBase 统一 `event: delta | done | error` 信封。
+- PlaneOS 统一 `event: delta | done | error` 信封。
 - 调用方「停止生成」API。
 - 一张图多个流式出口。
 - `stream` 与 `async_poll` 组合。
@@ -187,7 +187,7 @@ struct StreamBridge {
 
 - status = 上游 status（非法值回退 200）。
 - headers = 白名单 ∩ 上游头，再去掉必剥头。
-- body = 上游字节原样。OneBase 不插入 SSE 行、不补 `[DONE]`、不写 `event: error`。
+- body = 上游字节原样。PlaneOS 不插入 SSE 行、不补 `[DONE]`、不写 `event: error`。
 
 **Commit 之前的失败**
 
@@ -287,5 +287,5 @@ struct StreamBridge {
 
 - code 节点通过同一 `StreamBridge` yield（先 Commit 再 Chunk）。
 - 调用方显式取消，从而中止上游。
-- 统一 OneBase SSE 信封（若项目应用不想绑模型厂商协议）。
+- 统一 PlaneOS SSE 信封（若项目应用不想绑模型厂商协议）。
 - 同一份 `text` 额外 `sse_publish` 到 `/events/{slug}`（A 与 B 汇合）。

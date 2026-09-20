@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在不破坏现有超管控制台的前提下，为 OneBase 引入「项目（Project）」语义层和工作空间路由，让项目成员可在 `/workspace/<slug>` 下操作仅属于自己项目的资源。
+**Goal:** 在不破坏现有超管控制台的前提下，为 PlaneOS 引入「项目（Project）」语义层和工作空间路由，让项目成员可在 `/workspace/<slug>` 下操作仅属于自己项目的资源。
 
 **Architecture:** 在现有 `management.tenants` 表上扩展 2 列（`kind` / `workspace_config`）来承载"项目"语义，**不新建表**。后端新增 `project_models` / `project_handlers` / `project_middleware` 三个模块与现有 `tenant_*` 并列；前端新增 `app/workspace/[projectSlug]/*` 路由层与现有 `app/dashboard/*`（超管台）并列；通过新增 `X-Project-Slug` 请求头贯通前后端的项目上下文。
 

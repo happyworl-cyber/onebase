@@ -162,12 +162,12 @@ export default function PlatformTokensPage() {
 
   const mcpConfig = `{
   "mcpServers": {
-    "onebase": {
+    "planeos": {
       "command": "node",
-      "args": ["/绝对路径/onebase/mcp-server/dist/index.js"],
+      "args": ["/绝对路径/planeos/mcp-server/dist/index.js"],
       "env": {
-        "ONEBASE_BASE_URL": "${apiBase}",
-        "ONEBASE_TOKEN": "obp_你的令牌"
+        "PLANEOS_BASE_URL": "${apiBase}",
+        "PLANEOS_TOKEN": "obp_你的令牌"
       }
     }
   }

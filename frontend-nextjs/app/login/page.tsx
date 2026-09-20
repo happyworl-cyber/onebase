@@ -215,7 +215,7 @@ function LoginPageInner() {
                 <i className="fas fa-database text-3xl text-white"></i>
               </div>
               <div>
-                <h1 className="text-4xl font-bold tracking-tight">OneBase</h1>
+                <h1 className="text-4xl font-bold tracking-tight">PlaneOS</h1>
                 <p className="text-sm opacity-90 font-light">Zero-Code Data Gateway</p>
               </div>
             </div>

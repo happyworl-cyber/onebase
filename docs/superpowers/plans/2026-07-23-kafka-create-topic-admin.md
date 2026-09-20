@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let project members create Kafka topics from the OneBase Kafka Topics tab via JWT admin API.
+**Goal:** Let project members create Kafka topics from the PlaneOS Kafka Topics tab via JWT admin API.
 
 **Architecture:** Validate name/partitions/RF in `kafka_ds::commands::create_topic`, call rdkafka `AdminClient::create_topics`, expose `POST /api/admin/kafka-connections/:id/topics`, add TopicsTab form + `kafkaAPI.createTopic`. No token REST or workflow changes.
 

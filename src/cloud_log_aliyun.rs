@@ -53,7 +53,7 @@ fn parse_embedded_object(raw: &str) -> Option<Map<String, Value>> {
     }
 }
 
-/// Logtail 常把整行 JSON 放在 `content` / `message` 里；OneBase stdout 的
+/// Logtail 常把整行 JSON 放在 `content` / `message` 里；PlaneOS stdout 的
 /// `level` / `message` / `x_request_id` 都在那一层。已有同名键不覆盖。
 fn flatten_embedded_json(row: &mut Map<String, Value>) {
     const EMBEDDED: [&str; 4] = ["content", "message", "__raw_log__", "log"];

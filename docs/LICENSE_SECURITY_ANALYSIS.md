@@ -105,7 +105,7 @@ fn read_public_key() -> Option<String> {
 **破解难度**：⭐⭐⭐⭐ **高（需要二进制修改）**
 
 **攻击者需要**：
-1. 反编译 OneBase 二进制文件
+1. 反编译 PlaneOS 二进制文件
 2. 找到内嵌公钥的内存位置
 3. 用 hex 编辑器替换公钥
 4. 重新计算校验和（如果有）
@@ -123,7 +123,7 @@ fn read_public_key() -> Option<String> {
 
 **攻击方式**：
 ```bash
-# 1. 反编译 OneBase 二进制
+# 1. 反编译 PlaneOS 二进制
 # 找到 require_module() 函数
 
 # 2. 用 hex 编辑器修改机器码

@@ -1,4 +1,4 @@
-# OneBase
+# PlaneOS
 
 一个轻量级、高性能的 PostgreSQL RESTful API 服务器，使用 Rust 实现，参考 PostgREST 设计理念。
 
@@ -42,7 +42,7 @@ cp .env.example .env
 
 新建租户时会自动 seed 一组默认权限（`viewer/editor/admin/superadmin`），可在 `/api/rbac/permissions` 进一步定制。
 
-> 把 Onebase 当社区 / SaaS 后端使用、需要"每个用户只能看到自己数据"的场景，
+> 把 PlaneOS 当社区 / SaaS 后端使用、需要"每个用户只能看到自己数据"的场景，
 > 见 [docs/community-data-isolation.md](docs/community-data-isolation.md)（业务级 RBAC）
 > 与 [docs/postgres-rls-guide.md](docs/postgres-rls-guide.md)（数据级 PostgreSQL RLS）。
 > 两者叠加构成"双层防线"，覆盖个人资料 / 帖子 / 私信 / 点赞等典型场景，
@@ -144,7 +144,7 @@ cargo build --release
 
 ## 🎨 Web 管理后台
 
-OneBase 提供了一个现代化的 Web 管理界面！
+PlaneOS 提供了一个现代化的 Web 管理界面！
 
 ### 快速访问
 

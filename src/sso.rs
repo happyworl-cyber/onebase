@@ -508,13 +508,13 @@ async fn http_fetch_userinfo(
         client
             .post(&userinfo_url)
             .bearer_auth(access_token)
-            .header("User-Agent", "OneBase/1.0")
+            .header("User-Agent", "PlaneOS/1.0")
             .json(&serde_json::json!({ "userId": user_id.unwrap_or("") }))
     } else {
         client
             .get(&userinfo_url)
             .bearer_auth(access_token)
-            .header("User-Agent", "OneBase/1.0")
+            .header("User-Agent", "PlaneOS/1.0")
     };
     let response = request.send().await.map_err(|e| {
         tracing::error!(
@@ -576,7 +576,7 @@ async fn fetch_github_email(access_token: &str) -> Result<String, String> {
     let response = client
         .get("https://api.github.com/user/emails")
         .bearer_auth(access_token)
-        .header("User-Agent", "OneBase/1.0")
+        .header("User-Agent", "PlaneOS/1.0")
         .send()
         .await
         .map_err(|e| format!("GitHub email 请求失败: {}", e))?;

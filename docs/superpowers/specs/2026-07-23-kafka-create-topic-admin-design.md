@@ -10,7 +10,7 @@
 
 ### 1.1 目标
 
-在 Kafka 数据源页的 **Topics** 标签中支持创建 topic，使项目成员无需离开 OneBase 即可为工作流准备 topic（例如 `onebase.ai-close-ticket`）。
+在 Kafka 数据源页的 **Topics** 标签中支持创建 topic，使项目成员无需离开 PlaneOS 即可为工作流准备 topic（例如 `onebase.ai-close-ticket`）。
 
 1. JWT Admin API：`POST /api/admin/kafka-connections/:id/topics`
 2. 请求体：`name` + `num_partitions` + `replication_factor`
@@ -144,6 +144,6 @@ frontend-nextjs/.../kafka-connections/page.tsx  # TopicsTab 表单
 ## 8. 验收
 
 1. 项目成员在 Topics 页可创建 topic（名称 + 分区 + 副本）
-2. 创建成功后列表出现新 topic，无需出 OneBase
+2. 创建成功后列表出现新 topic，无需出 PlaneOS
 3. 重复创建返回明确「已存在」
 4. 令牌 REST / 工作流节点行为不变（无 create）

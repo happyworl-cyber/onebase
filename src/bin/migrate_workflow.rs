@@ -8,7 +8,7 @@ async fn main() -> anyhow::Result<()> {
     let database_url = env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/onebase".to_string());
 
-    println!("⚙️  OneBase Workflow DAG 引擎迁移");
+    println!("⚙️  PlaneOS Workflow DAG 引擎迁移");
     println!(
         "连接数据库: {}...",
         &database_url[..database_url.find('@').unwrap_or(20)]

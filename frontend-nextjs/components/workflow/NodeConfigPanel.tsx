@@ -917,7 +917,7 @@ export default function NodeConfigPanel({
                 className="w-full px-3 py-2 border rounded-lg text-sm font-mono"
                 placeholder="HR <hr@example.com>"
               />
-              <p className="text-xs text-gray-400 mt-1">也可通过 ONEBASE_SMTP_FROM / SMTP_FROM 环境变量提供。</p>
+              <p className="text-xs text-gray-400 mt-1">也可通过 SMTP_FROM 环境变量提供。</p>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">收件人 To *</label>
@@ -990,7 +990,7 @@ export default function NodeConfigPanel({
                   className="w-full px-3 py-2 border rounded-lg text-sm font-mono"
                   placeholder="smtp.example.com"
                 />
-                <p className="text-xs text-sky-600 mt-1">留空时读取 ONEBASE_SMTP_HOST / SMTP_HOST。</p>
+                <p className="text-xs text-sky-600 mt-1">留空时读取 SMTP_HOST。</p>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
@@ -1030,7 +1030,7 @@ export default function NodeConfigPanel({
                   placeholder="留空时读取环境变量"
                 />
                 <p className="text-xs text-sky-600 mt-1">
-                  生产环境建议留空，改用 ONEBASE_SMTP_USERNAME / ONEBASE_SMTP_PASSWORD。
+                  生产环境建议留空，改用 SMTP_USERNAME / SMTP_PASSWORD。
                 </p>
               </div>
             </div>

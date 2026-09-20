@@ -759,7 +759,7 @@ function TopicsTab({ connection }: { connection: KafkaConnection }) {
                 value={form.name}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                 className="w-full px-3 py-2 border rounded font-mono text-sm"
-                placeholder="onebase.ai-close-ticket"
+                placeholder="planeos.ai-close-ticket"
                 disabled={creating}
               />
             </label>
@@ -897,7 +897,7 @@ function ConsumerGroupsTab({ connection }: { connection: KafkaConnection }) {
           <input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder="筛选 group id，如 onebase-ai-close"
+            placeholder="筛选 group id，如 planeos-ai-close"
             className="px-3 py-1.5 border rounded text-xs font-mono min-w-[220px]"
           />
           <button type="button" onClick={loadGroups} disabled={loading} className="btn-default">
@@ -960,7 +960,7 @@ function ConsumerGroupsTab({ connection }: { connection: KafkaConnection }) {
                     </div>
                     {noMembers ? (
                       <div className="text-amber-700">
-                        无在线成员：OneBase 工作流 consumer 可能未启动，或 group id 与配置不一致。
+                        无在线成员：PlaneOS 工作流 consumer 可能未启动，或 group id 与配置不一致。
                       </div>
                     ) : (
                       <ul className="space-y-1 mt-1">

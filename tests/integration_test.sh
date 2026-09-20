@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# OneBase 安全 / RBAC 集成测试
+# PlaneOS 安全 / RBAC 集成测试
 #
 # 跑法：
 #   ./tests/integration_test.sh

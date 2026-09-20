@@ -10,7 +10,7 @@
   退款/发货是高危写操作，绝不能放在匿名 /pub 端点。
 - **角色校验（必做）**：每个工作流第一个节点 `role_guard` 校验调用者是 admin / finance_ops。
   - 调用方身份从 **payload `actor_way_uid`**（字符串 way_uid）读取——central 的
-    `OneBaseOrderActionRepository` 已在每个请求体显式注入（取自 auth store，口径同
+    `PlaneOSOrderActionRepository` 已在每个请求体显式注入（取自 auth store，口径同
     `operator_way_uid`）。注意 central http client 的默认参数只带数字 `uid`，**不可**用它当身份。
   - `role_guard` 用 `actor_way_uid` 查 central 后台管理员角色表（**部署时确认表名/字段**），
     空值或非授权角色 → `resp_forbidden(403)`。

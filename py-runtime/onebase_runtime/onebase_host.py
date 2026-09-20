@@ -1,4 +1,4 @@
-"""OneBase Python workflow host API.
+"""PlaneOS Python workflow host API.
 
 IPC is newline-delimited JSON over the Unix-domain socket named by
 ``ONEBASE_HOST_SOCK``. Each request is ``{id, op, args}`` and receives exactly
@@ -41,10 +41,10 @@ def _call(op, args=None):
     try:
         response = _json.loads(line.decode("utf-8"))
     except Exception as error:  # noqa: BLE001 - surface parse errors to the node
-        raise RuntimeError("OneBase host returned invalid JSON: %s" % error)
+        raise RuntimeError("PlaneOS host returned invalid JSON: %s" % error)
     if not response.get("ok"):
         raise RuntimeError(
-            response.get("error") or ("OneBase host operation failed: %s" % op)
+            response.get("error") or ("PlaneOS host operation failed: %s" % op)
         )
     return response.get("result")
 

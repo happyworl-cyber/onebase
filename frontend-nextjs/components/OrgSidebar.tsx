@@ -87,7 +87,7 @@ export default function OrgSidebar({
             <i className="fas fa-building text-white text-sm"></i>
           </div>
           <div className="min-w-0">
-            <h1 className="text-sm font-semibold text-gray-900 truncate">OneBase</h1>
+            <h1 className="text-sm font-semibold text-gray-900 truncate">PlaneOS</h1>
             <p className="text-[11px] text-gray-500">租户控制台</p>
           </div>
         </div>

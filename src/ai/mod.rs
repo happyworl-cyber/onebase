@@ -1,4 +1,4 @@
-//! PlaneOS / OneBase 通用 AI 助手后端。
+//! PlaneOS 通用 AI 助手后端。
 //!
 //! Provider 配置按项目隔离；密钥只以 AES-256-GCM 密文落库，对外仅返回
 //! `api_key_configured`。聊天不持久化，统一输出 meta/delta/tool/usage/done/error SSE。

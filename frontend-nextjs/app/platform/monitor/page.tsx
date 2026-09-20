@@ -936,7 +936,7 @@ function PlatformMonitorPageInner() {
             <div className="flex items-end justify-between mb-3">
               <h3 className="text-sm font-semibold text-gray-700">
                 <i className="fas fa-code mr-2 text-purple-500"></i>
-                OneBase Auto API 慢查询
+                PlaneOS Auto API 慢查询
               </h3>
               <div className="flex items-center space-x-3 text-xs text-gray-600">
                 <label className="flex items-center space-x-1.5">

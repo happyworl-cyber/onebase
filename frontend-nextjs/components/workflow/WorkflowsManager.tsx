@@ -440,11 +440,11 @@ const MCP_TOOLS: ReadonlyArray<readonly [string, string]> = [
 function McpGuideModal({ onClose }: { onClose: () => void }) {
   const base = typeof window !== 'undefined' ? window.location.origin : ''
   const mcpUrl = `${base}/mcp`
-  const claudeCmd = `claude mcp add --transport http onebase ${mcpUrl} --header "Authorization: Bearer obm_你的令牌"`
+  const claudeCmd = `claude mcp add --transport http planeos ${mcpUrl} --header "Authorization: Bearer obm_你的令牌"`
   const genericConfig = JSON.stringify(
     {
       mcpServers: {
-        onebase: {
+        planeos: {
           type: 'http',
           url: mcpUrl,
           headers: { Authorization: 'Bearer obm_你的令牌' },
@@ -457,9 +457,9 @@ function McpGuideModal({ onClose }: { onClose: () => void }) {
 
   // 整份接入指南拼成 Markdown，供「复制全部」一次性带走喂 AI。
   const mcpMarkdown = useMemo(() => [
-    '# OneBase MCP 接入指南',
+    '# PlaneOS MCP 接入指南',
     '',
-    '让 AI 客户端（Claude Code 等）接入 OneBase，由 AI 创作 / 调试工作流。',
+    '让 AI 客户端（Claude Code 等）接入 PlaneOS，由 AI 创作 / 调试工作流。',
     '',
     '## 接入地址（当前环境）',
     mcpUrl,
@@ -483,7 +483,7 @@ function McpGuideModal({ onClose }: { onClose: () => void }) {
     '',
     '## 第三步 · 跟 AI 说需求',
     '重开一个 AI 会话，直接描述接口需求，例如：',
-    '> 帮我在 onebase 建一个工作流：按用户 ID 查询最近 10 笔订单，调试通过后给我接口文档',
+    '> 帮我在 PlaneOS 建一个工作流：按用户 ID 查询最近 10 笔订单，调试通过后给我接口文档',
     '',
     'AI 会：读节点规范 → 创建工作流（只落草稿）→ 调试验证 → 发布（草稿才进运行时）→ 生成接口文档。启用 / 禁用仍只在页面操作（启停留人）。',
     '',
@@ -498,7 +498,7 @@ function McpGuideModal({ onClose }: { onClose: () => void }) {
         <div className="px-6 py-4 border-b flex items-center justify-between shrink-0">
           <div>
             <h3 className="font-semibold text-gray-800">MCP 接入 · 让你的 AI 来写工作流</h3>
-            <p className="text-xs text-gray-400 mt-0.5">把 OneBase 接入本地 AI 客户端（Claude Code 等），描述需求即可由 AI 创作、调试工作流</p>
+            <p className="text-xs text-gray-400 mt-0.5">把 PlaneOS 接入本地 AI 客户端（Claude Code 等），描述需求即可由 AI 创作、调试工作流</p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <CopyMarkdownButton text={mcpMarkdown} />
@@ -553,7 +553,7 @@ function McpGuideModal({ onClose }: { onClose: () => void }) {
               重开一个 AI 会话，直接描述接口需求，例如：
             </p>
             <blockquote className="text-xs bg-indigo-50 text-indigo-800 rounded-lg px-3 py-2 leading-relaxed">
-              "帮我在 onebase 建一个工作流：按用户 ID 查询最近 10 笔订单，调试通过后给我接口文档"
+              "帮我在 PlaneOS 建一个工作流：按用户 ID 查询最近 10 笔订单，调试通过后给我接口文档"
             </blockquote>
             <p className="text-xs text-gray-500 mt-2 leading-relaxed">
               AI 会自动完成：读节点规范 → 创建工作流（<strong>只落草稿</strong>）→ 调试验证 → <strong>发布</strong>（草稿才进运行时）→ 生成接口文档。

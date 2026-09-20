@@ -146,8 +146,8 @@ export default function PlatformProvisionSettingsPage() {
       <div className="p-4 rounded-lg border border-dashed border-gray-200 bg-gray-50 text-xs text-gray-600 space-y-2">
         <p className="font-medium text-gray-800">环境变量示例</p>
         <pre className="font-mono text-[11px] whitespace-pre-wrap break-all">
-{`PROVISION_WEBHOOK_URL=https://ops.internal/onebase/provision
-PROVISION_WEBHOOK_DEPROVISION_URL=https://ops.internal/onebase/deprovision
+{`PROVISION_WEBHOOK_URL=https://ops.internal/planeos/provision
+PROVISION_WEBHOOK_DEPROVISION_URL=https://ops.internal/planeos/deprovision
 PROVISION_WEBHOOK_TOKEN=...
 PROVISION_WEBHOOK_TIMEOUT_SECS=120`}
         </pre>

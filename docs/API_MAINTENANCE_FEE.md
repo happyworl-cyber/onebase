@@ -1,8 +1,8 @@
-# OneBase 维护费 API 文档
+# PlaneOS 维护费 API 文档
 
 ## 概述
 
-本文档详细说明了 OneBase 代理商分销系统中维护费相关的 API 端点，包括 License 签发（含维护费）、维护费续费管理、查询统计等功能。
+本文档详细说明了 PlaneOS 代理商分销系统中维护费相关的 API 端点，包括 License 签发（含维护费）、维护费续费管理、查询统计等功能。
 
 **基础URL**：`http://localhost:3010`（开发环境）
 
@@ -710,6 +710,6 @@ curl -X POST http://localhost:3010/api/partner/maintenance/1/mark-paid \
 
 ---
 
-**文档维护**：OneBase 开发团队
-**联系方式**：support@onebase.io
+**文档维护**：PlaneOS 开发团队
+**联系方式**：support@planeos.io
 **最后更新**：2026-09-02

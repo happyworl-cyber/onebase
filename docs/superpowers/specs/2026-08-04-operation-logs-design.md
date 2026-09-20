@@ -8,7 +8,7 @@
 
 ## 1. 背景与范围 (Context & Scope)
 
-OneBase 已有两套「日志」体系，但都不满足「面向租户、跨来源、带业务语义」的操作审计需求：
+PlaneOS 已有两套「日志」体系，但都不满足「面向租户、跨来源、带业务语义」的操作审计需求：
 
 - `management.audit_logs`：由全局 `audit_middleware` 自动写入，**形态是 HTTP 请求**（method/path/status），只记录 POST/PATCH/PUT/DELETE，偏**平台超管视角**。无法表达 MCP / 定时 / 系统内部这类**非 HTTP** 的操作，也没有 `resource_type` / `source` / `actor_type` 等业务维度。
 - `management.execution_index` / `workflow_runs` / `scheduled_task_runs`：**执行日志**（任务跑没跑成功），与「谁对什么资源做了什么操作」是不同关注点。

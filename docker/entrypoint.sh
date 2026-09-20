@@ -8,7 +8,7 @@ PG_PASS="${POSTGRES_PASSWORD:-onebase123}"
 PG_DB="${POSTGRES_DB:-onebase}"
 
 echo "========================================="
-echo "  OneBase All-in-One Container"
+echo "  PlaneOS All-in-One Container"
 echo "========================================="
 
 # ─── 0. 幂等写入 AIO Postgres 调优参数（每次启动，含已有数据目录）───

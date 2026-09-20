@@ -280,7 +280,7 @@ function KafkaTriggerConfig({
             value={String(parsed.group_id ?? '')}
             onChange={(e) => update('group_id', e.target.value)}
             className={`${fieldClass} font-mono`}
-            placeholder="留空则用 onebase-wf-{工作流id}"
+            placeholder="留空则用 planeos-wf-{工作流id}"
           />
         </label>
         <label className="flex flex-col gap-1 min-w-[150px]">
@@ -308,7 +308,7 @@ function KafkaTriggerConfig({
       </div>
       <div className="px-4 pb-2 text-[11px] text-slate-500 space-y-0.5">
         <p>
-          Group 建议固定完整名称（如 <code className="font-mono text-slate-700">onebase-ai-close-ticket</code>
+          Group 建议固定完整名称（如 <code className="font-mono text-slate-700">planeos-ai-close-ticket</code>
           ）；改名等于新消费组。可在「Kafka → 消费组」核对是否在线。
           {groupId ? (
             <span className="ml-1 font-mono text-slate-600">当前：{groupId}</span>

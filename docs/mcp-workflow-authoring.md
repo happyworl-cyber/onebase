@@ -1,6 +1,6 @@
 # MCP 工作流创作工作台
 
-让 AI 客户端（Claude Code 等）通过 MCP 协议在 OneBase 中**创作、调试、交付工作流**，
+让 AI 客户端（Claude Code 等）通过 MCP 协议在 PlaneOS 中**创作、调试、交付工作流**，
 以工作流替代后端接口代码。设计与安全模型详见 `.omc/plans/onebase-workflow-mcp-plan.md`。
 
 ## 接入（Claude Code）
@@ -9,7 +9,7 @@
 2. 客户端添加：
 
 ```bash
-claude mcp add --transport http onebase https://你的OneBase地址/mcp \
+claude mcp add --transport http planeos https://你的PlaneOS地址/mcp \
   --header "Authorization: Bearer obm_xxxxxxxx"
 ```
 

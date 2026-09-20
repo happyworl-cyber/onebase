@@ -1,4 +1,4 @@
-# OneBase API 使用示例大全
+# PlaneOS API 使用示例大全
 
 > ## ⚠️ 重要：本文档示例使用的是「超管直连 CRUD」接口（旧版）
 >
@@ -403,7 +403,7 @@ curl "http://localhost:3000/api/public/post_tags?post_id=1"
 
 ```javascript
 // 封装 API 客户端
-class OneBaseClient {
+class PlaneOSClient {
   constructor(baseUrl = 'http://localhost:3000/api') {
     this.baseUrl = baseUrl;
   }
@@ -450,7 +450,7 @@ class OneBaseClient {
 }
 
 // 使用示例
-const api = new OneBaseClient();
+const api = new PlaneOSClient();
 
 // 查询
 const users = await api.get('public', 'users', {

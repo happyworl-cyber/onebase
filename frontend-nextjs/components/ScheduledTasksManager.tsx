@@ -1016,7 +1016,7 @@ export default function ScheduledTasksManager({
                 hint={
                   shellAvailable
                     ? tenantMode
-                      ? 'shell 以服务进程身份在本租户上下文执行，已默认走 bwrap 沙盒；解释器走白名单，env 不会泄露 onebase 自身 secret'
+                      ? 'shell 以服务进程身份在本租户上下文执行，已默认走 bwrap 沙盒；解释器走白名单，env 不会泄露平台自身 secret'
                       : 'shell 在平台级模式下对超管开放；以服务进程身份执行，已默认走 bwrap 沙盒'
                     : undefined
                 }
@@ -1288,7 +1288,7 @@ export default function ScheduledTasksManager({
                   />
                 </FormField>
                 <FormField
-                  label="HMAC 签名密钥（X-Onebase-Signature）"
+                  label="HMAC 签名密钥"
                   hint={
                     editing
                       ? '留空保留原值；填入新值会覆盖；明文密钥不会回显'
@@ -1331,10 +1331,10 @@ export default function ScheduledTasksManager({
                       运行时沙盒由 <code>SCHEDULER_SHELL_SANDBOX_MODE</code> 决定（默认 <code>auto</code>：bwrap → nsjail → direct）
                     </li>
                     <li>
-                      <code>direct</code> 模式无沙盒，脚本以 onebase 进程身份执行；生产环境请用 <code>bwrap</code> 或 <code>off</code>
+                      <code>direct</code> 模式无沙盒，脚本以平台服务进程身份执行；生产环境请用 <code>bwrap</code> 或 <code>off</code>
                     </li>
                     <li>
-                      子进程 <code>env_clear</code> 后只注入白名单（PATH/HOME + 你在 shell_env 里显式填的项），不会泄露 onebase 自身的 secret
+                      子进程 <code>env_clear</code> 后只注入白名单（PATH/HOME + 你在 shell_env 里显式填的项），不会泄露平台自身的 secret
                     </li>
                     <li>
                       解释器走白名单（sh / bash / dash / zsh / python3 / node / ruby），无法直接调 <code>rm</code> / <code>dd</code> 等危险二进制
@@ -1382,7 +1382,7 @@ export default function ScheduledTasksManager({
                     onChange={(e) => setForm({ ...form, shell_script: e.target.value })}
                     className="input-base w-full font-mono text-xs"
                     rows={10}
-                    placeholder={'#!/bin/sh\nset -eu\necho "hello from onebase"'}
+                    placeholder={'#!/bin/sh\nset -eu\necho "hello from PlaneOS"'}
                     required
                   />
                 </FormField>

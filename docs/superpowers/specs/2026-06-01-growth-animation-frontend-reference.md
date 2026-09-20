@@ -1,6 +1,6 @@
 # 成长动画 SSE — 业务前端接入参考
 
-> 本文件供**业务前端团队**（独立仓库）拷贝参考。OneBase 只提供端点契约 + 这段参考代码 +
+> 本文件供**业务前端团队**（独立仓库）拷贝参考。PlaneOS 只提供端点契约 + 这段参考代码 +
 > 监控页；动画队列、claim/ack 业务逻辑由业务前端自行实现。
 
 ## 1. 端点契约
@@ -16,7 +16,7 @@ GET /events/growth-animation?projectId=1 # 可选：只订阅单个社区
 ```
 
 - **鉴权**：无需 JWT。用户身份由**上游网关注入的 `X-Way-UID`** 头确定；浏览器 `EventSource`
-  不能自定义头，故该头必须由网关在转发到 OneBase 时注入（前端无需也无法自带）。
+  不能自定义头，故该头必须由网关在转发到 PlaneOS 时注入（前端无需也无法自带）。
 - **事件**：
   - `event: connected`，`data: {"ok":true}`（带 `projectId` 时附 `"projectId":N`）——连接确认。
   - `event: growth_animation_available`，`data: {"eventId":123,"projectId":1,"eventType":"level_unlock"}`
@@ -26,7 +26,7 @@ GET /events/growth-animation?projectId=1 # 可选：只订阅单个社区
 
 ### claim / ack（RPC）
 
-收到唤醒后，经 OneBase 的 PostgREST 风格 RPC 调业务 DB 函数：
+收到唤醒后，经 PlaneOS 的 PostgREST 风格 RPC 调业务 DB 函数：
 
 ```
 POST /api/v1/{databaseId}/rpc/{fn_name}
@@ -36,7 +36,7 @@ POST /api/v1/{databaseId}/rpc/{fn_name}
 - 播放完成：`console_ack_growth_animation_event`。
 
 > 这些函数由业务方在 DB 侧实现；`{databaseId}` 与函数名以业务方约定为准。
-> 实际请求一般经业务网关转发到 OneBase（网关注入 `X-Way-UID` 等身份头）。
+> 实际请求一般经业务网关转发到 PlaneOS（网关注入 `X-Way-UID` 等身份头）。
 
 ## 2. 参考 Hook（React + TypeScript）
 
@@ -99,11 +99,11 @@ async function claimAndPlay(ev: GrowthEvent) {
 }
 ```
 
-## 3. 多标签页（业务前端职责，非 OneBase）
+## 3. 多标签页（业务前端职责，非 PlaneOS）
 
 同一社区开多个标签页时，每个标签都会各自建一条 `EventSource`（浏览器原生限制）。
 若想全用户只保留一条流并在标签间共享，业务前端可用 `BroadcastChannel` 或 `SharedWorker`
-做主从选举：仅"主标签"持流，收到唤醒后经 `BroadcastChannel` 广播给其它标签。OneBase
+做主从选举：仅"主标签"持流，收到唤醒后经 `BroadcastChannel` 广播给其它标签。PlaneOS
 侧不处理这一层。`console_claim_*` 的 lease 本身也能兜底防止多端重复播放。
 
 ## 4. 上线前对接清单
@@ -113,5 +113,5 @@ async function claimAndPlay(ev: GrowthEvent) {
       `console_claim/ack/requeue_*` 函数。
 - [ ] 运维在 `management.sse_notify_bridges` 插入成长动画那一行（见迁移
       `024_sse_notify_bridges.sql` 末尾示例 INSERT，把 `<BUSINESS_DB_ID>` 换成实际业务库 id）。
-- [ ] OneBase 监控页「实时推送规则 → 推送监控」可见对应 listener 已连接、收到/推送计数增长。
+- [ ] PlaneOS 监控页「实时推送规则 → 推送监控」可见对应 listener 已连接、收到/推送计数增长。
 ```

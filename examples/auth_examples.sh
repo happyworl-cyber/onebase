@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# OneBase 认证 API 使用示例
+# PlaneOS 认证 API 使用示例
 
 BASE_URL="http://localhost:3000"
 
-echo "=== OneBase 认证 API 测试 ==="
+echo "=== PlaneOS 认证 API 测试 ==="
 echo ""
 
 # 1. 健康检查

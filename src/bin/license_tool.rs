@@ -1,4 +1,4 @@
-//! OneBase License 签发 / 校验 CLI（原厂内部工具，私钥只留在原厂）。
+//! PlaneOS License 签发 / 校验 CLI（原厂内部工具，私钥只留在原厂）。
 //!
 //! 用法：
 //!   license_tool keygen [--out-dir .] [--name license]
@@ -315,7 +315,7 @@ fn fmt_ts(secs: i64) -> String {
 
 fn print_usage() {
     println!(
-        "OneBase License 工具\n\n\
+        "PlaneOS License 工具\n\n\
          用法:\n  \
          license_tool keygen [--out-dir .] [--name license]\n  \
          license_tool fingerprint\n  \

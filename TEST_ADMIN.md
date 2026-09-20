@@ -35,7 +35,7 @@ psql -U your_username -d your_database -f migrations/001_create_users_table.sql
 **预期结果**:
 - ✅ 看到登录页面
 - ✅ 有蓝紫渐变背景
-- ✅ 显示 "OneBase 数据库管理后台"
+- ✅ 显示 "PlaneOS 数据库管理后台"
 - ✅ 有邮箱和密码输入框
 
 **故障排除**:

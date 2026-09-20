@@ -711,7 +711,7 @@ function PatSection() {
             </button>
           </div>
           <p className="text-xs text-yellow-700 mt-2 font-mono">
-            claude mcp add --transport http onebase {'{BASE_URL}'}/mcp --header "Authorization: Bearer {'{令牌}'}"
+            claude mcp add --transport http planeos {'{BASE_URL}'}/mcp --header "Authorization: Bearer {'{令牌}'}"
           </p>
         </div>
       )}

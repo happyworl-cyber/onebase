@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# OneBase 事务 API 使用示例
+# PlaneOS 事务 API 使用示例
 
 BASE_URL="http://localhost:3000"
 
-echo "=== OneBase 事务 API 测试 ==="
+echo "=== PlaneOS 事务 API 测试 ==="
 echo ""
 
 # 颜色定义

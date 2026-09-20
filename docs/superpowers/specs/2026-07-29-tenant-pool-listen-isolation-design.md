@@ -10,11 +10,11 @@
 
 - `pool timed out while waiting for an open connection`（sqlx 租户池 acquire 超时，默认 30s）
 - 工作流 `timeout_ms=30000` 被强制中止（与 acquire 超时重叠，表现为两种错误形态）
-- OneBase SQL 编辑器查 `pg_stat_activity` 也 30s 超时（走同一租户池）
+- PlaneOS SQL 编辑器查 `pg_stat_activity` 也 30s 超时（走同一租户池）
 
-直连租户 PG（绕过 OneBase）显示：库侧健康（`max_connections=1600`，几乎无 `idle in transaction` / Lock 等待）。根因在应用侧：
+直连租户 PG（绕过 PlaneOS）显示：库侧健康（`max_connections=1600`，几乎无 `idle in transaction` / Lock 等待）。根因在应用侧：
 
-1. **NOTIFY / SSE LISTEN 占用业务池**：`PgListener::connect_with(&pool)` 长驻占用连接。acme-test 上约 10 个 notify 工作流 + 1 个 SSE bridge ≈ **每 OneBase 实例固定占 11 槽**；多实例叠加后，池上限 30 时业务余量极小。
+1. **NOTIFY / SSE LISTEN 占用业务池**：`PgListener::connect_with(&pool)` 长驻占用连接。acme-test 上约 10 个 notify 工作流 + 1 个 SSE bridge ≈ **每 PlaneOS 实例固定占 11 槽**；多实例叠加后，池上限 30 时业务余量极小。
 2. **重试风暴放大**：`open/get-recommend-list` 等失败后客户端重试，进一步打满剩余槽位。
 3. **工作流 PG 节点无 `statement_timeout`**：慢 SQL 可长时间占连接（防护缺口）。
 

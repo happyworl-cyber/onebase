@@ -1,4 +1,4 @@
-# OneBase 定价策略与竞品分析报告
+# PlaneOS 定价策略与竞品分析报告
 
 ## 一、竞品定价调研（2026 年数据）
 
@@ -73,7 +73,7 @@
 
 ---
 
-## 二、OneBase 定价策略建议
+## 二、PlaneOS 定价策略建议
 
 ### 2.1 核心定价逻辑
 
@@ -123,7 +123,7 @@
 | **可选模块** | AI（+¥30,000）、Pipeline（+¥20,000） |
 | **维护内容** | 安全补丁、Bug 修复、小版本升级 |
 
-**对标竞品**：Appsmith Enterprise（$30,000/年 ≈ ¥210,000/年），OneBase 定价更具竞争力
+**对标竞品**：Appsmith Enterprise（$30,000/年 ≈ ¥210,000/年），PlaneOS 定价更具竞争力
 
 ---
 
@@ -142,7 +142,7 @@
 | **维护内容** | 安全补丁、Bug 修复、大版本升级、专属支持 |
 | **额外服务** | 可选专属技术支持（¥50,000/年） |
 
-**对标竞品**：Retool Enterprise（定制定价，通常 $100,000-$300,000/年），OneBase 提供更清晰的透明定价
+**对标竞品**：Retool Enterprise（定制定价，通常 $100,000-$300,000/年），PlaneOS 提供更清晰的透明定价
 
 ---
 
@@ -289,18 +289,18 @@
 
 #### vs. Appsmith Enterprise
 - **Appsmith**：$30,000/年订阅（≈ ¥210,000/年）
-- **OneBase Standard**：¥80,000 买断 + ¥16,000 维护 = 首年 ¥96,000
-- **优势**：OneBase 首年成本 **降低 54%**，且支持永久买断
+- **PlaneOS Standard**：¥80,000 买断 + ¥16,000 维护 = 首年 ¥96,000
+- **优势**：PlaneOS 首年成本 **降低 54%**，且支持永久买断
 
 #### vs. Retool Enterprise
 - **Retool**：定制定价，通常 $100,000-$300,000/年
-- **OneBase Enterprise**：¥300,000 买断（约 $42,000）
-- **优势**：OneBase **避免按年付费陷阱**，总拥有成本（TCO）更低
+- **PlaneOS Enterprise**：¥300,000 买断（约 $42,000）
+- **优势**：PlaneOS **避免按年付费陷阱**，总拥有成本（TCO）更低
 
 #### vs. Budibase Business
 - **Budibase**：$3,588/年（$299/月 × 12）
-- **OneBase Standard**：¥20,000/年订阅（约 $2,800/年）
-- **优势**：OneBase 订阅价格更低，且功能更全面（AI、多租户）
+- **PlaneOS Standard**：¥20,000/年订阅（约 $2,800/年）
+- **优势**：PlaneOS 订阅价格更低，且功能更全面（AI、多租户）
 
 ---
 
@@ -504,4 +504,4 @@ function calculateTotalPrice(form: IssueLicenseForm): PriceBreakdown {
 **文档版本**：v1.0
 **更新时间**：2026-09-01
 **作者**：Claude Sonnet 4.5
-**适用产品**：OneBase 1.0+
+**适用产品**：PlaneOS 1.0+

@@ -1,4 +1,4 @@
-# OneBase — 产品架构愿景
+# PlaneOS — 产品架构愿景
 
 > **一句话定位**：面向百万级用户互联网产品的**零代码数据网关**——开发者只需设计数据库表结构，即可获得完整的 CRUD API、RBAC 鉴权、缓存、消息通知、日志与网关管理能力，无需编写任何业务读写代码。
 
@@ -17,7 +17,7 @@ Supabase 是优秀的开源 BaaS，但它的核心设计存在**无法通过补�
 | **无法横向扩展** | 单 Postgres 实例，无原生读写分离 / 分片 | 不适合百万级用户 |
 | **无缓存层** | 所有读请求直达数据库 | 热点数据重复查询，浪费资源 |
 
-**OneBase 的回答**：把鉴权、缓存、通知、网关、日志全部上提到**应用层**，让 Postgres 只做它最擅长的事——**存储和查询数据**。
+**PlaneOS 的回答**：把鉴权、缓存、通知、网关、日志全部上提到**应用层**，让 Postgres 只做它最擅长的事——**存储和查询数据**。
 
 ---
 
@@ -55,7 +55,7 @@ Supabase 是优秀的开源 BaaS，但它的核心设计存在**无法通过补�
 
 > **对数据库的读写操作走框架的 Auto API，开发者不需要写任何代码。**
 >
-> OneBase 的 Auto API 根据数据库元数据（表、列、外键、约束）自动生成 CRUD 端点。开发者通过**配置**而非**编码**来控制访问行为：
+> PlaneOS 的 Auto API 根据数据库元数据（表、列、外键、约束）自动生成 CRUD 端点。开发者通过**配置**而非**编码**来控制访问行为：
 > - 谁可以访问？→ RBAC 角色配置
 > - 哪些字段可见？→ 列级权限配置
 > - 哪些行可见？→ 行级过滤条件配置
@@ -188,7 +188,7 @@ permission:
 **与 Supabase RLS 的本质区别**：
 - 权限判定在**应用层**完成，不是 Postgres 内部
 - 权限数据**可缓存**到 Redis，不需要每次查库
-- OneBase 实例**可横向扩展**，多实例共享 Redis 缓存
+- PlaneOS 实例**可横向扩展**，多实例共享 Redis 缓存
 - 权限变更**热生效**：更新 DB → 清 Redis 缓存 → 下次请求自动加载新权限
 
 ### 4.4 SSO / 社交登录
@@ -203,13 +203,13 @@ permission:
      │
      ▼
 ┌──────────────────────────────────────┐
-│          OneBase Auth              │
+│          PlaneOS Auth              │
 │                                      │
 │  1. 用 code 换 access_token          │
 │  2. 获取用户 profile (email, name)   │
 │  3. 查找或创建本地用户               │
 │  4. 绑定 SSO provider               │
-│  5. 签发 OneBase JWT              │
+│  5. 签发 PlaneOS JWT              │
 │  6. 自动分配默认角色                 │
 └──────────────────────────────────────┘
 ```
@@ -250,7 +250,7 @@ permission:
 | **阶段 2** | Citus 分布式扩展（分片） | 100 万用户 |
 | **阶段 3** | 多区域部署 + 跨区域复制 | 1000 万用户 |
 
-**OneBase 的实现**：
+**PlaneOS 的实现**：
 - `PoolManager` 维护 `Primary` 和 `Replica[]` 两组连接池
 - Auto API 的 `SELECT` 请求自动路由到 Replica（负载均衡）
 - `INSERT/UPDATE/DELETE` 请求路由到 Primary
@@ -260,7 +260,7 @@ permission:
 
 ```
                     ┌──────────────────────────────┐
-                    │     OneBase Redis 客户端    │
+                    │     PlaneOS Redis 客户端    │
                     │  (支持 Standalone / Sentinel  │
                     │   / Cluster 三种模式)         │
                     └──────────────┬───────────────┘
@@ -369,7 +369,7 @@ Client: POST /api/v1/{db_id}/public/posts
 ## 七、多租户模型
 
 ```
-Platform (OneBase 实例)
+Platform (PlaneOS 实例)
   │
   ├── Tenant A (公司 A)
   │     ├── Database Connection 1 (生产库)
@@ -413,7 +413,7 @@ Platform (OneBase 实例)
 
 ## 九、与竞品的差异化对比
 
-| 能力 | Supabase | Firebase | Hasura | **OneBase** |
+| 能力 | Supabase | Firebase | Hasura | **PlaneOS** |
 |------|----------|----------|--------|---------------|
 | 数据库 CRUD | PostgREST (Haskell) | 私有协议 | GraphQL | **Rust Auto API** (极致性能) |
 | 鉴权方式 | RLS (Postgres 内) | Firebase Auth Rules | JWT + Webhook | **应用层 RBAC** (可缓存、可扩展) |
@@ -506,28 +506,28 @@ Platform (OneBase 实例)
 
 > "我只想设计好数据库表，前端直接调 API，不想写后端。"
 
-**OneBase 提供**：Auto API + 内置鉴权 + SSO → 一个人也能做百万用户的产品。
+**PlaneOS 提供**：Auto API + 内置鉴权 + SSO → 一个人也能做百万用户的产品。
 
 ### 画像 2: 中型团队 / SaaS 产品
 
 > "我们需要 RBAC 权限控制，Supabase 的 RLS 维护不下去了。"
 
-**OneBase 提供**：应用层 RBAC + Redis 权限缓存 + 可视化权限配置 → 权限管理从噩梦变成点点鼠标。
+**PlaneOS 提供**：应用层 RBAC + Redis 权限缓存 + 可视化权限配置 → 权限管理从噩梦变成点点鼠标。
 
 ### 画像 3: 大型产品 / 高并发场景
 
 > "我们有百万 DAU，需要横向扩展，不能只靠单个 Postgres。"
 
-**OneBase 提供**：PG 读写分离 + Redis Cluster + 多实例部署 → 从 10 万用户平滑扩展到千万级。
+**PlaneOS 提供**：PG 读写分离 + Redis Cluster + 多实例部署 → 从 10 万用户平滑扩展到千万级。
 
 ---
 
-## 十二、项目名称释义
+## 十二、产品名称释义
 
-**OneBase** = **One**（统一的数据入口）+ **Base**（稳固的数据基座）
+**PlaneOS** 代表统一、可靠的数据与自动化平台。
 
 寓意：**在数据库与应用之间架起一条高性能的通道**，让数据像在铁轨上一样高效、可靠、有序地流动。
 
 ---
 
-*本文档作为 OneBase 的产品架构北极星，所有设计决策和开发优先级以此为准。*
+*本文档作为 PlaneOS 的产品架构北极星，所有设计决策和开发优先级以此为准。*

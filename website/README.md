@@ -273,4 +273,4 @@ A: Vercel Dashboard → Deployments → 选择历史版本 → Promote to Produc
 ---
 
 **最后更新**: 2026-09-02
-**维护者**: OneBase Team
+**维护者**: PlaneOS Team

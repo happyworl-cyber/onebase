@@ -1,6 +1,6 @@
 ---
 name: workflow-qa
-description: Reviews OneBase workflows with local rules, call_workflow parent/child contract checks, and the project's default AI Provider. Use when the user asks to 检测、审查、质量检查 a workflow, worries editing a child will break parents, or mentions review_workflow / review_workflows / 保存前预警.
+description: Reviews PlaneOS workflows with local rules, call_workflow parent/child contract checks, and the project's default AI Provider. Use when the user asks to 检测、审查、质量检查 a workflow, worries editing a child will break parents, or mentions review_workflow / review_workflows / 保存前预警.
 ---
 
 # 工作流 AI 检测

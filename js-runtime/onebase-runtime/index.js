@@ -15,7 +15,7 @@ function zlibInput(bytes, name) {
 }
 
 /**
- * OneBase JavaScript workflow host API.
+ * PlaneOS JavaScript workflow host API.
  *
  * IPC is newline-delimited JSON over the Unix-domain socket named by
  * ONEBASE_HOST_SOCK. Each request is `{id, op, args}` and receives exactly
@@ -59,15 +59,15 @@ function call(op, args) {
   });
   if (output.error) throw output.error;
   if (output.status !== 0) {
-    throw new Error(`OneBase host IPC failed: ${(output.stderr || '').trim()}`);
+    throw new Error(`PlaneOS host IPC failed: ${(output.stderr || '').trim()}`);
   }
   let response;
   try {
     response = JSON.parse(output.stdout);
   } catch (error) {
-    throw new Error(`OneBase host returned invalid JSON: ${error.message}`);
+    throw new Error(`PlaneOS host returned invalid JSON: ${error.message}`);
   }
-  if (!response.ok) throw new Error(response.error || `OneBase host operation failed: ${op}`);
+  if (!response.ok) throw new Error(response.error || `PlaneOS host operation failed: ${op}`);
   return response.result;
 }
 

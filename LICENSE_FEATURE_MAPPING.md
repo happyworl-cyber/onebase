@@ -2,7 +2,7 @@
 
 ## 📊 概述
 
-本文档说明 OneBase 中**功能与 License 的映射关系**，以及两种实现方案的对比。
+本文档说明 PlaneOS 中**功能与 License 的映射关系**，以及两种实现方案的对比。
 
 ---
 
@@ -15,7 +15,7 @@
 
 ### 多维度限制
 
-OneBase License 支持多维度限制，功能可用性取决于：
+PlaneOS License 支持多维度限制，功能可用性取决于：
 
 1. **edition（版本等级）** - trial < standard < enterprise
 2. **modules（功能模块）** - ai, ha, multitenant, audit, pipeline

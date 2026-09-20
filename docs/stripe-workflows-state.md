@@ -5,7 +5,7 @@
 - 服务器：`http://127.0.0.1:3000`
 - 数据库 slug：`acme-test`（`database_id=2`, `tenant_id=4`）
 - gamesq schema 存放所有插件业务表
-- 工作流通过 OneBase 引擎执行，节点类型：`code`(Lua 5.4)、`db_query`、`db_execute`、`db_transaction`、`condition`、`response`、`http_call`、`foreach`
+- 工作流通过 PlaneOS 引擎执行，节点类型：`code`(Lua 5.4)、`db_query`、`db_execute`、`db_transaction`、`condition`、`response`、`http_call`、`foreach`
 
 ## 环境变量（服务器启动时需设置）
 

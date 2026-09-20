@@ -1,4 +1,4 @@
-# OneBase 快速部署指南
+# PlaneOS 快速部署指南
 
 ## 📋 前置要求
 
@@ -155,7 +155,7 @@ cargo build --release
 
 ### 6. 测试 API
 
-OneBase 的所有数据接口都需要先**登录**拿到 JWT，再带 `Authorization: Bearer <token>` 头访问。
+PlaneOS 的所有数据接口都需要先**登录**拿到 JWT，再带 `Authorization: Bearer <token>` 头访问。
 打开新终端按下面的顺序验证：
 
 ```bash
@@ -347,7 +347,7 @@ docker-compose up -d
 
 ```ini
 [Unit]
-Description=OneBase API Server
+Description=PlaneOS API Server
 After=network.target postgresql.service
 
 [Service]

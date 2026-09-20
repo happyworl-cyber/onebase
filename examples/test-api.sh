@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# OneBase API 测试脚本
+# PlaneOS API 测试脚本
 # 使用方法: bash examples/test-api.sh
 
 set -e
@@ -18,7 +18,7 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}==================================${NC}"
-echo -e "${BLUE}  OneBase API 功能测试${NC}"
+echo -e "${BLUE}  PlaneOS API 功能测试${NC}"
 echo -e "${BLUE}==================================${NC}"
 echo ""
 

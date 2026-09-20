@@ -322,7 +322,7 @@ fn runtime_dir() -> Result<PathBuf, String> {
     if dir.join("onebase_host.py").is_file() {
         Ok(dir)
     } else {
-        Err("OneBase Python runtime onebase_host.py is missing".to_string())
+        Err("PlaneOS Python runtime onebase_host.py is missing".to_string())
     }
 }
 

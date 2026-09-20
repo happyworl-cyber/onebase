@@ -2,7 +2,7 @@
 //!
 //! 设计见 `docs/superpowers/specs/2026-06-01-growth-animation-sse-design.md`。
 //!
-//! 现有 `DataChangeEvent` 只在经 OneBase REST API 写库时产生，覆盖不到业务库内部
+//! 现有 `DataChangeEvent` 只在经 PlaneOS REST API 写库时产生，覆盖不到业务库内部
 //! 触发器 / RPC 写入后发出的 `NOTIFY`。本模块按 `management.sse_notify_bridges` 的配置，
 //! 对每个启用的 `(database_id, channel)` 持一条 `LISTEN`，收到通知后用 `topic_template`
 //! （占位符取 NOTIFY payload 字段）算出 SSE topic，`publish_local` 推给本实例的连接。

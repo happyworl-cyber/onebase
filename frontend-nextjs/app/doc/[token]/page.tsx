@@ -108,7 +108,7 @@ export default function PublicWorkflowDocPage() {
               />
             </div>
             <div className="px-6 py-3 border-t text-center text-[11px] text-gray-300">
-              OneBase · 工作流接口文档
+              PlaneOS · 工作流接口文档
             </div>
           </div>
         )}

@@ -532,7 +532,7 @@ REVOKE CREATE ON SCHEMA public FROM onebase_app;
 ### 部署文档（给客户）
 
 ````markdown
-# OneBase 部署指南
+# PlaneOS 部署指南
 
 ## 快速开始
 

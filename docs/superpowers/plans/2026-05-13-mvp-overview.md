@@ -1,4 +1,4 @@
-# OneBase MVP（前 4 周）实施总览
+# PlaneOS MVP（前 4 周）实施总览
 
 > **For agentic workers**: 本文档是**索引**，不是可执行 plan。每个 milestone 对应一份独立的 plan 文件，请按依赖顺序选择执行。
 

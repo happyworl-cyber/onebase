@@ -160,7 +160,7 @@ export function buildRestApiDoc({ apiBaseUrl, databaseSlug, schema, gatewayMode 
       ]
 
   const fullDocText = [
-    `# OneBase REST / RPC API`,
+    `# PlaneOS REST / RPC API`,
     ``,
     `基址 Base URL : ${apiBaseUrl}`,
     `项目标识 project : ${databaseSlug}`,

@@ -125,7 +125,7 @@ function BatchExportModal({
           </div>
           <div>
             <div className="text-[12.5px] font-bold text-slate-800">JSON</div>
-            <div className="text-[10.5px] text-slate-400 mt-px">可直接再导入 OneBase</div>
+            <div className="text-[10.5px] text-slate-400 mt-px">可直接再导入 PlaneOS</div>
           </div>
           <span className="ml-auto text-[10px] text-slate-300 font-medium">
             <i className="fas fa-lock text-[10px]" /> 当前仅支持

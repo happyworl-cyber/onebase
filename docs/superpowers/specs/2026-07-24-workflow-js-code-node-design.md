@@ -2,7 +2,7 @@
 
 > 状态：implemented（一期已落地；JS host bridge 的 crypto 仅部分对齐 Lua——sha256/hmac_sha256/uuid/base64，md5/aes/rsa 等待补全）。
 >
-> 背景：工作流 `code` 节点目前仅支持嵌入式 Lua（mlua）。团队计划将 n8n 工作流迁移到 OneBase，n8n 侧逻辑多为 Node.js；若强制改写为 Lua 成本过高。
+> 背景：工作流 `code` 节点目前仅支持嵌入式 Lua（mlua）。团队计划将 n8n 工作流迁移到 PlaneOS，n8n 侧逻辑多为 Node.js；若强制改写为 Lua 成本过高。
 >
 > 范围锁定：一期仅 JavaScript（Node.js + 工作流级 npm）；Python / n8n `$input` 兼容层不做。
 
@@ -11,7 +11,7 @@
 ### 1.1 目标
 
 1. `code` 节点可选执行 **JavaScript（Node.js）**，默认仍为 Lua，现有工作流零改动。
-2. 脚本约定沿用 OneBase 的 `ctx.body` / `ctx.nodes`（允许入口处少量改动；**不**追求 n8n Code 节点 API 兼容）。
+2. 脚本约定沿用 PlaneOS 的 `ctx.body` / `ctx.nodes`（允许入口处少量改动；**不**追求 n8n Code 节点 API 兼容）。
 3. **按工作流**管理 npm 依赖（完整 npm 生态，非白名单）。
 4. 执行使用 **子进程 + bwrap/nsjail**（复用调度器 shell 沙盒思路）。
 5. 宿主 API **尽量对齐** 现有 Lua builtins：`env` / `http` / `crypto` / `log` / `json` / `time` / `sse` / `google`（含同等安全策略）。
@@ -33,7 +33,7 @@
 
 | 决定 | 选项 | 理由 |
 |---|---|---|
-| 成功标准 | OneBase `ctx` 约定，非 n8n API | 迁移成本可接受，实现面可控 |
+| 成功标准 | PlaneOS `ctx` 约定，非 n8n API | 迁移成本可接受，实现面可控 |
 | 语言一期 | **仅 Node.js** | 对应 n8n 主力；Python 二期 |
 | 依赖作用域 | **按工作流** | 隔离清晰，与「每个迁移工作流自带依赖」一致 |
 | 隔离 | **子进程 + bwrap/nsjail** | 对齐调度器；比同进程嵌入更安全 |

@@ -1,12 +1,12 @@
-# Stripe 支付迁移至 OneBase 工作流 Implementation Plan
+# Stripe 支付迁移至 PlaneOS 工作流 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把 `src/payment/` 下所有 Stripe 业务逻辑迁移为 OneBase 工作流节点，使框架本身不再包含任何支付业务代码。
+**Goal:** 把 `src/payment/` 下所有 Stripe 业务逻辑迁移为 PlaneOS 工作流节点，使框架本身不再包含任何支付业务代码。
 
 **Architecture:** Phase 0/1 纯 API 调用（无 Rust 改动），创建 7 个工作流定义写入数据库；Phase 2 扩展引擎（hmac_sha256、raw body、DbTransaction、ForEach、cron runner），再创建 Webhook 和调价 Job 两个工作流；最后删除 src/payment/ 目录。
 
-**Tech Stack:** Rust/axum、sqlx/PostgreSQL、Lua 5.4（mlua）、Stripe API、OneBase Workflow Engine（DAG）
+**Tech Stack:** Rust/axum、sqlx/PostgreSQL、Lua 5.4（mlua）、Stripe API、PlaneOS Workflow Engine（DAG）
 
 ---
 

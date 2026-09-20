@@ -639,7 +639,7 @@ pub fn diagnose(input: &VerdictInput) -> Verdict {
 
     if saturated {
         let mut hints = vec![
-            "先执行 POST /api/monitor/pool-reset?reload=true（监控页「重置连接池」）踢掉打满的进程内池，无需重启 OneBase".into(),
+            "先执行 POST /api/monitor/pool-reset?reload=true（监控页「重置连接池」）踢掉打满的进程内池，无需重启 PlaneOS".into(),
             "去「PG 会话」页找 idle in transaction / 长查询，确认是否有慢 SQL 占连接".into(),
             "确认 WORKFLOW_DB_STATEMENT_TIMEOUT_MS 已生效（默认 30s）".into(),
         ];
@@ -659,7 +659,7 @@ pub fn diagnose(input: &VerdictInput) -> Verdict {
         }
         let summary = if pg_usage < 50.0 {
             format!(
-                "应用连接池已满 ({}/{})，PG 侧健康 ({}/{}) — 瓶颈在 OneBase 池",
+                "应用连接池已满 ({}/{})，PG 侧健康 ({}/{}) — 瓶颈在 PlaneOS 池",
                 input.app_in_use, input.app_max, input.pg_instance_backends, input.pg_max
             )
         } else {
@@ -778,7 +778,7 @@ pub fn diagnose(input: &VerdictInput) -> Verdict {
     }
 }
 
-/// GET /api/monitor/pool-health — OneBase 业务池 + PG 会话 + 一句话结论
+/// GET /api/monitor/pool-health — PlaneOS 业务池 + PG 会话 + 一句话结论
 pub async fn get_pool_health(
     State(main_pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
@@ -1020,7 +1020,7 @@ pub async fn get_pool_health(
 
 /// POST /api/monitor/pool-reset — 踢掉当前库的进程内业务池，下次请求按配置重建。
 ///
-/// 用于「应用池打满 / acquire 超时」且直连 PG 仍健康时的软恢复：不必重启整个 OneBase。
+/// 用于「应用池打满 / acquire 超时」且直连 PG 仍健康时的软恢复：不必重启整个 PlaneOS。
 /// 鉴权与 `pool-health` 相同（`X-Database-Id` + database admin / 超管）。
 ///
 /// Query `reload=true`：踢池后立刻 `ensure_pool_loaded` 预热，避免下一次业务请求冷启动。
@@ -1099,7 +1099,7 @@ mod pool_health_tests {
         input.app_in_use = 50;
         let v = diagnose(&input);
         assert_eq!(v.level, VerdictLevel::Critical);
-        assert!(v.summary.contains("瓶颈在 OneBase 池"));
+        assert!(v.summary.contains("瓶颈在 PlaneOS 池"));
         assert!(!v.hints.is_empty());
         assert!(
             v.hints.iter().any(|h| h.contains("pool-reset")),

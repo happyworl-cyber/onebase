@@ -4,7 +4,7 @@ import AiAssistantPanel from '@/components/AiAssistantPanel'
 import { AI_ASSISTANT_ENABLED } from '@/lib/aiAssistant'
 
 export const metadata: Metadata = {
-  title: 'OneBase - PostgreSQL 管理平台',
+  title: 'PlaneOS - 企业数据与自动化平台',
   description: 'Enterprise Database Management Platform',
   icons: {
     icon: '/icon.svg',

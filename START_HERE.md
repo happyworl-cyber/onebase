@@ -1,4 +1,4 @@
-# 🚀 OneBase 启动和测试指南
+# 🚀 PlaneOS 启动和测试指南
 
 ## 📋 快速开始（3分钟）
 
@@ -272,7 +272,7 @@ cargo build
 **登录页面**：
 - 蓝紫渐变背景
 - 白色卡片
-- OneBase logo
+- PlaneOS logo
 
 **主界面**：
 - 深色侧边栏（左）

@@ -21,7 +21,7 @@ use sqlx::{PgPool, Row};
 use crate::auth::Claims;
 use crate::error::{AppError, Result};
 
-/// PAT 明文前缀（`obm_` = OneBase MCP）。区别于数据面 `ob_` 与平台令牌 `obp_`；
+/// PAT 明文前缀（`obm_` = PlaneOS MCP）。区别于数据面 `ob_` 与平台令牌 `obp_`；
 /// /mcp 不挂 auth_middleware，由 handler 自行调 [`verify_pat`]。
 pub const PAT_PREFIX: &str = "obm_";
 

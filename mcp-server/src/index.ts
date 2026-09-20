@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 /**
- * OneBase MCP server
+ * PlaneOS MCP server
  *
- * 把 OneBase 的 HTTP 管理端点封装成 MCP 工具，让 AI / 自动化客户端能直接：
+ * 把 PlaneOS 的 HTTP 管理端点封装成 MCP 工具，让 AI / 自动化客户端能直接：
  *   - 用 PG 池里的库开通新项目（create_project）
  *   - 创建 / 更新 / 调试 / 运行工作流（*_workflow）
  *
- * 鉴权：使用平台服务令牌（obp_ 前缀），通过环境变量注入。该令牌在 OneBase 后端
+ * 鉴权：使用平台服务令牌（obp_ 前缀），通过环境变量注入。该令牌在 PlaneOS 后端
  * 被解析成绑定用户的身份，并受令牌 scope（project:create / workflow:read|write|run）约束。
  *
  * 必需环境变量：
- *   - ONEBASE_BASE_URL   后端基址，如 http://10.0.5.11:31088
- *   - ONEBASE_TOKEN      平台令牌明文，obp_ 开头
+ *   - PLANEOS_BASE_URL   后端基址，如 http://10.0.5.11:31088
+ *   - PLANEOS_TOKEN      平台令牌明文，obp_ 开头
+ *
+ * 兼容环境变量：ONEBASE_BASE_URL、ONEBASE_TOKEN
  *
  * 运行（stdio）：node dist/index.js
  */
@@ -19,20 +21,24 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-const BASE_URL = (process.env.ONEBASE_BASE_URL || "").replace(/\/+$/, "");
-const TOKEN = process.env.ONEBASE_TOKEN || "";
+const BASE_URL = (
+  process.env.PLANEOS_BASE_URL ||
+  process.env.ONEBASE_BASE_URL ||
+  ""
+).replace(/\/+$/, "");
+const TOKEN = process.env.PLANEOS_TOKEN || process.env.ONEBASE_TOKEN || "";
 
 if (!BASE_URL) {
-  console.error("[onebase-mcp] 缺少环境变量 ONEBASE_BASE_URL");
+  console.error("[planeos-mcp] 缺少环境变量 PLANEOS_BASE_URL");
   process.exit(1);
 }
 if (!TOKEN) {
-  console.error("[onebase-mcp] 缺少环境变量 ONEBASE_TOKEN（obp_ 平台令牌）");
+  console.error("[planeos-mcp] 缺少环境变量 PLANEOS_TOKEN（obp_ 平台令牌）");
   process.exit(1);
 }
 if (!TOKEN.startsWith("obp_")) {
   console.error(
-    "[onebase-mcp] 警告：ONEBASE_TOKEN 不是 obp_ 开头，可能不是平台服务令牌"
+    "[planeos-mcp] 警告：PLANEOS_TOKEN 不是 obp_ 开头，可能不是平台服务令牌"
   );
 }
 
@@ -85,7 +91,7 @@ function errResult(e: unknown): ToolResult {
   };
 }
 
-const server = new McpServer({ name: "onebase", version: "1.0.0" });
+const server = new McpServer({ name: "planeos", version: "1.0.0" });
 
 // ─── 项目开通 ──────────────────────────────────────────────────────
 
@@ -391,10 +397,10 @@ server.registerTool(
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`[onebase-mcp] 已启动，后端=${BASE_URL}`);
+  console.error(`[planeos-mcp] 已启动，后端=${BASE_URL}`);
 }
 
 main().catch((e) => {
-  console.error("[onebase-mcp] 启动失败:", e);
+  console.error("[planeos-mcp] 启动失败:", e);
   process.exit(1);
 });

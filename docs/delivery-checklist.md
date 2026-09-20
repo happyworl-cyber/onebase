@@ -1,4 +1,4 @@
-# OneBase 交付前验证清单
+# PlaneOS 交付前验证清单
 
 > 本清单覆盖「商用授权 + 代码隔离」这批改动的交付前自检。逐项打勾后再出包。
 > 说明：本机 Windows 因缺 `libsasl2` 无法编译 Rust（`sasl2-sys` 原生依赖），
@@ -98,7 +98,7 @@ rg -n 'inob_|deob_'                   # 期望：0（确认 incr_/decr_ 等未�
 
 > 私钥只留原厂；`.gitignore` 已忽略 `*_private.pem` 与 `*.lic`。续保 = 原厂重新签发到期日更晚的 License 文件替换进去，后台任务自动生效、无需重启。
 
-## 四、OneBase-only 覆盖文件（同步时必须保留）
+## 四、PlaneOS-only 覆盖文件（同步时必须保留）
 
 以下文件上游没有，`sync-from-onebase.ps1` 的 `robocopy /MIR` 镜像会**删除**它们；每次同步后需从上一次提交恢复，并在新 `main.rs` 上重挂 License 接线：
 

@@ -1,4 +1,4 @@
--- OneBase 示例数据库 Schema
+-- PlaneOS 示例数据库 Schema
 
 -- 创建 Schema（如果需要）
 CREATE SCHEMA IF NOT EXISTS public;

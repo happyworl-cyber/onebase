@@ -1,8 +1,8 @@
-# OneBase 快速开始指南
+# PlaneOS 快速开始指南
 
-## 🎉 欢迎使用 OneBase v0.2
+## 🎉 欢迎使用 PlaneOS v0.2
 
-这是一个 5 分钟快速开始指南，帮助你立即运行 OneBase。
+这是一个 5 分钟快速开始指南，帮助你立即运行 PlaneOS。
 
 ## ⚡ 快速开始（5 分钟）
 
@@ -286,7 +286,7 @@ Authorization: Bearer <your_token_here>
 
 ## 🎊 成功启动！
 
-现在你已经成功运行 OneBase！
+现在你已经成功运行 PlaneOS！
 
 **可以做什么？**
 

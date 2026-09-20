@@ -571,8 +571,8 @@ export default function LicensesPage() {
               <ol className="text-blue-700 space-y-1 list-decimal list-inside">
                 <li>下载 license.lic 文件</li>
                 <li>将文件交付给客户</li>
-                <li>客户需将文件放置到 /etc/onebase/license.lic</li>
-                <li>重启 OneBase 服务即可激活</li>
+                <li>客户需将文件放置到容器或主机运行目录的 ./license.lic</li>
+                <li>重启 PlaneOS 服务即可激活</li>
               </ol>
             </div>
           </div>

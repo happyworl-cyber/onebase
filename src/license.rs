@@ -516,18 +516,18 @@ impl LicenseState {
                 tracing::info!(
                     status = snap.status.as_str(),
                     enforcement = self.mode.as_str(),
-                    "OneBase 授权校验：{}",
+                    "PlaneOS 授权校验：{}",
                     snap.message
                 );
             }
             LicenseStatus::Unlicensed => {
-                tracing::info!("OneBase 授权校验已关闭（enforce=off）");
+                tracing::info!("PlaneOS 授权校验已关闭（enforce=off）");
             }
             _ => {
                 tracing::warn!(
                     status = snap.status.as_str(),
                     enforcement = self.mode.as_str(),
-                    "OneBase 授权校验：{}（enforce=enforce 时写操作将被拦截并降级为只读）",
+                    "PlaneOS 授权校验：{}（enforce=enforce 时写操作将被拦截并降级为只读）",
                     snap.message
                 );
             }
@@ -557,7 +557,7 @@ impl LicenseState {
                     tracing::warn!(
                         from = prev.as_str(),
                         to = now.status.as_str(),
-                        "OneBase 授权状态发生变化：{}",
+                        "PlaneOS 授权状态发生变化：{}",
                         now.message
                     );
                     prev = now.status;

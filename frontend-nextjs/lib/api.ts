@@ -620,7 +620,7 @@ export interface PgPoolPublicEntry {
   is_platform_instance?: boolean
 }
 
-/** 当前 Onebase 平台自身 PG 实例（不含凭据）。 */
+/** 当前 PlaneOS 平台自身 PG 实例（不含凭据）。 */
 export interface PlatformPgInstance {
   available: boolean
   db_host?: string

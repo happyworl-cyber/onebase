@@ -1,8 +1,8 @@
-# OneBase 项目总结
+# PlaneOS 项目总结
 
 ## 🎯 项目概述
 
-**OneBase** 是一个轻量级、高性能的 PostgreSQL RESTful API 服务器，使用 Rust 实现。它的设计理念参考了 PostgREST，旨在提供一个简单、安全、高效的方式来自动生成数据库的 REST API。
+**PlaneOS** 是一个轻量级、高性能的 PostgreSQL RESTful API 服务器，使用 Rust 实现。它的设计理念参考了 PostgREST，旨在提供一个简单、安全、高效的方式来自动生成数据库的 REST API。
 
 ## ✨ 核心特性
 
@@ -320,7 +320,7 @@ volumes:
 
 ```ini
 [Unit]
-Description=OneBase API Server
+Description=PlaneOS API Server
 After=network.target postgresql.service
 
 [Service]
@@ -524,7 +524,7 @@ curl http://localhost:3000/api/public/users
 
 ## 🎉 总结
 
-OneBase 是一个**生产就绪**的简化版 Supabase 后端实现，具有以下优势：
+PlaneOS 是一个**生产就绪**的简化版 Supabase 后端实现，具有以下优势：
 
 ✅ **简单**: 零配置，自动生成 API  
 ✅ **安全**: 参数化查询，防 SQL 注入  

@@ -3,7 +3,7 @@
 // 模板按下后 **填进 ConditionBuilder**，用户可继续微调再保存；不直接 POST，避免假定字段
 // （如 department_id）一定存在于业务表。
 //
-// 字段名假设遵循 OneBase 命名约定：
+// 字段名假设遵循 PlaneOS 命名约定：
 // - `author_id` / `user_id` / `owner_id` — 数据归属人
 // - `department_id` — 部门字段（如不存在，模板加载后用户改自己的字段）
 // - `status` — 文章/订单等的发布态

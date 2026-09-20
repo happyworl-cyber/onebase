@@ -1340,7 +1340,7 @@ export default function GatewayManager({
                   }
                   rows={3}
                   spellCheck={false}
-                  placeholder="onebase-auth.acme.net"
+                  placeholder="planeos-auth.acme.net"
                   className="mt-1 w-full border border-gray-200 rounded-md px-3 py-2 text-sm font-mono bg-white"
                 />
               </label>

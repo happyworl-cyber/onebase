@@ -456,7 +456,7 @@ function StepPool({
     <div>
       <h2 className="text-base font-medium text-gray-900 mb-1">把项目数据库挂在哪台 PG？</h2>
       <p className="text-sm text-gray-500 mb-4">
-        推荐直接选用当前 Onebase 平台实例；也可从 PG 池选择其他服务器、运维自动开通，或手动填写连接。
+        推荐直接选用当前 PlaneOS 平台实例；也可从 PG 池选择其他服务器、运维自动开通，或手动填写连接。
         {mode !== 'webhook' && ' Redis 等中间件可在项目创建后于「环境变量」中自行配置。'}
       </p>
 
@@ -527,7 +527,7 @@ function StepPool({
                   '由运维 Provisioner 创建独立 PostgreSQL 实例，耗时可能 1–5 分钟。'}
               </p>
               <p className="text-xs text-gray-500 mt-2">
-                点击「完成创建」后，Onebase 会调用运维接口 provision 资源，并将返回的连接信息写入项目。
+                点击「完成创建」后，PlaneOS 会调用运维接口 provision 资源，并将返回的连接信息写入项目。
                 {webhookConfig.supports_async_poll && (
                   <span className="block mt-1 text-violet-700">
                     若 Provisioner 返回异步任务（HTTP 202），将自动 poll 直至完成（最长约{' '}
@@ -556,7 +556,7 @@ function StepPool({
               <i className="fas fa-database text-blue-600 mt-0.5"></i>
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium text-gray-900">
-                  使用当前 Onebase 平台数据库实例
+                  使用当前 PlaneOS 平台数据库实例
                 </div>
                 <div className="text-xs text-gray-600 font-mono mt-1">
                   {platformPg.db_host}:{platformPg.db_port}

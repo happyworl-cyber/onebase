@@ -1,4 +1,4 @@
-# OneBase Frontend (Next.js + React)
+# PlaneOS Frontend (Next.js + React)
 
 基于 React 18 + Next.js 14 + TypeScript + Tailwind CSS 的企业级前端应用。
 

@@ -80,7 +80,7 @@ export default function PartnerDashboard() {
       {/* 标题 */}
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">代理商概览</h1>
-        <p className="text-sm text-gray-500 mt-1">欢迎使用 OneBase 代理商控制台</p>
+        <p className="text-sm text-gray-500 mt-1">欢迎使用 PlaneOS 代理商控制台</p>
       </div>
 
       {/* License 统计卡片 */}

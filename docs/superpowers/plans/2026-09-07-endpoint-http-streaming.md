@@ -14,7 +14,7 @@
 
 - Do not create git commits unless the user explicitly asks. Keep the Commit steps in this plan but skip them until asked.
 - No `stream: true` graph must keep today's JSON / detach behavior byte-for-byte.
-- Do not wrap upstream bytes in a OneBase SSE envelope.
+- Do not wrap upstream bytes in a PlaneOS SSE envelope.
 - Do not send the stream through `SseHub` / Redis.
 - One `stream: true` `http_call` per definition; `stream` and `async_poll` are mutually exclusive.
 - `body` buffer cap is **8 MiB** (`8 * 1024 * 1024`). HTTP still writes every upstream byte after the cap; only the node buffer stops.
@@ -828,6 +828,6 @@ git commit -m "feat(workflow): add http_call stream checkbox"
 | `/pub/workflow` POST included; no extra URL | 4 |
 | `node_spec` + `workflow_api_doc` | 3, 4 |
 | Frontend checkbox | 5 |
-| Code yield / stop API / OneBase envelope | out of scope |
+| Code yield / stop API / PlaneOS envelope | out of scope |
 
 No TBD/TODO placeholders. Names (`StreamBridge`, `wait_stream_or_complete`, `execute_workflow_with_bridge`, `BODY_LIMIT_BYTES`) are consistent across tasks.

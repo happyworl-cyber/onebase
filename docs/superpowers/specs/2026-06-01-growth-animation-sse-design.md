@@ -1,8 +1,8 @@
 # 成长动画 SSE（PG NOTIFY → 定向推送）— 设计文档
 
 - 日期：2026-06-01
-- 范围：OneBase 后端（Rust / axum）+ 管理后台监控页（frontend-nextjs）。
-- 目标：用 OneBase 已有的 SSE 能力承接「成长动画 outbox 唤醒」需求，**取代独立 Go 服务**——
+- 范围：PlaneOS 后端（Rust / axum）+ 管理后台监控页（frontend-nextjs）。
+- 目标：用 PlaneOS 已有的 SSE 能力承接「成长动画 outbox 唤醒」需求，**取代独立 Go 服务**——
   监听业务库的 PostgreSQL NOTIFY，按 `wayUid + projectId` 定向把唤醒事件推给浏览器。
 
 ## 1. 背景
@@ -17,25 +17,25 @@ DB 触发器 `NOTIFY growth_animation_available`，payload 为：
 原方案由一个 Go 服务 `LISTEN growth_animation_available`、维护在线 SSE 连接、按 `wayUid:projectId`
 定向推送 `event: growth_animation_available`。前端收到后调 RPC 抢 DB lease，只有抢到的浏览器播放动画。
 
-OneBase 已具备：通用 SSE 总线 `SseHub`、`GET /sse` query-token 订阅、前缀作用域授权
+PlaneOS 已具备：通用 SSE 总线 `SseHub`、`GET /sse` query-token 订阅、前缀作用域授权
 （`user:` / `db:` / `sys:`）、`POST /api/sse/publish`、可配置的 SSE 转发规则（数据变更→topic）。
 详见 `docs/superpowers/specs/2026-06-01-sse-capability-design.md`。
 
-**关键缺口**：OneBase 的 `DataChangeEvent` **只在经我们 REST API 写入时**产生
+**关键缺口**：PlaneOS 的 `DataChangeEvent` **只在经我们 REST API 写入时**产生
 （`src/auto_api_handlers.rs`），DB 触发器/RPC 内部写入不会进事件总线。因此 outbox 的 NOTIFY
 覆盖不到现有桥接，需要一条专门的「PG NOTIFY → SSE」监听桥。
 
 ## 2. 已定的范围与边界
 
-- **OneBase 建**：
+- **PlaneOS 建**：
   1. PG NOTIFY 监听桥 + `way:` 定向 topic + 鉴权；
   2. 专用 SSE 端点 `GET /growth-animation/events`；
   3. 管理后台「实时推送监控」页（桥配置 CRUD + 在线连接/推送指标）。
 - **业务方建（不在本仓库）**：`gamesq.growth_animation_event` 表、NOTIFY 触发器、
-  `console_claim/ack/requeue_growth_animation_events` RPC。OneBase 不碰 outbox 业务逻辑。
-- **业务前端（不在本仓库）**：动画 hook / claim-ack / 播放队列在业务前端实现。OneBase
+  `console_claim/ack/requeue_growth_animation_events` RPC。PlaneOS 不碰 outbox 业务逻辑。
+- **业务前端（不在本仓库）**：动画 hook / claim-ack / 播放队列在业务前端实现。PlaneOS
   只提供**端点契约 + 一段参考 hook 代码**。
-- **网关信任**：`X-Way-UID` 由上游可信网关注入（剥离客户端自带值后注入可信值），OneBase
+- **网关信任**：`X-Way-UID` 由上游可信网关注入（剥离客户端自带值后注入可信值），PlaneOS
   直接信任，**不在本设计内做网关层校验**（与 session hooks 同信任模型）。
 
 ## 3. 目标 / 非目标
@@ -57,7 +57,7 @@ OneBase 已具备：通用 SSE 总线 `SseHub`、`GET /sse` query-token 订阅�
 ```
 业务写 gamesq.growth_animation_event
   └─(DB 触发器) NOTIFY growth_animation_available {eventId,projectId,wayUid,eventType}
-       └─ OneBase 监听桥（每实例对每个启用的 (database_id,channel) 一条 PgListener）
+       └─ PlaneOS 监听桥（每实例对每个启用的 (database_id,channel) 一条 PgListener）
             └─ 解析 payload → 按 topic_template 算 topic: way:{wayUid}:growth:{projectId}
                  └─ SseHub.publish_local（不经 Redis 扇出）
                       └─ /growth-animation/events 连接（一个用户一条，通配订阅 way:{wayUid}:growth:*）转成 SSE：
@@ -68,7 +68,7 @@ OneBase 已具备：通用 SSE 总线 `SseHub`、`GET /sse` query-token 订阅�
 
 ### 4.1 多实例与去重
 
-PostgreSQL 把 NOTIFY 投给**所有**正在 `LISTEN` 的会话。每个 OneBase 实例各持一条 LISTEN
+PostgreSQL 把 NOTIFY 投给**所有**正在 `LISTEN` 的会话。每个 PlaneOS 实例各持一条 LISTEN
 连接，故每个实例都会收到同一条通知，并**只向本实例的本地连接**投递（`publish_local`，
 `replicate = false`，不经 `onebase:sse` Redis 扇出）。浏览器只连一个实例 → **恰好一次**，
 无重复、本路径无需 Redis。
@@ -81,7 +81,7 @@ PostgreSQL 把 NOTIFY 投给**所有**正在 `LISTEN` 的会话。每个 OneBase
 身份来自网关注入的 `X-Way-UID`，通配也只会订到「自己」的唤醒，无越权。
 
 > 同一社区**多标签页**仍是各自一条 EventSource（浏览器原生限制），属业务前端职责，
-> 可用 `BroadcastChannel` / SharedWorker 在前端共享一条流；OneBase 侧不处理（参考代码点到）。
+> 可用 `BroadcastChannel` / SharedWorker 在前端共享一条流；PlaneOS 侧不处理（参考代码点到）。
 
 ## 5. 组件设计
 
@@ -186,9 +186,9 @@ struct ConnMeta { way_uid: String, project_id: Option<i32>, connected_at: DateTi
 
 ### 5.7 claim / ack（复用，无新增后端）
 
-业务前端收到 `growth_animation_available` 后，经 OneBase 现有 `/rpc` 调
+业务前端收到 `growth_animation_available` 后，经 PlaneOS 现有 `/rpc` 调
 `gamesq.console_claim_growth_animation_events(...)` 抢 lease，播放完成后调
-`console_ack_growth_animation_event(...)`。OneBase 不实现这些函数（DB 侧）。
+`console_ack_growth_animation_event(...)`。PlaneOS 不实现这些函数（DB 侧）。
 
 ## 6. 接线（`src/main.rs` / `src/lib.rs`）
 

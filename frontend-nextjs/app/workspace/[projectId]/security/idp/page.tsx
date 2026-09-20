@@ -1015,13 +1015,13 @@ export default function ProjectIdpPage() {
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [{
-    id: "onebase",
-    name: "OneBase",
+    id: "planeos",
+    name: "PlaneOS",
     type: "oidc",
     // 只需这一个 URL，其余端点自动发现
     issuer: "${callbackBase}",
-    clientId: process.env.ONEBASE_CLIENT_ID,
-    clientSecret: process.env.ONEBASE_CLIENT_SECRET,
+    clientId: process.env.PLANEOS_CLIENT_ID,
+    clientSecret: process.env.PLANEOS_CLIENT_SECRET,
   }],
 })`}
                           </pre>
@@ -1041,9 +1041,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
 oauth = OAuth()
 oauth.register(
-    name="onebase",
-    client_id=ONEBASE_CLIENT_ID,
-    client_secret=ONEBASE_CLIENT_SECRET,
+    name="planeos",
+    client_id=PLANEOS_CLIENT_ID,
+    client_secret=PLANEOS_CLIENT_SECRET,
     # 自动从 Discovery URL 加载所有端点
     server_metadata_url="${discoveryUrl}",
     client_kwargs={"scope": "openid email profile"},

@@ -73,7 +73,7 @@ export default function PlatformSidebar() {
             <i className="fas fa-database text-white text-sm"></i>
           </div>
           <div>
-            <h1 className="text-sm font-semibold text-gray-900">OneBase</h1>
+            <h1 className="text-sm font-semibold text-gray-900">PlaneOS</h1>
             <p className="text-[11px] text-gray-500">平台管理</p>
           </div>
         </div>
