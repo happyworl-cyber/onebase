@@ -43,8 +43,10 @@ fn validate_var_name(name: &str) -> Result<()> {
     let first_ok = matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_');
     let rest_ok = chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
     if name.is_empty() || !first_ok || !rest_ok {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "envvar_invalid_name",
             "变量名非法：必须匹配 ^[A-Za-z_][A-Za-z0-9_]*$".to_string(),
+            serde_json::json!({}),
         ));
     }
     Ok(())
@@ -81,6 +83,20 @@ fn record_env_var_op(
     summary: String,
     change: serde_json::Value,
 ) {
+    let (summary_code, summary_params) = match action {
+        operation_log::action::CREATE => (
+            "oplog_env_var_create",
+            json!({ "name": env_var_name }),
+        ),
+        operation_log::action::DELETE => (
+            "oplog_env_var_delete",
+            json!({ "name": env_var_name }),
+        ),
+        _ => (
+            "oplog_env_var_update",
+            json!({ "name": env_var_name }),
+        ),
+    };
     let input = OperationLogInput::new(
         tenant_id,
         Actor::from_claims(claims),
@@ -94,7 +110,8 @@ fn record_env_var_op(
         env_var_name.to_string(),
         Some(env_var_id.to_string()),
     )
-    .change(change);
+    .change(change)
+    .summary_code(summary_code, summary_params);
     operation_log::record(pool, input);
 }
 
@@ -108,16 +125,19 @@ const DECRYPT_FAILED_PLACEHOLDER: &str = "<解密失败>";
 /// 变量值校验：长度上限 + 拒绝写入解密失败占位串。
 fn validate_value(value: &str) -> Result<()> {
     if value.len() > MAX_VALUE_BYTES {
-        return Err(AppError::InvalidQuery(format!(
-            "变量值过大：上限 {}KB",
-            MAX_VALUE_BYTES / 1024
-        )));
+        return Err(AppError::validation(
+            "envvar_value_too_large",
+            format!("变量值过大：上限 {}KB", MAX_VALUE_BYTES / 1024),
+            serde_json::json!({ "max_kb": MAX_VALUE_BYTES / 1024 }),
+        ));
     }
     // 解密失败的行在列表里显示为占位串；若用户未改值直接保存会把占位串加密写回、
     // 永久覆盖原密文。这里直接拒绝，要求重新填入真实值。
     if value == DECRYPT_FAILED_PLACEHOLDER {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "envvar_value_is_decrypt_placeholder",
             "该变量当前解密失败，请重新填入真实值后再保存".to_string(),
+            serde_json::json!({}),
         ));
     }
     Ok(())
@@ -285,10 +305,11 @@ pub async fn create_env_var(
             .fetch_one(&pool)
             .await?;
     if count >= MAX_VARS_PER_TENANT {
-        return Err(AppError::InvalidQuery(format!(
-            "环境变量数量已达上限（{}），请清理后再添加",
-            MAX_VARS_PER_TENANT
-        )));
+        return Err(AppError::validation(
+            "envvar_count_limit_reached",
+            format!("环境变量数量已达上限（{}），请清理后再添加", MAX_VARS_PER_TENANT),
+            serde_json::json!({ "max_vars": MAX_VARS_PER_TENANT }),
+        ));
     }
 
     let value_encrypted = crypto::encrypt_secret(&req.value)?;
@@ -356,7 +377,13 @@ pub async fn update_env_var(
     .bind(project_id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("环境变量 {} 不存在", var_id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "envvar_not_found",
+            format!("环境变量 {} 不存在", var_id),
+            serde_json::json!({ "var_id": var_id }),
+        )
+    })?;
     let old_name: String = existing.get("name");
     let old_description: Option<String> = existing.get("description");
 
@@ -381,7 +408,13 @@ pub async fn update_env_var(
     .bind(project_id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("环境变量 {} 不存在", var_id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "envvar_not_found",
+            format!("环境变量 {} 不存在", var_id),
+            serde_json::json!({ "var_id": var_id }),
+        )
+    })?;
 
     tracing::info!(
         user_id = claims.sub,
@@ -430,7 +463,13 @@ pub async fn delete_env_var(
     .bind(project_id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("环境变量 {} 不存在", var_id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "envvar_not_found",
+            format!("环境变量 {} 不存在", var_id),
+            serde_json::json!({ "var_id": var_id }),
+        )
+    })?;
     let env_var_name: String = existing.get("name");
     let description: Option<String> = existing.get("description");
 
@@ -443,7 +482,11 @@ pub async fn delete_env_var(
             .rows_affected();
 
     if affected == 0 {
-        return Err(AppError::NotFound(format!("环境变量 {} 不存在", var_id)));
+        return Err(AppError::not_found_coded(
+            "envvar_not_found",
+            format!("环境变量 {} 不存在", var_id),
+            serde_json::json!({ "var_id": var_id }),
+        ));
     }
 
     tracing::info!(

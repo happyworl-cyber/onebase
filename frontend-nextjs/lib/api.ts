@@ -1,5 +1,6 @@
 import axios, { AxiosError, AxiosRequestConfig } from 'axios'
 import { showToast } from '@/components/Toast'
+import { resolveErrorMessage } from './i18nBridge'
 import { useAppStore } from '@/lib/store'
 import { clearAuthToken } from '@/lib/auth'
 
@@ -21,13 +22,15 @@ function extractErrorMessage(error: AxiosError<any>): string {
   const data = error.response?.data
   if (typeof data === 'string' && data) return data
   if (data && typeof data === 'object') {
-    if (typeof data.error === 'string' && data.error) return data.error
-    if (typeof data.message === 'string' && data.message) return data.message
+    const code = typeof data.code === 'string' ? data.code : undefined
+    const params = data.params && typeof data.params === 'object' ? data.params : undefined
+    if (typeof data.error === 'string' && data.error) return resolveErrorMessage(code, data.error, params)
+    if (typeof data.message === 'string' && data.message) return resolveErrorMessage(code, data.message, params)
   }
-  if (error.code === 'ECONNABORTED') return '请求超时，请稍后重试'
-  if (error.message === 'Network Error') return '网络异常，无法连接到后端'
+  if (error.code === 'ECONNABORTED') return 'Request timed out, please try again later'
+  if (error.message === 'Network Error') return 'Network error: cannot reach the backend'
   if (error.message) return error.message
-  return '请求失败，请稍后重试'
+  return 'Request failed, please try again later'
 }
 
 const api = axios.create({
@@ -1645,7 +1648,7 @@ export const scheduledTaskAPI = {
    */
   listFunctionsForDb: (databaseId: number, schema: string) => {
     if (!/^[A-Za-z0-9_$]+$/.test(schema)) {
-      return Promise.reject(new Error(`非法 schema 名: ${schema}`))
+      return Promise.reject(new Error(`Invalid schema name: ${schema}`))
     }
     const literal = schema.replace(/'/g, "''")
     return api.post<{
@@ -3267,6 +3270,9 @@ export interface OperationLogRow {
   high_risk: boolean
   ip: string | null
   created_at: string
+  /** 稳定 i18n 键，前端优先据此渲染；无对应字典项时回退到 `summary`。 */
+  summary_code?: string | null
+  summary_params?: Record<string, unknown>
   /** 组织级聚合列表才有 */
   tenant_id?: number
   project_name?: string

@@ -1,7 +1,7 @@
 //! SSE 通用消息的跨实例 Redis 桥接
 //!
 //! 与 `redis_pubsub.rs`（桥接 `EventBus` 的 `DataChangeEvent`）同模式，但走独立 channel
-//! `onebase:sse`，只负责 `SseHub` 里的「通用消息」（`SseEnvelope::replicate == true`）。
+//! `planeos:sse`，只负责 `SseHub` 里的「通用消息」（`SseEnvelope::replicate == true`）。
 //!
 //! 防回环 / 防重复的两条不变式：
 //! 1. 发布端只 PUBLISH `replicate == true` 的信封——数据变更桥接产生的信封 `replicate`
@@ -14,7 +14,7 @@ use futures::StreamExt;
 use crate::redis_manager::RedisManager;
 use crate::sse::{SseEnvelope, SseHub};
 
-const CHANNEL: &str = "onebase:sse";
+const CHANNEL: &str = "planeos:sse";
 
 pub struct SseRedisBridge;
 

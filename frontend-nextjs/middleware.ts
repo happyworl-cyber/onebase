@@ -17,7 +17,7 @@ import type { NextRequest } from 'next/server'
  */
 const PROTECTED_PREFIXES = ['/dashboard', '/platform', '/workspace', '/account'] as const
 
-const TOKEN_COOKIE = 'onebase_token'
+const TOKEN_COOKIE = 'planeos_token'
 
 function isProtected(pathname: string): boolean {
   return PROTECTED_PREFIXES.some(

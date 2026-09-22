@@ -1,6 +1,7 @@
 'use client'
 
 import { BaseEdge, EdgeLabelRenderer, EdgeProps } from 'reactflow'
+import { useTranslations } from 'next-intl'
 import { branchColor } from './workflowLayout'
 
 function edgeColor(sourceHandle?: string | null) {
@@ -59,6 +60,7 @@ export default function WorkflowEdge({
   selected,
   data,
 }: EdgeProps) {
+  const t = useTranslations('wfList')
   const isLoopBack = (data as any)?.edgeType === 'loop_back'
   const isLoopSource = (data as any)?.sourceNodeType === 'loop'
   const color = isLoopBack ? '#d946ef' : edgeColor(sourceHandleId)
@@ -67,11 +69,11 @@ export default function WorkflowEdge({
     : null
   const path = loopBack?.path ?? sBezier(sourceX, sourceY, targetX, targetY)
   const labelText = isLoopBack
-    ? '回边'
+    ? t('edgeBack')
     : isLoopSource && sourceHandleId === 'body'
-      ? '循环体'
+      ? t('edgeBody')
       : isLoopSource && sourceHandleId === 'done'
-        ? '完成'
+        ? t('edgeDone')
         : typeof label === 'string'
           ? label
           : null

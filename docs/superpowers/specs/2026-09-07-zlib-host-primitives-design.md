@@ -6,7 +6,7 @@
 - 相关代码：
   - `src/lua_builtins.rs`（Lua 沙箱全局模块）
   - `src/crypto_primitives.rs`（无状态原语拆分先例）
-  - `js-runtime/onebase-runtime/index.js`（JS 全局注入）
+  - `js-runtime/planeos-runtime/index.js`（JS 全局注入）
   - `src/js_host_bridge.rs`（本期不改）
   - `src/mcp_tools.rs`（`node_spec` 文档）
 
@@ -22,7 +22,7 @@
 
 1. 通用 zlib，不做 `tencent_im.gen_usersig(...)`。
 2. 格式是 **RFC 1950**（zlib wrapper = 2 字节头 + deflate + Adler-32），不是 raw deflate（RFC 1951）也不是 gzip（RFC 1952）。与 Python `zlib.compress`、Node `zlib.deflateSync`、腾讯官方 SDK 一致。
-3. JS 在 `onebase-runtime` 里直接调 Node `zlib`，**不走** `js_host_bridge` IPC。
+3. JS 在 `planeos-runtime` 里直接调 Node `zlib`，**不走** `js_host_bridge` IPC。
 4. API 名对齐：两边都是全局 `zlib.compress` / `zlib.decompress`。
 
 ### 非目标
@@ -53,7 +53,7 @@
 ```
 Lua code 节点                         JS code 节点
 ────────────                         ────────────
-zlib.compress(bytes)                 zlib.compress(bytes)   // onebase-runtime
+zlib.compress(bytes)                 zlib.compress(bytes)   // planeos-runtime
         │                                    │
         ▼                                    ▼
 src/zlib_primitives.rs               Node zlib.deflateSync
@@ -115,7 +115,7 @@ JS 侧 HMAC 仍走 host（hex），压缩用本地 `zlib`，自定义 base64 用
 | `src/zlib_primitives.rs` | **新建**。`compress(&[u8]) -> Result<Vec<u8>, String>`、`decompress(&[u8]) -> Result<Vec<u8>, String>`。常量 `MAX_BYTES: usize = 8 * 1024 * 1024`。入参超限、解压读满 `MAX_BYTES + 1` 即失败。 |
 | `src/lib.rs` / `src/main.rs` | `mod zlib_primitives;` |
 | `src/lua_builtins.rs` | `register_zlib_module`，`register_builtins` 里调用；单测往返 + 喂给 `crypto.base64_encode` |
-| `js-runtime/onebase-runtime/index.js` | `installGlobal('zlib', { compress, decompress })`，内部 `zlib.deflateSync` / `inflateSync`，`maxOutputLength: 8 * 1024 * 1024`；compress 前检查明文长度 |
+| `js-runtime/planeos-runtime/index.js` | `installGlobal('zlib', { compress, decompress })`，内部 `zlib.deflateSync` / `inflateSync`，`maxOutputLength: 8 * 1024 * 1024`；compress 前检查明文长度 |
 | `src/mcp_tools.rs` | Lua / JS 能力列表补 `zlib`；附 UserSig 配方 |
 | `Cargo.toml` | `flate2`（默认 features） |
 
@@ -127,7 +127,7 @@ JS 侧 HMAC 仍走 host（hex），压缩用本地 `zlib`，自定义 base64 用
 |---|---|
 | Rust `zlib_primitives` | 往返 `"hello"`；空串往返；含 `0x00 0xff` 的非 UTF-8；损坏输入报错；9 MiB 明文 compress 被拒；「压缩后的 9 MiB 零块」decompress 被拒且无截断输出 |
 | Lua builtins | `register_builtins` 后往返；压缩结果可 `crypto.base64_encode`；非法输入报错 |
-| JS runtime | `node --require onebase-runtime` 往返（**不**设 `ONEBASE_HOST_SOCK`，证明不走 IPC）；出参是 `Buffer` |
+| JS runtime | `node --require planeos-runtime` 往返（**不**设 `PLANEOS_HOST_SOCK`，证明不走 IPC）；出参是 `Buffer` |
 | 互操作 | 同一明文：Rust `compress` 的字节，Node `inflateSync` 能解开还原。不要求 Rust 与 Node 的 compress 输出逐字节相同 |
 
 不测完整腾讯 UserSig（依赖 secret 与墙上时钟）。配方正确性由同事用腾讯控制台验签。

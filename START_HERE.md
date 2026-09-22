@@ -26,7 +26,7 @@ cargo run
 📡 API 端点: http://127.0.0.1:3000/api/:schema/:table
 ```
 
-> 启动期看到 `WARN onebase: Redis 连接失败（将以无缓存模式运行）` 不影响登录——`REDIS_URL` 不可达时服务会在 3 秒超时后继续启动，但权限缓存 / 限流 / 多实例事件会失效。
+> 启动期看到 `WARN planeos: Redis 连接失败（将以无缓存模式运行）` 不影响登录——`REDIS_URL` 不可达时服务会在 3 秒超时后继续启动，但权限缓存 / 限流 / 多实例事件会失效。
 
 ### 第 2 步：访问管理后台
 
@@ -210,8 +210,8 @@ cargo build
 1. 确认已经跑过 `cargo run --bin migrate_all`（它会建出 `users` / `management.*` / `user_sessions`，并种入两个测试账号）。
 2. 如果是从老代码升级上来，可能缺 011/012 迁移，重跑 `migrate_all` 即可幂等补齐；或单独执行：
    ```bash
-   psql -U your_username -d onebase_db -f migrations/011_seed_default_permissions.sql
-   psql -U your_username -d onebase_db -f migrations/012_jwt_sessions.sql
+   psql -U your_username -d planeos_db -f migrations/011_seed_default_permissions.sql
+   psql -U your_username -d planeos_db -f migrations/012_jwt_sessions.sql
    ```
 3. 想直接重置超管密码：`cargo run --bin create_admin`。
 4. 手动测试 API：

@@ -20,7 +20,7 @@
 - `connect_dedicated_listener` signature stays the same
 - Hub tests use a fake listener — no real PostgreSQL
 - Do not commit unless the user asked; skip `git commit` steps if commits were not requested
-- Modules live on the bin crate (`src/main.rs` `mod …`); run tests with `cargo test --bin onebase <filter>`
+- Modules live on the bin crate (`src/main.rs` `mod …`); run tests with `cargo test --bin planeos <filter>`
 
 ## File map
 
@@ -89,7 +89,7 @@ After leak is implemented, 25 **must** contain `泄漏` (because `> 1` is checke
 - [ ] **Step 2: Run tests — expect leak test FAIL**
 
 ```bash
-cargo test --bin onebase diagnose_warn_listen_leak -- --nocapture
+cargo test --bin planeos diagnose_warn_listen_leak -- --nocapture
 ```
 
 Expected: FAIL (`summary` has no `泄漏`, or compile error if test-only).
@@ -116,7 +116,7 @@ Expected: FAIL (`summary` has no `泄漏`, or compile error if test-only).
 - [ ] **Step 4: Re-run**
 
 ```bash
-cargo test --bin onebase diagnose_warn -- --nocapture
+cargo test --bin planeos diagnose_warn -- --nocapture
 ```
 
 Expected: all `diagnose_warn*` PASS, including `diagnose_one_listener_does_not_warn_for_count`.
@@ -216,7 +216,7 @@ Use `tokio::time::timeout(Duration::from_secs(2), sub.recv())` so tests fail fas
 - [ ] **Step 2: Run — expect compile/link fail or test fail**
 
 ```bash
-cargo test --bin onebase two_channels_same_db_one_connection -- --nocapture
+cargo test --bin planeos two_channels_same_db_one_connection -- --nocapture
 ```
 
 Expected: FAIL (`ListenHub` / `start_with_factory` missing).
@@ -240,7 +240,7 @@ Channel string: hub may assume caller already validated; still store owned `Stri
 - [ ] **Step 4: Run all hub tests**
 
 ```bash
-cargo test --bin onebase pg_listen_hub -- --nocapture
+cargo test --bin planeos pg_listen_hub -- --nocapture
 ```
 
 Expected: PASS (the five tests above).
@@ -314,7 +314,7 @@ If you must split: in Task 3 keep `active_listener_count` as a thin wrapper that
 - [ ] **Step 3: Existing notify unit tests still pass**
 
 ```bash
-cargo test --bin onebase workflow_notify_trigger -- --nocapture
+cargo test --bin planeos workflow_notify_trigger -- --nocapture
 ```
 
 Expected: existing config/trigger_data/match tests PASS.
@@ -354,7 +354,7 @@ Delete the dedicated-connect `run_listener` function.
 - [ ] **Step 2: Keep `render_topic` tests**
 
 ```bash
-cargo test --bin onebase sse_notify_bridge -- --nocapture
+cargo test --bin planeos sse_notify_bridge -- --nocapture
 ```
 
 Expected: PASS.
@@ -448,13 +448,13 @@ Detail card:
 - [ ] **Step 3: Compile + focused tests**
 
 ```bash
-cargo test --bin onebase diagnose_ -- --nocapture
-cargo test --bin onebase pg_listen_hub -- --nocapture
-cargo test --bin onebase workflow_notify_trigger -- --nocapture
-cargo test --bin onebase sse_notify_bridge -- --nocapture
+cargo test --bin planeos diagnose_ -- --nocapture
+cargo test --bin planeos pg_listen_hub -- --nocapture
+cargo test --bin planeos workflow_notify_trigger -- --nocapture
+cargo test --bin planeos sse_notify_bridge -- --nocapture
 ```
 
-Expected: PASS. `cargo check --bin onebase` succeeds.
+Expected: PASS. `cargo check --bin planeos` succeeds.
 
 - [ ] **Step 4: Commit (only if the user asked)**
 

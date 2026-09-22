@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import { tableAPI, schemaAPI } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
 
@@ -40,6 +41,7 @@ type SortConfig = {
 } | null
 
 export default function TableEditor({ schema, table, onClose }: TableEditorProps) {
+  const t = useTranslations('tableEditor')
   const [records, setRecords] = useState<any[]>([])
   const [structure, setStructure] = useState<TableStructure | null>(null)
   const [loading, setLoading] = useState(true)
@@ -76,7 +78,7 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
       const response = await schemaAPI.getTableStructure(schema, table)
       setStructure(response.data)
     } catch (err: any) {
-      console.error('加载表结构失败:', err)
+      console.error(t('loadStructFailed'), err)
     }
   }, [schema, table])
 
@@ -113,8 +115,8 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
         setTotalCount(data.length >= pageSize ? (page * pageSize) + 1 : (page - 1) * pageSize + data.length)
       }
     } catch (err: any) {
-      console.error('加载数据失败:', err)
-      setError(err.response?.data?.error || err.message || '加载失败')
+      console.error(t('loadDataFailed'), err)
+      setError(err.response?.data?.error || err.message || t('loadFailed'))
       setRecords([])
     } finally {
       setLoading(false)
@@ -196,10 +198,10 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
       newRecords[rowIndex] = { ...newRecords[rowIndex], [column]: newValue }
       setRecords(newRecords)
       
-      showNotification('success', '保存成功')
+      showNotification('success', t('saveOk'))
     } catch (err: any) {
-      console.error('保存失败:', err)
-      showNotification('error', err.response?.data?.error || '保存失败')
+      console.error(t('saveFailed'), err)
+      showNotification('error', err.response?.data?.error || t('saveFailed'))
     } finally {
       setSaving(false)
       setEditingCell(null)
@@ -279,11 +281,11 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
       
       const response = await tableAPI.createRecord(schema, table, dataToSave)
       setNewRow(null)
-      showNotification('success', '添加成功')
+      showNotification('success', t('addOk'))
       loadRecords() // 重新加载数据
     } catch (err: any) {
-      console.error('添加失败:', err)
-      showNotification('error', err.response?.data?.error || '添加失败')
+      console.error(t('addFailed'), err)
+      showNotification('error', err.response?.data?.error || t('addFailed'))
     } finally {
       setSaving(false)
     }
@@ -293,7 +295,7 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
   const deleteSelectedRows = async () => {
     if (selectedRows.size === 0) return
     
-    const confirmed = window.confirm(`确定要删除选中的 ${selectedRows.size} 条记录吗？此操作不可撤销。`)
+    const confirmed = window.confirm(t('confirmDelete', { n: selectedRows.size }))
     if (!confirmed) return
     
     setSaving(true)
@@ -319,9 +321,9 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
     setSelectedRows(new Set())
     
     if (failCount === 0) {
-      showNotification('success', `成功删除 ${successCount} 条记录`)
+      showNotification('success', t('deleteOkN', { n: successCount }))
     } else {
-      showNotification('error', `删除完成: ${successCount} 成功, ${failCount} 失败`)
+      showNotification('error', t('deletePartial', { ok: successCount, fail: failCount }))
     }
     
     loadRecords()
@@ -426,17 +428,17 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
     const isAutoIncrement = column.column_default?.includes('nextval')
 
     if (isAutoIncrement) {
-      return <span className="text-gray-400 italic text-xs">自动生成</span>
+      return <span className="text-gray-400 italic text-xs">{t('autoGen')}</span>
     }
 
     // 其余函数式默认（now()、CURRENT_TIMESTAMP、gen_random_uuid() 等）依然给输入框，
     // 但提示用户不填会用默认值。
     const isFnDefault = isFunctionDefault(column.column_default)
     const placeholder = isFnDefault
-      ? `默认: ${column.column_default}`
+      ? t('phDefault', { default: column.column_default })
       : column.is_nullable === 'YES'
       ? 'NULL'
-      : '必填'
+      : t('required')
 
     return (
       <input
@@ -462,7 +464,7 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
           <div>
             <h2 className="text-sm font-semibold text-gray-900">{schema}.{table}</h2>
             <p className="text-xs text-gray-500">
-              {totalCount} 条记录 {structure?.table_size && `· ${structure.table_size}`}
+              {t('recordCount', { n: totalCount })} {structure?.table_size && `· ${structure.table_size}`}
             </p>
           </div>
         </div>
@@ -474,7 +476,7 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
             className={`btn-default text-xs ${showFilters ? 'bg-blue-50 border-blue-300' : ''}`}
           >
             <i className="fas fa-filter mr-1.5"></i>
-            筛选
+            {t('filter')}
           </button>
           
           {/* 添加行按钮 */}
@@ -484,7 +486,7 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
             className="btn-primary text-xs"
           >
             <i className="fas fa-plus mr-1.5"></i>
-            添加行
+            {t('addRow')}
           </button>
           
           {/* 删除按钮 */}
@@ -495,7 +497,7 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
               className="btn-danger text-xs"
             >
               <i className="fas fa-trash mr-1.5"></i>
-              删除 ({selectedRows.size})
+              {t('deleteN', { n: selectedRows.size })}
             </button>
           )}
           
@@ -506,7 +508,7 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
             className="btn-default text-xs"
           >
             <i className={`fas ${loading ? 'fa-spinner fa-spin' : 'fa-sync-alt'} mr-1.5`}></i>
-            刷新
+            {t('refresh')}
           </button>
         </div>
       </div>
@@ -525,7 +527,7 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
                     setFilters({ ...filters, [col.column_name]: e.target.value })
                     setPage(1)
                   }}
-                  placeholder="搜索..."
+                  placeholder={t('phSearch')}
                   className="w-28 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />
               </div>
@@ -538,7 +540,7 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
                 }}
                 className="text-xs text-blue-600 hover:text-blue-800"
               >
-                清除筛选
+                {t('clearFilter')}
               </button>
             )}
           </div>
@@ -571,14 +573,14 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
               <i className="fas fa-spinner fa-spin text-3xl text-blue-500 mb-3"></i>
-              <p className="text-gray-500">加载中...</p>
+              <p className="text-gray-500">{t('loading')}</p>
             </div>
           </div>
         ) : columns.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
               <i className="fas fa-table text-4xl text-gray-300 mb-3"></i>
-              <p className="text-gray-500">无法加载表结构</p>
+              <p className="text-gray-500">{t('cantLoadStruct')}</p>
             </div>
           </div>
         ) : (
@@ -625,7 +627,7 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
                         onClick={saveNewRow}
                         disabled={saving}
                         className="text-green-600 hover:text-green-800"
-                        title="保存"
+                        title={t('save')}
                       >
                         <i className={`fas ${saving ? 'fa-spinner fa-spin' : 'fa-check'}`}></i>
                       </button>
@@ -633,7 +635,7 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
                         onClick={() => setNewRow(null)}
                         disabled={saving}
                         className="text-red-600 hover:text-red-800"
-                        title="取消"
+                        title={t('cancel')}
                       >
                         <i className="fas fa-times"></i>
                       </button>
@@ -682,13 +684,13 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
                 <tr>
                   <td colSpan={columns.length + 1} className="px-4 py-12 text-center">
                     <i className="fas fa-inbox text-4xl text-gray-300 mb-3"></i>
-                    <p className="text-gray-500">暂无数据</p>
+                    <p className="text-gray-500">{t('empty')}</p>
                     <button
                       onClick={startNewRow}
                       className="mt-3 text-blue-600 hover:text-blue-800 text-sm"
                     >
                       <i className="fas fa-plus mr-1"></i>
-                      添加第一条记录
+                      {t('addFirst')}
                     </button>
                   </td>
                 </tr>
@@ -702,7 +704,7 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
       <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 bg-gray-50">
         <div className="flex items-center space-x-4">
           <span className="text-sm text-gray-600">
-            显示 {(page - 1) * pageSize + 1} - {Math.min(page * pageSize, totalCount)} / {totalCount} 条
+            {t('pageInfo', { from: (page - 1) * pageSize + 1, to: Math.min(page * pageSize, totalCount), total: totalCount })}
           </span>
           <select
             value={pageSize}
@@ -712,10 +714,10 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
             }}
             className="text-sm border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500"
           >
-            <option value={25}>25 条/页</option>
-            <option value={50}>50 条/页</option>
-            <option value={100}>100 条/页</option>
-            <option value={200}>200 条/页</option>
+            <option value={25}>{t('perPage', { n: 25 })}</option>
+            <option value={50}>{t('perPage', { n: 50 })}</option>
+            <option value={100}>{t('perPage', { n: 100 })}</option>
+            <option value={200}>{t('perPage', { n: 200 })}</option>
           </select>
         </div>
         
@@ -735,7 +737,7 @@ export default function TableEditor({ schema, table, onClose }: TableEditorProps
             <i className="fas fa-angle-left"></i>
           </button>
           <span className="px-3 py-1 text-sm">
-            第 {page} 页 / {totalPages || 1}
+            {t('pageOf', { page: page, total: totalPages || 1 })}
           </span>
           <button
             onClick={() => setPage(p => p + 1)}

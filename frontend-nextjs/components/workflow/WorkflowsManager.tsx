@@ -12,6 +12,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import dynamic from 'next/dynamic'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import api, { tenantAPI } from '@/lib/api'
@@ -158,7 +159,7 @@ interface EditorDraft {
   saveNote: string
 }
 
-const EDITOR_DRAFT_KEY_PREFIX = 'onebase:wf-editor-draft:'
+const EDITOR_DRAFT_KEY_PREFIX = 'planeos:wf-editor-draft:'
 
 function editorDraftKey(databaseId?: number | null): string {
   return `${EDITOR_DRAFT_KEY_PREFIX}${databaseId ?? 'default'}`
@@ -195,19 +196,19 @@ function clearEditorDraft(databaseId?: number | null): void {
 }
 
 const TRIGGER_TYPES = [
-  { value: 'endpoint', label: 'HTTP 端点', icon: '🌐', desc: 'POST /workflow/:project/:workflow_slug' },
-  { value: 'hook', label: '数据变更', icon: '⚡', desc: '监听表 CRUD 自动触发' },
-  { value: 'notify', label: 'PG NOTIFY', icon: '📣', desc: '监听业务库 LISTEN/NOTIFY 自动触发' },
-  { value: 'cron', label: '定时任务', icon: '⏰', desc: '按 Cron 表达式定期执行' },
-  { value: 'kafka', label: 'Kafka 消息', icon: '📨', desc: '消费 Kafka Topic 消息自动触发' },
-  { value: 'manual', label: '手动触发', icon: '👆', desc: '仅通过面板手动执行' },
+  { value: 'endpoint', label: 'HTTP endpoint', icon: '🌐', desc: 'POST /workflow/:project/:workflow_slug' },
+  { value: 'hook', label: 'Data change', icon: '⚡', desc: 'Auto-triggered by table CRUD' },
+  { value: 'notify', label: 'PG NOTIFY', icon: '📣', desc: 'Auto-triggered by business DB LISTEN/NOTIFY' },
+  { value: 'cron', label: 'Scheduled', icon: '⏰', desc: 'Runs periodically per a Cron expression' },
+  { value: 'kafka', label: 'Kafka message', icon: '📨', desc: 'Auto-triggered by consuming Kafka topic messages' },
+  { value: 'manual', label: 'Manual', icon: '👆', desc: 'Run manually only from the panel' },
 ]
 
 const DEFAULT_ALERT_WEBHOOK_TEMPLATE = JSON.stringify(
   {
     msg_type: 'markdown',
     content:
-      '### 🚨 报警\n- **类型**: {{source}}\n- **名称**: {{name}}\n- **状态**: {{status}}\n- **错误**: {{error}}\n- **时间**: {{time}}\n- **Run ID**: {{run_id}}',
+      '### 🚨 Alert\n- **Source**: {{source}}\n- **Name**: {{name}}\n- **Status**: {{status}}\n- **Error**: {{error}}\n- **Time**: {{time}}\n- **Run ID**: {{run_id}}',
   },
   null,
   2,
@@ -241,6 +242,7 @@ function isWholeTemplateExpr(text: string): boolean {
 }
 
 function parseNodeJsonField(
+  t: (k: string, p?: any) => string,
   nodeId: string,
   nodeType: string,
   field: string,
@@ -255,28 +257,28 @@ function parseNodeJsonField(
   try {
     parsed = JSON.parse(text)
   } catch {
-    throw new Error(`节点 ${nodeId}（${nodeType}）字段 ${field} 不是合法 JSON`)
+    throw new Error(t('nodeFieldInvalidJson', { id: nodeId, type: nodeType, field }))
   }
   if (
     requireObject &&
     (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object')
   ) {
-    throw new Error(`节点 ${nodeId}（${nodeType}）字段 ${field} 必须是 JSON 对象`)
+    throw new Error(t('nodeFieldMustObject', { id: nodeId, type: nodeType, field }))
   }
   return parsed
 }
 
-function normalizeNodesForExecution(nodes: WorkflowNodeDef[]): WorkflowNodeDef[] {
+function normalizeNodesForExecution(nodes: WorkflowNodeDef[], t: (k: string, p?: any) => string): WorkflowNodeDef[] {
   return nodes.map((node) => {
     const config = { ...(node.config || {}) } as Record<string, unknown>
     for (const field of JSON_OBJECT_FIELDS_BY_NODE[node.type] || []) {
       if (field in config) {
-        config[field] = parseNodeJsonField(node.id, node.type, field, config[field], true)
+        config[field] = parseNodeJsonField(t, node.id, node.type, field, config[field], true)
       }
     }
     for (const field of JSON_FIELDS_BY_NODE[node.type] || []) {
       if (field in config) {
-        config[field] = parseNodeJsonField(node.id, node.type, field, config[field], false)
+        config[field] = parseNodeJsonField(t, node.id, node.type, field, config[field], false)
       }
     }
     return { ...node, config }
@@ -328,11 +330,12 @@ function JsonLogBlock({ title, value }: { title?: string; value: unknown }) {
 }
 
 function DebugLogsBlock({ logs }: { logs: NodeLogLine[] }) {
+  const t = useTranslations('wfMgr')
   const text = logs.map((line) => `${line.level}  ${line.message}`).join('\n')
   return (
     <>
       <div className="flex items-center gap-2 mt-2 justify-between">
-        <div className="text-[11px] font-medium text-gray-500">调试日志</div>
+        <div className="text-[11px] font-medium text-gray-500">{t('debugLogs')}</div>
         <CopyButton text={text} />
       </div>
       <pre className="mt-1 p-2 bg-white border rounded font-mono overflow-auto max-h-48 text-[11px] leading-relaxed">
@@ -343,6 +346,7 @@ function DebugLogsBlock({ logs }: { logs: NodeLogLine[] }) {
 }
 
 function NodeResultCard({ nr, defaultOpen = false }: { nr: NodeResultItem; defaultOpen?: boolean }) {
+  const t = useTranslations('wfMgr')
   const hint = extractOutputHint(nr.output)
   const borderClass =
     nr.status === 'success' ? 'border-green-200 bg-green-50/40'
@@ -354,7 +358,7 @@ function NodeResultCard({ nr, defaultOpen = false }: { nr: NodeResultItem; defau
     : nr.status === 'failed' ? 'bg-red-100 text-red-700'
     : nr.status === 'failed_allowed' ? 'bg-amber-100 text-amber-700'
     : 'bg-gray-100 text-gray-500'
-  const statusLabel = nr.status === 'failed_allowed' ? '失败(已容错)' : nr.status
+  const statusLabel = nr.status === 'failed_allowed' ? t('statusFailedAllowed') : nr.status
 
   return (
     <details open={defaultOpen} className={`border rounded-lg text-xs ${borderClass}`}>
@@ -369,12 +373,12 @@ function NodeResultCard({ nr, defaultOpen = false }: { nr: NodeResultItem; defau
               </span>
             )}
             {nr.status === 'failed_allowed' && !hint && (
-              <span className="truncate text-amber-700" title={nr.error || ''}>· 已容错（allow_failure）</span>
+              <span className="truncate text-amber-700" title={nr.error || ''}>{t('tolerated')}</span>
             )}
           </div>
           <span className="flex items-center gap-2 shrink-0">
             {!!(nr.output && typeof nr.output === 'object' && (nr.output as Record<string, unknown>).dry_run === true) && (
-              <span className="px-1.5 py-0.5 rounded bg-sky-100 text-sky-700">已跳过</span>
+              <span className="px-1.5 py-0.5 rounded bg-sky-100 text-sky-700">{t('skipped')}</span>
             )}
             {nr.branch && <span className="text-indigo-500">→ {nr.branch}</span>}
             <span className={`px-1.5 py-0.5 rounded ${statusClass}`}>{statusLabel}</span>
@@ -385,10 +389,10 @@ function NodeResultCard({ nr, defaultOpen = false }: { nr: NodeResultItem; defau
       <div className="px-3 pb-3 border-t border-black/5">
         {nr.error && <p className="text-red-600 mt-2 font-mono">{nr.error}</p>}
         {nr.input != null && (
-          <JsonLogBlock title="入参（实际传递的参数）" value={nr.input} />
+          <JsonLogBlock title={t('inputActual')} value={nr.input} />
         )}
         {nr.output != null && (
-          <JsonLogBlock title="输出（对方响应）" value={nr.output} />
+          <JsonLogBlock title={t('outputResp')} value={nr.output} />
         )}
         {!!nr.logs?.length && <DebugLogsBlock logs={nr.logs} />}
       </div>
@@ -397,8 +401,9 @@ function NodeResultCard({ nr, defaultOpen = false }: { nr: NodeResultItem; defau
 }
 
 function NodeResultList({ results }: { results: NodeResultItem[] }) {
+  const t = useTranslations('wfMgr')
   if (!results?.length) {
-    return <p className="text-xs text-gray-400">没有节点结果</p>
+    return <p className="text-xs text-gray-400">{t('noNodeResults')}</p>
   }
   return (
     <div className="space-y-2">
@@ -416,38 +421,39 @@ function NodeResultList({ results }: { results: NodeResultItem[] }) {
 // MCP 工具清单（与后端 mcp_tools.rs 注册的工具一一对应）。
 // Markdown「复制全部」与页面表格共用这一份，新增工具只改这里。
 const MCP_TOOLS: ReadonlyArray<readonly [string, string]> = [
-  ['node_spec', '节点规范知识库（AI 写定义前必读）'],
-  ['list_skills / get_skill', '列出 / 读取仓库内助手技能，做检测、审查前先看'],
-  ['list_workflows / get_workflow', '查列表 / 查完整定义（有草稿时返回草稿）'],
-  ['list_env_vars', '列出项目环境变量，写 {{env.X}} 前确认存在'],
-  ['create_workflow', '创建并保存为草稿，不进运行时'],
-  ['update_workflow', '更新草稿，不进运行时、不打版本；不能改启用状态'],
-  ['publish_workflow', '把草稿发布为线上定义，发布后运行时才用新图'],
-  ['discard_workflow_draft', '丢弃草稿，回到当前已发布定义'],
-  ['duplicate_workflow', '复制为新副本（草稿态、强制禁用，启用归人）'],
-  ['debug_workflow', '调试试跑，不依赖发布；默认干跑，真实执行受环境护栏约束'],
-  ['review_workflow / review_workflows', '单个 / 批量质量检查，只出报告不改工作流'],
-  ['workflow_api_doc', '按已发布定义生成入参清单 + curl 示例；未发布则按草稿预览'],
-  ['get_workflow_runs', '查执行历史摘要（次数统计 + error_message，不含节点 I/O）'],
-  ['get_workflow_run_detail', '查单次运行节点级输入输出'],
-  ['list_workflow_versions', '查询版本历史（仅元信息，只含已发布快照）'],
-  ['get_workflow_version', '获取历史版本完整快照（含 nodes/edges），恢复归人'],
+  ['node_spec', 'MCPKEY:tNodeSpec'],
+  ['list_skills / get_skill', 'MCPKEY:tSkills'],
+  ['list_workflows / get_workflow', 'MCPKEY:tListWf'],
+  ['list_env_vars', 'MCPKEY:tListEnv'],
+  ['create_workflow', 'MCPKEY:tCreate'],
+  ['update_workflow', 'MCPKEY:tUpdate'],
+  ['publish_workflow', 'MCPKEY:tPublish'],
+  ['discard_workflow_draft', 'MCPKEY:tDiscard'],
+  ['duplicate_workflow', 'MCPKEY:tDuplicate'],
+  ['debug_workflow', 'MCPKEY:tDebug'],
+  ['review_workflow / review_workflows', 'MCPKEY:tReview'],
+  ['workflow_api_doc', 'MCPKEY:tApiDoc'],
+  ['get_workflow_runs', 'MCPKEY:tRuns'],
+  ['get_workflow_run_detail', 'MCPKEY:tRunDetail'],
+  ['list_workflow_versions', 'MCPKEY:tListVersions'],
+  ['get_workflow_version', 'MCPKEY:tGetVersion'],
 ]
 
 // MCP 接入教程：指导用户把本实例接入本地 AI 客户端，让 AI 创作/调试工作流。
 // 接入地址取当前页面 origin——测试/生产是独立部署（不同域名），在哪个环境打开本页，
 // 教程里的 URL 就指向哪个环境，无需手动区分。
 function McpGuideModal({ onClose }: { onClose: () => void }) {
+  const t = useTranslations('wfMgr')
   const base = typeof window !== 'undefined' ? window.location.origin : ''
   const mcpUrl = `${base}/mcp`
-  const claudeCmd = `claude mcp add --transport http planeos ${mcpUrl} --header "Authorization: Bearer obm_你的令牌"`
+  const claudeCmd = `claude mcp add --transport http planeos ${mcpUrl} --header "Authorization: Bearer ${t('tokenPlaceholder')}"`
   const genericConfig = JSON.stringify(
     {
       mcpServers: {
         planeos: {
           type: 'http',
           url: mcpUrl,
-          headers: { Authorization: 'Bearer obm_你的令牌' },
+          headers: { Authorization: `Bearer ${t('tokenPlaceholder')}` },
         },
       },
     },
@@ -457,38 +463,38 @@ function McpGuideModal({ onClose }: { onClose: () => void }) {
 
   // 整份接入指南拼成 Markdown，供「复制全部」一次性带走喂 AI。
   const mcpMarkdown = useMemo(() => [
-    '# PlaneOS MCP 接入指南',
+    t('mdTitle'),
     '',
-    '让 AI 客户端（Claude Code 等）接入 PlaneOS，由 AI 创作 / 调试工作流。',
+    t('mdIntro'),
     '',
-    '## 接入地址（当前环境）',
+    t('mdAddrH'),
     mcpUrl,
     '',
-    '> 测试与生产独立部署：在哪个环境打开页面，地址即指向该环境。非生产实例 AI 可真实增删改查调试；生产实例仅允许干跑 + 只读查询，写操作被引擎拦截。',
+    t('mdAddrNote'),
     '',
-    '## 第一步 · 生成个人访问令牌（PAT）',
-    '前往「安全 → API Key」页面底部「个人访问令牌」区块，点「生成令牌」。令牌以 `obm_` 开头（MCP 专用，区别于平台令牌的 `obp_`），明文只显示一次，请立即复制；可随时吊销。',
+    t('mdStep1H'),
+    t('mdStep1'),
     '',
-    '## 第二步 · 接入 AI 客户端',
+    t('mdStep2H'),
     '',
-    'Claude Code（终端执行，替换为你的令牌）：',
+    t('mdStep2Claude'),
     '```bash',
     claudeCmd,
     '```',
     '',
-    '其他支持 MCP 的客户端（Cursor 等）通用 HTTP 配置：',
+    t('mdStep2Other'),
     '```json',
     genericConfig,
     '```',
     '',
-    '## 第三步 · 跟 AI 说需求',
-    '重开一个 AI 会话，直接描述接口需求，例如：',
-    '> 帮我在 PlaneOS 建一个工作流：按用户 ID 查询最近 10 笔订单，调试通过后给我接口文档',
+    t('mdStep3H'),
+    t('mdStep3'),
+    t('mdStep3Eg'),
     '',
-    'AI 会：读节点规范 → 创建工作流（只落草稿）→ 调试验证 → 发布（草稿才进运行时）→ 生成接口文档。启用 / 禁用仍只在页面操作（启停留人）。',
+    t('mdStep3Flow'),
     '',
-    '## AI 可用工具',
-    ...MCP_TOOLS.map(([name, desc]) => `- \`${name}\`：${desc}`),
+    t('mdToolsH'),
+    ...MCP_TOOLS.map(([name, desc]) => `- \`${name}\`：${desc.startsWith('MCPKEY:') ? t(desc.slice(7)) : desc}`),
   ].join('\n'), [mcpUrl, claudeCmd, genericConfig])
 
   return (
@@ -497,8 +503,8 @@ function McpGuideModal({ onClose }: { onClose: () => void }) {
       <div className="relative bg-white w-[720px] max-w-[92vw] max-h-[85vh] rounded-xl shadow-xl flex flex-col">
         <div className="px-6 py-4 border-b flex items-center justify-between shrink-0">
           <div>
-            <h3 className="font-semibold text-gray-800">MCP 接入 · 让你的 AI 来写工作流</h3>
-            <p className="text-xs text-gray-400 mt-0.5">把 PlaneOS 接入本地 AI 客户端（Claude Code 等），描述需求即可由 AI 创作、调试工作流</p>
+            <h3 className="font-semibold text-gray-800">{t('guideTitle')}</h3>
+            <p className="text-xs text-gray-400 mt-0.5">{t('guideSubtitle')}</p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <CopyMarkdownButton text={mcpMarkdown} />
@@ -509,37 +515,33 @@ function McpGuideModal({ onClose }: { onClose: () => void }) {
         <div className="p-6 overflow-y-auto space-y-6 text-sm text-gray-700">
           {/* 接入地址 */}
           <section>
-            <h4 className="font-semibold text-gray-900 mb-2">接入地址（当前环境）</h4>
+            <h4 className="font-semibold text-gray-900 mb-2">{t('addrH')}</h4>
             <div className="flex items-center gap-2 flex-wrap">
               <code className="text-xs bg-gray-100 px-2 py-1 rounded font-mono break-all flex-1 min-w-0">{mcpUrl}</code>
               <CopyButton text={mcpUrl} />
             </div>
             <p className="text-xs text-gray-500 mt-2 leading-relaxed">
-              测试与生产是独立部署：<strong>在哪个环境打开本页，这里就是哪个环境的地址</strong>。
-              两个环境都要用的话，分别打开各自的页面按本教程接入一次（建议各生成各的令牌）。
-              非生产实例 AI 可真实增删改查调试；生产实例只允许干跑 + 只读查询，写操作会被引擎拦截。
+              {t('addrDesc')}
             </p>
           </section>
 
           {/* 第一步：令牌 */}
           <section>
-            <h4 className="font-semibold text-gray-900 mb-2">第一步 · 生成个人访问令牌（PAT）</h4>
+            <h4 className="font-semibold text-gray-900 mb-2">{t('step1H')}</h4>
             <p className="text-xs text-gray-600 leading-relaxed">
-              前往 <strong>安全 → API Key</strong> 页面底部的「<strong>个人访问令牌</strong>」区块，点「生成令牌」。
-              令牌为 <code className="bg-gray-100 px-1 rounded font-mono">obm_</code> 开头（MCP 专用，区别于平台令牌的 <code className="bg-gray-100 px-1 rounded font-mono">obp_</code>），<strong>明文只显示一次</strong>，
-              请立即复制；泄露或不用了可随时在同一页面吊销。
+              {t('step1Desc', { a: 'obm_', b: 'obp_' })}
             </p>
           </section>
 
           {/* 第二步：接入 */}
           <section>
-            <h4 className="font-semibold text-gray-900 mb-2">第二步 · 接入你的 AI 客户端</h4>
-            <p className="text-xs text-gray-500 mb-2">Claude Code（终端执行，令牌替换成第一步生成的）：</p>
+            <h4 className="font-semibold text-gray-900 mb-2">{t('step2H')}</h4>
+            <p className="text-xs text-gray-500 mb-2">{t('step2Claude')}</p>
             <div className="relative">
               <pre className="text-xs bg-gray-900 text-gray-100 rounded-lg p-3 overflow-x-auto font-mono whitespace-pre-wrap break-all">{claudeCmd}</pre>
               <div className="absolute top-2 right-2"><CopyButton text={claudeCmd} /></div>
             </div>
-            <p className="text-xs text-gray-500 mt-3 mb-2">其他支持 MCP 的客户端（Cursor 等），用通用 HTTP 配置：</p>
+            <p className="text-xs text-gray-500 mt-3 mb-2">{t('step2Other')}</p>
             <div className="relative">
               <pre className="text-xs bg-gray-900 text-gray-100 rounded-lg p-3 overflow-x-auto font-mono">{genericConfig}</pre>
               <div className="absolute top-2 right-2"><CopyButton text={genericConfig} /></div>
@@ -548,28 +550,27 @@ function McpGuideModal({ onClose }: { onClose: () => void }) {
 
           {/* 第三步：使用 */}
           <section>
-            <h4 className="font-semibold text-gray-900 mb-2">第三步 · 跟 AI 说需求</h4>
+            <h4 className="font-semibold text-gray-900 mb-2">{t('step3H')}</h4>
             <p className="text-xs text-gray-600 leading-relaxed mb-2">
-              重开一个 AI 会话，直接描述接口需求，例如：
+              {t('step3Desc')}
             </p>
             <blockquote className="text-xs bg-indigo-50 text-indigo-800 rounded-lg px-3 py-2 leading-relaxed">
-              "帮我在 PlaneOS 建一个工作流：按用户 ID 查询最近 10 笔订单，调试通过后给我接口文档"
+              {t('step3Eg')}
             </blockquote>
             <p className="text-xs text-gray-500 mt-2 leading-relaxed">
-              AI 会自动完成：读节点规范 → 创建工作流（<strong>只落草稿</strong>）→ 调试验证 → <strong>发布</strong>（草稿才进运行时）→ 生成接口文档。
-              启用 / 禁用仍只在本页面操作——启停始终在人手里。
+              {t('step3Flow')}
             </p>
           </section>
 
           {/* 工具清单 */}
           <section>
-            <h4 className="font-semibold text-gray-900 mb-2">AI 可用的工具（{MCP_TOOLS.length} 组）</h4>
+            <h4 className="font-semibold text-gray-900 mb-2">{t('toolsH', { n: MCP_TOOLS.length })}</h4>
             <table className="w-full text-xs border-separate border-spacing-0">
               <tbody>
                 {MCP_TOOLS.map(([name, desc]) => (
                   <tr key={name}>
                     <td className="py-1 pr-3 font-mono text-indigo-700 whitespace-nowrap align-top">{name}</td>
-                    <td className="py-1 text-gray-600">{desc}</td>
+                    <td className="py-1 text-gray-600">{desc.startsWith('MCPKEY:') ? t(desc.slice(7)) : desc}</td>
                   </tr>
                 ))}
               </tbody>
@@ -584,6 +585,7 @@ function McpGuideModal({ onClose }: { onClose: () => void }) {
 // 接口文档「分享」按钮：生成 / 展示 / 关闭一个免登录的公开文档链接（<origin>/doc/<token>）。
 // 未保存的新工作流（无 id）置灰，提示先保存。
 function ShareDocButton({ workflowId }: { workflowId: number | null }) {
+  const t = useTranslations('wfMgr')
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [token, setToken] = useState<string | null>(null)
@@ -601,7 +603,7 @@ function ShareDocButton({ workflowId }: { workflowId: number | null }) {
       setEnabled(!!res.data?.share_enabled)
       setLoaded(true)
     } catch {
-      showToast('error', '读取分享状态失败')
+      showToast('error', t('loadShareFailed'))
     } finally {
       setLoading(false)
     }
@@ -622,7 +624,7 @@ function ShareDocButton({ workflowId }: { workflowId: number | null }) {
       setEnabled(!!res.data?.share_enabled)
       setLoaded(true)
     } catch {
-      showToast('error', '操作失败，请重试')
+      showToast('error', t('opFailed'))
     } finally {
       setLoading(false)
     }
@@ -632,11 +634,11 @@ function ShareDocButton({ workflowId }: { workflowId: number | null }) {
     return (
       <button
         disabled
-        title="请先保存工作流，再生成分享链接"
+        title={t('saveFirstShare')}
         className="px-3 py-1.5 text-xs border border-gray-200 text-gray-300 rounded-lg font-medium cursor-not-allowed inline-flex items-center gap-1.5 shrink-0"
       >
         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" /></svg>
-        分享
+        {t('share')}
       </button>
     )
   }
@@ -648,19 +650,19 @@ function ShareDocButton({ workflowId }: { workflowId: number | null }) {
         className="px-3 py-1.5 text-xs border border-gray-300 text-gray-600 rounded-lg font-medium hover:bg-gray-100 inline-flex items-center gap-1.5"
       >
         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" /></svg>
-        {enabled ? '已分享' : '分享'}
+        {enabled ? t('shared') : t('share')}
       </button>
       {open && (
         <div className="absolute right-0 mt-2 w-80 bg-white border rounded-xl shadow-xl p-4 z-10 text-left" onClick={e => e.stopPropagation()}>
           <div className="flex items-center justify-between mb-2">
-            <h5 className="font-semibold text-gray-800 text-sm">公开分享</h5>
+            <h5 className="font-semibold text-gray-800 text-sm">{t('publicShare')}</h5>
             <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600 text-lg leading-none">&times;</button>
           </div>
           <p className="text-xs text-gray-500 leading-relaxed mb-3">
-            生成一个免登录的公开链接，任何人打开都能查看这份接口文档（只读、实时、不含任何密钥）。可随时关闭使其失效。
+            {t('publicShareDesc')}
           </p>
           {loading && !loaded ? (
-            <p className="text-xs text-gray-400">加载中…</p>
+            <p className="text-xs text-gray-400">{t('loading')}</p>
           ) : enabled && shareUrl ? (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
@@ -668,9 +670,9 @@ function ShareDocButton({ workflowId }: { workflowId: number | null }) {
                 <CopyButton text={shareUrl} />
               </div>
               <div className="flex items-center gap-2">
-                <a href={shareUrl} target="_blank" rel="noreferrer" className="text-xs text-indigo-600 hover:underline">在新标签打开</a>
+                <a href={shareUrl} target="_blank" rel="noreferrer" className="text-xs text-indigo-600 hover:underline">{t('openNewTab')}</a>
                 <span className="text-gray-300">·</span>
-                <button onClick={() => setShare(false)} disabled={loading} className="text-xs text-red-500 hover:text-red-600 disabled:opacity-50">关闭分享</button>
+                <button onClick={() => setShare(false)} disabled={loading} className="text-xs text-red-500 hover:text-red-600 disabled:opacity-50">{t('closeShare')}</button>
               </div>
             </div>
           ) : (
@@ -679,7 +681,7 @@ function ShareDocButton({ workflowId }: { workflowId: number | null }) {
               disabled={loading}
               className="w-full px-3 py-2 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium disabled:opacity-50"
             >
-              {loading ? '生成中…' : '生成公开链接'}
+              {loading ? t('generating') : t('genPublicLink')}
             </button>
           )}
         </div>
@@ -714,11 +716,13 @@ function WorkflowDocModal({
   workflowId?: number | null
   onClose: () => void
 }) {
+  const t = useTranslations('wfMgr')
   // 对外调用基址走运行期解析：项目级(网关域名) > 平台级 > 构建期 NEXT_PUBLIC_API_URL > 浏览器 origin。
   // gatewayMode：配了网关域名时，接口文档隐藏 API Key 鉴权头（网关统一鉴权）。
   const { apiBase, gatewayMode } = usePublicApiConfig(projectId ?? undefined)
   const model = useMemo(() => deriveDocModel(meta, nodes, dbSlug), [meta, nodes, dbSlug])
-  const docMarkdown = useMemo(() => buildDocMarkdown(model, apiBase, gatewayMode), [model, apiBase, gatewayMode])
+  const tDoc = useTranslations('wfDoc')
+  const docMarkdown = useMemo(() => buildDocMarkdown(model, apiBase, tDoc, gatewayMode), [model, apiBase, tDoc, gatewayMode])
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ paddingRight: rightOffset }}>
@@ -726,8 +730,8 @@ function WorkflowDocModal({
       <div className="relative bg-white w-[720px] max-w-[92vw] max-h-[85vh] rounded-xl shadow-xl flex flex-col">
         <div className="px-6 py-4 border-b flex items-center justify-between shrink-0">
           <div>
-            <h3 className="font-semibold text-gray-800">接口文档 · {meta.name || '未命名工作流'}</h3>
-            <p className="text-xs text-gray-400 mt-0.5">外部系统接入与调试说明</p>
+            <h3 className="font-semibold text-gray-800">{t('docTitle', { name: meta.name || t('unnamed') })}</h3>
+            <p className="text-xs text-gray-400 mt-0.5">{t('docSubtitle')}</p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <ShareDocButton workflowId={workflowId} />
@@ -761,6 +765,7 @@ export default function WorkflowsManager({
   defaultDatabaseId,
   projectId = null,
 }: WorkflowsManagerProps = {}) {
+  const t = useTranslations('wfMgr')
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -857,8 +862,8 @@ export default function WorkflowsManager({
       const d = (e as CustomEvent).detail || {}
       setAiPanel({ open: !!d.open, width: Number(d.width) || 0, mobile: !!d.mobile })
     }
-    window.addEventListener('onebase:ai-panel', onAiPanel)
-    return () => window.removeEventListener('onebase:ai-panel', onAiPanel)
+    window.addEventListener('planeos:ai-panel', onAiPanel)
+    return () => window.removeEventListener('planeos:ai-panel', onAiPanel)
   }, [])
   // AI 面板占用的右侧宽度（小屏全屏时不避让，由 z-index 决定层级）。
   const aiOffset = aiPanel.open && !aiPanel.mobile ? aiPanel.width : 0
@@ -907,11 +912,11 @@ export default function WorkflowsManager({
       const parsed = JSON.parse(trimmed)
       if (parsed === null) return { ok: true, value: null }
       if (typeof parsed !== 'object' || Array.isArray(parsed)) {
-        return { ok: false, error: '入参定义必须是 JSON 对象' }
+        return { ok: false, error: t('inputSchemaMustObject') }
       }
       return { ok: true, value: parsed }
     } catch {
-      return { ok: false, error: '入参定义 JSON 格式错误' }
+      return { ok: false, error: t('inputSchemaInvalidJson') }
     }
   }
 
@@ -972,7 +977,7 @@ export default function WorkflowsManager({
         setEditorFolders([])
       }
     } catch (err) {
-      console.warn('加载编辑器分类选项失败:', err)
+      console.warn(t('loadCatOptsFailed'), err)
     }
   }, [defaultDatabaseId])
 
@@ -1025,7 +1030,7 @@ export default function WorkflowsManager({
       const res = await tenantAPI.getMyConnections(currentProject?.id ?? undefined)
       setConnections(Array.isArray(res.data) ? res.data : [])
     } catch (err) {
-      console.error('加载数据库连接失败:', err)
+      console.error(t('loadDbConnFailed'), err)
     }
   }, [currentProject?.id])
 
@@ -1036,8 +1041,7 @@ export default function WorkflowsManager({
   const handleCleanupRuns = async () => {
     if (
       !confirm(
-        '将把“运行中”但已卡住超过 10 分钟的工作流执行记录收口为“失败”。\n' +
-          '正常执行中的任务（10 分钟内）不受影响。\n\n确认清理？',
+        t('confirmCleanStuck'),
       )
     ) {
       return
@@ -1049,9 +1053,9 @@ export default function WorkflowsManager({
         grace_secs: 600,
       })
       const n = res.data?.cleaned ?? 0
-      alert(n > 0 ? `已清理 ${n} 条卡住的执行记录。` : '没有需要清理的卡住记录。')
+      alert(n > 0 ? t('cleanedN', { n }) : t('noStuck'))
     } catch (err: any) {
-      alert(err?.response?.data?.error || '清理失败')
+      alert(err?.response?.data?.error || t('cleanFailed'))
     } finally {
       setCleaning(false)
     }
@@ -1084,7 +1088,7 @@ export default function WorkflowsManager({
         if (res.data?.deps_status) latestDepsStatus = res.data.deps_status as WorkflowDepsStatus
         if (res.data?.py_deps_status) latestPyDepsStatus = res.data.py_deps_status as WorkflowDepsStatus
       } catch (err) {
-        console.error('拉取工作流最新定义失败，使用列表缓存:', err)
+        console.error(t('fetchLatestFailed'), err)
       }
       const tax = resolveWorkflowTaxonomy(latest)
       setEditing(latest)
@@ -1125,7 +1129,7 @@ export default function WorkflowsManager({
         category: folderPlacement?.category ?? UNCATEGORIZED_FOLDER_NAME,
       })
       setEditorNodes([
-        { id: 'start', type: 'code', label: '处理逻辑', config: { code: 'function execute(ctx)\n  ctx.body = { ok = true }\nend' } }
+        { id: 'start', type: 'code', label: t('procLogic'), config: { code: 'function execute(ctx)\n  ctx.body = { ok = true }\nend' } }
       ])
       setEditorEdges([])
       syncWorkflowIdInUrl(null)
@@ -1138,13 +1142,13 @@ export default function WorkflowsManager({
   const handleCopyWorkflowLink = useCallback(
     async (workflowId: number) => {
       if (projectId == null || !Number.isFinite(projectId)) {
-        showToast('error', '无法复制编辑链接：缺少项目信息')
+        showToast('error', t('copyLinkNoProject'))
         return
       }
       const url = buildWorkflowEditorUrl(projectId, workflowId)
       const ok = await copyTextToClipboard(url)
-      if (ok) showToast('success', '编辑链接已复制')
-      else showToast('error', '复制失败，请手动复制地址栏中的编辑链接')
+      if (ok) showToast('success', t('editLinkCopied'))
+      else showToast('error', t('copyEditLinkFailed'))
     },
     [projectId],
   )
@@ -1177,7 +1181,7 @@ export default function WorkflowsManager({
       try {
         const res = await api.get(`/api/admin/workflows/${id}`)
         const wf = res.data?.workflow as Workflow | undefined
-        if (!wf) throw new Error('工作流不存在')
+        if (!wf) throw new Error(t('wfNotFound'))
         if (cancelled) return
         // 成功后再标记，避免 Strict Mode 二次挂载时被错误跳过
         consumedShareIdRef.current = id
@@ -1187,8 +1191,8 @@ export default function WorkflowsManager({
         const msg =
           err?.response?.data?.error ||
           err?.message ||
-          '无法打开分享的工作流'
-        showToast('error', typeof msg === 'string' ? msg : '无法打开分享的工作流')
+          t('cantOpenShared')
+        showToast('error', typeof msg === 'string' ? msg : t('cantOpenShared'))
         syncWorkflowIdInUrl(null)
       }
     })()
@@ -1255,8 +1259,8 @@ export default function WorkflowsManager({
         )
         refreshList()
       } catch (err) {
-        console.error('移动分类失败:', err)
-        showToast('error', '移动分类失败，请重试')
+        console.error(t('moveCatFailed'), err)
+        showToast('error', t('moveCatFailedToast'))
         throw err
       }
     },
@@ -1288,8 +1292,8 @@ export default function WorkflowsManager({
         }
         refreshList()
       } catch (err) {
-        console.error('重命名后同步工作流失败:', err)
-        showToast('error', '部分工作流归属未更新，请重试')
+        console.error(t('renameSyncFailed'), err)
+        showToast('error', t('renameSyncFailedToast'))
         throw err
       }
     },
@@ -1333,7 +1337,7 @@ export default function WorkflowsManager({
   const buildPayload = (): Record<string, unknown> | null => {
     let triggerConfig: any
     try { triggerConfig = JSON.parse(formMeta.trigger_config) } catch {
-      alert('触发配置 JSON 格式错误')
+      alert(t('triggerJsonError'))
       return null
     }
     const parsedInputSchema = parseInputSchemaForSave(formMeta.input_schema ?? '')
@@ -1346,20 +1350,20 @@ export default function WorkflowsManager({
       try {
         const parsed = JSON.parse(formMeta.alert_webhook_template || '{}')
         if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object') {
-          alert('告警模板必须是 JSON 对象')
+          alert(t('alertTemplateMustObject'))
           return null
         }
         alertWebhookTemplate = parsed as Record<string, unknown>
       } catch {
-        alert('告警模板 JSON 格式错误')
+        alert(t('alertTemplateJsonError'))
         return null
       }
     }
     let normalizedNodes: WorkflowNodeDef[]
     try {
-      normalizedNodes = normalizeNodesForExecution(editorNodes)
+      normalizedNodes = normalizeNodesForExecution(editorNodes, t)
     } catch (err: any) {
-      alert(err?.message || '节点配置 JSON 格式错误')
+      alert(err?.message || t('nodeConfigJsonError'))
       return null
     }
 
@@ -1420,7 +1424,7 @@ export default function WorkflowsManager({
       }
       return workflow
     } catch (err: any) {
-      alert(err.response?.data?.error || '保存失败')
+      alert(err.response?.data?.error || t('saveFailed'))
       return undefined
     }
   }
@@ -1441,11 +1445,11 @@ export default function WorkflowsManager({
       setSaveNote('')
       pendingPublishRef.current = false
       markEditorCleanIfUnchanged(gen)
-      showToast('success', '已发布')
+      showToast('success', t('published'))
       refreshList()
     } catch (err: any) {
       pendingPublishRef.current = false
-      alert(err.response?.data?.error || '发布失败')
+      alert(err.response?.data?.error || t('publishFailed'))
     }
   }
 
@@ -1474,7 +1478,7 @@ export default function WorkflowsManager({
       setQaFailed(false)
       setQaFindings(findings)
     } catch {
-      showToast('error', '规范预检失败，仍可保存')
+      showToast('error', t('qaPrecheckFailed'))
       setQaFailed(true)
       setQaFindings([])
     }
@@ -1505,16 +1509,16 @@ export default function WorkflowsManager({
 
   const handleDiscardDraft = async () => {
     if (!editing) return
-    if (!confirm('确认丢弃未发布的修改？画布将恢复为已发布版本。')) return
+    if (!confirm(t('confirmDiscard'))) return
     try {
       const res = await api.post(`/api/admin/workflows/${editing.id}/discard-draft`)
       const workflow = res.data?.workflow as Workflow | undefined
       if (!workflow) throw new Error('empty')
       applyEditorWorkflow(workflow)
-      showToast('success', '已丢弃草稿')
+      showToast('success', t('draftDiscarded'))
       refreshList()
     } catch (err: any) {
-      alert(err.response?.data?.error || '丢弃草稿失败')
+      alert(err.response?.data?.error || t('discardDraftFailed'))
     }
   }
 
@@ -1528,7 +1532,7 @@ export default function WorkflowsManager({
       const res = await api.get(`/api/admin/workflows/${editing.id}/versions`)
       setVersions(res.data.versions || [])
     } catch (err: any) {
-      alert(err?.response?.data?.error || '加载版本历史失败')
+      alert(err?.response?.data?.error || t('loadVersionsFailed'))
     } finally {
       setVersionsLoading(false)
     }
@@ -1541,14 +1545,14 @@ export default function WorkflowsManager({
       const res = await api.get(`/api/admin/workflows/${editing.id}/versions/${version}`)
       setVersionDetail(res.data.version)
     } catch (err: any) {
-      alert(err?.response?.data?.error || '加载版本详情失败')
+      alert(err?.response?.data?.error || t('loadVersionDetailFailed'))
     }
   }
 
   // 恢复到某版本：后端把该快照写入草稿（不上线），前端重新载入编辑器。
   const restoreVersion = async (version: number) => {
     if (!editing) return
-    if (!confirm(`确认恢复到版本 v${version}？将写入草稿，不会立刻上线。`)) {
+    if (!confirm(t('confirmRestore', { v: version }))) {
       return
     }
     try {
@@ -1562,9 +1566,9 @@ export default function WorkflowsManager({
       setShowVersions(false)
       setVersionDetail(null)
       refreshList()
-      alert(`已恢复到 v${version}。`)
+      alert(t('restoredOk', { v: version }))
     } catch (err: any) {
-      alert(err?.response?.data?.error || '恢复失败')
+      alert(err?.response?.data?.error || t('restoreFailed'))
     }
   }
 
@@ -1574,14 +1578,14 @@ export default function WorkflowsManager({
     try {
       triggerData = debugInput.trim() ? JSON.parse(debugInput) : {}
     } catch {
-      setDebugError('测试输入不是合法 JSON')
+      setDebugError(t('debugInputInvalidJson'))
       return
     }
     let normalizedNodes: WorkflowNodeDef[]
     try {
-      normalizedNodes = normalizeNodesForExecution(editorNodes)
+      normalizedNodes = normalizeNodesForExecution(editorNodes, t)
     } catch (err: any) {
-      setDebugError(err?.message || '节点配置 JSON 格式错误')
+      setDebugError(err?.message || t('nodeConfigJsonError'))
       return
     }
     setDebugError(null)
@@ -1599,7 +1603,7 @@ export default function WorkflowsManager({
       })
       setDebugResult(res.data)
     } catch (err: any) {
-      setDebugError(err.response?.data?.error || '调试运行失败')
+      setDebugError(err.response?.data?.error || t('debugRunFailed'))
     } finally {
       setDebugRunning(false)
     }
@@ -1616,9 +1620,9 @@ export default function WorkflowsManager({
       await api.delete(`/api/admin/workflows/${deleteTarget.id}`)
       setDeleteTarget(null)
       refreshList()
-      showToast('success', '工作流已删除')
+      showToast('success', t('wfDeleted'))
     } catch (err: any) {
-      showToast('error', err.response?.data?.error || '删除失败')
+      showToast('error', err.response?.data?.error || t('deleteFailed'))
     } finally {
       setDeleting(false)
     }
@@ -1628,36 +1632,36 @@ export default function WorkflowsManager({
     try {
       await api.post(`/api/admin/workflows/${id}/publish`, { version_note: null })
       refreshList()
-      showToast('success', '已发布')
+      showToast('success', t('published'))
     } catch (err: any) {
-      showToast('error', err.response?.data?.error || '发布失败')
+      showToast('error', err.response?.data?.error || t('publishFailed'))
     }
   }
 
   const handleListDiscardDraft = async (id: number) => {
-    if (!confirm('丢弃未发布的修改？已发布的工作流将回到线上定义。')) return
+    if (!confirm(t('confirmDiscard2'))) return
     try {
       await api.post(`/api/admin/workflows/${id}/discard-draft`)
       refreshList()
-      showToast('success', '已丢弃草稿')
+      showToast('success', t('draftDiscarded'))
     } catch (err: any) {
-      showToast('error', err.response?.data?.error || '丢弃草稿失败')
+      showToast('error', err.response?.data?.error || t('discardDraftFailed'))
     }
   }
 
   const handleTrigger = async (wf: { id: number; published_version?: number | null }) => {
     if (wf.published_version == null) {
-      showToast('error', '尚未发布')
+      showToast('error', t('notPublished'))
       return
     }
     // 二次确认：手动运行会真实执行全部节点（写库 / HTTP / 邮件 / Stripe 等副作用与费用），不可逆。
-    if (!confirm('确认手动运行此工作流？\n这会真实执行所有节点（可能写库 / 发 HTTP / 产生 Stripe 等外部副作用与费用）。')) return
+    if (!confirm(t('confirmManualRun'))) return
     try {
       await api.post(`/api/admin/workflows/${wf.id}/trigger`, {})
-      showToast('success', '工作流已触发')
+      showToast('success', t('wfTriggered'))
       if (showRuns === wf.id) loadRuns(wf.id)
     } catch (err: any) {
-      showToast('error', err.response?.data?.error || '触发失败')
+      showToast('error', err.response?.data?.error || t('triggerFailed'))
     }
   }
 
@@ -1690,7 +1694,7 @@ export default function WorkflowsManager({
       const ax = err as { response?: { data?: { error?: string } }; message?: string }
       setRunDetailError((s) => ({
         ...s,
-        [runId]: ax.response?.data?.error || ax.message || '加载失败',
+        [runId]: ax.response?.data?.error || ax.message || t('loadFailed'),
       }))
     } finally {
       setRunDetailLoading((s) => ({ ...s, [runId]: false }))
@@ -1714,9 +1718,9 @@ export default function WorkflowsManager({
     try {
       await api.patch(`/api/admin/workflows/${wf.id}`, { is_enabled: !wf.is_enabled })
       refreshList()
-      showToast('success', wf.is_enabled ? '已禁用' : '已启用')
+      showToast('success', wf.is_enabled ? t('disabled') : t('enabled'))
     } catch (err: any) {
-      showToast('error', err.response?.data?.error || '操作失败')
+      showToast('error', err.response?.data?.error || t('opFailed2'))
     }
   }
 
@@ -1728,9 +1732,9 @@ export default function WorkflowsManager({
       await api.patch(`/api/admin/workflows/${editing.id}`, { is_enabled: next })
       setEditing({ ...editing, is_enabled: next })
       refreshList()
-      showToast('success', next ? '已启用' : '已禁用')
+      showToast('success', next ? t('enabled') : t('disabled'))
     } catch (err: any) {
-      showToast('error', err.response?.data?.error || '操作失败')
+      showToast('error', err.response?.data?.error || t('opFailed2'))
     }
   }
 
@@ -1740,7 +1744,7 @@ export default function WorkflowsManager({
       await api.post(`/api/admin/workflows/${id}/duplicate`, {})
       await refreshList()
     } catch (err: any) {
-      alert(err.response?.data?.error || '复制失败')
+      alert(err.response?.data?.error || t('copyFailed'))
     }
   }
 
@@ -1754,20 +1758,20 @@ export default function WorkflowsManager({
   const handleExportEditor = () => {
     let triggerConfig: any = {}
     try { triggerConfig = formMeta.trigger_config ? JSON.parse(formMeta.trigger_config) : {} } catch {
-      return showToast('error', '触发配置 JSON 格式错误，无法导出')
+      return showToast('error', t('triggerJsonExportErr'))
     }
     const parsedInputSchema = parseInputSchemaForSave(formMeta.input_schema ?? '')
-    if (!parsedInputSchema.ok) return showToast('error', `${parsedInputSchema.error}，无法导出`)
+    if (!parsedInputSchema.ok) return showToast('error', `${parsedInputSchema.error}${t('cantExportSuffix')}`)
     let alertWebhookTemplate: Record<string, unknown> | null = null
     if ((formMeta.alert_webhook_url ?? '').trim()) {
       try {
         const parsed = JSON.parse(formMeta.alert_webhook_template || '{}')
         if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object') {
-          return showToast('error', '告警模板必须是 JSON 对象，无法导出')
+          return showToast('error', t('alertTemplateMustObjectExport'))
         }
         alertWebhookTemplate = parsed as Record<string, unknown>
       } catch {
-        return showToast('error', '告警模板 JSON 格式错误，无法导出')
+        return showToast('error', t('alertTemplateJsonErrExport'))
       }
     }
     downloadWorkflowJson({
@@ -1834,13 +1838,13 @@ export default function WorkflowsManager({
 
         <WorkflowConfirmDialog
           open={deleteTarget !== null}
-          title="删除工作流"
+          title={t('deleteWfTitle')}
           message={
             deleteTarget
-              ? `确定删除工作流「${deleteTarget.name}」？此操作不可撤销。`
+              ? t('confirmDeleteWf', { name: deleteTarget.name })
               : ''
           }
-          confirmLabel="删除"
+          confirmLabel={t('delete')}
           variant="danger"
           loading={deleting}
           onConfirm={() => void confirmDelete()}
@@ -1932,7 +1936,7 @@ export default function WorkflowsManager({
               <div className="px-5 py-4 border-b flex items-center justify-between shrink-0">
                 <h3 className="font-semibold text-gray-800 flex items-center gap-2">
                   <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                  版本历史
+                  {t('versionHistory')}
                 </h3>
                 <div className="flex items-center gap-2 shrink-0">
                   {projectId != null && editing && (
@@ -1944,7 +1948,7 @@ export default function WorkflowsManager({
                       }}
                       className="text-xs text-indigo-600 hover:underline"
                     >
-                      在页面中打开
+                      {t('openInPage')}
                     </a>
                   )}
                   <button onClick={() => setShowVersions(false)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
@@ -1953,34 +1957,34 @@ export default function WorkflowsManager({
 
               <div className="p-5 overflow-y-auto flex-1 space-y-3">
                 <p className="text-xs text-gray-400">
-                  每次在编辑器里保存都会留一份定义快照。恢复某版本会写回当前定义并记为新版本，可反复回滚。
+                  {t('versionHistoryDesc')}
                 </p>
                 {versionsLoading ? (
-                  <div className="text-center py-10 text-gray-400 text-sm">加载中…</div>
+                  <div className="text-center py-10 text-gray-400 text-sm">{t('loading')}</div>
                 ) : versions.length === 0 ? (
-                  <div className="text-center py-10 text-gray-400 text-sm">暂无版本记录</div>
+                  <div className="text-center py-10 text-gray-400 text-sm">{t('noVersions')}</div>
                 ) : (
                   versions.map((v, idx) => (
                     <div key={v.id} className="border rounded-lg p-3 text-sm">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <span className="font-mono font-semibold text-gray-800">v{v.version}</span>
-                          {idx === 0 && <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-xs">最新</span>}
-                          {typeof v.node_count === 'number' && <span className="text-xs text-gray-400">{v.node_count} 节点</span>}
+                          {idx === 0 && <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-xs">{t('latest')}</span>}
+                          {typeof v.node_count === 'number' && <span className="text-xs text-gray-400">{t('nodesCount', { n: v.node_count })}</span>}
                         </div>
                         <div className="flex items-center gap-2">
-                          <button onClick={() => viewVersion(v.version)} className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50">查看</button>
+                          <button onClick={() => viewVersion(v.version)} className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50">{t('view')}</button>
                           {projectId != null && editing && (
                             <button
                               type="button"
                               onClick={() => router.push(workflowVersionsPath(projectId, editing.id, v.version))}
                               className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
                             >
-                              页面
+                              {t('page')}
                             </button>
                           )}
                           {idx !== 0 && (
-                            <button onClick={() => restoreVersion(v.version)} className="text-xs px-2 py-0.5 rounded border border-indigo-300 text-indigo-600 hover:bg-indigo-50">恢复</button>
+                            <button onClick={() => restoreVersion(v.version)} className="text-xs px-2 py-0.5 rounded border border-indigo-300 text-indigo-600 hover:bg-indigo-50">{t('restore')}</button>
                           )}
                         </div>
                       </div>
@@ -1995,10 +1999,10 @@ export default function WorkflowsManager({
                       {versionDetail && versionDetail.version === v.version && (
                         <div className="mt-2 border-t pt-2 space-y-1.5 text-xs">
                           <div className="text-gray-500">
-                            名称 <span className="text-gray-700">{versionDetail.name}</span> · slug <span className="font-mono text-gray-700">{versionDetail.slug}</span> · 触发 {versionDetail.trigger_type}
+                            {t.rich('versionMeta', { name: versionDetail.name, slug: versionDetail.slug, trigger: versionDetail.trigger_type, s: (c) => <span className="text-gray-700">{c}</span>, m: (c) => <span className="font-mono text-gray-700">{c}</span> })}
                           </div>
                           <details>
-                            <summary className="cursor-pointer text-gray-500 hover:text-gray-700">节点 / 连线 JSON</summary>
+                            <summary className="cursor-pointer text-gray-500 hover:text-gray-700">{t('nodesEdgesJson')}</summary>
                             <pre className="mt-1 p-2 bg-gray-50 border rounded font-mono overflow-auto max-h-60">{JSON.stringify({ nodes: versionDetail.nodes, edges: versionDetail.edges }, null, 2)}</pre>
                           </details>
                         </div>
@@ -2018,7 +2022,7 @@ export default function WorkflowsManager({
             <div className="relative bg-white w-full max-w-xl h-full shadow-xl flex flex-col">
               <div className="px-5 py-4 border-b flex items-center justify-between shrink-0">
                 <h3 className="font-semibold text-gray-800 flex items-center gap-2">
-                  <span className="text-amber-500">●</span> 调试运行
+                  <span className="text-amber-500">●</span> {t('debugRun')}
                 </h3>
                 <button onClick={() => setShowDebug(false)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
               </div>
@@ -2026,14 +2030,11 @@ export default function WorkflowsManager({
               <div className="p-5 overflow-y-auto flex-1 space-y-4">
                 {debugDryRun ? (
                   <div className="bg-sky-50 border border-sky-200 text-sky-800 text-xs rounded-lg p-3 leading-relaxed">
-                    <strong>干跑模式</strong>：用<strong>当前编辑器里的定义</strong>（无需先保存）跑一遍，
-                    但会<strong>跳过写数据库、HTTP 请求、发送邮件、SSE 推送</strong>等副作用节点（返回 mock 输出）。
-                    用于安全地验证流程走向与模板变量。
+                    {t('dryRunHint')}
                   </div>
                 ) : (
                   <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-lg p-3 leading-relaxed">
-                    调试会用<strong>当前编辑器里的定义</strong>（无需先保存）<strong>真实执行</strong>每个节点——
-                    包括<strong>写数据库、发起 HTTP 请求、发送邮件</strong>等副作用。请使用测试数据。
+                    {t('realRunHint')}
                   </div>
                 )}
 
@@ -2045,13 +2046,13 @@ export default function WorkflowsManager({
                     className="w-4 h-4 rounded border-gray-300 text-sky-600 focus:ring-sky-500"
                   />
                   <span className="text-sm text-gray-700">
-                    干跑（跳过副作用，不真实写库 / 请求 / 发信）
+                    {t('dryRunCheckbox')}
                   </span>
                 </label>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    测试输入（trigger，JSON）
+                    {t('testInput')}
                   </label>
                   <textarea
                     value={debugInput}
@@ -2061,7 +2062,7 @@ export default function WorkflowsManager({
                     placeholder={'{\n  "candidate_email": "test@example.com"\n}'}
                   />
                   <p className="text-xs text-gray-400 mt-1">
-                    在节点里用 <code className="bg-gray-100 px-1 rounded">{'{{trigger.字段}}'}</code> 引用这里的数据。
+                    {t.rich('testInputHint', { tpl: '{{trigger.field}}', code: (c) => <code className="bg-gray-100 px-1 rounded">{c}</code> })}
                   </p>
                 </div>
 
@@ -2070,7 +2071,7 @@ export default function WorkflowsManager({
                   disabled={debugRunning}
                   className={`w-full py-2 text-white rounded-lg font-medium disabled:opacity-50 ${debugDryRun ? 'bg-sky-500 hover:bg-sky-600' : 'bg-amber-500 hover:bg-amber-600'}`}
                 >
-                  {debugRunning ? '运行中…' : debugDryRun ? '▶ 干跑调试' : '▶ 真实运行调试'}
+                  {debugRunning ? t('debugRunning') : debugDryRun ? t('dryDebug') : t('realDebug')}
                 </button>
 
                 {debugError && (
@@ -2097,13 +2098,13 @@ export default function WorkflowsManager({
                     )}
 
                     <div className="space-y-2">
-                      <div className="text-xs font-medium text-gray-500">逐节点结果</div>
+                      <div className="text-xs font-medium text-gray-500">{t('perNodeResults')}</div>
                       <NodeResultList results={debugResult.node_results || []} />
                     </div>
 
                     {debugResult.final_output != null && (
                       <details>
-                        <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-600">最终输出</summary>
+                        <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-600">{t('finalOutput')}</summary>
                         <JsonLogBlock value={debugResult.final_output} />
                       </details>
                     )}
@@ -2138,14 +2139,14 @@ export default function WorkflowsManager({
           <div className="bg-white rounded-xl shadow-xl w-[960px] max-w-[95vw] max-h-[85vh] overflow-hidden">
             <div className="p-4 border-b flex justify-between items-center">
               <div>
-                <h3 className="font-semibold">执行记录</h3>
-                <p className="text-xs text-gray-400 mt-0.5">展开节点可查看输出、错误与分支详情</p>
+                <h3 className="font-semibold">{t('execRecords')}</h3>
+                <p className="text-xs text-gray-400 mt-0.5">{t('execRecordsDesc')}</p>
               </div>
               <button onClick={() => setShowRuns(null)} className="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
             </div>
             <div className="overflow-auto max-h-[70vh] p-4">
               {runs.length === 0 ? (
-                <p className="text-center text-gray-400 py-8">暂无执行记录</p>
+                <p className="text-center text-gray-400 py-8">{t('noExecRecords')}</p>
               ) : (
                 <div className="space-y-4">
                   {runs.map(run => {
@@ -2165,8 +2166,8 @@ export default function WorkflowsManager({
                             {run.elapsed_ms != null && <span className="text-xs text-gray-400">{run.elapsed_ms}ms</span>}
                             {executed > 0 && (
                               <span className="text-xs text-gray-400">
-                                {executed} 个节点执行
-                                {failed > 0 && <span className="text-red-500 ml-1">· {failed} 失败</span>}
+                                {t('nodesExecuted', { n: executed })}
+                                {failed > 0 && <span className="text-red-500 ml-1">{t('failedN', { n: failed })}</span>}
                               </span>
                             )}
                           </div>
@@ -2177,7 +2178,7 @@ export default function WorkflowsManager({
                                 onClick={() => handleViewReplay(run)}
                                 className="text-xs text-indigo-600 hover:text-indigo-800 whitespace-nowrap"
                               >
-                                <i className="fas fa-diagram-project mr-1"></i>查看执行回放
+                                <i className="fas fa-diagram-project mr-1"></i>{t('viewReplay')}
                               </button>
                             )}
                           </div>
@@ -2197,10 +2198,10 @@ export default function WorkflowsManager({
                           }}
                         >
                           <summary className="text-xs font-medium text-gray-500 cursor-pointer hover:text-gray-700 select-none">
-                            逐节点详情 ({run.node_count ?? 0})
+                            {t('perNodeDetail', { n: run.node_count ?? 0 })}
                           </summary>
                           <div className="mt-2">
-                            {runDetailLoading[run.id] && <p className="text-xs text-gray-400">加载中…</p>}
+                            {runDetailLoading[run.id] && <p className="text-xs text-gray-400">{t('loading')}</p>}
                             {runDetailError[run.id] && (
                               <p className="text-xs text-red-600">
                                 {runDetailError[run.id]}{' '}
@@ -2209,7 +2210,7 @@ export default function WorkflowsManager({
                                   className="underline"
                                   onClick={() => showRuns != null && void ensureRunDetail(showRuns, run.id)}
                                 >
-                                  重试
+                                  {t('retry')}
                                 </button>
                               </p>
                             )}
@@ -2218,7 +2219,7 @@ export default function WorkflowsManager({
                             )}
                             {runDetails[run.id]?.final_output != null && (
                               <details className="mt-2">
-                                <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-600">最终输出</summary>
+                                <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-600">{t('finalOutput')}</summary>
                                 <JsonLogBlock value={runDetails[run.id].final_output} />
                               </details>
                             )}
@@ -2237,7 +2238,7 @@ export default function WorkflowsManager({
       <Modal
         isOpen={qaFindings !== null}
         onClose={dismissQaModal}
-        title={qaFailed ? '规范预检失败，仍可保存' : `保存前有 ${qaFindings?.length ?? 0} 条提醒`}
+        title={qaFailed ? t('qaPrecheckFailed') : t('qaTitle', { n: qaFindings?.length ?? 0 })}
         size="md"
         closeOnOverlayClick={false}
         footer={
@@ -2247,7 +2248,7 @@ export default function WorkflowsManager({
               onClick={dismissQaModal}
               className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800"
             >
-              返回修改
+              {t('backToEdit')}
             </button>
             <button
               type="button"
@@ -2261,13 +2262,13 @@ export default function WorkflowsManager({
               }}
               className="px-4 py-2 text-sm rounded-lg font-medium bg-indigo-600 text-white hover:bg-indigo-700"
             >
-              仍然保存
+              {t('saveAnyway')}
             </button>
           </div>
         }
       >
         {qaFailed && (qaFindings?.length ?? 0) === 0 ? (
-          <p className="text-sm text-slate-600">仍可保存。</p>
+          <p className="text-sm text-slate-600">{t('canStillSave')}</p>
         ) : (
           <ul className="space-y-3 max-h-80 overflow-y-auto">
             {(qaFindings ?? []).map((finding, idx) => (

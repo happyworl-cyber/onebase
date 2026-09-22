@@ -4,6 +4,8 @@
 //! - `category`：部门下的分类名
 //! - 旧 API 若只传单段 `category` 且无 `/`，视为共享部门下的分类
 
+use crate::error::AppError;
+
 pub const SHARED_DEPARTMENT: &str = "共享";
 pub const UNCATEGORIZED_CATEGORY: &str = "未分类";
 
@@ -180,9 +182,13 @@ pub fn resolve_taxonomy_update(
 pub fn resolve_batch_move_target(
     department: Option<&str>,
     category: Option<&str>,
-) -> Result<WorkflowTaxonomy, String> {
+) -> Result<WorkflowTaxonomy, AppError> {
     if department.is_none() && category.is_none() {
-        return Err("move 需要 department 与 category".to_string());
+        return Err(AppError::validation(
+            "wftax_batch_move_missing_target",
+            "move 需要 department 与 category",
+            serde_json::json!({}),
+        ));
     }
     Ok(normalize_for_storage(from_parts(department, category)))
 }
@@ -243,8 +249,12 @@ mod tests {
 
     #[test]
     fn batch_move_requires_at_least_one_field() {
-        let err = resolve_batch_move_target(None, None).unwrap_err();
-        assert_eq!(err, "move 需要 department 与 category");
+        match resolve_batch_move_target(None, None).unwrap_err() {
+            AppError::Coded { message, .. } => {
+                assert_eq!(message, "move 需要 department 与 category")
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]

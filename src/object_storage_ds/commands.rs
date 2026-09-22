@@ -39,16 +39,32 @@ pub fn is_write_op(op: &str, args: &JsonValue) -> bool {
 pub fn validate_object_key(key: &str) -> Result<String> {
     let t = key.trim();
     if t.is_empty() {
-        return Err(AppError::InvalidQuery("key 不能为空".into()));
+        return Err(AppError::validation(
+            "objstore_key_empty",
+            "key 不能为空",
+            serde_json::json!({}),
+        ));
     }
     if t.len() > 1024 {
-        return Err(AppError::InvalidQuery("key 长度不能超过 1024".into()));
+        return Err(AppError::validation(
+            "objstore_key_too_long",
+            "key 长度不能超过 1024",
+            serde_json::json!({}),
+        ));
     }
     if t.contains('\0') {
-        return Err(AppError::InvalidQuery("key 含非法字符".into()));
+        return Err(AppError::validation(
+            "objstore_key_invalid_char",
+            "key 含非法字符",
+            serde_json::json!({}),
+        ));
     }
     if t.split('/').any(|seg| seg == "..") {
-        return Err(AppError::InvalidQuery("key 不得包含 .. 路径段".into()));
+        return Err(AppError::validation(
+            "objstore_key_dotdot",
+            "key 不得包含 .. 路径段",
+            serde_json::json!({}),
+        ));
     }
     Ok(t.to_string())
 }
@@ -58,14 +74,22 @@ pub fn resolve_bucket(args: &JsonValue, default_bucket: &str) -> Result<String> 
         Some(b) => {
             let t = b.trim();
             if t.is_empty() {
-                return Err(AppError::InvalidQuery("bucket 不能为空".into()));
+                return Err(AppError::validation(
+                    "objstore_bucket_empty",
+                    "bucket 不能为空",
+                    serde_json::json!({}),
+                ));
             }
             Ok(t.to_string())
         }
         None => {
             let t = default_bucket.trim();
             if t.is_empty() {
-                return Err(AppError::InvalidQuery("连接未配置默认 bucket".into()));
+                return Err(AppError::validation(
+                    "objstore_bucket_default_missing",
+                    "连接未配置默认 bucket",
+                    serde_json::json!({}),
+                ));
             }
             Ok(t.to_string())
         }
@@ -93,27 +117,37 @@ pub fn decode_put_body(args: &JsonValue) -> Result<(Vec<u8>, Option<String>)> {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
     if let Some(b64) = args.get("content_base64").and_then(|v| v.as_str()) {
-        let bytes = B64
-            .decode(b64)
-            .map_err(|e| AppError::InvalidQuery(format!("content_base64 无效: {e}")))?;
+        let bytes = B64.decode(b64).map_err(|e| {
+            AppError::validation(
+                "objstore_content_base64_invalid",
+                format!("content_base64 无效: {e}"),
+                serde_json::json!({ "error": e.to_string() }),
+            )
+        })?;
         if bytes.len() > MAX_BODY_BYTES {
-            return Err(AppError::InvalidQuery(format!(
-                "对象超过 {MAX_BODY_BYTES} 字节，请改用 presign 上传"
-            )));
+            return Err(AppError::validation(
+                "objstore_body_too_large_upload",
+                format!("对象超过 {MAX_BODY_BYTES} 字节，请改用 presign 上传"),
+                serde_json::json!({ "max_bytes": MAX_BODY_BYTES }),
+            ));
         }
         return Ok((bytes, content_type));
     }
     if let Some(text) = args.get("content").and_then(|v| v.as_str()) {
         let bytes = text.as_bytes().to_vec();
         if bytes.len() > MAX_BODY_BYTES {
-            return Err(AppError::InvalidQuery(format!(
-                "对象超过 {MAX_BODY_BYTES} 字节，请改用 presign 上传"
-            )));
+            return Err(AppError::validation(
+                "objstore_body_too_large_upload",
+                format!("对象超过 {MAX_BODY_BYTES} 字节，请改用 presign 上传"),
+                serde_json::json!({ "max_bytes": MAX_BODY_BYTES }),
+            ));
         }
         return Ok((bytes, content_type));
     }
-    Err(AppError::InvalidQuery(
-        "put 需要 `content` 或 `content_base64`".into(),
+    Err(AppError::validation(
+        "objstore_put_missing_content",
+        "put 需要 `content` 或 `content_base64`",
+        serde_json::json!({}),
     ))
 }
 
@@ -125,7 +159,11 @@ fn map_s3_err(op: &str, e: impl std::fmt::Display) -> AppError {
         || lower.contains("404")
         || lower.contains("nosuchbucket")
     {
-        return AppError::NotFound(format!("对象存储 {op}: {msg}"));
+        return AppError::not_found_coded(
+            "objstore_s3_not_found",
+            format!("对象存储 {op}: {msg}"),
+            serde_json::json!({ "op": op, "message": msg }),
+        );
     }
     if lower.contains("403")
         || lower.contains("access denied")
@@ -133,7 +171,11 @@ fn map_s3_err(op: &str, e: impl std::fmt::Display) -> AppError {
         || lower.contains("signature")
         || lower.contains("forbidden")
     {
-        return AppError::InvalidQuery(format!("对象存储拒绝访问（{op}）: 请检查密钥/权限"));
+        return AppError::validation(
+            "objstore_s3_access_denied",
+            format!("对象存储拒绝访问（{op}）: 请检查密钥/权限"),
+            serde_json::json!({ "op": op }),
+        );
     }
     AppError::Internal(format!("对象存储 {op} 失败: {msg}"))
 }
@@ -144,9 +186,11 @@ fn map_http_status(op: &str, status: reqwest::StatusCode, body: &str) -> AppErro
 }
 
 fn get_body_too_large() -> AppError {
-    AppError::InvalidQuery(format!(
-        "对象超过 {MAX_BODY_BYTES} 字节，请改用 presign 下载"
-    ))
+    AppError::validation(
+        "objstore_body_too_large_download",
+        format!("对象超过 {MAX_BODY_BYTES} 字节，请改用 presign 下载"),
+        serde_json::json!({ "max_bytes": MAX_BODY_BYTES }),
+    )
 }
 
 fn append_get_chunk(body: &mut Vec<u8>, chunk: &[u8]) -> Result<()> {
@@ -179,10 +223,11 @@ pub async fn execute(
 ) -> Result<JsonValue> {
     let op_l = op.to_ascii_lowercase();
     if !SUPPORTED_OPS.contains(&op_l.as_str()) {
-        return Err(AppError::InvalidQuery(format!(
-            "不支持的 op `{op}`，可选: {}",
-            SUPPORTED_OPS.join(", ")
-        )));
+        return Err(AppError::validation(
+            "objstore_unsupported_op",
+            format!("不支持的 op `{op}`，可选: {}", SUPPORTED_OPS.join(", ")),
+            serde_json::json!({ "op": op, "supported_ops": SUPPORTED_OPS.join(", ") }),
+        ));
     }
     let bucket = resolve_bucket(args, default_bucket)?;
     match op_l.as_str() {
@@ -226,9 +271,13 @@ pub async fn probe_bucket(handle: &S3Handle, bucket_name: &str) -> Result<()> {
 }
 
 fn arg_str<'a>(args: &'a JsonValue, name: &str) -> Result<&'a str> {
-    args.get(name)
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::InvalidQuery(format!("缺少字符串参数 `{name}`")))
+    args.get(name).and_then(|v| v.as_str()).ok_or_else(|| {
+        AppError::validation(
+            "objstore_missing_string_arg",
+            format!("缺少字符串参数 `{name}`"),
+            serde_json::json!({ "name": name }),
+        )
+    })
 }
 
 async fn op_put(handle: &S3Handle, bucket_name: &str, args: &JsonValue) -> Result<JsonValue> {
@@ -347,17 +396,27 @@ async fn op_delete(handle: &S3Handle, bucket_name: &str, args: &JsonValue) -> Re
     let mut keys: Vec<String> = Vec::new();
     if let Some(arr) = args.get("keys").and_then(|v| v.as_array()) {
         if arr.is_empty() {
-            return Err(AppError::InvalidQuery("`keys` 不能为空数组".into()));
+            return Err(AppError::validation(
+                "objstore_delete_keys_empty",
+                "`keys` 不能为空数组",
+                serde_json::json!({}),
+            ));
         }
         if arr.len() > DELETE_KEYS_CAP {
-            return Err(AppError::InvalidQuery(format!(
-                "单次最多删除 {DELETE_KEYS_CAP} 个对象"
-            )));
+            return Err(AppError::validation(
+                "objstore_delete_keys_too_many",
+                format!("单次最多删除 {DELETE_KEYS_CAP} 个对象"),
+                serde_json::json!({ "cap": DELETE_KEYS_CAP }),
+            ));
         }
         for v in arr {
-            let k = v
-                .as_str()
-                .ok_or_else(|| AppError::InvalidQuery("`keys` 元素必须是字符串".into()))?;
+            let k = v.as_str().ok_or_else(|| {
+                AppError::validation(
+                    "objstore_delete_keys_not_string",
+                    "`keys` 元素必须是字符串",
+                    serde_json::json!({}),
+                )
+            })?;
             keys.push(validate_object_key(k)?);
         }
     } else {
@@ -478,9 +537,11 @@ async fn op_presign(handle: &S3Handle, bucket_name: &str, args: &JsonValue) -> R
             action.sign(expires).to_string()
         }
         other => {
-            return Err(AppError::InvalidQuery(format!(
-                "presign method 仅支持 GET/PUT，收到 {other}"
-            )))
+            return Err(AppError::validation(
+                "objstore_presign_method_unsupported",
+                format!("presign method 仅支持 GET/PUT，收到 {other}"),
+                serde_json::json!({ "method": other }),
+            ))
         }
     };
     let expires_at = (chrono::Utc::now() + chrono::Duration::seconds(secs as i64)).to_rfc3339();

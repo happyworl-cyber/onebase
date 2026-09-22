@@ -51,8 +51,10 @@ async fn tenant_scope(pool: &PgPool, claims: &Claims) -> Result<Option<Vec<i32>>
     } else {
         let ids = admin_tenant_ids(pool, claims).await?;
         if ids.is_empty() {
-            return Err(AppError::Forbidden(
+            return Err(AppError::forbidden_coded(
+                "execlog_requires_admin_role",
                 "需要平台超管或租户 owner/admin 角色才能查看执行日志".to_string(),
+                serde_json::json!({}),
             ));
         }
         Ok(Some(ids))
@@ -309,7 +311,11 @@ pub async fn get_execution_detail(
     .await?;
 
     if index_rows.is_empty() {
-        return Err(AppError::NotFound("未找到该执行记录".to_string()));
+        return Err(AppError::not_found_coded(
+            "execlog_execution_not_found",
+            "未找到该执行记录".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     // 租户隔离：项目 owner/admin，或该项目所属组织的 org admin+。
@@ -346,7 +352,11 @@ pub async fn get_execution_detail(
             }
         }
         if !allowed {
-            return Err(AppError::Forbidden("无权查看该执行记录".to_string()));
+            return Err(AppError::forbidden_coded(
+                "execlog_no_access_to_execution",
+                "无权查看该执行记录".to_string(),
+                serde_json::json!({}),
+            ));
         }
     }
 

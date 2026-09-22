@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# OneBase 快速测试脚本
+# PlaneOS 快速测试脚本
 
-echo "🧪 OneBase 管理后台快速测试"
+echo "🧪 PlaneOS 管理后台快速测试"
 echo "================================"
 echo ""
 

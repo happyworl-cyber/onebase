@@ -5,42 +5,44 @@ import type {
 } from '@/components/workflow/graph/graphApi'
 
 /**
- * 本地 dev 预览页专用的内置 mock 数据 —— 不接后端，纯前端常量。
- * 覆盖已实现的全部能力：多 department▸category combo 嵌套、节点大小随 nodeCount、
- * SSE/Kafka/Redis/HTTP 四种特殊标记、call_workflow 依赖边（含跨 combo 长边）、
- * external:true 外部依赖节点（分类 scope 视图专用）。
+ * Built-in mock data for the local dev preview page -- no backend, pure frontend constants.
+ * Covers every implemented capability: nested multi department/category combos, node size
+ * scaling with nodeCount, the four special-node badges (SSE/Kafka/Redis/HTTP), call_workflow
+ * dependency edges (including long edges crossing combos), and external:true external
+ * dependency nodes (used by the category-scoped view).
  */
 
-/** "全量" fixture：不带 scope 时的全景视图，5 个 department、8 个 category、18 个工作流节点。 */
+/** "Full" fixture: the overview when no scope is applied -- 5 departments, 8 categories, 18 workflow nodes. */
 export const FULL_FIXTURE: DependencyGraphResponse = {
   unresolved: 1,
   windowDays: 3,
   nodes: [
-    { id: 1, slug: 'order-create', name: '创建订单', department: '订单服务', category: '支付', nodeCount: 8, specialFlags: [], external: false, enabled: true, windowRuns: 1200, windowFailed: 24, errorRate: 0.02, activity: 'active' },
-    { id: 2, slug: 'order-pay', name: '订单支付', department: '订单服务', category: '支付', nodeCount: 14, specialFlags: ['http_call'], external: false, enabled: true, windowRuns: 1200, windowFailed: 96, errorRate: 0.08, activity: 'active' },
-    { id: 3, slug: 'order-pay-callback', name: '支付回调', department: '订单服务', category: '支付', nodeCount: 6, specialFlags: ['http_call'], external: false, enabled: true, windowRuns: 1200, windowFailed: 420, errorRate: 0.35, activity: 'active' },
-    { id: 4, slug: 'order-refund', name: '发起退款', department: '订单服务', category: '退款', nodeCount: 5, specialFlags: [], external: false, enabled: true, windowRuns: 40, windowFailed: 0, errorRate: 0.0, activity: 'idle' },
-    { id: 5, slug: 'order-refund-audit', name: '退款审核', department: '订单服务', category: '退款', nodeCount: 3, specialFlags: [], external: false, enabled: false, windowRuns: 0, windowFailed: 0, errorRate: 0.0, activity: 'dormant' },
-    { id: 6, slug: 'user-login', name: '用户登录', department: '用户服务', category: '账户', nodeCount: 10, specialFlags: ['redis'], external: false, enabled: true, windowRuns: 1200, windowFailed: 12, errorRate: 0.01, activity: 'active' },
-    { id: 7, slug: 'user-profile', name: '用户资料', department: '用户服务', category: '账户', nodeCount: 4, specialFlags: [], external: false, enabled: true, windowRuns: 0, windowFailed: 0, errorRate: 0.0, activity: 'dormant' },
-    { id: 8, slug: 'user-bind-phone', name: '绑定手机号', department: '用户服务', category: '账户', nodeCount: 7, specialFlags: [], external: false, enabled: true, windowRuns: 40, windowFailed: 24, errorRate: 0.6, activity: 'idle' },
-    { id: 9, slug: 'notify-order', name: '订单通知', department: '用户服务', category: '通知', nodeCount: 12, specialFlags: ['sse_publish', 'kafka'], external: false, enabled: true, windowRuns: 1200, windowFailed: 144, errorRate: 0.12, activity: 'active' },
-    { id: 10, slug: 'notify-refund', name: '退款通知', department: '用户服务', category: '通知', nodeCount: 6, specialFlags: ['sse_publish'], external: false, enabled: false, windowRuns: 0, windowFailed: 0, errorRate: 0.0, activity: 'dormant' },
-    { id: 11, slug: 'notify-digest', name: '通知摘要', department: '用户服务', category: '通知', nodeCount: 40, specialFlags: ['kafka'], external: false, enabled: true, windowRuns: 40, windowFailed: 36, errorRate: 0.9, activity: 'idle' },
-    { id: 12, slug: 'shared-log', name: '共享审计日志', department: '', category: '', nodeCount: 2, specialFlags: [], external: false, enabled: true, windowRuns: 1200, windowFailed: 0, errorRate: 0.0, activity: 'active' },
-    { id: 13, slug: 'shared-cleanup', name: '共享清理任务', department: '', category: '', nodeCount: 3, specialFlags: ['redis'], external: false, enabled: true, windowRuns: 40, windowFailed: 0, errorRate: 0.0, activity: 'idle' },
-    { id: 14, slug: 'gw-route', name: '网关路由分发', department: '网关', category: '路由', nodeCount: 9, specialFlags: ['http_call'], external: false, enabled: true, windowRuns: 1200, windowFailed: 60, errorRate: 0.05, activity: 'active' },
-    { id: 15, slug: 'gw-ratelimit', name: '限流校验', department: '网关', category: '路由', nodeCount: 5, specialFlags: ['redis', 'http_call'], external: false, enabled: true, windowRuns: 1200, windowFailed: 540, errorRate: 0.45, activity: 'active' },
-    { id: 16, slug: 'risk-check', name: '风控检查', department: '风控服务', category: '规则', nodeCount: 5, specialFlags: ['redis'], external: false, enabled: true, windowRuns: 40, windowFailed: 0, errorRate: 0.0, activity: 'idle' },
-    { id: 17, slug: 'risk-blacklist-sync', name: '黑名单同步', department: '风控服务', category: '规则', nodeCount: 11, specialFlags: ['kafka'], external: false, enabled: false, windowRuns: 0, windowFailed: 0, errorRate: 0.7, activity: 'dormant' },
-    { id: 18, slug: 'risk-report', name: '风控报表', department: '风控服务', category: '报表', nodeCount: 16, specialFlags: ['sse_publish', 'http_call'], external: false, enabled: true, windowRuns: 0, windowFailed: 0, errorRate: 0.0, activity: 'dormant' },
+    { id: 1, slug: 'order-create', name: 'Create Order', department: 'Order Service', category: 'Payment', nodeCount: 8, specialFlags: [], external: false, enabled: true, windowRuns: 1200, windowFailed: 24, errorRate: 0.02, activity: 'active' },
+    { id: 2, slug: 'order-pay', name: 'Order Payment', department: 'Order Service', category: 'Payment', nodeCount: 14, specialFlags: ['http_call'], external: false, enabled: true, windowRuns: 1200, windowFailed: 96, errorRate: 0.08, activity: 'active' },
+    { id: 3, slug: 'order-pay-callback', name: 'Payment Callback', department: 'Order Service', category: 'Payment', nodeCount: 6, specialFlags: ['http_call'], external: false, enabled: true, windowRuns: 1200, windowFailed: 420, errorRate: 0.35, activity: 'active' },
+    { id: 4, slug: 'order-refund', name: 'Initiate Refund', department: 'Order Service', category: 'Refund', nodeCount: 5, specialFlags: [], external: false, enabled: true, windowRuns: 40, windowFailed: 0, errorRate: 0.0, activity: 'idle' },
+    { id: 5, slug: 'order-refund-audit', name: 'Refund Review', department: 'Order Service', category: 'Refund', nodeCount: 3, specialFlags: [], external: false, enabled: false, windowRuns: 0, windowFailed: 0, errorRate: 0.0, activity: 'dormant' },
+    { id: 6, slug: 'user-login', name: 'User Login', department: 'User Service', category: 'Account', nodeCount: 10, specialFlags: ['redis'], external: false, enabled: true, windowRuns: 1200, windowFailed: 12, errorRate: 0.01, activity: 'active' },
+    { id: 7, slug: 'user-profile', name: 'User Profile', department: 'User Service', category: 'Account', nodeCount: 4, specialFlags: [], external: false, enabled: true, windowRuns: 0, windowFailed: 0, errorRate: 0.0, activity: 'dormant' },
+    { id: 8, slug: 'user-bind-phone', name: 'Bind Phone Number', department: 'User Service', category: 'Account', nodeCount: 7, specialFlags: [], external: false, enabled: true, windowRuns: 40, windowFailed: 24, errorRate: 0.6, activity: 'idle' },
+    { id: 9, slug: 'notify-order', name: 'Order Notification', department: 'User Service', category: 'Notification', nodeCount: 12, specialFlags: ['sse_publish', 'kafka'], external: false, enabled: true, windowRuns: 1200, windowFailed: 144, errorRate: 0.12, activity: 'active' },
+    { id: 10, slug: 'notify-refund', name: 'Refund Notification', department: 'User Service', category: 'Notification', nodeCount: 6, specialFlags: ['sse_publish'], external: false, enabled: false, windowRuns: 0, windowFailed: 0, errorRate: 0.0, activity: 'dormant' },
+    { id: 11, slug: 'notify-digest', name: 'Notification Digest', department: 'User Service', category: 'Notification', nodeCount: 40, specialFlags: ['kafka'], external: false, enabled: true, windowRuns: 40, windowFailed: 36, errorRate: 0.9, activity: 'idle' },
+    { id: 12, slug: 'shared-log', name: 'Shared Audit Log', department: '', category: '', nodeCount: 2, specialFlags: [], external: false, enabled: true, windowRuns: 1200, windowFailed: 0, errorRate: 0.0, activity: 'active' },
+    { id: 13, slug: 'shared-cleanup', name: 'Shared Cleanup Task', department: '', category: '', nodeCount: 3, specialFlags: ['redis'], external: false, enabled: true, windowRuns: 40, windowFailed: 0, errorRate: 0.0, activity: 'idle' },
+    { id: 14, slug: 'gw-route', name: 'Gateway Routing Dispatch', department: 'Gateway', category: 'Routing', nodeCount: 9, specialFlags: ['http_call'], external: false, enabled: true, windowRuns: 1200, windowFailed: 60, errorRate: 0.05, activity: 'active' },
+    { id: 15, slug: 'gw-ratelimit', name: 'Rate Limit Check', department: 'Gateway', category: 'Routing', nodeCount: 5, specialFlags: ['redis', 'http_call'], external: false, enabled: true, windowRuns: 1200, windowFailed: 540, errorRate: 0.45, activity: 'active' },
+    { id: 16, slug: 'risk-check', name: 'Risk Check', department: 'Risk Service', category: 'Rules', nodeCount: 5, specialFlags: ['redis'], external: false, enabled: true, windowRuns: 40, windowFailed: 0, errorRate: 0.0, activity: 'idle' },
+    { id: 17, slug: 'risk-blacklist-sync', name: 'Blacklist Sync', department: 'Risk Service', category: 'Rules', nodeCount: 11, specialFlags: ['kafka'], external: false, enabled: false, windowRuns: 0, windowFailed: 0, errorRate: 0.7, activity: 'dormant' },
+    { id: 18, slug: 'risk-report', name: 'Risk Report', department: 'Risk Service', category: 'Reports', nodeCount: 16, specialFlags: ['sse_publish', 'http_call'], external: false, enabled: true, windowRuns: 0, windowFailed: 0, errorRate: 0.0, activity: 'dormant' },
   ],
   edges: [
     { from: 15, to: 14 },
     { from: 14, to: 1 },
     { from: 1, to: 2 },
-    // 重复边用例：模拟工作流 1 里有两个 call_workflow 节点各自调用同一目标 2
-    // （后端修复前会重复吐出这条 (from,to)，导致 G6 报 "Edge already exists"）。
+    // Duplicate-edge test case: simulates workflow 1 having two call_workflow nodes that each
+    // call the same target 2 (before the backend fix this (from,to) pair would be emitted
+    // twice, causing G6 to report "Edge already exists").
     { from: 1, to: 2 },
     { from: 2, to: 3 },
     { from: 1, to: 4 },
@@ -58,20 +60,22 @@ export const FULL_FIXTURE: DependencyGraphResponse = {
 }
 
 /**
- * "分类 scope" fixture：模拟带 department=订单服务&category=支付 请求后的响应——
- * 主集 3 个节点，外部依赖 3 个节点（external:true，来自用户服务/风控服务/网关三个不同服务），
- * 用于演示外部节点的虚线描边+灰底角标+跨 combo 连边。
+ * "Category scope" fixture: simulates the response for a request with
+ * department=Order Service&category=Payment -- 3 nodes in the primary set plus 3 external
+ * dependency nodes (external:true, from three different services: User Service, Risk Service,
+ * and Gateway), used to demonstrate the dashed outline + gray badge + cross-combo edges for
+ * external nodes.
  */
 export const SCOPE_FIXTURE: DependencyGraphResponse = {
   unresolved: 0,
   windowDays: 3,
   nodes: [
-    { id: 1, slug: 'order-create', name: '创建订单', department: '订单服务', category: '支付', nodeCount: 8, specialFlags: [], external: false, enabled: true, windowRuns: 1200, windowFailed: 24, errorRate: 0.02, activity: 'active' },
-    { id: 2, slug: 'order-pay', name: '订单支付', department: '订单服务', category: '支付', nodeCount: 14, specialFlags: ['http_call'], external: false, enabled: true, windowRuns: 1200, windowFailed: 96, errorRate: 0.08, activity: 'active' },
-    { id: 3, slug: 'order-pay-callback', name: '支付回调', department: '订单服务', category: '支付', nodeCount: 6, specialFlags: ['http_call'], external: false, enabled: true, windowRuns: 1200, windowFailed: 420, errorRate: 0.35, activity: 'active' },
-    { id: 9, slug: 'notify-order', name: '订单通知', department: '用户服务', category: '通知', nodeCount: 12, specialFlags: ['sse_publish', 'kafka'], external: true, enabled: true, windowRuns: 1200, windowFailed: 144, errorRate: 0.12, activity: 'active' },
-    { id: 16, slug: 'risk-check', name: '风控检查', department: '风控服务', category: '规则', nodeCount: 5, specialFlags: ['redis'], external: true, enabled: true, windowRuns: 40, windowFailed: 0, errorRate: 0.0, activity: 'idle' },
-    { id: 14, slug: 'gw-route', name: '网关路由分发', department: '网关', category: '路由', nodeCount: 9, specialFlags: ['http_call'], external: true, enabled: false, windowRuns: 0, windowFailed: 0, errorRate: 0.0, activity: 'dormant' },
+    { id: 1, slug: 'order-create', name: 'Create Order', department: 'Order Service', category: 'Payment', nodeCount: 8, specialFlags: [], external: false, enabled: true, windowRuns: 1200, windowFailed: 24, errorRate: 0.02, activity: 'active' },
+    { id: 2, slug: 'order-pay', name: 'Order Payment', department: 'Order Service', category: 'Payment', nodeCount: 14, specialFlags: ['http_call'], external: false, enabled: true, windowRuns: 1200, windowFailed: 96, errorRate: 0.08, activity: 'active' },
+    { id: 3, slug: 'order-pay-callback', name: 'Payment Callback', department: 'Order Service', category: 'Payment', nodeCount: 6, specialFlags: ['http_call'], external: false, enabled: true, windowRuns: 1200, windowFailed: 420, errorRate: 0.35, activity: 'active' },
+    { id: 9, slug: 'notify-order', name: 'Order Notification', department: 'User Service', category: 'Notification', nodeCount: 12, specialFlags: ['sse_publish', 'kafka'], external: true, enabled: true, windowRuns: 1200, windowFailed: 144, errorRate: 0.12, activity: 'active' },
+    { id: 16, slug: 'risk-check', name: 'Risk Check', department: 'Risk Service', category: 'Rules', nodeCount: 5, specialFlags: ['redis'], external: true, enabled: true, windowRuns: 40, windowFailed: 0, errorRate: 0.0, activity: 'idle' },
+    { id: 14, slug: 'gw-route', name: 'Gateway Routing Dispatch', department: 'Gateway', category: 'Routing', nodeCount: 9, specialFlags: ['http_call'], external: true, enabled: false, windowRuns: 0, windowFailed: 0, errorRate: 0.0, activity: 'dormant' },
   ],
   edges: [
     { from: 14, to: 1 },
@@ -82,30 +86,36 @@ export const SCOPE_FIXTURE: DependencyGraphResponse = {
   ],
 }
 
-export const SCOPE_FIXTURE_SCOPE = { department: '订单服务', category: '支付' }
+export const SCOPE_FIXTURE_SCOPE = { department: 'Order Service', category: 'Payment' }
 
 /**
- * "大规模" fixture —— 模拟真实体量（约 120~150 节点）。之前所有布局/配色调整只在 18 节点的
- * FULL_FIXTURE 上验过，上线后 boss 实测截图暴露：节点一多，力导把图摊得极开、大片空白，
- * 整图被 zoom-to-fit 缩得极小，颜色又浅，几乎看不清。这份 fixture 用来在本地复现该规模问题，
- * 所有布局收敛/配色加深的调整都要在它上面验证，不能再只看小图。
+ * "Large" fixture -- simulates realistic scale (roughly 120~150 nodes). All previous
+ * layout/color tuning had only been verified against the 18-node FULL_FIXTURE; after shipping,
+ * the boss's real screenshots exposed the problem: with more nodes the force layout spreads the
+ * graph out with huge blank areas, zoom-to-fit shrinks the whole graph tiny, and the colors are
+ * too light to make anything out. This fixture reproduces that scale problem locally -- every
+ * layout-convergence/color-darkening tweak must be verified against it, not just the small
+ * graph.
  *
- * 8 个 department、每个 2~4 个 category，nodeCount/状态/特殊标记/external 都按索引取模制造梯度
- * （确定性生成，不用随机数，保证截图可复现）；边：每个分类内部按序链式依赖 + 少量跨部门长边
- * + 1 组重复边（复用去重用例）。
+ * 8 departments, each with 2~4 categories; nodeCount/status/special flags/external are all
+ * derived from the index modulo to create a gradient (deterministic, no randomness, so
+ * screenshots stay reproducible). Edges: sequential chained dependencies within each category,
+ * plus a handful of long cross-department edges, plus 1 duplicate edge (reusing the dedup test
+ * case).
  */
 function generateLargeFixture(): DependencyGraphResponse {
   const DEPARTMENTS: { name: string; categories: string[] }[] = [
-    { name: '订单服务', categories: ['下单', '支付', '退款'] },
-    { name: '用户服务', categories: ['账户', '通知'] },
-    { name: '网关', categories: ['路由', '限流'] },
-    { name: '风控服务', categories: ['规则', '报表', '黑名单'] },
-    { name: '支付服务', categories: ['渠道', '对账'] },
-    { name: '消息服务', categories: ['站内信', '推送', '短信', '邮件'] },
-    { name: '运营服务', categories: ['活动', '优惠券'] },
-    { name: '数据服务', categories: ['报表', '同步', '归档'] },
+    { name: 'Order Service', categories: ['Place Order', 'Payment', 'Refund'] },
+    { name: 'User Service', categories: ['Account', 'Notification'] },
+    { name: 'Gateway', categories: ['Routing', 'Rate Limit'] },
+    { name: 'Risk Service', categories: ['Rules', 'Reports', 'Blacklist'] },
+    { name: 'Payment Service', categories: ['Channel', 'Reconciliation'] },
+    { name: 'Message Service', categories: ['In-app Message', 'Push', 'SMS', 'Email'] },
+    { name: 'Operations Service', categories: ['Campaign', 'Coupon'] },
+    { name: 'Data Service', categories: ['Reports', 'Sync', 'Archive'] },
   ]
-  // nodeCount 梯度：小到大循环取值，保证同一 fixture 里既有臃肿工作流也有轻量工作流。
+  // nodeCount gradient: cycles from small to large, ensuring the fixture has both bloated
+  // and lightweight workflows.
   const NODE_COUNT_CYCLE = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 22, 26, 32, 40]
   const FLAG_CYCLE: string[][] = [
     [],
@@ -122,13 +132,15 @@ function generateLargeFixture(): DependencyGraphResponse {
   const ACTIVITY_CYCLE: DependencyGraphNode['activity'][] = ['active', 'active', 'idle', 'dormant', 'idle']
 
   const nodes: DependencyGraphNode[] = []
-  // 分类内工作流 id 表，供边生成阶段按分类内链式依赖 + 跨部门长边取用。
+  // Table of workflow ids per category, used by the edge-generation phase for in-category
+  // chained dependencies + cross-department long edges.
   const catNodeIds: string[][] = []
   let seq = 1
   let cursor = 0
   for (const dept of DEPARTMENTS) {
     for (const cat of dept.categories) {
-      // 每个分类 5~8 条工作流，累计到 8 部门 × 2~4 分类（共 21 分类）后落在 120~150 节点区间。
+      // 5~8 workflows per category; across 8 departments x 2~4 categories (21 categories
+      // total) this lands in the 120~150 node range.
       const count = 5 + (cursor % 4)
       const ids: string[] = []
       for (let i = 0; i < count; i++) {
@@ -137,7 +149,7 @@ function generateLargeFixture(): DependencyGraphResponse {
         nodes.push({
           id,
           slug: `${dept.name}-${cat}-${i}`.toLowerCase(),
-          name: `${dept.name}·${cat}·工作流${i + 1}`,
+          name: `${dept.name} · ${cat} · Workflow ${i + 1}`,
           department: dept.name,
           category: cat,
           nodeCount: NODE_COUNT_CYCLE[seq % NODE_COUNT_CYCLE.length],
@@ -158,20 +170,24 @@ function generateLargeFixture(): DependencyGraphResponse {
   }
 
   const edges: DependencyGraphEdge[] = []
-  // 分类内链式依赖：工作流[i] 调用 工作流[i+1]，模拟同分类内的调用编排。
+  // In-category chained dependency: workflow[i] calls workflow[i+1], simulating call
+  // orchestration within the same category.
   for (const ids of catNodeIds) {
     for (let i = 0; i < ids.length - 1; i++) {
       edges.push({ from: Number(ids[i]), to: Number(ids[i + 1]) })
     }
   }
-  // 跨部门/跨分类长边：每个分类的第一个节点依赖前一个分类的最后一个节点，制造需要跨 combo
-  // 绘制的长边（治理长边穿插曲率/颜色的用例），同时保证图整体连通、非孤立多个碎片。
+  // Cross-department/cross-category long edges: each category's first node depends on the
+  // previous category's last node, creating long edges that must be drawn across combos (the
+  // test case for long-edge curvature/color handling), while also keeping the overall graph
+  // connected instead of fragmented into isolated pieces.
   for (let i = 1; i < catNodeIds.length; i++) {
     const from = catNodeIds[i][0]
     const to = catNodeIds[i - 1][catNodeIds[i - 1].length - 1]
     edges.push({ from: Number(from), to: Number(to) })
   }
-  // 重复边用例（沿用 FULL_FIXTURE 的去重回归覆盖）：复制第一条边。
+  // Duplicate edge test case (reusing FULL_FIXTURE's dedup regression coverage): duplicate
+  // the first edge.
   if (edges.length > 0) edges.push({ ...edges[0] })
 
   return { nodes, edges, unresolved: 2, windowDays: 3 }
@@ -180,40 +196,47 @@ function generateLargeFixture(): DependencyGraphResponse {
 export const LARGE_FIXTURE: DependencyGraphResponse = generateLargeFixture()
 
 /**
- * "超大规模" fixture（P0 真数据规模复现）—— 真环境反馈两个问题都要在这份 fixture 上复现：
- * ①长名字被截断读不全（真实案例形如"购买插件Chapter Pass订阅"/"续费(Airwallex渠道)自动
- * 扣款失败处理"，中英混排+括号+专有名词，比 LARGE_FIXTURE 里的短中文名更接近真实痛点）；
- * ②300~400 节点量级下的拖拽/缩放卡顿。department/category 数量也比 LARGE_FIXTURE 翻倍
- * （13 个部门、跨度更宽），逼近真实租户"部门多、每部门下又分好几类"的分布，而不是只把
- * 单个分类里的节点数堆多——后者测不出 combo-combined 三层递归在"层数多、combo 数多"时的
- * 真实开销。生成逻辑与 generateLargeFixture 同构（确定性、无随机数，保证截图可复现），
- * 只是参数拉大 + 插入一批真实长名字节点。
+ * "XL" fixture (P0 real-data-scale reproduction) -- reproduces two issues reported from
+ * production, both of which must show up in this fixture:
+ * (1) long names get truncated and unreadable (real cases look like "Purchase plugin Chapter
+ * Pass subscription" / "Renewal (Airwallex channel) auto-charge failure handling" -- mixed
+ * language, parentheses, and proper nouns, which is closer to the real pain point than the
+ * short names in LARGE_FIXTURE);
+ * (2) drag/zoom jank at the 300~400 node scale. The department/category counts are also
+ * doubled compared to LARGE_FIXTURE (13 departments, wider spread), approximating a real
+ * tenant's "many departments, each split into several categories" distribution, rather than
+ * just piling more nodes into a single category -- the latter doesn't exercise the real
+ * overhead of the three-level combo-combined recursion when both the level count and combo
+ * count are high. The generation logic mirrors generateLargeFixture (deterministic, no
+ * randomness, so screenshots stay reproducible); only the parameters are scaled up and a batch
+ * of realistic long-name nodes is inserted.
  */
 function generateXLFixture(): DependencyGraphResponse {
   const DEPARTMENTS: { name: string; categories: string[] }[] = [
-    { name: '订单服务', categories: ['下单', '支付', '退款', '售后'] },
-    { name: '用户服务', categories: ['账户', '通知', '权限'] },
-    { name: '网关', categories: ['路由', '限流', '鉴权'] },
-    { name: '风控服务', categories: ['规则', '报表', '黑名单'] },
-    { name: '支付服务', categories: ['渠道', '对账', '结算'] },
-    { name: '消息服务', categories: ['站内信', '推送', '短信', '邮件'] },
-    { name: '运营服务', categories: ['活动', '优惠券', '积分'] },
-    { name: '数据服务', categories: ['报表', '同步', '归档'] },
-    { name: '插件市场', categories: ['购买', '续费', '退订', '试用'] },
-    { name: '内容服务', categories: ['帖子', '评论', '审核'] },
-    { name: '客服服务', categories: ['工单', '客服消息'] },
-    { name: '直播服务', categories: ['连麦', '礼物', '弹幕'] },
-    { name: '社区服务', categories: ['话题', '关注', '举报'] },
+    { name: 'Order Service', categories: ['Place Order', 'Payment', 'Refund', 'After-sales'] },
+    { name: 'User Service', categories: ['Account', 'Notification', 'Permission'] },
+    { name: 'Gateway', categories: ['Routing', 'Rate Limit', 'Auth'] },
+    { name: 'Risk Service', categories: ['Rules', 'Reports', 'Blacklist'] },
+    { name: 'Payment Service', categories: ['Channel', 'Reconciliation', 'Settlement'] },
+    { name: 'Message Service', categories: ['In-app Message', 'Push', 'SMS', 'Email'] },
+    { name: 'Operations Service', categories: ['Campaign', 'Coupon', 'Points'] },
+    { name: 'Data Service', categories: ['Reports', 'Sync', 'Archive'] },
+    { name: 'Plugin Market', categories: ['Purchase', 'Renewal', 'Unsubscribe', 'Trial'] },
+    { name: 'Content Service', categories: ['Post', 'Comment', 'Review'] },
+    { name: 'Support Service', categories: ['Ticket', 'Support Message'] },
+    { name: 'Live Service', categories: ['Co-host', 'Gift', 'Bullet Comments'] },
+    { name: 'Community Service', categories: ['Topic', 'Follow', 'Report'] },
   ]
-  // 真实痛点复现：长名字节点——中英混排、括号、专有名词，插进 catNodeIds 首位节点里，
-  // 保证每个分类至少有一个长名字节点被真实渲染到（不是散落在随机位置靠概率碰上）。
+  // Reproducing the real pain point: long-name nodes -- mixed language, parentheses, proper
+  // nouns -- inserted as the first node of each catNodeIds entry, ensuring every category has
+  // at least one long-name node actually rendered (not scattered randomly by chance).
   const LONG_NAME_CYCLE = [
-    '购买插件Chapter Pass订阅',
-    '续费(Airwallex渠道)自动扣款',
-    '取消订阅并退还剩余额度到钱包余额',
-    'Stripe Webhook回调签名校验与幂等处理',
-    '插件试用到期自动降级为免费版',
-    '多币种价格换算(USD/EUR/JPY/CNY)缓存刷新',
+    'Purchase plugin Chapter Pass subscription',
+    'Renewal (Airwallex channel) auto-charge',
+    'Cancel subscription and refund remaining balance to wallet',
+    'Stripe webhook callback signature verification and idempotency handling',
+    'Plugin trial expiration auto-downgrade to free tier',
+    'Multi-currency price conversion (USD/EUR/JPY/CNY) cache refresh',
   ]
   const NODE_COUNT_CYCLE = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 22, 26, 32, 40]
   const FLAG_CYCLE: string[][] = [
@@ -237,17 +260,19 @@ function generateXLFixture(): DependencyGraphResponse {
   let longNameCursor = 0
   for (const dept of DEPARTMENTS) {
     for (const cat of dept.categories) {
-      // 每分类 6~9 条工作流，13 部门 × 若干分类（共 41 分类）落在 300~400 节点区间。
+      // 6~9 workflows per category; 13 departments x several categories (41 categories
+      // total) lands in the 300~400 node range.
       const count = 6 + (cursor % 4)
       const ids: string[] = []
       for (let i = 0; i < count; i++) {
         const id = seq
         const isExternal = seq % 19 === 0
-        // 每个分类首个节点用长名字循环表，保证长名字均匀分布在各服务/分类下，不是扎堆。
+        // The first node of each category uses the long-name cycle table, ensuring long
+        // names are evenly distributed across services/categories instead of clustering.
         const name =
           i === 0
             ? LONG_NAME_CYCLE[longNameCursor % LONG_NAME_CYCLE.length]
-            : `${dept.name}·${cat}·工作流${i + 1}`
+            : `${dept.name} · ${cat} · Workflow ${i + 1}`
         if (i === 0) longNameCursor += 1
         nodes.push({
           id,
@@ -291,45 +316,57 @@ function generateXLFixture(): DependencyGraphResponse {
 export const XL_FIXTURE: DependencyGraphResponse = generateXLFixture()
 
 /**
- * "聚合压力" fixture（方案一聚合视图节点重叠修复专用复现用例）——boss 真实环境反馈：分类数
- * 20+、簇间调用边密集时，"按分类聚合"视图节点大面积堆叠重合、标签互相压住甚至被截断成
- * "各…"。之前的 LARGE/XL fixture 虽然分类数也不少（分别 21/41 个），但没暴露这问题，
- * 因为：①簇间边只是"每个分类第一个节点依赖前一个分类最后一个节点"的稀疏链式关系，聚合后
- * 每个簇最多一进一出，力导随便摆都不挤；②长名字只集中在个别节点，分类名本身都很短。
- * 这份 fixture 专门复现真实痛点：
- * - 22 个分类，每类工作流条数从 1 到 8 强烈不均（1 条的最容易被长标签压垮，因为圆本身极小）；
- * - 分类名长短混排——一半是短分类名（"对账"/"发货"），一半是真实业务里那种长分类名
- *   （"各类活动与优惠券自动核销异常处理"这类），逼真复现"Acme·各…"被截断的痛点；
- * - 簇间调用边不再是稀疏链式，而是每个分类额外向另外 3 个不相邻分类建边（确定性取模，不用
- *   随机数保证截图可复现），聚合后是一张密集的多对多网，而不是一条项链。
+ * "Aggregation stress" fixture (dedicated reproduction case for the plan-1 aggregated-view
+ * node-overlap fix) -- the boss's real environment reported that with 20+ categories and dense
+ * inter-cluster call edges, the "aggregate by category" view piles nodes into large overlapping
+ * clumps, with labels overlapping each other or even truncated into "...". The earlier
+ * LARGE/XL fixtures had plenty of categories too (21/41 respectively) but never exposed this,
+ * because: (1) inter-cluster edges were just the sparse chain "each category's first node
+ * depends on the previous category's last node" -- after aggregation each cluster had at most
+ * one in-edge and one out-edge, so the force layout never got crowded no matter how it placed
+ * things; (2) long names were concentrated on a handful of nodes, and the category names
+ * themselves were all short.
+ * This fixture specifically reproduces the real pain point:
+ * - 22 categories, with workflow counts per category ranging unevenly from 1 to 8 (categories
+ *   with 1 workflow are the most easily overwhelmed by long labels, since their circle is
+ *   already tiny);
+ * - a mix of long and short category names -- half are short ("Reconciliation"/"Shipping"),
+ *   half are the kind of long category names seen in real business ("Various Campaign & Coupon
+ *   Auto-redemption Exception Handling" style), faithfully reproducing the "Acme·..." truncation
+ *   pain point;
+ * - inter-cluster call edges are no longer a sparse chain; instead each category additionally
+ *   builds edges to 3 other non-adjacent categories (deterministic modulo, no randomness, so
+ *   screenshots stay reproducible), so after aggregation it becomes a dense many-to-many mesh
+ *   rather than a single necklace chain.
  */
 function generateAggStressFixture(): DependencyGraphResponse {
   const CATEGORIES: { dept: string; cat: string }[] = [
-    { dept: '订单服务', cat: '下单' },
-    { dept: '订单服务', cat: '支付' },
-    { dept: '订单服务', cat: '退款审核与仲裁处理' },
-    { dept: '订单服务', cat: '售后' },
-    { dept: '用户服务', cat: '账户' },
-    { dept: '用户服务', cat: '实名认证与风控黑名单核验' },
-    { dept: '用户服务', cat: '权限' },
-    { dept: '网关', cat: '路由' },
-    { dept: '网关', cat: '限流与熔断降级策略' },
-    { dept: '风控服务', cat: '规则' },
-    { dept: '风控服务', cat: '报表' },
-    { dept: '支付服务', cat: '渠道对接与签名校验' },
-    { dept: '支付服务', cat: '对账' },
-    { dept: '消息服务', cat: '推送' },
-    { dept: '消息服务', cat: '站内信与系统公告分发' },
-    { dept: '运营服务', cat: '活动与优惠券自动核销异常处理' },
-    { dept: '运营服务', cat: '积分' },
-    { dept: '数据服务', cat: '同步' },
-    { dept: '插件市场', cat: '购买与订阅生命周期管理' },
-    { dept: '插件市场', cat: '退订' },
-    { dept: '内容服务', cat: '审核' },
-    { dept: '社区服务', cat: '举报与仲裁裁决流程' },
+    { dept: 'Order Service', cat: 'Place Order' },
+    { dept: 'Order Service', cat: 'Payment' },
+    { dept: 'Order Service', cat: 'Refund Review & Arbitration' },
+    { dept: 'Order Service', cat: 'After-sales' },
+    { dept: 'User Service', cat: 'Account' },
+    { dept: 'User Service', cat: 'Identity Verification & Risk Blacklist Check' },
+    { dept: 'User Service', cat: 'Permission' },
+    { dept: 'Gateway', cat: 'Routing' },
+    { dept: 'Gateway', cat: 'Rate Limit & Circuit Breaker Strategy' },
+    { dept: 'Risk Service', cat: 'Rules' },
+    { dept: 'Risk Service', cat: 'Reports' },
+    { dept: 'Payment Service', cat: 'Channel Integration & Signature Verification' },
+    { dept: 'Payment Service', cat: 'Reconciliation' },
+    { dept: 'Message Service', cat: 'Push' },
+    { dept: 'Message Service', cat: 'In-app Message & System Announcement Distribution' },
+    { dept: 'Operations Service', cat: 'Campaign & Coupon Auto-redemption Exception Handling' },
+    { dept: 'Operations Service', cat: 'Points' },
+    { dept: 'Data Service', cat: 'Sync' },
+    { dept: 'Plugin Market', cat: 'Purchase & Subscription Lifecycle Management' },
+    { dept: 'Plugin Market', cat: 'Unsubscribe' },
+    { dept: 'Content Service', cat: 'Review' },
+    { dept: 'Community Service', cat: 'Report & Arbitration Ruling Process' },
   ]
-  // 条数梯度刻意从 1 起步——1 条的分类圆最小（nodeVisualSize 幂律曲线下限附近），
-  // 最容易被长标签压垮，正是要复现的痛点。
+  // Count gradient deliberately starts at 1 -- a category with 1 node has the smallest
+  // circle (near the lower bound of the nodeVisualSize power curve), making it the easiest to
+  // be overwhelmed by a long label, which is exactly the pain point being reproduced.
   const COUNT_CYCLE = [1, 1, 2, 3, 5, 8]
   const FLAG_CYCLE: string[][] = [[], ['http_call'], ['redis'], [], ['kafka'], ['sse_publish']]
 
@@ -344,7 +381,7 @@ function generateAggStressFixture(): DependencyGraphResponse {
       nodes.push({
         id,
         slug: `${c.dept}-${c.cat}-${i}`.toLowerCase(),
-        name: `${c.dept}·${c.cat}·工作流${i + 1}`,
+        name: `${c.dept} · ${c.cat} · Workflow ${i + 1}`,
         department: c.dept,
         category: c.cat,
         nodeCount: [3, 5, 8, 12, 18, 26][seq % 6],
@@ -363,14 +400,17 @@ function generateAggStressFixture(): DependencyGraphResponse {
   })
 
   const edges: DependencyGraphEdge[] = []
-  // 分类内链式依赖（条数 ≥2 的分类才有内部编排）。
+  // In-category chained dependency (only categories with >=2 workflows have internal
+  // orchestration).
   for (const ids of catNodeIds) {
     for (let i = 0; i < ids.length - 1; i++) {
       edges.push({ from: Number(ids[i]), to: Number(ids[i + 1]) })
     }
   }
-  // 密集跨分类边：每个分类额外向 3 个"跳跃距离不同"的分类建边（+3/+7/+11，确定性取模），
-  // 聚合后每个簇节点周围挂着好几条边，而不是稀疏链条——这才是真实环境"边密"的复现关键。
+  // Dense cross-category edges: each category additionally builds edges to 3 categories at
+  // different "jump distances" (+3/+7/+11, deterministic modulo); after aggregation each
+  // cluster node has several edges hanging off it instead of a sparse chain -- this is the
+  // key to reproducing the real environment's "dense edges".
   const JUMPS = [3, 7, 11]
   catNodeIds.forEach((ids, i) => {
     if (ids.length === 0) return
@@ -388,52 +428,62 @@ function generateAggStressFixture(): DependencyGraphResponse {
 export const AGG_STRESS_FIXTURE: DependencyGraphResponse = generateAggStressFixture()
 
 /**
- * "600 节点" fixture（性能二期验收专用）——boss 批准的二期目标规模，逼近真实大租户体量。
- * 贴近真实分布的三个刻意设计点：
- * - 部门/分类条数强烈不均（3~34 条一个分类都有），不是均匀切块；
- * - 少数"hub"节点（网关鉴权/风控核验/统一通知这类被到处调用的公共能力）被跨部门大量指向，
- *   被依赖数远超其余节点，用来验收入度光环/排行榜在真实偏斜分布下是否还读得清楚；
- * - 长短工作流名混排（复用 XL fixture 的真实业务长名字库），验收标签换行/省略号策略。
- * 边生成仍是确定性（无随机数）：分类内链式 + 跨分类稀疏跳跃 + hub 集中调用三层叠加。
+ * "600-node" fixture (dedicated to phase-2 performance acceptance) -- the phase-2 target scale
+ * approved by the boss, approximating a real large-tenant volume. Three deliberate design
+ * points that mirror real distributions:
+ * - department/category counts are strongly uneven (anywhere from 3 to 34 workflows in a single
+ *   category), not evenly sliced;
+ * - a handful of "hub" nodes (shared capabilities that get called everywhere, like gateway
+ *   auth/risk verification/unified notification) are pointed to heavily across departments,
+ *   with an in-degree far exceeding other nodes, used to verify whether the in-degree
+ *   halo/leaderboard still reads clearly under a realistically skewed distribution;
+ * - a mix of long and short workflow names (reusing XL fixture's real-business long-name pool)
+ *   to verify the label wrap/ellipsis strategy.
+ * Edge generation is still deterministic (no randomness): in-category chains + sparse
+ * cross-category jumps + hub-focused calls layered together.
  */
 function generateHugeFixture(): DependencyGraphResponse {
   const DEPARTMENTS: { name: string; categories: string[] }[] = [
-    { name: '订单服务', categories: ['下单', '支付', '退款', '售后', '发票'] },
-    { name: '用户服务', categories: ['账户', '通知', '权限', '实名认证'] },
-    { name: '网关', categories: ['路由', '限流', '鉴权', '熔断降级'] },
-    { name: '风控服务', categories: ['规则', '报表', '黑名单', '设备指纹'] },
-    { name: '支付服务', categories: ['渠道', '对账', '结算'] },
-    { name: '消息服务', categories: ['站内信', '推送', '短信', '邮件', '模板管理'] },
-    { name: '运营服务', categories: ['活动', '优惠券', '积分', '签到'] },
-    { name: '数据服务', categories: ['报表', '同步', '归档'] },
-    { name: '插件市场', categories: ['购买', '续费', '退订', '试用'] },
-    { name: '内容服务', categories: ['帖子', '评论', '审核', '推荐'] },
-    { name: '客服服务', categories: ['工单', '客服消息'] },
-    { name: '直播服务', categories: ['连麦', '礼物', '弹幕'] },
-    { name: '社区服务', categories: ['话题', '关注', '举报'] },
-    { name: '搜索服务', categories: ['索引构建', '查询'] },
-    { name: '认证服务', categories: ['登录', '第三方授权', '会话管理'] },
-    { name: '统计服务', categories: ['埋点', '报表生成'] },
-    { name: '库存服务', categories: ['扣减', '预占', '同步'] },
-    { name: '物流服务', categories: ['运单', '轨迹同步'] },
+    { name: 'Order Service', categories: ['Place Order', 'Payment', 'Refund', 'After-sales', 'Invoice'] },
+    { name: 'User Service', categories: ['Account', 'Notification', 'Permission', 'Identity Verification'] },
+    { name: 'Gateway', categories: ['Routing', 'Rate Limit', 'Auth', 'Circuit Breaker'] },
+    { name: 'Risk Service', categories: ['Rules', 'Reports', 'Blacklist', 'Device Fingerprint'] },
+    { name: 'Payment Service', categories: ['Channel', 'Reconciliation', 'Settlement'] },
+    { name: 'Message Service', categories: ['In-app Message', 'Push', 'SMS', 'Email', 'Template Management'] },
+    { name: 'Operations Service', categories: ['Campaign', 'Coupon', 'Points', 'Check-in'] },
+    { name: 'Data Service', categories: ['Reports', 'Sync', 'Archive'] },
+    { name: 'Plugin Market', categories: ['Purchase', 'Renewal', 'Unsubscribe', 'Trial'] },
+    { name: 'Content Service', categories: ['Post', 'Comment', 'Review', 'Recommendation'] },
+    { name: 'Support Service', categories: ['Ticket', 'Support Message'] },
+    { name: 'Live Service', categories: ['Co-host', 'Gift', 'Bullet Comments'] },
+    { name: 'Community Service', categories: ['Topic', 'Follow', 'Report'] },
+    { name: 'Search Service', categories: ['Index Building', 'Query'] },
+    { name: 'Auth Service', categories: ['Login', 'Third-party Auth', 'Session Management'] },
+    { name: 'Analytics Service', categories: ['Tracking', 'Report Generation'] },
+    { name: 'Inventory Service', categories: ['Deduction', 'Reservation', 'Sync'] },
+    { name: 'Logistics Service', categories: ['Shipment', 'Tracking Sync'] },
   ]
   const LONG_NAME_CYCLE = [
-    '购买插件Chapter Pass订阅',
-    '续费(Airwallex渠道)自动扣款',
-    '取消订阅并退还剩余额度到钱包余额',
-    'Stripe Webhook回调签名校验与幂等处理',
-    '插件试用到期自动降级为免费版',
-    '多币种价格换算(USD/EUR/JPY/CNY)缓存刷新',
-    '设备指纹采集与风险评分批量核验',
-    '第三方授权令牌过期自动刷新重试',
+    'Purchase plugin Chapter Pass subscription',
+    'Renewal (Airwallex channel) auto-charge',
+    'Cancel subscription and refund remaining balance to wallet',
+    'Stripe webhook callback signature verification and idempotency handling',
+    'Plugin trial expiration auto-downgrade to free tier',
+    'Multi-currency price conversion (USD/EUR/JPY/CNY) cache refresh',
+    'Device fingerprint collection and batch risk score verification',
+    'Third-party auth token expiration auto-refresh retry',
   ]
-  // 条数梯度刻意拉宽跨度（3~34），比 XL fixture 更极端不均——真实大租户里"账户/支付"这类
-  // 核心分类条数远超"关注/举报"这类边缘分类，用固定循环表模拟这种偏斜而不是均匀切块。
+  // The count gradient deliberately widens the spread (3~34), more extremely uneven than the
+  // XL fixture -- in a real large tenant, core categories like "Account/Payment" have far more
+  // workflows than edge categories like "Follow/Report"; a fixed cycle table simulates this
+  // skew instead of an even split.
   const COUNT_CYCLE = [3, 5, 6, 8, 10, 12, 14, 18, 22, 28, 34, 4, 7, 9]
   const NODE_COUNT_CYCLE = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 22, 26, 32, 40]
-  // trigger_cron / trigger_notify 是特殊节点筛选器新增的两类（对齐后端按 trigger_type 派生
-  // 的合成标记，见 graphData.ts SPECIAL_FLAG_META 注释）——补进循环表让筛选器四类必选项
-  // （定时执行/Redis/Kafka/等待Notify）在这份验收 fixture 里都有非零命中。
+  // trigger_cron / trigger_notify are two categories newly added to the special-node filter
+  // (aligned with the synthetic flags the backend derives from trigger_type -- see the
+  // SPECIAL_FLAG_META comment in graphData.ts) -- added to the cycle table so all four required
+  // filter categories (scheduled execution/Redis/Kafka/waiting on Notify) get nonzero hits in
+  // this acceptance fixture.
   const FLAG_CYCLE: string[][] = [
     [],
     [],
@@ -464,7 +514,7 @@ function generateHugeFixture(): DependencyGraphResponse {
       for (let i = 0; i < count; i++) {
         const id = seq
         const isExternal = seq % 23 === 0
-        const name = i === 0 ? LONG_NAME_CYCLE[longNameCursor % LONG_NAME_CYCLE.length] : `${dept.name}·${cat}·工作流${i + 1}`
+        const name = i === 0 ? LONG_NAME_CYCLE[longNameCursor % LONG_NAME_CYCLE.length] : `${dept.name} · ${cat} · Workflow ${i + 1}`
         if (i === 0) longNameCursor += 1
         nodes.push({
           id,
@@ -490,22 +540,27 @@ function generateHugeFixture(): DependencyGraphResponse {
   })
 
   const edges: DependencyGraphEdge[] = []
-  // 分类内链式依赖：同分类工作流按序号编排调用。
+  // In-category chained dependency: workflows in the same category call each other in
+  // sequence order.
   for (const ids of catNodeIds) {
     for (let i = 0; i < ids.length - 1; i++) {
       edges.push({ from: Number(ids[i]), to: Number(ids[i + 1]) })
     }
   }
-  // 跨分类稀疏跳跃：制造需要跨 combo 绘制的长边，同时保证整图连通。
+  // Sparse cross-category jumps: create long edges that must be drawn across combos, while
+  // keeping the overall graph connected.
   for (let i = 1; i < catNodeIds.length; i++) {
     const from = catNodeIds[i][0]
     const to = catNodeIds[i - 1][catNodeIds[i - 1].length - 1]
     if (from && to) edges.push({ from: Number(from), to: Number(to) })
   }
-  // Hub 集中调用：挑 8 个分布在不同部门的"公共能力"节点当 hub（网关鉴权/风控核验/统一通知
-  // 这类现实中确实会被到处调用的节点），让其余每个分类里挑一个节点按确定性取模指向某个 hub，
-  // 制造真实分布常见的"少数节点入度极高"偏斜，而不是所有节点入度均匀。
-  const hubCandidates = ['网关-鉴权-0', '风控服务-规则-0', '用户服务-账户-0', '认证服务-登录-0', '消息服务-站内信-0', '数据服务-同步-0', '支付服务-渠道-0', '库存服务-扣减-0']
+  // Hub-focused calls: pick 8 "shared capability" nodes spread across different departments
+  // as hubs (nodes that really do get called everywhere in real life, like gateway auth/risk
+  // verification/unified notification), and have every other category pick one node to point
+  // at a hub via deterministic modulo, creating the "a few nodes with extremely high
+  // in-degree" skew common in real distributions, instead of uniform in-degree across all
+  // nodes.
+  const hubCandidates = ['gateway-auth-0', 'risk service-rules-0', 'user service-account-0', 'auth service-login-0', 'message service-in-app message-0', 'data service-sync-0', 'payment service-channel-0', 'inventory service-deduction-0']
   const slugToId = new Map<string, string>()
   nodes.forEach((n) => slugToId.set(n.slug, String(n.id)))
   const hubIds = hubCandidates.map((slug) => slugToId.get(slug)).filter((id): id is string => !!id)

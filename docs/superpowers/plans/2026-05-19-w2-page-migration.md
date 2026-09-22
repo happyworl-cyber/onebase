@@ -176,7 +176,7 @@ Expected: `Finished` 无 error。
 - [ ] **Step 4: 启动后端 smoke**
 
 ```bash
-cargo run --bin onebase > /tmp/backend.log 2>&1 &
+cargo run --bin planeos > /tmp/backend.log 2>&1 &
 BACKEND_PID=$!
 sleep 8
 # 拿 admin token
@@ -964,7 +964,7 @@ git commit -m "feat(w2): add settings/members placeholder pages to satisfy sideb
 
 ```bash
 cargo build 2>&1 | tail -3
-cargo run --bin onebase > /tmp/backend.log 2>&1 &
+cargo run --bin planeos > /tmp/backend.log 2>&1 &
 BACKEND_PID=$!
 sleep 8
 

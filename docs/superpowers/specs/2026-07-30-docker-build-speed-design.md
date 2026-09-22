@@ -21,7 +21,7 @@
 ## 问题根因
 
 1. 改 `src/`（或 `migrations/`）会使 `cargo build` 所在层失效；层内 `target/` 为空，等于冷编译。
-2. 现有 `cargo clean -p onebase --release` 每次清掉本包产物，阻止增量编译。
+2. 现有 `cargo clean -p planeos --release` 每次清掉本包产物，阻止增量编译。
 3. release 链接大二进制（含 `rdkafka` cmake-build 等）本身耗时长。
 4. 依赖层缓存已有效；本次不优先做拆镜像或预热 base（可后续叠加）。
 
@@ -61,10 +61,10 @@
    层因代码变更重跑时，对象文件仍留在 agent 的 BuildKit cache 中，从而增量编译。
 
 2. **二进制拷出 cache**  
-   cache mount 不进入镜像层。构建结束后将产物复制到固定路径（例如 `/build/onebase`），runtime 使用 `COPY --from=rust-builder` 该路径。
+   cache mount 不进入镜像层。构建结束后将产物复制到固定路径（例如 `/build/planeos`），runtime 使用 `COPY --from=rust-builder` 该路径。
 
-3. **去掉每次必跑的 `cargo clean -p onebase`**  
-   保留 stub `main`/`bin` 依赖预热技巧；正式构建直接 `cargo build --release --bin onebase`。若出现 stub 指纹粘连，再加更窄的清理，而不是每次 `clean -p`。
+3. **去掉每次必跑的 `cargo clean -p planeos`**  
+   保留 stub `main`/`bin` 依赖预热技巧；正式构建直接 `cargo build --release --bin planeos`。若出现 stub 指纹粘连，再加更窄的清理，而不是每次 `clean -p`。
 
 4. **更快链接器**  
    在 builder 安装 `mold`（或 fallback `lld`），构建时设置  
@@ -112,8 +112,8 @@
 
 ## 后续修正（2026-08-11）
 
-1. **去掉正式构建的 `cargo clean -p onebase --release`**  
-   每次 clean 会毁掉本包增量；改为直接 `cargo build --release --bin onebase`，依赖仍由 stub 层缓存。若偶发 stub 指纹粘连，再临时加回窄清理。
+1. **去掉正式构建的 `cargo clean -p planeos --release`**  
+   每次 clean 会毁掉本包增量；改为直接 `cargo build --release --bin planeos`，依赖仍由 stub 层缓存。若偶发 stub 指纹粘连，再临时加回窄清理。
 
 2. **对象存储不用 aws-sdk-s3**  
    改用 `rusty-s3` + 现有 `reqwest`，避免 `aws-config` / `aws-lc-sys` 拉高冷依赖编译成本（本地与 Jenkins 在 `Cargo.toml` 变更时均受益）。

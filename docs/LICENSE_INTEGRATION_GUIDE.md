@@ -387,7 +387,7 @@ cargo run --bin license_tool issue \
   --out test_license.lic
 
 # 设置环境变量
-export ONEBASE_LICENSE_FILE=./test_license.lic
+export PLANEOS_LICENSE_FILE=./test_license.lic
 ```
 
 ### Q3：PlaneOS 的其他功能会受影响吗？

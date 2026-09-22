@@ -16,6 +16,7 @@
 
 import { useEffect, useState } from 'react'
 import { pgPoolAPI, type PgPoolAdminEntry, type CreatePgPoolBody } from '@/lib/api'
+import { useTranslations } from 'next-intl'
 import { useNotification } from '@/hooks/useNotification'
 import { closeOnBackdropPress } from '@/lib/utils'
 
@@ -44,6 +45,7 @@ const EMPTY_FORM: DrawerState['form'] = {
 }
 
 export default function PlatformPgPoolsPage() {
+  const t = useTranslations('platformPgPools')
   const notify = useNotification()
   const [pools, setPools] = useState<PgPoolAdminEntry[] | null>(null)
   const [loading, setLoading] = useState(true)
@@ -94,15 +96,15 @@ export default function PlatformPgPoolsPage() {
     const { form, mode, editingId } = drawer
     const port = parseInt(form.db_port, 10)
     if (!form.name.trim() || !form.db_host.trim() || !form.admin_user.trim()) {
-      notify.warning('name / db_host / admin_user 不能为空')
+      notify.warning(t('warnRequired'))
       return
     }
     if (!Number.isFinite(port) || port <= 0 || port > 65535) {
-      notify.warning('db_port 必须是 1-65535 之间的整数')
+      notify.warning(t('warnPort'))
       return
     }
     if (mode === 'create' && !form.admin_password) {
-      notify.warning('创建时必须填 admin_password')
+      notify.warning(t('warnPassword'))
       return
     }
 
@@ -118,7 +120,7 @@ export default function PlatformPgPoolsPage() {
           note: form.note.trim() || null,
         }
         await pgPoolAPI.create(body)
-        notify.success(`已创建 PG 池：${body.name}`)
+        notify.success(t('created', { name: body.name }))
       } else if (editingId !== null) {
         await pgPoolAPI.update(editingId, {
           name: form.name.trim(),
@@ -130,7 +132,7 @@ export default function PlatformPgPoolsPage() {
           note: form.note.trim() || null,
           is_active: form.is_active,
         })
-        notify.success(`已更新 PG 池 #${editingId}`)
+        notify.success(t('updated', { id: editingId }))
       }
       setDrawer(null)
       await load()
@@ -149,20 +151,19 @@ export default function PlatformPgPoolsPage() {
     } catch (err: any) {
       setTestResults((s) => ({
         ...s,
-        [id]: { ok: false, msg: err?.response?.data?.error || err?.message || '测试失败' },
+        [id]: { ok: false, msg: err?.response?.data?.error || err?.message || t('testFailed') },
       }))
     }
   }
 
   const handleDelete = async (p: PgPoolAdminEntry) => {
     const ok = window.confirm(
-      `确认要停用 PG 池『${p.name}』吗？\n` +
-        `停用后 wizard 不再列出，但已经从这台 PG provisioned 出去的项目继续可用。`,
+      t('confirmDisable', { name: p.name }),
     )
     if (!ok) return
     try {
       await pgPoolAPI.remove(p.id)
-      notify.success(`已停用 ${p.name}`)
+      notify.success(t('disabled', { name: p.name }))
       await load()
     } catch (err: any) {
       notify.error(err)
@@ -173,15 +174,14 @@ export default function PlatformPgPoolsPage() {
     <div className="w-full space-y-6">
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">PG 服务器池</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            维护可分配给项目的 PG 实例。普通用户走『新建项目』时会从 active 列表里选一台，
-            后端用这里的 admin 凭据帮他建库。admin 密码以 AES-256-GCM 加密存储，前端不展示。
+            {t('subtitle')}
           </p>
         </div>
         <button onClick={openCreate} className="btn-primary">
           <i className="fas fa-plus mr-2"></i>
-          注册 PG 服务器
+          {t('registerBtn')}
         </button>
       </div>
 
@@ -189,27 +189,27 @@ export default function PlatformPgPoolsPage() {
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50 text-xs uppercase text-gray-500 tracking-wider">
             <tr>
-              <th className="px-5 py-3 text-left font-medium">名称</th>
-              <th className="px-5 py-3 text-left font-medium">主机</th>
-              <th className="px-5 py-3 text-left font-medium">admin 用户</th>
-              <th className="px-5 py-3 text-left font-medium">备注</th>
-              <th className="px-5 py-3 text-left font-medium">状态</th>
-              <th className="px-5 py-3 text-left font-medium">连通性</th>
-              <th className="px-5 py-3 text-right font-medium">操作</th>
+              <th className="px-5 py-3 text-left font-medium">{t('colName')}</th>
+              <th className="px-5 py-3 text-left font-medium">{t('colHost')}</th>
+              <th className="px-5 py-3 text-left font-medium">{t('colAdminUser')}</th>
+              <th className="px-5 py-3 text-left font-medium">{t('colNote')}</th>
+              <th className="px-5 py-3 text-left font-medium">{t('colStatus')}</th>
+              <th className="px-5 py-3 text-left font-medium">{t('colConn')}</th>
+              <th className="px-5 py-3 text-right font-medium">{t('colActions')}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {loading && (
               <tr>
                 <td colSpan={7} className="px-5 py-12 text-center text-gray-400">
-                  <i className="fas fa-spinner fa-spin mr-2"></i>加载中...
+                  <i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}
                 </td>
               </tr>
             )}
             {!loading && (pools?.length ?? 0) === 0 && (
               <tr>
                 <td colSpan={7} className="px-5 py-12 text-center text-gray-400">
-                  还没有任何 PG 池条目；点右上角『注册 PG 服务器』添加第一台。
+                  {t('empty')}
                 </td>
               </tr>
             )}
@@ -239,18 +239,18 @@ export default function PlatformPgPoolsPage() {
                     </td>
                     <td className="px-5 py-3">
                       {tr === undefined ? (
-                        <span className="text-xs text-gray-400">未测试</span>
+                        <span className="text-xs text-gray-400">{t('untested')}</span>
                       ) : tr.loading ? (
                         <span className="text-xs text-gray-500">
-                          <i className="fas fa-spinner fa-spin mr-1"></i>测试中
+                          <i className="fas fa-spinner fa-spin mr-1"></i>{t('testing')}
                         </span>
                       ) : tr.ok ? (
                         <span className="text-xs text-green-600">
-                          <i className="fas fa-check-circle mr-1"></i>通
+                          <i className="fas fa-check-circle mr-1"></i>{t('connOk')}
                         </span>
                       ) : (
                         <span className="text-xs text-red-600 truncate max-w-[200px]" title={tr.msg}>
-                          <i className="fas fa-times-circle mr-1"></i>不通
+                          <i className="fas fa-times-circle mr-1"></i>{t('connFail')}
                         </span>
                       )}
                     </td>
@@ -259,20 +259,20 @@ export default function PlatformPgPoolsPage() {
                         onClick={() => handleTest(p.id)}
                         className="text-xs text-blue-600 hover:text-blue-800"
                       >
-                        <i className="fas fa-plug mr-1"></i>测试
+                        <i className="fas fa-plug mr-1"></i>{t('test')}
                       </button>
                       <button
                         onClick={() => openEdit(p)}
                         className="text-xs text-gray-600 hover:text-gray-900"
                       >
-                        <i className="fas fa-pen mr-1"></i>编辑
+                        <i className="fas fa-pen mr-1"></i>{t('edit')}
                       </button>
                       {p.is_active && (
                         <button
                           onClick={() => handleDelete(p)}
                           className="text-xs text-red-600 hover:text-red-800"
                         >
-                          <i className="fas fa-power-off mr-1"></i>停用
+                          <i className="fas fa-power-off mr-1"></i>{t('disable')}
                         </button>
                       )}
                     </td>
@@ -293,16 +293,16 @@ export default function PlatformPgPoolsPage() {
             className="bg-white w-full max-w-lg rounded-xl shadow-xl p-6 m-4"
           >
             <h3 className="text-lg font-semibold text-gray-900 mb-1">
-              {drawer.mode === 'create' ? '注册 PG 服务器' : `编辑 PG 池 #${drawer.editingId}`}
+              {drawer.mode === 'create' ? t('createTitle') : t('editTitle', { id: drawer.editingId })}
             </h3>
             <p className="text-sm text-gray-500 mb-4">
               {drawer.mode === 'create'
-                ? '填入一台你已经准备好的 PG 实例的 admin 凭据。后端将用这对凭据帮用户在这台机器上 CREATE DATABASE。'
-                : '改密码请显式输入；留空则保持不变。'}
+                ? t('createHint')
+                : t('editHint')}
             </p>
 
             <div className="space-y-3">
-              <Field label="名称" required>
+              <Field label={t('nameLabel')} required>
                 <input
                   type="text"
                   value={drawer.form.name}
@@ -310,7 +310,7 @@ export default function PlatformPgPoolsPage() {
                     setDrawer({ ...drawer, form: { ...drawer.form, name: e.target.value } })
                   }
                   className="w-full input-base"
-                  placeholder="例如：aliyun-rds-prod"
+                  placeholder={t('namePlaceholder')}
                 />
               </Field>
 
@@ -354,7 +354,7 @@ export default function PlatformPgPoolsPage() {
               <Field
                 label={
                   drawer.mode === 'edit'
-                    ? 'admin_password（留空 = 不修改）'
+                    ? t('pwEditLabel')
                     : 'admin_password'
                 }
                 required={drawer.mode === 'create'}
@@ -369,12 +369,12 @@ export default function PlatformPgPoolsPage() {
                     })
                   }
                   className="w-full input-base"
-                  placeholder={drawer.mode === 'edit' ? '••••••（留空保持不变）' : ''}
+                  placeholder={drawer.mode === 'edit' ? t('pwEditPlaceholder') : ''}
                   autoComplete="new-password"
                 />
               </Field>
 
-              <Field label="备注">
+              <Field label={t('noteLabel')}>
                 <textarea
                   value={drawer.form.note}
                   onChange={(e) =>
@@ -382,7 +382,7 @@ export default function PlatformPgPoolsPage() {
                   }
                   rows={2}
                   className="w-full input-base"
-                  placeholder="阿里云 RDS prod 共享池 / 容量 100 库"
+                  placeholder={t('notePlaceholder')}
                 />
               </Field>
 
@@ -398,7 +398,7 @@ export default function PlatformPgPoolsPage() {
                       })
                     }
                   />
-                  is_active（关掉相当于停用此池，wizard 不再列出）
+                  {t('isActiveHint')}
                 </label>
               )}
             </div>
@@ -409,14 +409,14 @@ export default function PlatformPgPoolsPage() {
                 disabled={saving}
                 className="px-4 py-2 text-sm text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
               >
-                取消
+                {t('cancel')}
               </button>
               <button
                 onClick={handleSave}
                 disabled={saving}
                 className="btn-primary disabled:opacity-50"
               >
-                {saving ? '保存中...' : '保存'}
+                {saving ? t('saving') : t('save')}
               </button>
             </div>
           </div>

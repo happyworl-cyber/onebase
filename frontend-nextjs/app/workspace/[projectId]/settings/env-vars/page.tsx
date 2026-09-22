@@ -18,6 +18,7 @@ import { useParams } from 'next/navigation'
 import { projectEnvVarsAPI, type ProjectEnvVar } from '@/lib/api'
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import { useNotification } from '@/hooks/useNotification'
+import { useTranslations } from 'next-intl'
 import { copyToClipboard, closeOnBackdropPress } from '@/lib/utils'
 import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
 
@@ -39,6 +40,7 @@ export default function ProjectEnvVarsPage() {
   const params = useParams<{ projectId: string }>()
   const projectId = parseInt(params.projectId, 10)
   const caps = useCurrentProjectCapabilities()
+  const t = useTranslations('wsEnvVars')
   const notify = useNotification()
 
   const [vars, setVars] = useState<ProjectEnvVar[] | null>(null)
@@ -72,8 +74,8 @@ export default function ProjectEnvVarsPage() {
   // 复制变量值到剪贴板——密钥类长串手选易漏字符，给个一键复制
   const handleCopyValue = async (v: ProjectEnvVar) => {
     const ok = await copyToClipboard(v.value)
-    if (ok) notify.success(`已复制 ${v.name} 的值`)
-    else notify.warning('当前环境不支持自动复制，请手动选中复制')
+    if (ok) notify.success(t('copiedValue', { name: v.name }))
+    else notify.warning(t('copyUnsupported'))
   }
 
   // 打开新建弹窗
@@ -91,7 +93,7 @@ export default function ProjectEnvVarsPage() {
       value: v.decrypt_error ? '' : v.value,
       description: v.description ?? '',
     })
-    if (v.decrypt_error) notify.warning(`${v.name} 当前解密失败，请重新填入真实值`)
+    if (v.decrypt_error) notify.warning(t('decryptFailed', { name: v.name }))
     setShowModal(true)
   }
 
@@ -110,8 +112,8 @@ export default function ProjectEnvVarsPage() {
     if (!formValid) {
       notify.warning(
         isCreate && !nameValid
-          ? '变量名需以字母或下划线开头，仅含字母、数字、下划线'
-          : '变量值不能为空',
+          ? t('errName')
+          : t('errValue'),
       )
       return
     }
@@ -125,7 +127,7 @@ export default function ProjectEnvVarsPage() {
         })
         // 新建追加到列表末尾
         setVars((prev) => (prev ? [...prev, res.data] : [res.data]))
-        notify.success(`已新建变量 ${res.data.name}`)
+        notify.success(t('created', { name: res.data.name }))
       } else {
         // 后端 PUT 复用 EnvVarRequest 且校验 name，变量名不变也要原样回传
         const res = await projectEnvVarsAPI.update(projectId, form.editing!.id, {
@@ -135,7 +137,7 @@ export default function ProjectEnvVarsPage() {
         })
         // 原地替换
         setVars((prev) => prev?.map((x) => (x.id === res.data.id ? res.data : x)) ?? null)
-        notify.success(`已更新变量 ${res.data.name}`)
+        notify.success(t('updated', { name: res.data.name }))
       }
       setShowModal(false)
       setForm(EMPTY_FORM)
@@ -165,8 +167,7 @@ export default function ProjectEnvVarsPage() {
 
   const handleDelete = async (v: ProjectEnvVar) => {
     const ok = window.confirm(
-      `确认删除环境变量 ${v.name} 吗？\n` +
-        `引用了 {{env.${v.name}}} 或 env.get("${v.name}") 的工作流将读到空值 / nil。`,
+      t('confirmDelete', { name: v.name }),
     )
     if (!ok) return
 
@@ -174,7 +175,7 @@ export default function ProjectEnvVarsPage() {
     try {
       await projectEnvVarsAPI.remove(projectId, v.id)
       setVars((prev) => prev?.filter((x) => x.id !== v.id) ?? null)
-      notify.success(`已删除 ${v.name}`)
+      notify.success(t('deleted', { name: v.name }))
     } catch (err: any) {
       notify.error(err)
     } finally {
@@ -183,17 +184,16 @@ export default function ProjectEnvVarsPage() {
   }
 
   if (!caps.canManageMembers) {
-    return <ForbiddenPlaceholder reason="环境变量管理需要项目 admin 或 owner 角色（或平台超管）" />
+    return <ForbiddenPlaceholder reason={t('forbidden')} />
   }
 
   return (
     <div data-alt="env-vars-page" className="p-6 max-w-5xl space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold text-gray-900">环境变量</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            项目级变量库，供工作流以 <code className="px-1 bg-gray-100 rounded">{'{{env.X}}'}</code> 模板或 Lua{' '}
-            <code className="px-1 bg-gray-100 rounded">env.get()</code> 读取。值加密存储、本页明文回显，执行输出自动脱敏。
+            {t.rich('subtitle', { tpl: '{{env.X}}', code: (c) => <code className="px-1 bg-gray-100 rounded">{c}</code> })}
           </p>
         </div>
         <button
@@ -202,7 +202,7 @@ export default function ProjectEnvVarsPage() {
           className="btn-primary flex-shrink-0 whitespace-nowrap"
         >
           <i className="fas fa-plus mr-2"></i>
-          新建
+          {t('create')}
         </button>
       </div>
 
@@ -211,25 +211,25 @@ export default function ProjectEnvVarsPage() {
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50 text-xs uppercase text-gray-500 tracking-wider">
             <tr>
-              <th className="px-5 py-3 text-left font-medium">变量名</th>
-              <th className="px-5 py-3 text-left font-medium">值（明文）</th>
-              <th className="px-5 py-3 text-left font-medium">描述</th>
-              <th className="px-5 py-3 text-left font-medium">更新时间</th>
-              <th className="px-5 py-3 text-right font-medium">操作</th>
+              <th className="px-5 py-3 text-left font-medium">{t('thName')}</th>
+              <th className="px-5 py-3 text-left font-medium">{t('thValue')}</th>
+              <th className="px-5 py-3 text-left font-medium">{t('thDesc')}</th>
+              <th className="px-5 py-3 text-left font-medium">{t('thUpdated')}</th>
+              <th className="px-5 py-3 text-right font-medium">{t('thActions')}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {loading && (
               <tr>
                 <td colSpan={5} className="px-5 py-12 text-center text-gray-400">
-                  <i className="fas fa-spinner fa-spin mr-2"></i>加载中...
+                  <i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}
                 </td>
               </tr>
             )}
             {!loading && (vars?.length ?? 0) === 0 && (
               <tr>
                 <td colSpan={5} className="px-5 py-12 text-center text-gray-400">
-                  暂无环境变量，点击右上角「新建」添加第一个。
+                  {t('empty')}
                 </td>
               </tr>
             )}
@@ -245,7 +245,7 @@ export default function ProjectEnvVarsPage() {
                       {v.decrypt_error ? (
                         <span data-alt="env-var-decrypt-error" className="text-red-600 flex items-center gap-1.5">
                           <i className="fas fa-triangle-exclamation"></i>
-                          <span>解密失败，请编辑重填真实值</span>
+                          <span>{t('decryptFailedRow')}</span>
                         </span>
                       ) : (
                         <div className="group flex items-start gap-2 text-gray-700">
@@ -254,7 +254,7 @@ export default function ProjectEnvVarsPage() {
                             data-alt="env-var-copy-button"
                             onClick={() => handleCopyValue(v)}
                             className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-blue-600 transition-opacity flex-shrink-0 mt-0.5"
-                            title="复制值"
+                            title={t('copyValue')}
                           >
                             <i className="fas fa-copy text-xs"></i>
                           </button>
@@ -272,24 +272,24 @@ export default function ProjectEnvVarsPage() {
                         onClick={() => openEdit(v)}
                         disabled={deleting}
                         className="text-blue-600 hover:text-blue-800 text-sm disabled:opacity-40 mr-4"
-                        title="编辑变量值 / 描述"
+                        title={t('editTitle')}
                       >
                         <i className="fas fa-pen mr-1"></i>
-                        编辑
+                        {t('edit')}
                       </button>
                       <button
                         data-alt="env-var-delete-button"
                         onClick={() => handleDelete(v)}
                         disabled={deleting}
                         className="text-red-600 hover:text-red-800 text-sm disabled:opacity-40 disabled:hover:text-red-600"
-                        title="删除该变量"
+                        title={t('deleteTitle')}
                       >
                         {deleting ? (
                           <i className="fas fa-spinner fa-spin"></i>
                         ) : (
                           <>
                             <i className="fas fa-trash mr-1"></i>
-                            删除
+                            {t('delete')}
                           </>
                         )}
                       </button>
@@ -313,13 +313,13 @@ export default function ProjectEnvVarsPage() {
             className="bg-white w-full max-w-lg rounded-xl shadow-xl p-6 m-4"
           >
             <h3 className="text-lg font-semibold text-gray-900 mb-4">
-              {isCreate ? '新建环境变量' : `编辑 ${form.editing?.name}`}
+              {isCreate ? t('createTitle') : t('editModalTitle', { name: form.editing?.name })}
             </h3>
 
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  变量名 <span className="text-red-500">*</span>
+                  {t('nameLabel')} <span className="text-red-500">*</span>
                 </label>
                 <input
                   data-alt="env-var-name-input"
@@ -328,23 +328,23 @@ export default function ProjectEnvVarsPage() {
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                   disabled={!isCreate}
                   className="w-full input-base font-mono disabled:bg-gray-50 disabled:text-gray-500"
-                  placeholder="如 API_TOKEN"
+                  placeholder={t('phName')}
                   autoFocus={isCreate}
                 />
                 {/* 仅新建态做即时校验提示；编辑态变量名锁定无需提示 */}
                 {isCreate && form.name.trim().length > 0 && !nameValid && (
                   <p className="text-xs text-red-500 mt-1">
-                    需以字母或下划线开头，仅含字母、数字、下划线。
+                    {t('nameHint')}
                   </p>
                 )}
                 {!isCreate && (
-                  <p className="text-xs text-gray-400 mt-1">变量名不可修改；如需改名请删除后重建。</p>
+                  <p className="text-xs text-gray-400 mt-1">{t('nameImmutable')}</p>
                 )}
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  变量值 <span className="text-red-500">*</span>
+                  {t('valueLabel')} <span className="text-red-500">*</span>
                 </label>
                 <input
                   data-alt="env-var-value-input"
@@ -352,22 +352,22 @@ export default function ProjectEnvVarsPage() {
                   value={form.value}
                   onChange={(e) => setForm((f) => ({ ...f, value: e.target.value }))}
                   className="w-full input-base font-mono"
-                  placeholder="变量的值"
+                  placeholder={t('phValue')}
                 />
                 <p className="text-xs text-gray-400 mt-1">
-                  明文展示便于确认；加密存储，执行输出中自动脱敏。
+                  {t('valueHint')}
                 </p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">描述</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">{t('descLabel')}</label>
                 <input
                   data-alt="env-var-description-input"
                   type="text"
                   value={form.description}
                   onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
                   className="w-full input-base"
-                  placeholder="选填，说明该变量的用途"
+                  placeholder={t('phDesc')}
                 />
               </div>
             </div>
@@ -379,7 +379,7 @@ export default function ProjectEnvVarsPage() {
                 disabled={saving}
                 className="px-4 py-2 text-sm text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
               >
-                取消
+                {t('cancel')}
               </button>
               <button
                 data-alt="env-var-submit-button"
@@ -387,7 +387,7 @@ export default function ProjectEnvVarsPage() {
                 disabled={saving || !formValid}
                 className="btn-primary disabled:opacity-50"
               >
-                {saving ? '保存中...' : '确定'}
+                {saving ? t('saving') : t('confirm')}
               </button>
             </div>
           </div>

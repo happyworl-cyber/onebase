@@ -1,3 +1,7 @@
+const createNextIntlPlugin = require('next-intl/plugin')
+// 指向自定义 request 配置（cookie 决定语言，不用 URL 路由）
+const withNextIntl = createNextIntlPlugin('./i18n/request.ts')
+
 /** @type {import('next').NextConfig} */
 const fs = require('fs')
 const path = require('path')
@@ -54,7 +58,7 @@ const nextConfig = {
   env: {
     NEXT_PUBLIC_IDP_ISSUER: process.env.NEXT_PUBLIC_IDP_ISSUER || '',
     // `/workflow/*` 由 App Router 的长请求代理处理，避免 rewrites 内置代理约 30s 后断连。
-    ONEBASE_BACKEND_URL: backendUrl,
+    PLANEOS_BACKEND_URL: backendUrl,
   },
   // 生产构建时跳过 TS/ESLint 严格检查，避免遗留的小问题阻断 Docker 镜像构建
   typescript: { ignoreBuildErrors: true },
@@ -112,4 +116,4 @@ const nextConfig = {
   },
 }
 
-module.exports = nextConfig
+module.exports = withNextIntl(nextConfig)

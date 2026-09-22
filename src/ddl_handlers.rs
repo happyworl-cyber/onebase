@@ -202,20 +202,28 @@ pub fn check_ident(label: &str, value: &str) -> Result<()> {
     if is_valid_pg_ident(value) {
         Ok(())
     } else {
-        Err(AppError::InvalidQuery(format!(
-            "{} '{}' 不是合法的 PostgreSQL 标识符（仅限 [A-Za-z_][A-Za-z0-9_]*，长度 ≤63）",
-            label, value
-        )))
+        Err(AppError::validation(
+            "ddl_invalid_identifier",
+            format!(
+                "{} '{}' 不是合法的 PostgreSQL 标识符（仅限 [A-Za-z_][A-Za-z0-9_]*，长度 ≤63）",
+                label, value
+            ),
+            serde_json::json!({ "label": label, "value": value }),
+        ))
     }
 }
 
 fn check_schema_allowed(schema: &str) -> Result<()> {
     check_ident("schema 名", schema)?;
     if FORBIDDEN_SCHEMAS.contains(&schema.to_ascii_lowercase().as_str()) {
-        return Err(AppError::Forbidden(format!(
-            "不允许在 schema '{}' 上执行 DDL（平台 / PG 系统 schema）",
-            schema
-        )));
+        return Err(AppError::forbidden_coded(
+            "ddl_schema_forbidden",
+            format!(
+                "不允许在 schema '{}' 上执行 DDL（平台 / PG 系统 schema）",
+                schema
+            ),
+            serde_json::json!({ "schema": schema }),
+        ));
     }
     Ok(())
 }
@@ -225,11 +233,15 @@ fn check_data_type(t: &str) -> Result<()> {
     if ALLOWED_DATA_TYPES.contains(&normalized.as_str()) {
         Ok(())
     } else {
-        Err(AppError::InvalidQuery(format!(
-            "数据类型 '{}' 不在白名单内。允许：{}",
-            t,
-            ALLOWED_DATA_TYPES.join(", ")
-        )))
+        Err(AppError::validation(
+            "ddl_data_type_not_allowed",
+            format!(
+                "数据类型 '{}' 不在白名单内。允许：{}",
+                t,
+                ALLOWED_DATA_TYPES.join(", ")
+            ),
+            serde_json::json!({ "type": t, "allowed": ALLOWED_DATA_TYPES.join(", ") }),
+        ))
     }
 }
 
@@ -238,11 +250,15 @@ fn check_fk_action(action: &str) -> Result<()> {
     if ALLOWED_FK_ACTIONS.contains(&normalized.as_str()) {
         Ok(())
     } else {
-        Err(AppError::InvalidQuery(format!(
-            "外键动作 '{}' 不合法。允许：{}",
-            action,
-            ALLOWED_FK_ACTIONS.join(", ")
-        )))
+        Err(AppError::validation(
+            "ddl_fk_action_invalid",
+            format!(
+                "外键动作 '{}' 不合法。允许：{}",
+                action,
+                ALLOWED_FK_ACTIONS.join(", ")
+            ),
+            serde_json::json!({ "action": action, "allowed": ALLOWED_FK_ACTIONS.join(", ") }),
+        ))
     }
 }
 
@@ -273,10 +289,11 @@ fn render_column_type(col: &ColumnDef) -> Result<String> {
             Some(n) if n > 0 && n <= 10485760 => format!("{}({})", base, n),
             None => base.clone(),
             _ => {
-                return Err(AppError::InvalidQuery(format!(
-                    "{}/{} 的 length 非法",
-                    col.name, base
-                )))
+                return Err(AppError::validation(
+                    "ddl_column_length_invalid",
+                    format!("{}/{} 的 length 非法", col.name, base),
+                    serde_json::json!({ "column": col.name, "type": base }),
+                ))
             }
         },
         "numeric" => match (col.precision, col.scale) {
@@ -286,10 +303,11 @@ fn render_column_type(col: &ColumnDef) -> Result<String> {
             (Some(p), None) if p > 0 && p <= 1000 => format!("numeric({})", p),
             (None, None) => "numeric".to_string(),
             _ => {
-                return Err(AppError::InvalidQuery(format!(
-                    "{}/numeric 的 precision/scale 非法",
-                    col.name
-                )))
+                return Err(AppError::validation(
+                    "ddl_numeric_precision_invalid",
+                    format!("{}/numeric 的 precision/scale 非法", col.name),
+                    serde_json::json!({ "column": col.name }),
+                ))
             }
         },
         _ => base.clone(),
@@ -402,15 +420,20 @@ pub async fn resolve_ddl_database_id_for_user(
         .map_err(AppError::Database)?
     };
     match rows.len() {
-        0 => Err(AppError::NotFound(format!(
-            "database_slug '{}' 不存在或无权访问",
-            db_seg
-        ))),
+        0 => Err(AppError::not_found_coded(
+            "ddl_database_slug_not_found",
+            format!("database_slug '{}' 不存在或无权访问", db_seg),
+            serde_json::json!({ "slug": db_seg }),
+        )),
         1 => Ok(rows[0].get("id")),
-        _ => Err(AppError::InvalidQuery(format!(
-            "database_slug '{}' 存在歧义，请使用 API Key 或确保租户唯一",
-            db_seg
-        ))),
+        _ => Err(AppError::validation(
+            "ddl_database_slug_ambiguous",
+            format!(
+                "database_slug '{}' 存在歧义，请使用 API Key 或确保租户唯一",
+                db_seg
+            ),
+            serde_json::json!({ "slug": db_seg }),
+        )),
     }
 }
 
@@ -419,8 +442,10 @@ async fn enforce_ddl_api_key(key: &DdlApiKeyAuth, schema: &str, resource: &str) 
     let new_format =
         perms.get("allowed_actions").is_some() || perms.get("allowed_resources").is_some();
     if !new_format {
-        return Err(AppError::Forbidden(
+        return Err(AppError::forbidden_coded(
+            "ddl_api_key_legacy_scope",
             "该 API Key 使用旧版 scope 格式，不支持 DDL；请重建 key 并启用 allowed_resources/allowed_actions".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -434,8 +459,10 @@ async fn enforce_ddl_api_key(key: &DdlApiKeyAuth, schema: &str, resource: &str) 
         })
         .unwrap_or_default();
     if !actions.is_empty() && !actions.iter().any(|a| a == "*" || a == "ALL" || a == "DDL") {
-        return Err(AppError::Forbidden(
+        return Err(AppError::forbidden_coded(
+            "ddl_api_key_ddl_not_allowed",
             "API Key 不允许执行 DDL 操作".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -454,10 +481,11 @@ async fn enforce_ddl_api_key(key: &DdlApiKeyAuth, schema: &str, resource: &str) 
             .iter()
             .any(|r| r == "*" || r == "*.*" || r == resource || r == &schema_wildcard);
         if !allowed {
-            return Err(AppError::Forbidden(format!(
-                "API Key 不允许访问资源: {}",
-                resource
-            )));
+            return Err(AppError::forbidden_coded(
+                "ddl_api_key_resource_forbidden",
+                format!("API Key 不允许访问资源: {}", resource),
+                serde_json::json!({ "resource": resource }),
+            ));
         }
     }
     Ok(())
@@ -477,8 +505,10 @@ async fn enforce_ddl_access(
         }
         DdlAuthSubject::ApiKey(key) => {
             if key.database_id != database_id {
-                return Err(AppError::Unauthorized(
+                return Err(AppError::unauthorized_coded(
+                    "ddl_api_key_database_mismatch",
                     "URL 中的 database_slug 与 API Key 绑定的数据库不一致".to_string(),
+                    serde_json::json!({}),
                 ));
             }
             enforce_ddl_api_key(key, schema, &resource).await
@@ -501,8 +531,10 @@ pub async fn enforce_ddl_schema_access(
         }
         DdlAuthSubject::ApiKey(key) => {
             if key.database_id != database_id {
-                return Err(AppError::Unauthorized(
+                return Err(AppError::unauthorized_coded(
+                    "ddl_api_key_database_mismatch",
                     "URL 中的 database_slug 与 API Key 绑定的数据库不一致".to_string(),
+                    serde_json::json!({}),
                 ));
             }
             enforce_ddl_api_key(key, schema, &resource).await
@@ -615,7 +647,13 @@ pub async fn ddl_auth_middleware(
         .await
         .map_err(|e| AppError::Internal(format!("校验 API Key 失败: {}", e)))?;
 
-        let row = row.ok_or_else(|| AppError::Unauthorized("API Key 无效或已过期".to_string()))?;
+        let row = row.ok_or_else(|| {
+            AppError::unauthorized_coded(
+                "ddl_api_key_invalid",
+                "API Key 无效或已过期".to_string(),
+                serde_json::json!({}),
+            )
+        })?;
         let key_database_id: i32 = row.get("database_id");
         let permissions: Value = row.get("permissions");
 
@@ -633,8 +671,10 @@ pub async fn ddl_auth_middleware(
             row.is_some()
         };
         if !key_path_match {
-            return Err(AppError::Unauthorized(
+            return Err(AppError::unauthorized_coded(
+                "ddl_api_key_database_mismatch",
                 "URL 中的 database_slug 与 API Key 绑定的数据库不一致".to_string(),
+                serde_json::json!({}),
             ));
         }
 
@@ -656,15 +696,21 @@ pub async fn ddl_auth_middleware(
         return Ok(next.run(req).await);
     }
 
-    Err(AppError::Unauthorized(
+    Err(AppError::unauthorized_coded(
+        "ddl_missing_credentials",
         "缺少有效的 JWT 或 API Key".to_string(),
+        serde_json::json!({}),
     ))
 }
 
 fn require_database_id(opt: Option<Extension<CurrentDatabaseId>>) -> Result<i32> {
     opt.map(|Extension(CurrentDatabaseId(id))| id)
         .ok_or_else(|| {
-            AppError::InvalidQuery("缺少 X-Database-Id 请求头，无法在租户库上执行 DDL".to_string())
+            AppError::validation(
+                "ddl_missing_database_header",
+                "缺少 X-Database-Id 请求头，无法在租户库上执行 DDL".to_string(),
+                serde_json::json!({}),
+            )
         })
 }
 
@@ -714,6 +760,8 @@ pub async fn create_table(
             }
         })),
         None,
+        Some("oplog_table_create"),
+        json!({ "schema": req.schema, "table": req.table }),
     );
     Ok(Json(result))
 }
@@ -806,13 +854,19 @@ async fn create_table_inner(pool: &PgPool, req: &CreateTableRequest) -> Result<V
     check_schema_allowed(&req.schema)?;
     check_ident("表名", &req.table)?;
     if req.columns.is_empty() {
-        return Err(AppError::InvalidQuery("至少需要 1 列才能建表".to_string()));
+        return Err(AppError::validation(
+            "ddl_table_needs_column",
+            "至少需要 1 列才能建表".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let pk_count = req.columns.iter().filter(|c| c.is_primary_key).count();
     if pk_count > 1 {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "ddl_composite_pk_unsupported",
             "v1 不支持复合主键；请用单列主键 + 唯一约束/索引等价表达".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -832,10 +886,11 @@ async fn create_table_inner(pool: &PgPool, req: &CreateTableRequest) -> Result<V
     for idx in &req.indexes {
         check_ident("索引名", &idx.name)?;
         if idx.columns.is_empty() {
-            return Err(AppError::InvalidQuery(format!(
-                "索引 '{}' 至少需要 1 列",
-                idx.name
-            )));
+            return Err(AppError::validation(
+                "ddl_index_needs_column",
+                format!("索引 '{}' 至少需要 1 列", idx.name),
+                serde_json::json!({ "index_name": idx.name }),
+            ));
         }
         let mut col_idents = Vec::with_capacity(idx.columns.len());
         for c in &idx.columns {
@@ -915,6 +970,8 @@ pub async fn drop_table(
             "fields": { "Schema": schema, "级联删除": q.cascade }
         })),
         None,
+        Some("oplog_table_delete"),
+        json!({ "schema": schema, "table": table, "cascade": q.cascade }),
     );
     Ok(Json(result))
 }
@@ -1012,6 +1069,12 @@ pub async fn alter_table(
         destructive.then_some(true),
         alter_ops_to_change(&table, &req.operations),
         None,
+        Some(if destructive {
+            "oplog_table_alter_destructive"
+        } else {
+            "oplog_table_alter"
+        }),
+        json!({ "schema": schema, "table": table }),
     );
     Ok(Json(result))
 }
@@ -1051,7 +1114,11 @@ async fn alter_table_inner(
     check_schema_allowed(schema)?;
     check_ident("表名", table)?;
     if operations.is_empty() {
-        return Err(AppError::InvalidQuery("operations 不能为空".to_string()));
+        return Err(AppError::validation(
+            "ddl_operations_empty",
+            "operations 不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let mut sqls = Vec::with_capacity(operations.len());

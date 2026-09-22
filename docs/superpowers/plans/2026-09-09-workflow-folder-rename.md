@@ -94,7 +94,7 @@ These should compile against the existing `trim_name`. If they pass immediately,
 
 - [ ] **Step 2: Run tests**
 
-Run: `cargo test -p onebase --lib workflow_folder_handlers::tests -- --nocapture`
+Run: `cargo test -p planeos --lib workflow_folder_handlers::tests -- --nocapture`
 
 Expected: 4 PASS.
 
@@ -741,7 +741,7 @@ Run:
 cd frontend-nextjs && npx tsc --noEmit
 npx tsx frontend-nextjs/components/workflow/list/folderRename.test.ts
 npx tsx frontend-nextjs/components/workflow/list/buildFolderTree.test.ts
-cargo test -p onebase --lib workflow_folder_handlers::tests -- --nocapture
+cargo test -p planeos --lib workflow_folder_handlers::tests -- --nocapture
 ```
 
 Expected: all pass.

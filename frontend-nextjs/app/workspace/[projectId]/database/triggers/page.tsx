@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   schemaAPI,
   queryAPI,
@@ -29,6 +30,7 @@ interface FunctionInfo {
 
 export default function TriggersPage() {
   const { currentSchema } = useAppStore()
+  const t = useTranslations('wsTriggers')
   const notify = useNotification()
   const [triggers, setTriggers] = useState<TriggerInfo[]>([])
   const [tables, setTables] = useState<TableInfo[]>([])
@@ -71,7 +73,7 @@ export default function TriggersPage() {
       const response = await schemaAPI.listTables(currentSchema)
       setTables(response.data.filter((t: TableInfo) => t.table_type === 'BASE TABLE'))
     } catch (err) {
-      console.error('加载表列表失败:', err)
+      console.error(t('loadTablesFailed'), err)
     }
   }
 
@@ -89,7 +91,7 @@ export default function TriggersPage() {
         }))
       setFunctions(triggerFns)
     } catch (err) {
-      console.error('加载触发器函数失败:', err)
+      console.error(t('loadFnFailed'), err)
     }
   }
 
@@ -102,7 +104,7 @@ export default function TriggersPage() {
   // 创建触发器
   const createTrigger = async () => {
     if (!newTrigger.name || !newTrigger.table || !newTrigger.function) {
-      notify.warning('请填写所有必填字段')
+      notify.warning(t('errRequired'))
       return
     }
     
@@ -121,7 +123,7 @@ export default function TriggersPage() {
       // 触发器创建抽屉本身是用户填表 + 点保存，意图明确；executeManaged
       // 直接带 ack，省一层通用确认 modal。
       await queryAPI.executeManaged(sql)
-      notify.success('触发器创建成功')
+      notify.success(t('createOk'))
       setShowCreateForm(false)
       setNewTrigger({
         name: '',
@@ -140,12 +142,12 @@ export default function TriggersPage() {
 
   // 删除触发器
   const deleteTrigger = async (trigger: TriggerInfo) => {
-    const confirmed = window.confirm(`确定要删除触发器 "${trigger.trigger_name}" 吗？`)
+    const confirmed = window.confirm(t('confirmDelete', { name: trigger.trigger_name }))
     if (!confirmed) return
     
     try {
       await queryAPI.executeManaged(`DROP TRIGGER "${trigger.trigger_name}" ON "${currentSchema}"."${trigger.table_name}";`)
-      notify.success('触发器已删除')
+      notify.success(t('deleteOk'))
       setSelectedTrigger(null)
       loadTriggers()
     } catch (err: any) {
@@ -158,7 +160,7 @@ export default function TriggersPage() {
     try {
       const action = trigger.is_enabled ? 'DISABLE' : 'ENABLE'
       await queryAPI.executeManaged(`ALTER TABLE "${currentSchema}"."${trigger.table_name}" ${action} TRIGGER "${trigger.trigger_name}";`)
-      notify.success(`触发器已${trigger.is_enabled ? '禁用' : '启用'}`)
+      notify.success(t('toggled', { state: trigger.is_enabled ? t('disable') : t('enable') }))
       loadTriggers()
     } catch (err: any) {
       notify.error(err)
@@ -186,9 +188,9 @@ export default function TriggersPage() {
       {/* 页面头部 */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-800">触发器管理</h1>
+          <h1 className="text-2xl font-semibold text-gray-800">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            管理数据库表的触发器
+            {t('subtitle')}
           </p>
         </div>
         
@@ -196,10 +198,10 @@ export default function TriggersPage() {
           onClick={() => setShowCreateForm(true)}
           disabled={functions.length === 0}
           className="btn-primary"
-          title={functions.length === 0 ? '请先创建触发器函数' : ''}
+          title={functions.length === 0 ? t('needFnFirst') : ''}
         >
           <i className="fas fa-plus mr-2"></i>
-          创建触发器
+          {t('createTrigger')}
         </button>
       </div>
 
@@ -207,7 +209,7 @@ export default function TriggersPage() {
         <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
           <p className="text-sm text-yellow-700">
             <i className="fas fa-info-circle mr-2"></i>
-            未找到触发器函数。请先在"函数管理"中创建返回类型为 trigger 的函数。
+            {t('noFnHint')}
           </p>
         </div>
       )}
@@ -224,7 +226,7 @@ export default function TriggersPage() {
                   type="text"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="搜索触发器..."
+                  placeholder={t('phSearch')}
                   className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />
               </div>
@@ -233,13 +235,13 @@ export default function TriggersPage() {
               {loading && triggers.length === 0 ? (
                 <div className="p-4 text-center text-gray-500">
                   <i className="fas fa-spinner fa-spin mr-2"></i>
-                  加载中...
+                  {t('loading')}
                 </div>
               ) : filteredTriggers.length === 0 ? (
                 <div className="p-8 text-center">
                   <i className="fas fa-bolt text-4xl text-gray-300 mb-3"></i>
                   <p className="text-gray-500">
-                    {searchTerm ? '未找到匹配的触发器' : '暂无触发器'}
+                    {searchTerm ? t('noMatch') : t('empty')}
                   </p>
                 </div>
               ) : (
@@ -269,7 +271,7 @@ export default function TriggersPage() {
                         <span className={`text-xs px-2 py-0.5 rounded ${
                           trigger.is_enabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
                         }`}>
-                          {trigger.is_enabled ? '启用' : '禁用'}
+                          {trigger.is_enabled ? t('enable') : t('disable')}
                         </span>
                       </div>
                       <div className="mt-2 flex items-center space-x-2">
@@ -293,7 +295,7 @@ export default function TriggersPage() {
           {!selectedTrigger ? (
             <div className="card p-8 text-center">
               <i className="fas fa-bolt text-5xl text-gray-300 mb-4"></i>
-              <p className="text-gray-500">选择一个触发器查看详情</p>
+              <p className="text-gray-500">{t('selectHint')}</p>
             </div>
           ) : (
             <div className="card">
@@ -311,7 +313,7 @@ export default function TriggersPage() {
                     }`}
                   >
                     <i className={`fas ${selectedTrigger.is_enabled ? 'fa-pause' : 'fa-play'} mr-1`}></i>
-                    {selectedTrigger.is_enabled ? '禁用' : '启用'}
+                    {selectedTrigger.is_enabled ? t('disable') : t('enable')}
                   </button>
                   <button
                     onClick={() => deleteTrigger(selectedTrigger)}
@@ -324,25 +326,25 @@ export default function TriggersPage() {
               <div className="p-4 space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <span className="text-xs text-gray-500">关联表</span>
+                    <span className="text-xs text-gray-500">{t('relTable')}</span>
                     <p className="text-sm font-medium text-gray-900">{selectedTrigger.table_name}</p>
                   </div>
                   <div>
-                    <span className="text-xs text-gray-500">执行时机</span>
+                    <span className="text-xs text-gray-500">{t('timing')}</span>
                     <p className="text-sm text-gray-900">{selectedTrigger.action_timing}</p>
                   </div>
                   <div>
-                    <span className="text-xs text-gray-500">触发事件</span>
+                    <span className="text-xs text-gray-500">{t('event')}</span>
                     <p className="text-sm text-gray-900">{selectedTrigger.event_manipulation}</p>
                   </div>
                   <div>
-                    <span className="text-xs text-gray-500">触发级别</span>
+                    <span className="text-xs text-gray-500">{t('level')}</span>
                     <p className="text-sm text-gray-900">{selectedTrigger.action_orientation}</p>
                   </div>
                 </div>
                 
                 <div>
-                  <span className="text-xs text-gray-500">触发器定义</span>
+                  <span className="text-xs text-gray-500">{t('definition')}</span>
                   <pre className="mt-2 p-4 bg-gray-900 text-green-400 rounded-lg text-sm font-mono overflow-auto max-h-[300px]">
                     {selectedTrigger.action_statement}
                   </pre>
@@ -357,7 +359,7 @@ export default function TriggersPage() {
       <Drawer
         isOpen={showCreateForm}
         onClose={() => setShowCreateForm(false)}
-        title="创建触发器"
+        title={t('createTrigger')}
         size="md"
         footer={
           <div className="flex gap-3">
@@ -365,7 +367,7 @@ export default function TriggersPage() {
               onClick={() => setShowCreateForm(false)}
               className="flex-1 h-11 px-5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-all duration-200"
             >
-              取消
+              {t('cancel')}
             </button>
             <button
               onClick={createTrigger}
@@ -373,32 +375,32 @@ export default function TriggersPage() {
               className="flex-1 h-11 px-5 text-sm font-medium text-white bg-gradient-to-r from-amber-500 to-amber-600 rounded-lg hover:from-amber-600 hover:to-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-sm hover:shadow-md flex items-center justify-center"
             >
               <i className="fas fa-bolt mr-2"></i>
-              创建触发器
+              {t('createTrigger')}
             </button>
           </div>
         }
       >
         <div className="space-y-5">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">触发器名称</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">{t('triggerName')}</label>
             <input
               type="text"
               value={newTrigger.name}
               onChange={(e) => setNewTrigger({ ...newTrigger, name: e.target.value })}
-              placeholder="输入触发器名称"
+              placeholder={t('phName')}
               className="w-full input-base"
               autoFocus
             />
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">关联表</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">{t('relTable')}</label>
             <select
               value={newTrigger.table}
               onChange={(e) => setNewTrigger({ ...newTrigger, table: e.target.value })}
               className="w-full input-base"
             >
-              <option value="">选择表...</option>
+              <option value="">{t('selectTable')}</option>
               {tables.map(table => (
                 <option key={table.table_name} value={table.table_name}>
                   {table.table_name}
@@ -409,33 +411,33 @@ export default function TriggersPage() {
           
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">执行时机</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{t('timing')}</label>
               <select
                 value={newTrigger.timing}
                 onChange={(e) => setNewTrigger({ ...newTrigger, timing: e.target.value })}
                 className="w-full input-base"
               >
-                <option value="BEFORE">BEFORE (之前)</option>
-                <option value="AFTER">AFTER (之后)</option>
-                <option value="INSTEAD OF">INSTEAD OF (替代)</option>
+                <option value="BEFORE">{t('timingBefore')}</option>
+                <option value="AFTER">{t('timingAfter')}</option>
+                <option value="INSTEAD OF">{t('timingInstead')}</option>
               </select>
             </div>
             
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">触发级别</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{t('level')}</label>
               <select
                 value={newTrigger.forEach}
                 onChange={(e) => setNewTrigger({ ...newTrigger, forEach: e.target.value })}
                 className="w-full input-base"
               >
-                <option value="ROW">FOR EACH ROW (每行)</option>
-                <option value="STATEMENT">FOR EACH STATEMENT (每语句)</option>
+                <option value="ROW">{t('levelRow')}</option>
+                <option value="STATEMENT">{t('levelStatement')}</option>
               </select>
             </div>
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-3">触发事件</label>
+            <label className="block text-sm font-medium text-gray-700 mb-3">{t('event')}</label>
             <div className="grid grid-cols-2 gap-2">
               {['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'].map(event => (
                 <label 
@@ -461,13 +463,13 @@ export default function TriggersPage() {
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">触发器函数</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">{t('triggerFn')}</label>
             <select
               value={newTrigger.function}
               onChange={(e) => setNewTrigger({ ...newTrigger, function: e.target.value })}
               className="w-full input-base"
             >
-              <option value="">选择函数...</option>
+              <option value="">{t('selectFn')}</option>
               {functions.map(func => (
                 <option key={func.function_name} value={func.function_name}>
                   {func.function_name}()
@@ -477,25 +479,25 @@ export default function TriggersPage() {
             {functions.length === 0 && (
               <p className="text-xs text-yellow-600 mt-1">
                 <i className="fas fa-exclamation-triangle mr-1"></i>
-                请先创建返回类型为 trigger 的函数
+                {t('createFnHint')}
               </p>
             )}
           </div>
           
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              条件表达式 <span className="text-gray-400 font-normal">(可选)</span>
+              {t('condition')} <span className="text-gray-400 font-normal">{t('optional')}</span>
             </label>
             <input
               type="text"
               value={newTrigger.condition}
               onChange={(e) => setNewTrigger({ ...newTrigger, condition: e.target.value })}
-              placeholder="例如: NEW.status = 'active'"
+              placeholder={t('phCondition')}
               className="w-full input-base font-mono text-sm"
             />
             <p className="text-xs text-gray-500 mt-1">
               <i className="fas fa-info-circle mr-1"></i>
-              WHEN 子句的条件，只有满足条件时才触发
+              {t('conditionHint')}
             </p>
           </div>
         </div>

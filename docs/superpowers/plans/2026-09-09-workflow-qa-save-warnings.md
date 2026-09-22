@@ -150,7 +150,7 @@ Order: add `input_schema: None` to the struct and all literals first so the crat
 
 - [x] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p onebase --lib workflow_qa:: -- --nocapture`
+Run: `cargo test -p planeos --lib workflow_qa:: -- --nocapture`
 
 Expected: FAIL on the new `style_*` / `lint_unsaved` tests (`assert!` false). Existing 23 tests still pass.
 
@@ -199,7 +199,7 @@ pub fn lint_unsaved(
 
 - [x] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p onebase --lib workflow_qa:: -- --nocapture`
+Run: `cargo test -p planeos --lib workflow_qa:: -- --nocapture`
 
 Expected: all `workflow_qa` tests PASS (old + new).
 
@@ -219,7 +219,7 @@ git commit -m "feat: add workflow style lint rules for save-time warnings."
 - Modify: `src/main.rs` — register `POST /api/admin/workflows/qa` immediately after the `debug` route (must be before `/:id`)
 
 **Interfaces:**
-- Consumes: `resolve_tenant_for_workflow_input`, `onebase::workflow_qa::{lint_unsaved, Finding}` — **bin crate**: `workflow_qa` is on the lib crate, so the handler uses `onebase::workflow_qa::lint_unsaved` (same as `mcp_tools`).
+- Consumes: `resolve_tenant_for_workflow_input`, `planeos::workflow_qa::{lint_unsaved, Finding}` — **bin crate**: `workflow_qa` is on the lib crate, so the handler uses `planeos::workflow_qa::lint_unsaved` (same as `mcp_tools`).
 - Produces:
   - `pub struct QaWorkflowRequest { pub nodes: Value, pub edges: Value, pub database_id: Option<i32>, pub tenant_id: Option<i32>, pub trigger_type: Option<String>, pub input_schema: Option<Value> }`
   - `pub async fn qa_workflow(...) -> Result<Json<Value>>`
@@ -235,7 +235,7 @@ pub async fn qa_workflow(
     let _ = resolve_tenant_for_workflow_input(&pool, &claims, req.database_id, req.tenant_id).await?;
     let trigger = req.trigger_type.as_deref().unwrap_or("manual");
     let schema = req.input_schema.as_ref().filter(|v| !v.is_null());
-    let findings = onebase::workflow_qa::lint_unsaved(trigger, schema, &req.nodes, &req.edges)
+    let findings = planeos::workflow_qa::lint_unsaved(trigger, schema, &req.nodes, &req.edges)
         .map_err(AppError::InvalidQuery)?;
     Ok(Json(json!({ "findings": findings })))
 }
@@ -247,7 +247,7 @@ Unit-test the mapping without a live server by testing `lint_unsaved` (already i
 
 - [x] **Step 1: Write a compile-level assertion test in `workflow_handlers` only if cheap**
 
-Skip a new failing handler test (no in-process HTTP harness for this module). Task 1 `lint_unsaved` covers 400-equivalent `Err`. Proceed to implement the route; verification is `cargo test --bin onebase mcp_tools::tests::test_tool_definitions_shape` plus `cargo check --bin onebase` to ensure `qa_workflow` links.
+Skip a new failing handler test (no in-process HTTP harness for this module). Task 1 `lint_unsaved` covers 400-equivalent `Err`. Proceed to implement the route; verification is `cargo test --bin planeos mcp_tools::tests::test_tool_definitions_shape` plus `cargo check --bin planeos` to ensure `qa_workflow` links.
 
 - [x] **Step 2: Implement handler + route**
 
@@ -265,8 +265,8 @@ In `src/main.rs` after the debug route:
 Run:
 
 ```
-cargo test -p onebase --lib workflow_qa:: -- --nocapture
-cargo check --bin onebase
+cargo test -p planeos --lib workflow_qa:: -- --nocapture
+cargo check --bin planeos
 ```
 
 Expected: PASS / finished without errors.

@@ -54,8 +54,10 @@ async fn require_tenant_admin(
     if admins.contains(&tenant_id) {
         Ok(())
     } else {
-        Err(AppError::Forbidden(
+        Err(AppError::forbidden_coded(
+            "es_admin_tenant_admin_required",
             "仅超管或该租户 owner/admin 可管理 ES 连接".to_string(),
+            serde_json::json!({}),
         ))
     }
 }
@@ -72,7 +74,13 @@ async fn fetch_connection_authorized(
             .fetch_optional(pool)
             .await
             .map_err(|e| AppError::Internal(format!("查询 ES 连接失败: {e}")))?
-            .ok_or_else(|| AppError::NotFound(format!("ES 连接 {} 不存在", id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_coded(
+                    "es_admin_connection_not_found",
+                    format!("ES 连接 {} 不存在", id),
+                    serde_json::json!({ "id": id }),
+                )
+            })?;
     require_tenant_admin(pool, claims, conn.tenant_id).await?;
     Ok(conn)
 }
@@ -250,18 +258,21 @@ pub async fn update_connection(
             (None, t) if t == existing.auth_type => existing.auth_credential_enc.clone(),
             // 切了 auth_type 但没给新 credential → 拒绝（防止用旧 ApiKey 当 Basic user:pass 解析）
             (None, _) => {
-                return Err(AppError::InvalidQuery(
+                return Err(AppError::validation(
+                    "es_admin_auth_type_switch_requires_credential",
                     "切换 auth_type 时必须同时提供新的 credential".to_string(),
+                    serde_json::json!({}),
                 ));
             }
             // 给了非空 credential → 重新加密
             (Some(s), _) if !s.is_empty() => Some(crypto::encrypt_secret(s)?),
             // 给了空串但 auth_type 不是 none → 拒
             (Some(_), _) => {
-                return Err(AppError::InvalidQuery(format!(
-                    "auth_type={} 必须提供非空 credential",
-                    final_auth_type
-                )));
+                return Err(AppError::validation(
+                    "es_admin_credential_required_for_auth_type",
+                    format!("auth_type={} 必须提供非空 credential", final_auth_type),
+                    serde_json::json!({ "auth_type": final_auth_type }),
+                ));
             }
         };
 
@@ -387,14 +398,20 @@ pub async fn create_token(
     let _ = fetch_connection_authorized(&pool, &claims, connection_id).await?;
 
     if req.name.trim().is_empty() {
-        return Err(AppError::InvalidQuery("token name 不能为空".to_string()));
+        return Err(AppError::validation(
+            "es_admin_token_name_empty",
+            "token name 不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
     let methods = req.allowed_methods.unwrap_or_else(default_methods);
     validate_methods(&methods)?;
     let allowlist = req.index_allowlist.unwrap_or_else(|| vec!["*".to_string()]);
     if allowlist.is_empty() {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "es_admin_index_allowlist_empty",
             "index_allowlist 至少要有一项（用 [\"*\"] 表示不限）".to_string(),
+            serde_json::json!({}),
         ));
     }
     let denylist = req.path_denylist.unwrap_or_else(default_path_denylist);
@@ -448,8 +465,10 @@ pub async fn update_token(
     }
     if let Some(a) = &req.index_allowlist {
         if a.is_empty() {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "es_admin_update_index_allowlist_empty",
                 "index_allowlist 至少要有一项".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -477,7 +496,13 @@ pub async fn update_token(
     .fetch_optional(&pool)
     .await
     .map_err(|e| AppError::Internal(format!("更新 token 失败: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("token {} 不存在", token_id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "es_admin_token_not_found",
+            format!("token {} 不存在", token_id),
+            serde_json::json!({ "token_id": token_id }),
+        )
+    })?;
     Ok(Json(row))
 }
 
@@ -502,22 +527,29 @@ pub async fn delete_token(
 fn validate_auth_type(t: &str) -> Result<(), AppError> {
     match t {
         "api_key" | "basic" | "none" => Ok(()),
-        other => Err(AppError::InvalidQuery(format!(
-            "非法 auth_type: {} （支持 api_key / basic / none）",
-            other
-        ))),
+        other => Err(AppError::validation(
+            "es_admin_auth_type_invalid",
+            format!("非法 auth_type: {} （支持 api_key / basic / none）", other),
+            serde_json::json!({ "auth_type": other }),
+        )),
     }
 }
 
 fn validate_base_url(url: &str) -> Result<(), AppError> {
     let trimmed = url.trim();
     if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "es_admin_base_url_scheme_invalid",
             "base_url 必须以 http:// 或 https:// 开头".to_string(),
+            serde_json::json!({}),
         ));
     }
     if trimmed.contains(' ') || trimmed.contains('\n') {
-        return Err(AppError::InvalidQuery("base_url 含非法字符".to_string()));
+        return Err(AppError::validation(
+            "es_admin_base_url_illegal_chars",
+            "base_url 含非法字符".to_string(),
+            serde_json::json!({}),
+        ));
     }
     Ok(())
 }
@@ -528,10 +560,11 @@ fn encrypt_credential(
 ) -> Result<Option<String>, AppError> {
     match (auth_type, credential) {
         ("none", _) => Ok(None),
-        (_, None) | (_, Some("")) => Err(AppError::InvalidQuery(format!(
-            "auth_type={} 必须提供非空 credential",
-            auth_type
-        ))),
+        (_, None) | (_, Some("")) => Err(AppError::validation(
+            "es_admin_credential_required_on_create",
+            format!("auth_type={} 必须提供非空 credential", auth_type),
+            serde_json::json!({ "auth_type": auth_type }),
+        )),
         (_, Some(s)) => Ok(Some(crypto::encrypt_secret(s)?)),
     }
 }
@@ -584,17 +617,20 @@ fn default_path_denylist() -> Vec<String> {
 fn validate_methods(methods: &[String]) -> Result<(), AppError> {
     const VALID: &[&str] = &["GET", "POST", "PUT", "DELETE", "HEAD", "PATCH", "OPTIONS"];
     if methods.is_empty() {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "es_admin_allowed_methods_empty",
             "allowed_methods 不能为空".to_string(),
+            serde_json::json!({}),
         ));
     }
     for m in methods {
         let upper = m.to_uppercase();
         if !VALID.contains(&upper.as_str()) {
-            return Err(AppError::InvalidQuery(format!(
-                "非法 HTTP method: {}（允许 {:?}）",
-                m, VALID
-            )));
+            return Err(AppError::validation(
+                "es_admin_method_invalid",
+                format!("非法 HTTP method: {}（允许 {:?}）", m, VALID),
+                serde_json::json!({ "method": m, "allowed": VALID }),
+            ));
         }
     }
     Ok(())
@@ -603,12 +639,18 @@ fn validate_methods(methods: &[String]) -> Result<(), AppError> {
 fn validate_regex_list(patterns: &[String]) -> Result<(), AppError> {
     for p in patterns {
         if p.is_empty() {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "es_admin_path_denylist_empty_pattern",
                 "path_denylist 不能含空字符串".to_string(),
+                serde_json::json!({}),
             ));
         }
         regex::Regex::new(p).map_err(|e| {
-            AppError::InvalidQuery(format!("path_denylist 含非法正则 `{}`: {}", p, e))
+            AppError::validation(
+                "es_admin_path_denylist_invalid_regex",
+                format!("path_denylist 含非法正则 `{}`: {}", p, e),
+                serde_json::json!({ "pattern": p, "error": e.to_string() }),
+            )
         })?;
     }
     Ok(())
@@ -617,7 +659,11 @@ fn validate_regex_list(patterns: &[String]) -> Result<(), AppError> {
 fn map_unique_violation(e: sqlx::Error, msg: &str) -> AppError {
     if let sqlx::Error::Database(ref db_err) = e {
         if db_err.code().as_deref() == Some("23505") {
-            return AppError::InvalidQuery(msg.to_string());
+            return AppError::validation(
+                "es_admin_duplicate_connection_name",
+                msg.to_string(),
+                serde_json::json!({}),
+            );
         }
     }
     AppError::Internal(format!("DB 错误: {e}"))

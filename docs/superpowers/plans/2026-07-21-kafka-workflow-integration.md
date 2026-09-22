@@ -163,7 +163,7 @@ mod tests {
             &json!({ "connection_id": 1, "topic": "orders" }),
         )
         .unwrap();
-        assert_eq!(cfg.group_id, "onebase-wf-42");
+        assert_eq!(cfg.group_id, "planeos-wf-42");
         assert_eq!(cfg.auto_offset_reset, "latest");
         assert_eq!(cfg.value_format, "json");
     }
@@ -202,7 +202,7 @@ mod tests {
 
 `trigger_config.rs`:
 - Require `connection_id` (i64) + non-empty `topic`
-- `group_id` default `format!("onebase-wf-{workflow_id}")`
+- `group_id` default `format!("planeos-wf-{workflow_id}")`
 - `auto_offset_reset` in `latest|earliest`, default `latest`
 - `value_format` in `json|text`, default `json`
 - `build_kafka_trigger_data`: shape per spec §6.5; json parse failure → `payload: null`
@@ -476,7 +476,7 @@ Trigger config defaults:
 { connection_id: 0, topic: '', group_id: '', auto_offset_reset: 'latest', value_format: 'json' }
 ```
 
-Empty `group_id` → backend defaults to `onebase-wf-{id}`.
+Empty `group_id` → backend defaults to `planeos-wf-{id}`.
 
 - [ ] **Step 1: Node palette + config panel**
 - [ ] **Step 2: Trigger meta + forms**

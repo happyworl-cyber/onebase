@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { cn, formatDateTime } from '@/lib/utils'
 import {
   COMPACT_LIST_ACTIONS_CLASS,
@@ -46,11 +47,12 @@ interface WorkflowRowProps {
 }
 
 function PublishBadge({ w }: { w: WorkflowListItem }) {
+  const t = useTranslations('wfList')
   if (w.published_version == null) {
-    return <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">未发布</span>
+    return <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">{t('unpublished')}</span>
   }
   if (w.has_unpublished) {
-    return <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">有修改</span>
+    return <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">{t('hasChanges')}</span>
   }
   return null
 }
@@ -65,6 +67,7 @@ function draftMenuHandlers(
 }
 
 function TriggerBadge({ triggerType }: { triggerType: string }) {
+  const t = useTranslations('wfTrigger')
   const meta = TRIGGER_META[triggerType] ?? TRIGGER_META.manual
   return (
     <span
@@ -74,7 +77,7 @@ function TriggerBadge({ triggerType }: { triggerType: string }) {
       )}
     >
       <i className={cn('fas text-[10px]', meta.icon)} />
-      {meta.label}
+      {t(meta.labelKey)}
     </span>
   )
 }
@@ -116,6 +119,7 @@ function WorkflowDescription({
 
 /** 工作流 ID 徽标；当某个搜索 term 精确等于该 ID 时高亮（与后端 w.id 精确匹配语义一致）。 */
 function WorkflowIdBadge({ id, search }: { id: number; search?: string }) {
+  const t = useTranslations('wfList')
   const hit = searchTerms(search).includes(String(id))
   return (
     <span
@@ -123,7 +127,7 @@ function WorkflowIdBadge({ id, search }: { id: number; search?: string }) {
         'text-[11px] font-mono shrink-0 rounded-[2px]',
         hit ? 'bg-amber-200 px-1 text-slate-900 font-semibold' : 'text-slate-400',
       )}
-      title={`工作流 ID：${id}`}
+      title={t('workflowIdTitle', { id })}
     >
       #{id}
     </span>
@@ -152,6 +156,7 @@ export default function WorkflowRow({
   selected = false,
   onSelectToggle,
 }: WorkflowRowProps & { folderId: string }) {
+  const t = useTranslations('wfList')
   const meta = TRIGGER_META[w.trigger_type] ?? TRIGGER_META.manual
   const on = w.is_enabled
   const [menuOpen, setMenuOpen] = useState(false)
@@ -214,7 +219,7 @@ export default function WorkflowRow({
         )}
       >
         <span className={cn('w-1.5 h-1.5 rounded-full inline-block', on ? 'bg-emerald-400' : 'bg-slate-300')} />
-        {on ? '启用' : '禁用'}
+        {on ? t('enable') : t('disable')}
       </span>
 
       <span
@@ -223,9 +228,9 @@ export default function WorkflowRow({
           LIST_BODY_TEXT_CLASS,
           'text-slate-500 hidden md:flex truncate justify-self-start min-w-0',
         )}
-        title={w.created_by_name || '未知'}
+        title={w.created_by_name || t('unknown')}
       >
-        {w.created_by_name || '未知'}
+        {w.created_by_name || t('unknown')}
       </span>
 
       <span
@@ -234,9 +239,9 @@ export default function WorkflowRow({
           LIST_BODY_TEXT_CLASS,
           'text-slate-500 hidden md:flex truncate justify-self-start min-w-0',
         )}
-        title={w.updated_by_email || w.updated_by_name || '未知'}
+        title={w.updated_by_email || w.updated_by_name || t('unknown')}
       >
-        {w.updated_by_name || '未知'}
+        {w.updated_by_name || t('unknown')}
       </span>
 
       <span
@@ -295,6 +300,7 @@ export function WorkflowCard({
   selected = false,
   onSelectToggle,
 }: WorkflowRowProps & { folderId: string }) {
+  const t = useTranslations('wfList')
   const meta = TRIGGER_META[w.trigger_type] ?? TRIGGER_META.manual
   const on = w.is_enabled
   const [menuOpen, setMenuOpen] = useState(false)
@@ -336,7 +342,7 @@ export function WorkflowCard({
             {globalSearch && <FolderBadge folderId={folderId} folders={folders} />}
             <span className={cn('text-xs font-medium flex items-center gap-1', on ? 'text-emerald-600' : 'text-slate-400')}>
               <span className={cn('w-1.5 h-1.5 rounded-full inline-block', on ? 'bg-emerald-400' : 'bg-slate-300')} />
-              {on ? '启用' : '禁用'}
+              {on ? t('enable') : t('disable')}
             </span>
           </div>
           <div className="flex items-center gap-2 mt-1.5 min-w-0">
@@ -347,11 +353,11 @@ export function WorkflowCard({
           </div>
           {w.description && <WorkflowDescription text={w.description} highlight={search} className="mt-1.5" />}
           <div className={cn('flex items-center gap-3 mt-2 text-slate-400', LIST_SECONDARY_TEXT_CLASS)}>
-            <span>{w.nodes?.length || 0} 节点</span>
+            <span>{t('nodesCount', { n: w.nodes?.length || 0 })}</span>
             <span>·</span>
-            <span>{w.created_by_name || '未知'}</span>
+            <span>{w.created_by_name || t('unknown')}</span>
             <span>·</span>
-            <span>{w.updated_by_name || '未知'}</span>
+            <span>{w.updated_by_name || t('unknown')}</span>
             <span>·</span>
             <span title={w.updated_at ? formatDateTime(w.updated_at) : undefined}>
               {formatRelativeTime(w.updated_at)}

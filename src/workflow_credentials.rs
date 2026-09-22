@@ -1,6 +1,7 @@
 //! 项目凭证运行时：装载结果、模板解析、HTTP 头注入、字段校验。
 //! 密钥明文只短暂留在 `CredentialFields.secret`；`Debug` 不打印 secret。
 
+use crate::error::AppError;
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -147,42 +148,60 @@ pub fn apply_http_auth_headers(
     Ok(())
 }
 
-pub fn validate_kind(kind: &str) -> Result<String, String> {
+pub fn validate_kind(kind: &str) -> Result<String, AppError> {
     let kind = kind.trim().to_string();
     if matches!(kind.as_str(), "basic" | "bearer" | "api_key" | "aliyun_ak") {
         Ok(kind)
     } else {
-        Err(format!(
-            "非法凭证类型：{kind}（仅支持 basic / bearer / api_key / aliyun_ak）"
+        Err(AppError::validation(
+            "wfcred_invalid_kind",
+            format!("非法凭证类型：{kind}（仅支持 basic / bearer / api_key / aliyun_ak）"),
+            json!({ "kind": kind }),
         ))
     }
 }
 
-pub fn validate_header_name(name: &str) -> Result<Option<String>, String> {
+pub fn validate_header_name(name: &str) -> Result<Option<String>, AppError> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return Ok(None);
     }
     if trimmed.chars().count() > 128 {
-        return Err("header_name 过长（上限 128 字符）".to_string());
+        return Err(AppError::validation(
+            "wfcred_header_name_too_long",
+            "header_name 过长（上限 128 字符）",
+            json!({ "max_len": 128 }),
+        ));
     }
     if !trimmed
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
-        return Err("header_name 只允许字母数字、下划线和连字符".to_string());
+        return Err(AppError::validation(
+            "wfcred_header_name_charset",
+            "header_name 只允许字母数字、下划线和连字符",
+            json!({}),
+        ));
     }
     Ok(Some(trimmed.to_string()))
 }
 
-pub fn validate_kind_fields(kind: &str, username: Option<&str>) -> Result<(), String> {
+pub fn validate_kind_fields(kind: &str, username: Option<&str>) -> Result<(), AppError> {
     if kind == "basic" || kind == "aliyun_ak" {
         let ok = username.map(str::trim).filter(|s| !s.is_empty()).is_some();
         if !ok {
             return Err(if kind == "aliyun_ak" {
-                "aliyun_ak 凭证必须填写 AccessKeyId".into()
+                AppError::validation(
+                    "wfcred_aliyun_ak_missing_access_key_id",
+                    "aliyun_ak 凭证必须填写 AccessKeyId",
+                    json!({}),
+                )
             } else {
-                "basic 凭证必须填写用户名".into()
+                AppError::validation(
+                    "wfcred_basic_missing_username",
+                    "basic 凭证必须填写用户名",
+                    json!({}),
+                )
             });
         }
     }

@@ -262,7 +262,7 @@ impl HttpExecutor {
                 hasher.update(secret.as_bytes());
                 hasher.update(&body_bytes);
                 let sig = hex::encode(hasher.finalize());
-                req = req.header("X-Onebase-Signature", sig);
+                req = req.header("X-PlaneOS-Signature", sig);
             }
         }
 
@@ -360,7 +360,7 @@ impl ShellSandboxMode {
 ///   4. **沙盒**：bwrap / nsjail 隔离命名空间 + 整盘 ro-bind + tmpfs 覆盖可写区
 ///   5. **解释器白名单**：`is_known_interpreter` 拦掉 `/bin/rm` 之流的 shebang 伪装
 ///   6. **env 隔离**：`env_clear` 后只注入白名单（PATH/HOME + 用户显式 shell_env），
-///      不会泄露 onebase 进程自带的 secret / DB 凭据
+///      不会泄露 planeos 进程自带的 secret / DB 凭据
 ///
 /// 输出形态：
 ///   - 成功（exit_code=0）→ Ok(Value)，结构 `{ stdout, stderr, exit_code, sandbox, interpreter }`
@@ -400,7 +400,7 @@ impl ShellExecutor {
             M::Off => EffectiveSandbox::Off,
             M::Direct => {
                 tracing::warn!(
-                    "ShellExecutor: SCHEDULER_SHELL_SANDBOX_MODE=direct —— 脚本将以 onebase \
+                    "ShellExecutor: SCHEDULER_SHELL_SANDBOX_MODE=direct —— 脚本将以 planeos \
                      进程身份运行，**无沙盒**，仅限受信开发环境"
                 );
                 EffectiveSandbox::Direct
@@ -567,7 +567,7 @@ impl ShellExecutor {
             EffectiveSandbox::Direct => {
                 let mut c = tokio::process::Command::new(interpreter);
                 c.arg("-c").arg(script).current_dir(cwd);
-                // env_clear + 白名单：避免 leak onebase 进程的 SECRET / DB 凭据。
+                // env_clear + 白名单：避免 leak planeos 进程的 SECRET / DB 凭据。
                 c.env_clear();
                 c.env(
                     "PATH",
@@ -606,7 +606,7 @@ impl ShellExecutor {
                     cwd,
                 ]);
                 // 环境变量必须在 bwrap 层用 `--setenv` 注入，否则进入沙盒后会丢；
-                // onebase 自身的 env 我们不传，避免 secret 泄露。
+                // planeos 自身的 env 我们不传，避免 secret 泄露。
                 c.env_clear();
                 c.args([
                     "--setenv",

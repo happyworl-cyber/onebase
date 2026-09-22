@@ -1,6 +1,6 @@
 //! MCP 工具集 —— 工作流创作工作台的固定工具
 //!
-//! 设计原则（见 .omc/plans/onebase-workflow-mcp-plan.md）：
+//! 设计原则（见 .omc/plans/planeos-workflow-mcp-plan.md）：
 //! - 工具直接构造 axum extractor 调用现有 handler，权限/校验/审计零重复；
 //! - create 保持 is_enabled=true；create/update 只写草稿，publish 后才进入运行时；
 //! - debug 默认 dry_run=true；**生产实例**（RUST_ENV 非 development/staging/test，
@@ -136,7 +136,7 @@ config: `{ "connection_id": 整数, "model": "连接 models 列表中的字面�
 
 ### email_send（邮件）
 config: `{ "from": "Name <a@b.c>", "to": "x@y.z 或逗号分隔", "cc"/"bcc" 可选, "subject", "body" }`
-- SMTP 由环境变量提供（ONEBASE_SMTP_* / SMTP_*）；输出 `{ "sent", "accepted", "subject" }`
+- SMTP 由环境变量提供（PLANEOS_SMTP_* / SMTP_*）；输出 `{ "sent", "accepted", "subject" }`
 
 ### condition（条件分支）
 config: `{ "conditions": [{ "branch": "分支名", "expression": "表达式" }], "default_branch": "默认分支名" }`
@@ -505,17 +505,25 @@ pub fn tool_definitions() -> Value {
 pub async fn call_tool(pool: &PgPool, claims: &Claims, name: &str, args: &Value) -> Result<Value> {
     match name {
         "node_spec" => Ok(json!({ "spec": NODE_SPEC })),
-        "list_skills" => Ok(onebase::ai_skills::list_skills_json()),
+        "list_skills" => Ok(planeos::ai_skills::list_skills_json()),
         "get_skill" => {
             let name = args
                 .get("name")
                 .and_then(|v| v.as_str())
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| AppError::InvalidQuery("缺少必填参数 name".into()))?;
-            let skill = onebase::ai_skills::get_skill(name)
-                .ok_or_else(|| AppError::NotFound(format!("技能「{name}」不存在")))?;
-            Ok(onebase::ai_skills::skill_json(&skill))
+                .ok_or_else(|| {
+                    AppError::validation("mcp_missing_name", "缺少必填参数 name", serde_json::json!({}))
+                })?;
+            let skill = planeos::ai_skills::get_skill(name)
+                .ok_or_else(|| {
+                    AppError::not_found_coded(
+                        "mcp_skill_not_found",
+                        format!("技能「{name}」不存在"),
+                        serde_json::json!({ "name": name }),
+                    )
+                })?;
+            Ok(planeos::ai_skills::skill_json(&skill))
         }
         "list_llm_connections" => tool_list_llm_connections(pool, claims, args).await,
         "list_workflows" => tool_list_workflows(pool, claims, args).await,
@@ -534,8 +542,13 @@ pub async fn call_tool(pool: &PgPool, claims: &Claims, name: &str, args: &Value)
         "update_workflow" => tool_update_workflow(pool, claims, args).await,
         "publish_workflow" => {
             let id = require_id(args)?;
-            let req: PublishWorkflowRequest = serde_json::from_value(args.clone())
-                .map_err(|e| AppError::InvalidQuery(format!("publish_workflow 参数错误: {}", e)))?;
+            let req: PublishWorkflowRequest = serde_json::from_value(args.clone()).map_err(|e| {
+                AppError::validation(
+                    "mcp_publish_workflow_invalid_params",
+                    format!("publish_workflow 参数错误: {}", e),
+                    serde_json::json!({ "error": e.to_string() }),
+                )
+            })?;
             let resp = workflow_handlers::publish_workflow(
                 State(pool.clone()),
                 Path(id),
@@ -579,7 +592,11 @@ pub async fn call_tool(pool: &PgPool, claims: &Claims, name: &str, args: &Value)
         "get_workflow_run_detail" => {
             let id = require_id(args)?;
             let run_id = args.get("run_id").and_then(|v| v.as_i64()).ok_or_else(|| {
-                AppError::InvalidQuery("缺少必填参数 run_id 或 run_id 超出范围".to_string())
+                AppError::validation(
+                    "mcp_missing_run_id",
+                    "缺少必填参数 run_id 或 run_id 超出范围",
+                    serde_json::json!({}),
+                )
             })?;
             let resp = workflow_handlers::get_workflow_run_detail(
                 State(pool.clone()),
@@ -615,7 +632,11 @@ pub async fn call_tool(pool: &PgPool, claims: &Claims, name: &str, args: &Value)
                 .and_then(|v| v.as_i64())
                 .and_then(|v| i32::try_from(v).ok())
                 .ok_or_else(|| {
-                    AppError::InvalidQuery("缺少必填参数 version 或 version 超出范围".to_string())
+                    AppError::validation(
+                        "mcp_missing_version",
+                        "缺少必填参数 version 或 version 超出范围",
+                        serde_json::json!({}),
+                    )
                 })?;
             let resp = workflow_handlers::get_workflow_version(
                 State(pool.clone()),
@@ -625,7 +646,11 @@ pub async fn call_tool(pool: &PgPool, claims: &Claims, name: &str, args: &Value)
             .await?;
             Ok(resp.0)
         }
-        _ => Err(AppError::NotFound(format!("未知工具: {}", name))),
+        _ => Err(AppError::not_found_coded(
+            "mcp_unknown_tool",
+            format!("未知工具: {}", name),
+            serde_json::json!({ "name": name }),
+        )),
     }
 }
 
@@ -637,19 +662,24 @@ async fn tool_review_workflow(pool: &PgPool, claims: &Claims, args: &Value) -> R
         axum::Extension(claims.clone()),
     )
     .await?;
-    let snap = onebase::workflow_qa::snapshot_from_get_json(&resp.0)
-        .ok_or_else(|| AppError::InvalidQuery("工作流定义缺少 id/slug/nodes".to_string()))?;
-    let (red, mut rules) = onebase::workflow_qa::review_local(&snap);
+    let snap = planeos::workflow_qa::snapshot_from_get_json(&resp.0).ok_or_else(|| {
+        AppError::validation(
+            "mcp_workflow_definition_missing_fields",
+            "工作流定义缺少 id/slug/nodes",
+            serde_json::json!({}),
+        )
+    })?;
+    let (red, mut rules) = planeos::workflow_qa::review_local(&snap);
     let tenant_id = resp
         .0
         .get("workflow")
         .and_then(|w| w.get("tenant_id"))
         .and_then(|v| v.as_i64())
         .and_then(|n| i32::try_from(n).ok());
-    onebase::workflow_qa::attach_call_graph(pool, &snap, tenant_id, None, &mut rules).await;
+    planeos::workflow_qa::attach_call_graph(pool, &snap, tenant_id, None, &mut rules).await;
     let ai = crate::ai::review_workflow_with_project_provider(pool, &red, &rules).await;
-    Ok(onebase::workflow_qa::review_item_json(
-        &onebase::workflow_qa::to_review_item(&red, rules, ai),
+    Ok(planeos::workflow_qa::review_item_json(
+        &planeos::workflow_qa::to_review_item(&red, rules, ai),
     ))
 }
 
@@ -660,37 +690,37 @@ async fn tool_review_workflows(pool: &PgPool, claims: &Claims, args: &Value) -> 
         .get("workflows")
         .and_then(|v| v.as_array())
         .unwrap_or(&empty);
-    let max_ai = onebase::workflow_qa::clamp_max_ai(args.get("max_ai").and_then(|v| v.as_i64()));
+    let max_ai = planeos::workflow_qa::clamp_max_ai(args.get("max_ai").and_then(|v| v.as_i64()));
     let mut scanned_snaps = Vec::new();
     let mut cand = Vec::new();
     let mut sketches_by_tenant: std::collections::HashMap<
         Option<i32>,
-        Vec<onebase::workflow_qa::WorkflowSketch>,
+        Vec<planeos::workflow_qa::WorkflowSketch>,
     > = std::collections::HashMap::new();
     for item in arr {
-        let Some(snap) = onebase::workflow_qa::snapshot_from_list_item(item) else {
+        let Some(snap) = planeos::workflow_qa::snapshot_from_list_item(item) else {
             continue;
         };
-        let (red, mut rules) = onebase::workflow_qa::review_local(&snap);
+        let (red, mut rules) = planeos::workflow_qa::review_local(&snap);
         let tenant_id = item
             .get("tenant_id")
             .and_then(|v| v.as_i64())
             .and_then(|n| i32::try_from(n).ok());
         if !sketches_by_tenant.contains_key(&tenant_id) {
-            let loaded = onebase::workflow_qa::load_tenant_sketches(pool, tenant_id)
+            let loaded = planeos::workflow_qa::load_tenant_sketches(pool, tenant_id)
                 .await
                 .unwrap_or_default();
             sketches_by_tenant.insert(tenant_id, loaded);
         }
         if let Some(sketches) = sketches_by_tenant.get(&tenant_id) {
-            rules.extend(onebase::workflow_qa::scan_call_graph(&snap, None, sketches));
-            onebase::workflow_qa::sort_findings(&mut rules);
+            rules.extend(planeos::workflow_qa::scan_call_graph(&snap, None, sketches));
+            planeos::workflow_qa::sort_findings(&mut rules);
         }
-        let has_code = onebase::workflow_qa::has_code_node(&red.nodes);
+        let has_code = planeos::workflow_qa::has_code_node(&red.nodes);
         cand.push((red.id, rules.clone(), has_code));
         scanned_snaps.push((red, rules));
     }
-    let ai_ids = onebase::workflow_qa::pick_ai_ids(&cand, max_ai);
+    let ai_ids = planeos::workflow_qa::pick_ai_ids(&cand, max_ai);
     let mut sent = 0usize;
     let mut ai_ok = 0usize;
     let mut ai_error = 0usize;
@@ -701,31 +731,31 @@ async fn tool_review_workflows(pool: &PgPool, claims: &Claims, args: &Value) -> 
             sent += 1;
             let r = crate::ai::review_workflow_with_project_provider(pool, &red, &rules).await;
             match r.status {
-                onebase::workflow_qa::AiStatus::Ok => ai_ok += 1,
-                onebase::workflow_qa::AiStatus::Error => ai_error += 1,
-                onebase::workflow_qa::AiStatus::Skipped => {}
+                planeos::workflow_qa::AiStatus::Ok => ai_ok += 1,
+                planeos::workflow_qa::AiStatus::Error => ai_error += 1,
+                planeos::workflow_qa::AiStatus::Skipped => {}
             }
             r
         } else {
-            onebase::workflow_qa::AiResult {
-                status: onebase::workflow_qa::AiStatus::Skipped,
+            planeos::workflow_qa::AiResult {
+                status: planeos::workflow_qa::AiStatus::Skipped,
                 findings: vec![],
                 error: None,
             }
         };
-        let item = onebase::workflow_qa::to_review_item(&red, rules, ai);
+        let item = planeos::workflow_qa::to_review_item(&red, rules, ai);
         if send || !item.rules.is_empty() {
             items.push(item);
         }
     }
-    let summary = onebase::workflow_qa::BatchSummary {
+    let summary = planeos::workflow_qa::BatchSummary {
         scanned: arr.len(),
         rules_hit: items.iter().filter(|i| !i.rules.is_empty()).count(),
         sent_to_ai: sent,
         ai_ok,
         ai_error,
     };
-    Ok(onebase::workflow_qa::batch_json(&summary, &items))
+    Ok(planeos::workflow_qa::batch_json(&summary, &items))
 }
 
 fn require_id(args: &Value) -> Result<i32> {
@@ -733,7 +763,13 @@ fn require_id(args: &Value) -> Result<i32> {
     args.get("id")
         .and_then(|v| v.as_i64())
         .and_then(|v| i32::try_from(v).ok())
-        .ok_or_else(|| AppError::InvalidQuery("缺少必填参数 id 或 id 超出范围".to_string()))
+        .ok_or_else(|| {
+            AppError::validation(
+                "mcp_missing_id",
+                "缺少必填参数 id 或 id 超出范围",
+                serde_json::json!({}),
+            )
+        })
 }
 
 /// 环境变量列表：复用页面接口同一份"鉴权 + 解密 + 审计"实现（env_var_handlers::read_env_vars_plain），
@@ -743,7 +779,13 @@ async fn tool_list_env_vars(pool: &PgPool, claims: &Claims, args: &Value) -> Res
         .get("tenant_id")
         .and_then(|v| v.as_i64())
         .and_then(|v| i32::try_from(v).ok())
-        .ok_or_else(|| AppError::InvalidQuery("缺少必填参数 tenant_id 或超出范围".to_string()))?;
+        .ok_or_else(|| {
+            AppError::validation(
+                "mcp_missing_tenant_id",
+                "缺少必填参数 tenant_id 或超出范围",
+                serde_json::json!({}),
+            )
+        })?;
     let vars = crate::env_var_handlers::read_env_vars_plain(pool, claims, tenant_id, "mcp").await?;
     Ok(json!({
         "tenant_id": tenant_id,
@@ -758,7 +800,13 @@ async fn tool_list_llm_connections(pool: &PgPool, claims: &Claims, args: &Value)
         .get("tenant_id")
         .and_then(|v| v.as_i64())
         .and_then(|v| i32::try_from(v).ok())
-        .ok_or_else(|| AppError::InvalidQuery("缺少 tenant_id".into()))?;
+        .ok_or_else(|| {
+            AppError::validation(
+                "mcp_llm_connections_missing_tenant_id",
+                "缺少 tenant_id",
+                serde_json::json!({}),
+            )
+        })?;
     crate::permissions::require_tenant_membership_any(pool, claims, tenant_id).await?;
     let rows = crate::llm_ds::list_for_tenant(pool, tenant_id).await?;
     Ok(serde_json::to_value(rows).unwrap_or(json!([])))
@@ -795,13 +843,19 @@ async fn tool_list_workflows(pool: &PgPool, claims: &Claims, args: &Value) -> Re
 }
 
 async fn tool_create_workflow(pool: &PgPool, claims: &Claims, args: &Value) -> Result<Value> {
-    let mut req: CreateWorkflowRequest = serde_json::from_value(args.clone())
-        .map_err(|e| AppError::InvalidQuery(format!("create_workflow 参数错误: {}", e)))?;
+    let mut req: CreateWorkflowRequest = serde_json::from_value(args.clone()).map_err(|e| {
+        AppError::validation(
+            "mcp_create_workflow_invalid_params",
+            format!("create_workflow 参数错误: {}", e),
+            serde_json::json!({ "error": e.to_string() }),
+        )
+    })?;
     // 保持默认开关为启用，但定义只保存为草稿，发布后才进入运行时
     req.is_enabled = Some(true);
     let (_status, resp) = workflow_handlers::create_workflow(
         State(pool.clone()),
         axum::Extension(claims.clone()),
+        None,
         None,
         Some(axum::Extension(crate::operation_log::OpSourceHint(
             crate::operation_log::Source::Mcp,
@@ -844,8 +898,13 @@ async fn tool_duplicate_workflow(pool: &PgPool, claims: &Claims, args: &Value) -
 
 async fn tool_update_workflow(pool: &PgPool, claims: &Claims, args: &Value) -> Result<Value> {
     let id = require_id(args)?;
-    let mut req: UpdateWorkflowRequest = serde_json::from_value(args.clone())
-        .map_err(|e| AppError::InvalidQuery(format!("update_workflow 参数错误: {}", e)))?;
+    let mut req: UpdateWorkflowRequest = serde_json::from_value(args.clone()).map_err(|e| {
+        AppError::validation(
+            "mcp_update_workflow_invalid_params",
+            format!("update_workflow 参数错误: {}", e),
+            serde_json::json!({ "error": e.to_string() }),
+        )
+    })?;
     // 安全语义：MCP 不可改启用状态
     req.is_enabled = None;
 
@@ -879,8 +938,13 @@ pub fn instance_is_production() -> bool {
 }
 
 async fn tool_debug_workflow(pool: &PgPool, claims: &Claims, args: &Value) -> Result<Value> {
-    let mut req: DebugWorkflowRequest = serde_json::from_value(args.clone())
-        .map_err(|e| AppError::InvalidQuery(format!("debug_workflow 参数错误: {}", e)))?;
+    let mut req: DebugWorkflowRequest = serde_json::from_value(args.clone()).map_err(|e| {
+        AppError::validation(
+            "mcp_debug_workflow_invalid_params",
+            format!("debug_workflow 参数错误: {}", e),
+            serde_json::json!({ "error": e.to_string() }),
+        )
+    })?;
 
     // MCP 语义：默认干跑；显式 dry_run=false 才真实执行
     let dry_run = req.dry_run.unwrap_or(true);

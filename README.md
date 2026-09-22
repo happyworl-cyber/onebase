@@ -137,7 +137,7 @@ cargo run
 
 # 生产模式
 cargo build --release
-./target/release/onebase
+./target/release/planeos
 ```
 
 服务器将在 `http://127.0.0.1:3000` 启动。
@@ -526,7 +526,7 @@ async function example() {
 ## 📁 项目结构
 
 ```
-onebase/
+planeos/
 ├── Cargo.toml              # 依赖配置
 ├── .env                    # 环境变量（不提交到版本控制）
 ├── src/
@@ -792,7 +792,7 @@ INSERT INTO public.users (name, email, age, status) VALUES
 | 谁能调 | **仅平台超级管理员**。中间件链 `auth_middleware → require_superadmin_middleware → dynamic_db_middleware` 自洽守门，**不依赖任何全局兜底**。普通用户 / API Key / 租户 admin 调用都会 403。 |
 | 是否做 SQL 注入过滤 | **/query 不做**——它的本质就是"执行调用方提交的任意 SQL"，做语法级过滤等于自废武功。<br>**/transaction 不接收原始 SQL**——所有 op 通过 `query_builder::SqlBuilder` 生成，**走 `$N` 参数化绑定**，操作符走白名单（Eq/Neq/Gt/Gte/Lt/Lte/In/IsNull/IsNotNull），与 Auto API RBAC 用同一套。 |
 | 静态护栏 | `read_only=true` 模式拒绝非 SELECT；`is_dangerous_operation()` 黑名单拦截 `DROP DATABASE / DROP SCHEMA / TRUNCATE`；`/transaction` 单事务上限 100 个 op。 |
-| 数据隔离 | 强制走 `dynamic_db_middleware`：按请求头 `X-Database-Id` 切目标租户库连接池。**漏带头会回落到管理库（onebase），跨租户读到平台元数据**——所以前端在调用前必须带正确的 db id（dashboard 已自动注入）。 |
+| 数据隔离 | 强制走 `dynamic_db_middleware`：按请求头 `X-Database-Id` 切目标租户库连接池。**漏带头会回落到管理库（planeos），跨租户读到平台元数据**——所以前端在调用前必须带正确的 db id（dashboard 已自动注入）。 |
 | 审计 | **双轨**：(a) `tracing::warn` 结构化日志 target=`raw_sql_audit`，字段包含 `user_id` / `database_id` / `sql_type` / `sql_len` / `read_only`（`/transaction` 记 `op_count`）；(b) handler 通过 `AuditDetailSink` 把同一份结构化元数据塞回 `audit_middleware`，落到 `management.audit_logs.request_body`（JSONB），并把 `action` 列从 `POST` 升级为 `RAW_SQL_QUERY` / `RAW_SQL_BLOCKED` / `RAW_SQL_TXN`，便于按 `WHERE action LIKE 'RAW_SQL%'` 直接拉取所有高危调用链。`tenant_id` 列由 `dynamic_db_middleware` 反查 `tenant_databases.tenant_id` 后通过 `CurrentTenantId` 扩展自动回填，按租户拉日志可直接 `WHERE tenant_id = ?`。**原始 SQL 不入库**（敏感）。 |
 | 限流 | 经过全局 `rate_limit_middleware`；可以在 `management.rate_limit_rules` 里按 endpoint=`/query` 配置专属阈值（30s 热加载，CRUD 立即生效）。 |
 | 已知缺口 | 无独立残留项。`/query` 真正落库的 SQL 原文不入审计——这是 by design（敏感）。如确需"原文留底"，应单独引入加密字段 + 显式知情同意流程。 |

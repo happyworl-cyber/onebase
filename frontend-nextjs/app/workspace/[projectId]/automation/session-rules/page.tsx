@@ -30,6 +30,7 @@ import {
 } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
 import { useNotification } from '@/hooks/useNotification'
+import { useTranslations } from 'next-intl'
 import Drawer from '@/components/Drawer'
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
@@ -150,6 +151,7 @@ export default function SessionRulesPage() {
   const currentConnection = useAppStore((s) => s.currentConnection)
   const databaseSlug = currentConnection?.database_slug || null
   const caps = useCurrentProjectCapabilities()
+  const t = useTranslations('wsSessionRules')
   const notify = useNotification()
 
   const [rules, setRules] = useState<SessionRule[]>([])
@@ -232,7 +234,7 @@ export default function SessionRulesPage() {
     try {
       const parsed = JSON.parse(jsonText)
       if (!Array.isArray(parsed)) {
-        setJsonParseError('hooks 必须是 JSON 数组')
+        setJsonParseError(t('errHooksArray'))
         return
       }
       const next: FormHook[] = parsed.map((h: any) => ({
@@ -252,7 +254,7 @@ export default function SessionRulesPage() {
       setJsonParseError(null)
       setJsonMode(false)
     } catch (e: any) {
-      setJsonParseError(`JSON 解析失败：${e?.message ?? String(e)}`)
+      setJsonParseError(t('jsonParseFailed', { msg: e?.message ?? String(e) }))
     }
   }
 
@@ -290,7 +292,7 @@ export default function SessionRulesPage() {
     setValidationTopLevel(null)
 
     if (!form.name.trim()) {
-      notify.warning('请填写规则名称')
+      notify.warning(t('errRuleName'))
       return
     }
 
@@ -300,12 +302,12 @@ export default function SessionRulesPage() {
       try {
         const parsed = JSON.parse(jsonText)
         if (!Array.isArray(parsed)) {
-          setJsonParseError('hooks 必须是 JSON 数组')
+          setJsonParseError(t('errHooksArray'))
           return
         }
         hooksWire = parsed
       } catch (e: any) {
-        setJsonParseError(`JSON 解析失败：${e?.message ?? String(e)}`)
+        setJsonParseError(t('jsonParseFailed', { msg: e?.message ?? String(e) }))
         return
       }
     } else {
@@ -322,7 +324,7 @@ export default function SessionRulesPage() {
           hooks: hooksWire,
         }
         await sessionRuleAPI.create(databaseSlug, payload)
-        notify.success('规则已创建')
+        notify.success(t('ruleCreated'))
       } else {
         const payload: UpdateSessionRuleInput = {
           name: form.name.trim(),
@@ -331,7 +333,7 @@ export default function SessionRulesPage() {
           hooks: hooksWire,
         }
         await sessionRuleAPI.update(databaseSlug, editingId, payload)
-        notify.success('规则已更新')
+        notify.success(t('ruleUpdated'))
       }
       setDrawerOpen(false)
       loadRules()
@@ -343,7 +345,7 @@ export default function SessionRulesPage() {
         const { byIndex, topLevel } = indexErrors(details)
         setValidationByIndex(byIndex)
         setValidationTopLevel(topLevel)
-        notify.warning('hooks 校验失败，请检查标红的行')
+        notify.warning(t('hooksValidateFailed'))
       } else {
         notify.error(ax as unknown as Error)
       }
@@ -357,7 +359,7 @@ export default function SessionRulesPage() {
     if (!databaseSlug) return
     try {
       await sessionRuleAPI.update(databaseSlug, rule.id, { is_active: !rule.is_active })
-      notify.success(rule.is_active ? '规则已停用' : '规则已启用')
+      notify.success(rule.is_active ? t('ruleDeactivated') : t('ruleActivated'))
       loadRules()
     } catch (err) {
       notify.error(err as Error)
@@ -366,10 +368,10 @@ export default function SessionRulesPage() {
 
   const handleDelete = async (rule: SessionRule) => {
     if (!databaseSlug) return
-    if (!confirm(`确定删除规则 "${rule.name}"？`)) return
+    if (!confirm(t('confirmDelete', { name: rule.name }))) return
     try {
       await sessionRuleAPI.delete(databaseSlug, rule.id)
-      notify.success('规则已删除')
+      notify.success(t('ruleDeleted'))
       loadRules()
     } catch (err) {
       notify.error(err as Error)
@@ -379,24 +381,24 @@ export default function SessionRulesPage() {
   // ─── 守卫 ───
   if (!caps.canManageEvents) {
     return (
-      <ForbiddenPlaceholder reason="会话规则需要 admin+ 角色（owner / admin / 超管）" />
+      <ForbiddenPlaceholder reason={t('forbidden')} />
     )
   }
 
   if (isNaN(projectId)) {
-    return <div className="p-8 text-center text-gray-500">URL 中的 projectId 无效</div>
+    return <div className="p-8 text-center text-gray-500">{t('invalidProject')}</div>
   }
 
   if (!databaseSlug) {
     return (
       <div className="p-8 text-center text-gray-500 space-y-3">
         <i className="fas fa-plug text-4xl text-gray-300"></i>
-        <p>本项目尚未绑定主数据库连接，无法管理会话规则。</p>
+        <p>{t('noConn')}</p>
         <Link
           href={`/workspace/${projectId}/settings/connections`}
           className="text-blue-600 hover:underline"
         >
-          前往设置 → 数据库连接
+          {t('goConn')}
         </Link>
       </div>
     )
@@ -410,17 +412,16 @@ export default function SessionRulesPage() {
           避免长段文字把按钮挤窄。database_slug 不在 UI 里露出（用户不关心底层实现细节）。 */}
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-baseline gap-3 min-w-0 flex-1">
-          <h1 className="text-2xl font-bold text-gray-900 flex-shrink-0">会话规则</h1>
+          <h1 className="text-2xl font-bold text-gray-900 flex-shrink-0">{t('title')}</h1>
           <div className="flex items-center gap-1.5 text-sm text-gray-600 min-w-0">
             <span className="truncate">
-              把请求头映射到 PG session GUC（如 <code>app.current_user_id</code> /{' '}
-              <code>app.project_ids</code>）
+              {t.rich('headerMapDesc', { c: (c) => <code>{c}</code> })}
             </span>
             {/* tabIndex=0 让键盘也能 focus 到这里触发 tooltip；role=button 略 overkill 因为没有 action，仅作信息提示。
                 pointer-events-none 让 tooltip 不挡下方元素点击。 */}
             <span
               tabIndex={0}
-              aria-label="查看优先级与合并规则说明"
+              aria-label={t('tooltipAria')}
               className="relative inline-flex flex-shrink-0 group outline-none"
             >
               <i className="fas fa-circle-info text-gray-400 group-hover:text-gray-600 group-focus:text-gray-600 cursor-help"></i>
@@ -428,16 +429,10 @@ export default function SessionRulesPage() {
                 role="tooltip"
                 className="invisible opacity-0 group-hover:visible group-hover:opacity-100 group-focus:visible group-focus:opacity-100 transition-opacity duration-150 absolute left-0 top-full mt-2 z-20 w-80 p-3 bg-gray-900 text-gray-100 rounded-lg shadow-lg text-xs leading-relaxed pointer-events-none"
               >
-                <p className="font-medium mb-1.5 text-gray-100">优先级与合并规则</p>
+                <p className="font-medium mb-1.5 text-gray-100">{t('priorityTitle')}</p>
                 <ul className="space-y-1 list-disc list-outside ml-4 text-gray-300">
-                  <li>多条 active 规则按 id 升序合并（同 GUC 时后规则覆盖前规则）</li>
-                  <li>
-                    API Key{' '}
-                    <code className="bg-gray-800 px-1 rounded text-[10.5px]">
-                      permissions.session_hooks
-                    </code>{' '}
-                    优先级最高，会覆盖项目级规则
-                  </li>
+                  <li>{t('priorityRule1')}</li>
+                  <li>{t.rich('priorityRule2', { c: (c) => <code className="bg-gray-800 px-1 rounded text-[10.5px]">{c}</code> })}</li>
                 </ul>
               </div>
             </span>
@@ -445,7 +440,7 @@ export default function SessionRulesPage() {
         </div>
         <button onClick={openCreate} className="btn-primary flex-shrink-0 whitespace-nowrap">
           <i className="fas fa-plus mr-2"></i>
-          新建规则
+          {t('newRule')}
         </button>
       </div>
 
@@ -457,10 +452,10 @@ export default function SessionRulesPage() {
         ) : rules.length === 0 ? (
           <div className="p-12 text-center text-gray-500">
             <i className="fas fa-sliders-h text-4xl mb-4 text-gray-300"></i>
-            <p className="mb-4">本项目暂无会话规则</p>
+            <p className="mb-4">{t('empty')}</p>
             <button onClick={openCreate} className="btn-primary">
               <i className="fas fa-plus mr-2"></i>
-              新建第一条规则
+              {t('newFirstRule')}
             </button>
           </div>
         ) : (
@@ -490,8 +485,7 @@ export default function SessionRulesPage() {
                       </p>
                     )}
                     <p className="text-xs text-gray-400 mt-1">
-                      {rule.hooks.length} 条 hook · 更新于{' '}
-                      {new Date(rule.updated_at).toLocaleString()}
+                      {t('hookCountUpdated', { n: rule.hooks.length, date: new Date(rule.updated_at).toLocaleString() })}
                     </p>
                   </div>
                 </div>
@@ -503,7 +497,7 @@ export default function SessionRulesPage() {
                         : 'bg-gray-100 text-gray-500'
                     }`}
                   >
-                    {rule.is_active ? '生效中' : '已停用'}
+                    {rule.is_active ? t('active') : t('inactive')}
                   </span>
                   <button
                     onClick={() => handleToggleActive(rule)}
@@ -513,19 +507,19 @@ export default function SessionRulesPage() {
                         : 'text-green-700 hover:bg-green-50'
                     }`}
                   >
-                    {rule.is_active ? '停用' : '启用'}
+                    {rule.is_active ? t('deactivate') : t('activate')}
                   </button>
                   <button
                     onClick={() => openEdit(rule)}
                     className="px-3 py-1 text-sm text-blue-600 hover:bg-blue-50 rounded-lg"
                   >
-                    编辑
+                    {t('edit')}
                   </button>
                   <button
                     onClick={() => handleDelete(rule)}
                     className="px-3 py-1 text-sm text-red-600 hover:bg-red-50 rounded-lg"
                   >
-                    删除
+                    {t('delete')}
                   </button>
                 </div>
               </div>
@@ -538,7 +532,7 @@ export default function SessionRulesPage() {
       <Drawer
         isOpen={drawerOpen}
         onClose={closeDrawer}
-        title={editingId == null ? '新建会话规则' : `编辑会话规则 #${editingId}`}
+        title={editingId == null ? t('createTitle') : t('editTitle', { id: editingId })}
         size="lg"
         footer={
           <div className="flex gap-3">
@@ -547,14 +541,14 @@ export default function SessionRulesPage() {
               disabled={saving}
               className="flex-1 h-11 px-5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
             >
-              取消
+              {t('cancel')}
             </button>
             <button
               onClick={handleSave}
               disabled={saving || !form.name.trim()}
               className="flex-1 btn-primary disabled:opacity-50"
             >
-              {saving ? '保存中...' : editingId == null ? '创建' : '保存'}
+              {saving ? t('saving') : editingId == null ? t('create') : t('save')}
             </button>
           </div>
         }
@@ -569,25 +563,25 @@ export default function SessionRulesPage() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              规则名称 <span className="text-red-500">*</span>
+              {t('ruleNameLabel')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="例：acme-headers"
+              placeholder={t('phRuleName')}
               className="w-full input-base"
               maxLength={100}
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">备注</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">{t('remarkLabel')}</label>
             <textarea
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
               rows={2}
-              placeholder="可选：说明这条规则的来源 / 适用场景"
+              placeholder={t('phRemark')}
               className="w-full input-base font-mono text-sm"
             />
           </div>
@@ -600,10 +594,10 @@ export default function SessionRulesPage() {
                 onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
                 className="rounded border-gray-300 text-blue-600"
               />
-              <span className="text-sm text-gray-700">启用（is_active）</span>
+              <span className="text-sm text-gray-700">{t('enableLabel')}</span>
             </label>
             <p className="mt-1 text-xs text-gray-500 pl-6">
-              停用的规则不参与 inject 路径合并；可用于"草稿"或"临时下线"状态。
+              {t('enableHint')}
             </p>
           </div>
 
@@ -612,7 +606,7 @@ export default function SessionRulesPage() {
             <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-b border-gray-200">
               <div className="flex items-center space-x-3">
                 <span className="text-sm font-medium text-gray-700">
-                  Hooks（{jsonMode ? 'JSON 模式' : '表单模式'}）
+                  {t('hooksLabel', { mode: jsonMode ? t('modeJson') : t('modeForm') })}
                 </span>
               </div>
               <div className="flex items-center space-x-1 text-xs">
@@ -625,7 +619,7 @@ export default function SessionRulesPage() {
                       : 'text-gray-500 hover:bg-gray-100'
                   }`}
                 >
-                  表单
+                  {t('tabForm')}
                 </button>
                 <button
                   type="button"
@@ -661,15 +655,14 @@ export default function SessionRulesPage() {
                   <div className="text-xs text-red-600">{jsonParseError}</div>
                 )}
                 <p className="text-xs text-gray-500">
-                  字段约束：GUC 必须匹配 <code>^app\.[a-z_][a-z0-9_]{'{'}0,63{'}'}$</code>；
-                  type 只能是 <code>text</code> 或 <code>int_csv</code>。
+                  {t.rich('fieldConstraint', { c1: () => <code>{'^app\\.[a-z_][a-z0-9_]{0,63}$'}</code>, c2: () => <code>text</code>, c3: () => <code>int_csv</code> })}
                 </p>
               </div>
             ) : (
               <div className="p-3 space-y-3">
                 {form.hooks.length === 0 ? (
                   <div className="text-sm text-gray-500 py-3 text-center">
-                    尚未配置任何 hook，点击下方按钮添加。
+                    {t('noHooks')}
                   </div>
                 ) : (
                   form.hooks.map((h, i) => {
@@ -694,7 +687,7 @@ export default function SessionRulesPage() {
                             onClick={() => removeHook(i)}
                             className="text-xs text-red-600 hover:underline"
                           >
-                            移除
+                            {t('remove')}
                           </button>
                         </div>
                         <div className="grid grid-cols-2 gap-2">
@@ -742,7 +735,7 @@ export default function SessionRulesPage() {
                           </div>
                           <div>
                             <label className="block text-xs text-gray-600 mb-1">
-                              类型
+                              {t('typeLabel')}
                             </label>
                             <select
                               value={h.type}
@@ -755,8 +748,8 @@ export default function SessionRulesPage() {
                                   : 'border-gray-300 focus:ring-blue-500'
                               }`}
                             >
-                              <option value="text">text（字符串）</option>
-                              <option value="int_csv">int_csv（逗号分隔整数）</option>
+                              <option value="text">{t('typeText')}</option>
+                              <option value="int_csv">{t('typeIntCsv')}</option>
                             </select>
                             {fieldErr('type') && (
                               <p className="text-[11px] text-red-600 mt-0.5">
@@ -766,7 +759,7 @@ export default function SessionRulesPage() {
                           </div>
                           <div>
                             <label className="block text-xs text-gray-600 mb-1">
-                              {h.type === 'text' ? '最大长度' : '最大段数'}
+                              {h.type === 'text' ? t('maxLength') : t('maxCount')}
                             </label>
                             <input
                               type="number"
@@ -798,16 +791,15 @@ export default function SessionRulesPage() {
                   className="w-full py-2 text-sm text-blue-600 border border-dashed border-blue-300 rounded-lg hover:bg-blue-50"
                 >
                   <i className="fas fa-plus mr-2"></i>
-                  添加 hook
+                  {t('addHook')}
                 </button>
               </div>
             )}
           </div>
 
           <div className="text-xs text-gray-500 leading-relaxed">
-            <p className="font-medium text-gray-700 mb-1">优先级提示</p>
-            同项目下多条 active 规则按 id 升序合并（同 GUC 后规则覆盖前规则）；
-            API Key <code>permissions.session_hooks</code> 拥有最高优先级，会覆盖任意项目级规则。
+            <p className="font-medium text-gray-700 mb-1">{t('priorityHintTitle')}</p>
+            {t.rich('priorityHintBody', { c: (c) => <code>{c}</code> })}
           </div>
         </div>
       </Drawer>

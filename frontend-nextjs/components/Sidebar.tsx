@@ -1,6 +1,7 @@
 'use client'
 
 import { usePathname, useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { clearAuthToken } from '@/lib/auth'
 
 interface MenuItem {
@@ -11,18 +12,19 @@ interface MenuItem {
 }
 
 const menuItems: MenuItem[] = [
-  { name: 'Schema 浏览器', icon: 'fa-database', path: '/dashboard/schema' },
-  { name: '数据表', icon: 'fa-table', path: '/dashboard/tables' },
-  { name: 'SQL 查询', icon: 'fa-code', path: '/dashboard/query' },
-  { name: '事务管理', icon: 'fa-exchange-alt', path: '/dashboard/transaction' },
+  { name: 'navSchema', icon: 'fa-database', path: '/dashboard/schema' },
+  { name: 'navTables', icon: 'fa-table', path: '/dashboard/tables' },
+  { name: 'navSql', icon: 'fa-code', path: '/dashboard/query' },
+  { name: 'navTransaction', icon: 'fa-exchange-alt', path: '/dashboard/transaction' },
   // 用户管理已迁至 /platform/users（跨租户，仅超管），见 PlatformSidebar
   // { name: '用户管理', icon: 'fa-users', path: '/dashboard/users' },
-  { name: 'API 测试', icon: 'fa-vial', path: '/test', isDivider: true },
+  { name: 'navApiTest', icon: 'fa-vial', path: '/test', isDivider: true },
 ]
 
 export default function Sidebar() {
   const pathname = usePathname()
   const router = useRouter()
+  const t = useTranslations('legacySidebar')
 
   const handleLogout = () => {
     clearAuthToken()
@@ -61,7 +63,7 @@ export default function Sidebar() {
                          }`}
             >
               <i className={`fas ${item.icon} text-xs w-4`}></i>
-              <span>{item.name}</span>
+              <span>{t(item.name)}</span>
             </button>
           </div>
         ))}
@@ -76,7 +78,7 @@ export default function Sidebar() {
                    flex items-center space-x-3"
         >
           <i className="fas fa-sign-out-alt text-xs w-4"></i>
-          <span>退出登录</span>
+          <span>{t('logout')}</span>
         </button>
       </div>
     </div>

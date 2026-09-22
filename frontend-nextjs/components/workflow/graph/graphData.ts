@@ -16,14 +16,14 @@ import type { DependencyGraphEdge, DependencyGraphNode } from './graphApi'
  */
 export const SPECIAL_FLAG_META: Record<
   string,
-  { label: string; shortLabel: string; faClass: string; glyph: string; color: string; dotClass: string }
+  { labelKey: string; shortLabelKey: string; faClass: string; glyph: string; color: string; dotClass: string }
 > = {
-  sse_publish: { label: 'SSE 推送', shortLabel: 'SSE', faClass: 'fa-satellite-dish', glyph: '', color: '#6366f1', dotClass: 'bg-indigo-500' },
-  http_call: { label: 'HTTP 调用', shortLabel: 'HTTP', faClass: 'fa-globe', glyph: '', color: '#0ea5e9', dotClass: 'bg-sky-500' },
-  kafka: { label: 'Kafka 消息', shortLabel: 'Kafka', faClass: 'fa-layer-group', glyph: '', color: '#10b981', dotClass: 'bg-emerald-500' },
-  redis: { label: 'Redis 操作', shortLabel: 'Redis', faClass: 'fa-bolt', glyph: '', color: '#f43f5e', dotClass: 'bg-rose-500' },
-  trigger_cron: { label: '定时执行', shortLabel: '定时', faClass: 'fa-clock', glyph: '', color: '#7c3aed', dotClass: 'bg-violet-500' },
-  trigger_notify: { label: '等待 Notify', shortLabel: 'Notify', faClass: 'fa-bell', glyph: '', color: '#0d9488', dotClass: 'bg-teal-500' },
+  sse_publish: { labelKey: 'flagSse', shortLabelKey: 'shortSse', faClass: 'fa-satellite-dish', glyph: '', color: '#6366f1', dotClass: 'bg-indigo-500' },
+  http_call: { labelKey: 'flagHttp', shortLabelKey: 'shortHttp', faClass: 'fa-globe', glyph: '', color: '#0ea5e9', dotClass: 'bg-sky-500' },
+  kafka: { labelKey: 'flagKafka', shortLabelKey: 'shortKafka', faClass: 'fa-layer-group', glyph: '', color: '#10b981', dotClass: 'bg-emerald-500' },
+  redis: { labelKey: 'flagRedis', shortLabelKey: 'shortRedis', faClass: 'fa-bolt', glyph: '', color: '#f43f5e', dotClass: 'bg-rose-500' },
+  trigger_cron: { labelKey: 'flagCron', shortLabelKey: 'shortCron', faClass: 'fa-clock', glyph: '', color: '#7c3aed', dotClass: 'bg-violet-500' },
+  trigger_notify: { labelKey: 'flagNotify', shortLabelKey: 'shortNotify', faClass: 'fa-bell', glyph: '', color: '#0d9488', dotClass: 'bg-teal-500' },
 }
 
 /** 特殊节点筛选器（左上角 chip 组）展示顺序：boss 点名的四类在前（定时/redis/kafka/notify），
@@ -248,11 +248,11 @@ function specialFlagBadges(flags: string[], nodeCount: number): NodeBadgeStylePr
  */
 export type ColorMode = 'department' | 'enabled' | 'errorRate' | 'activity'
 
-export const COLOR_MODE_META: Record<ColorMode, { label: string; icon: string }> = {
-  department: { label: '服务色', icon: 'fa-diagram-project' },
-  enabled: { label: '启停', icon: 'fa-power-off' },
-  errorRate: { label: '错误率', icon: 'fa-triangle-exclamation' },
-  activity: { label: '活跃度', icon: 'fa-signal' },
+export const COLOR_MODE_META: Record<ColorMode, { labelKey: string; icon: string }> = {
+  department: { labelKey: 'cmDept', icon: 'fa-diagram-project' },
+  enabled: { labelKey: 'cmEnabled', icon: 'fa-power-off' },
+  errorRate: { labelKey: 'cmError', icon: 'fa-triangle-exclamation' },
+  activity: { labelKey: 'cmActivity', icon: 'fa-signal' },
 }
 export const COLOR_MODE_ORDER: ColorMode[] = ['department', 'enabled', 'errorRate', 'activity']
 
@@ -280,13 +280,13 @@ const ACTIVITY_DORMANT: NodeSwatch = { fill: '#cbd5e1', stroke: '#475569', dot: 
  */
 export type ErrorRateTier = 'none' | 'healthy' | 'minor' | 'warning' | 'severe' | 'critical'
 
-export const ERROR_RATE_TIERS: { tier: ErrorRateTier; label: string; swatch: NodeSwatch }[] = [
-  { tier: 'healthy', label: '健康 · 0%', swatch: { fill: '#a7f3d0', stroke: '#059669', dot: '#059669' } },
-  { tier: 'minor', label: '轻微 · ≤ 1%', swatch: { fill: '#d9f99d', stroke: '#65a30d', dot: '#65a30d' } },
-  { tier: 'warning', label: '注意 · ≤ 5%', swatch: { fill: '#fde68a', stroke: '#d97706', dot: '#d97706' } },
-  { tier: 'severe', label: '严重 · ≤ 20%', swatch: { fill: '#fed7aa', stroke: '#ea580c', dot: '#ea580c' } },
-  { tier: 'critical', label: '着火 · > 20%', swatch: { fill: '#fecaca', stroke: '#dc2626', dot: '#dc2626' } },
-  { tier: 'none', label: '窗口内无运行', swatch: { fill: '#cbd5e1', stroke: '#475569', dot: '#475569' } },
+export const ERROR_RATE_TIERS: { tier: ErrorRateTier; labelKey: string; swatch: NodeSwatch }[] = [
+  { tier: 'healthy', labelKey: 'tierHealthy', swatch: { fill: '#a7f3d0', stroke: '#059669', dot: '#059669' } },
+  { tier: 'minor', labelKey: 'tierMinor', swatch: { fill: '#d9f99d', stroke: '#65a30d', dot: '#65a30d' } },
+  { tier: 'warning', labelKey: 'tierWarning', swatch: { fill: '#fde68a', stroke: '#d97706', dot: '#d97706' } },
+  { tier: 'severe', labelKey: 'tierSevere', swatch: { fill: '#fed7aa', stroke: '#ea580c', dot: '#ea580c' } },
+  { tier: 'critical', labelKey: 'tierCritical', swatch: { fill: '#fecaca', stroke: '#dc2626', dot: '#dc2626' } },
+  { tier: 'none', labelKey: 'tierNone', swatch: { fill: '#cbd5e1', stroke: '#475569', dot: '#475569' } },
 ]
 
 /** 错误率 + 窗口内运行次数 → 档位。runs 为 0 时错误率无意义，直接归"无运行"。 */
@@ -442,7 +442,7 @@ export function buildGraphData(
     const badges = specialFlagBadges(n.specialFlags, n.nodeCount)
     if (n.external) {
       badges.push({
-        text: '外部',
+        text: 'External',
         placement: 'top',
         fontSize: 9,
         padding: 2,
@@ -480,7 +480,7 @@ export function buildGraphData(
         size: nodeVisualSize(n.nodeCount),
         fill: color.fill,
         stroke: color.stroke,
-        labelText: n.external ? `${n.name || n.slug} (外部)` : n.name || n.slug,
+        labelText: n.external ? `${n.name || n.slug} (external)` : n.name || n.slug,
         labelMaxWidth: nodeLabelMaxWidth(n.nodeCount),
         badge: badges.length > 0,
         badges,

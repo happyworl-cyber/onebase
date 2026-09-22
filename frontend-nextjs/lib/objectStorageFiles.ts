@@ -45,7 +45,7 @@ export function isGetTooLargeError(message: string): boolean {
 }
 
 export function lastConnectionStorageKey(projectId: string | number): string {
-  return `onebase.files.connection.${projectId}`
+  return `planeos.files.connection.${projectId}`
 }
 
 export function folderDisplayName(commonPrefix: string, currentPrefix: string): string {

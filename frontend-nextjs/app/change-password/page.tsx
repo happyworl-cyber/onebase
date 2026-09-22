@@ -1,12 +1,14 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import { useAppStore } from '@/lib/store'
 import { authAPI } from '@/lib/api'
 import { getAuthToken } from '@/lib/auth'
 
 export default function ChangePasswordPage() {
+  const t = useTranslations('changePasswordPage')
   const router = useRouter()
   const currentUser = useAppStore((s) => s.currentUser)
   const setCurrentUser = useAppStore((s) => s.setCurrentUser)
@@ -28,10 +30,10 @@ export default function ChangePasswordPage() {
     currentUser?.is_superadmin ? '/platform' : '/workspace'
 
   const validate = (): string | null => {
-    if (!oldPassword) return '请输入当前密码'
-    if (newPassword.length < 8) return '新密码至少 8 个字符'
-    if (newPassword === oldPassword) return '新密码不能与当前密码相同'
-    if (newPassword !== confirmPassword) return '两次输入的新密码不一致'
+    if (!oldPassword) return t('errCurrentPwdRequired')
+    if (newPassword.length < 8) return t('errNewPwdMinLength')
+    if (newPassword === oldPassword) return t('errPwdSameAsOld')
+    if (newPassword !== confirmPassword) return t('errPwdMismatch')
     return null
   }
 
@@ -62,7 +64,7 @@ export default function ChangePasswordPage() {
         router.replace(targetAfterDone())
       }
     } catch (err: any) {
-      setError(err?.response?.data?.error || '修改密码失败，请重试')
+      setError(err?.response?.data?.error || t('errChangePwdFailed'))
       setLoading(false)
     }
   }
@@ -74,24 +76,26 @@ export default function ChangePasswordPage() {
           <div className="w-12 h-12 rounded-xl bg-amber-100 flex items-center justify-center">
             <i className="fas fa-shield-alt text-xl text-amber-600" />
           </div>
-          <h1 className="text-2xl font-semibold text-gray-800">修改初始密码</h1>
+          <h1 className="text-2xl font-semibold text-gray-800">{t('title')}</h1>
           <p className="text-sm text-gray-500 leading-relaxed">
-            为保障账户安全，初始密码仅可使用一次。
+            {t('securityNote')}
             {currentUser?.email ? (
               <>
-                {' '}请为账户{' '}
-                <span className="font-medium text-gray-700">{currentUser.email}</span>{' '}
-                设置新密码后继续使用。
+                {' '}
+                {t.rich('setNewPwdForEmail', {
+                  email: currentUser.email,
+                  emailTag: (chunks) => <span className="font-medium text-gray-700">{chunks}</span>,
+                })}
               </>
             ) : (
-              ' 请设置新密码后继续使用。'
+              ` ${t('setNewPwdGeneric')}`
             )}
           </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">当前密码</label>
+            <label className="block text-sm font-medium text-gray-700">{t('currentPassword')}</label>
             <div className="relative">
               <input
                 type="password"
@@ -100,14 +104,14 @@ export default function ChangePasswordPage() {
                 required
                 autoComplete="current-password"
                 className="w-full input-with-icon pl-10"
-                placeholder="请输入当前（初始）密码"
+                placeholder={t('currentPasswordPlaceholder')}
               />
               <i className="fas fa-lock absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none" />
             </div>
           </div>
 
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">新密码</label>
+            <label className="block text-sm font-medium text-gray-700">{t('newPassword')}</label>
             <div className="relative">
               <input
                 type="password"
@@ -116,14 +120,14 @@ export default function ChangePasswordPage() {
                 required
                 autoComplete="new-password"
                 className="w-full input-with-icon pl-10"
-                placeholder="至少 8 个字符"
+                placeholder={t('newPasswordPlaceholder')}
               />
               <i className="fas fa-key absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none" />
             </div>
           </div>
 
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">确认新密码</label>
+            <label className="block text-sm font-medium text-gray-700">{t('confirmNewPassword')}</label>
             <div className="relative">
               <input
                 type="password"
@@ -132,7 +136,7 @@ export default function ChangePasswordPage() {
                 required
                 autoComplete="new-password"
                 className="w-full input-with-icon pl-10"
-                placeholder="再次输入新密码"
+                placeholder={t('confirmNewPasswordPlaceholder')}
               />
               <i className="fas fa-key absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none" />
             </div>
@@ -157,11 +161,11 @@ export default function ChangePasswordPage() {
             {loading ? (
               <span className="flex items-center justify-center space-x-2">
                 <i className="fas fa-spinner fa-spin" />
-                <span>提交中...</span>
+                <span>{t('submitting')}</span>
               </span>
             ) : (
               <span className="flex items-center justify-center space-x-2">
-                <span>修改密码并继续</span>
+                <span>{t('submitAndContinue')}</span>
                 <i className="fas fa-arrow-right text-sm" />
               </span>
             )}

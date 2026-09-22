@@ -1,6 +1,7 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import {
   useEffectiveRole,
   useUiCapabilities,
@@ -48,6 +49,7 @@ export default function PermissionGate({
   const router = useRouter()
   const role = useEffectiveRole()
   const capabilities = useUiCapabilities()
+  const t = useTranslations('permissionGate')
 
   if (capabilities[requires]) {
     return <>{children}</>
@@ -67,36 +69,44 @@ export default function PermissionGate({
         <div className="w-14 h-14 mx-auto bg-amber-50 rounded-full flex items-center justify-center mb-5">
           <i className="fas fa-lock text-amber-500 text-xl" />
         </div>
-        <h1 className="text-xl font-semibold text-gray-900">需要管理员权限</h1>
+        <h1 className="text-xl font-semibold text-gray-900">{t('title')}</h1>
         <p className="text-sm text-gray-500 mt-2 leading-relaxed">
-          页面 <span className="text-gray-700 font-medium">「{pageName}」</span>
-          仅对当前项目的 <span className="text-gray-700 font-medium">Owner / Admin</span> 或
-          <span className="text-gray-700 font-medium"> 平台超级管理员</span>开放。
+          {t.rich('scope', {
+            pageName,
+            name1: (chunks) => (
+              <span className="text-gray-700 font-medium">{chunks}</span>
+            ),
+            name2: (chunks) => (
+              <span className="text-gray-700 font-medium">{chunks}</span>
+            ),
+            name3: (chunks) => (
+              <span className="text-gray-700 font-medium">{chunks}</span>
+            ),
+          })}
         </p>
         <p className="text-sm text-gray-500 mt-2 leading-relaxed">
-          {description ??
-            '你目前在该项目内是普通成员，可继续浏览数据、调用 API；如需配置权限/角色/SSO 等，请联系项目管理员。'}
+          {description ?? t('defaultDescription')}
         </p>
         <div className="mt-3 text-xs text-gray-400">
-          当前身份：
+          {t('currentIdentityLabel')}
           {role.isPlatformSuperadmin
-            ? '平台超级管理员'
+            ? t('platformSuperadmin')
             : role.tenantRole
-              ? `${role.tenantRole}（项目成员）`
-              : '未选择项目'}
+              ? t('tenantRoleMember', { role: role.tenantRole })
+              : t('noProjectSelected')}
         </div>
         <div className="flex items-center justify-center gap-3 mt-7">
           <button
             onClick={() => router.push('/workspace')}
             className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700"
           >
-            返回首页
+            {t('backHome')}
           </button>
           <button
             onClick={() => router.back()}
             className="px-4 py-2 rounded-lg bg-gray-100 text-gray-700 text-sm hover:bg-gray-200"
           >
-            返回上一页
+            {t('backPrevious')}
           </button>
         </div>
       </div>

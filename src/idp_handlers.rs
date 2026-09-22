@@ -25,7 +25,7 @@ use crate::error::{AppError, Result};
 use crate::operation_log::{self, Actor, OperationLogInput, Source, Status};
 use crate::permissions;
 
-const VALID_PROVIDER_TYPES: &[&str] = &["google", "apple", "facebook", "github", "oidc", "mind"];
+const VALID_PROVIDER_TYPES: &[&str] = &["google", "apple", "facebook", "github", "oidc"];
 const DEFAULT_ALLOWED_SCOPES: &[&str] = &["openid", "email", "profile"];
 const CLIENT_ID_PREFIX: &str = "ob_live_";
 const CLIENT_SECRET_PREFIX: &str = "obs_live_";
@@ -108,7 +108,6 @@ fn provider_default_label(provider_type: &str) -> String {
         "apple" => "使用 Apple 登录".to_string(),
         "facebook" => "使用 Facebook 登录".to_string(),
         "github" => "使用 GitHub 登录".to_string(),
-        "mind" => "使用 Mind 登录".to_string(),
         _ => format!("使用 {} 登录", provider_type),
     }
 }
@@ -117,10 +116,11 @@ fn validate_provider_type(provider_type: &str) -> Result<()> {
     if VALID_PROVIDER_TYPES.contains(&provider_type) {
         Ok(())
     } else {
-        Err(AppError::InvalidQuery(format!(
-            "不支持的 provider_type: {}",
-            provider_type
-        )))
+        Err(AppError::validation(
+            "idp_provider_type_unsupported",
+            format!("不支持的 provider_type: {}", provider_type),
+            serde_json::json!({ "provider_type": provider_type }),
+        ))
     }
 }
 
@@ -128,33 +128,44 @@ fn normalize_provider_config(provider_config: Option<Value>) -> Result<Option<Va
     match provider_config {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Object(map)) => Ok(Some(Value::Object(map))),
-        Some(_) => Err(AppError::InvalidQuery(
-            "provider_config 必须是 JSON object".to_string(),
+        Some(_) => Err(AppError::validation(
+            "idp_provider_config_must_be_object",
+            "provider_config 必须是 JSON object",
+            serde_json::json!({}),
         )),
     }
 }
 
 fn validate_redirect_uris(redirect_uris: &[String]) -> Result<()> {
     if redirect_uris.is_empty() {
-        return Err(AppError::InvalidQuery(
-            "redirect_uris 至少需要一个回调地址".to_string(),
+        return Err(AppError::validation(
+            "idp_redirect_uris_required",
+            "redirect_uris 至少需要一个回调地址",
+            serde_json::json!({}),
         ));
     }
     if redirect_uris.len() > MAX_REDIRECT_URIS {
-        return Err(AppError::InvalidQuery(format!(
-            "redirect_uris 数量不能超过 {}",
-            MAX_REDIRECT_URIS
-        )));
+        return Err(AppError::validation(
+            "idp_redirect_uris_too_many",
+            format!("redirect_uris 数量不能超过 {}", MAX_REDIRECT_URIS),
+            serde_json::json!({ "max": MAX_REDIRECT_URIS }),
+        ));
     }
     for uri in redirect_uris {
         let trimmed = uri.trim();
         if trimmed.is_empty() {
-            return Err(AppError::InvalidQuery(
-                "redirect_uri 不能为空字符串".to_string(),
+            return Err(AppError::validation(
+                "idp_redirect_uri_empty",
+                "redirect_uri 不能为空字符串",
+                serde_json::json!({}),
             ));
         }
         reqwest::Url::parse(trimmed).map_err(|_| {
-            AppError::InvalidQuery(format!("redirect_uri 不是合法 URL: {}", trimmed))
+            AppError::validation(
+                "idp_redirect_uri_invalid_url",
+                format!("redirect_uri 不是合法 URL: {}", trimmed),
+                serde_json::json!({ "url": trimmed }),
+            )
         })?;
     }
     Ok(())
@@ -168,29 +179,37 @@ fn normalize_allowed_scopes(scopes: Option<Vec<String>>) -> Result<Vec<String>> 
             .collect()
     });
     if scopes.is_empty() {
-        return Err(AppError::InvalidQuery(
-            "allowed_scopes 不能为空".to_string(),
+        return Err(AppError::validation(
+            "idp_allowed_scopes_required",
+            "allowed_scopes 不能为空",
+            serde_json::json!({}),
         ));
     }
     if scopes.len() > MAX_SCOPE_COUNT {
-        return Err(AppError::InvalidQuery(format!(
-            "allowed_scopes 数量不能超过 {}",
-            MAX_SCOPE_COUNT
-        )));
+        return Err(AppError::validation(
+            "idp_allowed_scopes_too_many",
+            format!("allowed_scopes 数量不能超过 {}", MAX_SCOPE_COUNT),
+            serde_json::json!({ "max": MAX_SCOPE_COUNT }),
+        ));
     }
     for scope in &scopes {
         let trimmed = scope.trim();
         if trimmed.is_empty() {
-            return Err(AppError::InvalidQuery("scope 不能为空".to_string()));
+            return Err(AppError::validation(
+                "idp_scope_required",
+                "scope 不能为空",
+                serde_json::json!({}),
+            ));
         }
         if !trimmed
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':' || c == '-' || c == '.')
         {
-            return Err(AppError::InvalidQuery(format!(
-                "scope 含非法字符: {}",
-                trimmed
-            )));
+            return Err(AppError::validation(
+                "idp_scope_invalid_chars",
+                format!("scope 含非法字符: {}", trimmed),
+                serde_json::json!({ "scope": trimmed }),
+            ));
         }
     }
     Ok(scopes.into_iter().map(|s| s.trim().to_string()).collect())
@@ -198,13 +217,17 @@ fn normalize_allowed_scopes(scopes: Option<Vec<String>>) -> Result<Vec<String>> 
 
 fn validate_client_ttls(access_token_ttl: i32, refresh_token_ttl: i32) -> Result<()> {
     if !(60..=86_400).contains(&access_token_ttl) {
-        return Err(AppError::InvalidQuery(
-            "access_token_ttl 必须在 60 到 86400 秒之间".to_string(),
+        return Err(AppError::validation(
+            "idp_access_token_ttl_range",
+            "access_token_ttl 必须在 60 到 86400 秒之间",
+            serde_json::json!({}),
         ));
     }
     if !(300..=31_536_000).contains(&refresh_token_ttl) {
-        return Err(AppError::InvalidQuery(
-            "refresh_token_ttl 必须在 300 到 31536000 秒之间".to_string(),
+        return Err(AppError::validation(
+            "idp_refresh_token_ttl_range",
+            "refresh_token_ttl 必须在 300 到 31536000 秒之间",
+            serde_json::json!({}),
         ));
     }
     Ok(())
@@ -251,10 +274,11 @@ async fn assert_client_belongs_to_project(
     .fetch_one(pool)
     .await?;
     if !exists {
-        return Err(AppError::NotFound(format!(
-            "项目 {} 下不存在 OAuth2 Client {}",
-            project_id, client_id
-        )));
+        return Err(AppError::not_found_coded(
+            "idp_client_not_found",
+            format!("项目 {} 下不存在 OAuth2 Client {}", project_id, client_id),
+            serde_json::json!({ "project_id": project_id, "client_id": client_id }),
+        ));
     }
     Ok(())
 }
@@ -315,6 +339,11 @@ fn record_idp_op(
     change: Value,
     high_risk: bool,
 ) {
+    let summary_code = if action == operation_log::action::CREATE {
+        "oplog_idp_create"
+    } else {
+        "oplog_idp_update"
+    };
     let mut input = OperationLogInput::new(
         tenant_id,
         Actor::from_claims(claims),
@@ -328,7 +357,8 @@ fn record_idp_op(
         resource_name.to_string(),
         Some(resource_id),
     )
-    .change(change);
+    .change(change)
+    .summary_code(summary_code, json!({ "name": resource_name }));
     input.high_risk = Some(high_risk);
     operation_log::record(pool, input);
 }
@@ -343,6 +373,15 @@ fn record_oauth_client_op(
     change: Value,
     high_risk: bool,
 ) {
+    let summary_code = if action == operation_log::action::CREATE {
+        "oplog_oauth_client_create"
+    } else if summary.contains("密钥") {
+        "oplog_oauth_client_rotate_secret"
+    } else if summary.contains("Provider 绑定") {
+        "oplog_oauth_client_providers"
+    } else {
+        "oplog_oauth_client_update"
+    };
     let mut input = OperationLogInput::new(
         tenant_id,
         Actor::from_claims(claims),
@@ -356,7 +395,8 @@ fn record_oauth_client_op(
         client_id.to_string(),
         Some(client_id.to_string()),
     )
-    .change(change);
+    .change(change)
+    .summary_code(summary_code, json!({ "client": client_id }));
     input.high_risk = Some(high_risk);
     operation_log::record(pool, input);
 }
@@ -479,11 +519,19 @@ pub async fn create_project_idp_provider(
 
     let client_id = req.client_id.trim();
     if client_id.is_empty() {
-        return Err(AppError::InvalidQuery("client_id 不能为空".to_string()));
+        return Err(AppError::validation(
+            "idp_client_id_required",
+            "client_id 不能为空",
+            serde_json::json!({}),
+        ));
     }
     let client_secret = req.client_secret.trim();
     if client_secret.is_empty() {
-        return Err(AppError::InvalidQuery("client_secret 不能为空".to_string()));
+        return Err(AppError::validation(
+            "idp_client_secret_required",
+            "client_secret 不能为空",
+            serde_json::json!({}),
+        ));
     }
 
     let encrypted_secret = crypto::encrypt_secret(client_secret)?;
@@ -575,10 +623,11 @@ pub async fn update_project_idp_provider(
     .fetch_optional(&pool)
     .await?
     .ok_or_else(|| {
-        AppError::NotFound(format!(
-            "项目 {} 未配置 provider {}",
-            project_id, provider_type
-        ))
+        AppError::not_found_coded(
+            "idp_provider_not_configured",
+            format!("项目 {} 未配置 provider {}", project_id, provider_type),
+            serde_json::json!({ "project_id": project_id, "provider_type": provider_type }),
+        )
     })?;
     let provider_id: i32 = existing.get("id");
     let old_display_name: Option<String> = existing.get("display_name");
@@ -588,12 +637,20 @@ pub async fn update_project_idp_provider(
 
     if let Some(client_id) = &req.client_id {
         if client_id.trim().is_empty() {
-            return Err(AppError::InvalidQuery("client_id 不能为空".to_string()));
+            return Err(AppError::validation(
+                "idp_client_id_required",
+                "client_id 不能为空",
+                serde_json::json!({}),
+            ));
         }
     }
     if let Some(client_secret) = &req.client_secret {
         if client_secret.trim().is_empty() {
-            return Err(AppError::InvalidQuery("client_secret 不能为空".to_string()));
+            return Err(AppError::validation(
+                "idp_client_secret_required",
+                "client_secret 不能为空",
+                serde_json::json!({}),
+            ));
         }
     }
 
@@ -624,7 +681,13 @@ pub async fn update_project_idp_provider(
     .bind(&provider_type)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("项目 {} 未配置 provider {}", project_id, provider_type)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "idp_provider_not_configured",
+            format!("项目 {} 未配置 provider {}", project_id, provider_type),
+            serde_json::json!({ "project_id": project_id, "provider_type": provider_type }),
+        )
+    })?;
 
     let new_display_name = row
         .get::<Option<String>, _>("display_name")
@@ -736,7 +799,11 @@ pub async fn create_oauth2_client(
 
     let display_name = req.display_name.trim();
     if display_name.is_empty() {
-        return Err(AppError::InvalidQuery("display_name 不能为空".to_string()));
+        return Err(AppError::validation(
+            "idp_display_name_required",
+            "display_name 不能为空",
+            serde_json::json!({}),
+        ));
     }
     validate_redirect_uris(&req.redirect_uris)?;
     let allowed_scopes = normalize_allowed_scopes(req.allowed_scopes)?;
@@ -845,7 +912,11 @@ pub async fn update_oauth2_client(
 
     if let Some(display_name) = &req.display_name {
         if display_name.trim().is_empty() {
-            return Err(AppError::InvalidQuery("display_name 不能为空".to_string()));
+            return Err(AppError::validation(
+                "idp_display_name_required",
+                "display_name 不能为空",
+                serde_json::json!({}),
+            ));
         }
     }
     if let Some(redirect_uris) = &req.redirect_uris {
@@ -909,10 +980,11 @@ pub async fn update_oauth2_client(
     .fetch_optional(&pool)
     .await?
     .ok_or_else(|| {
-        AppError::NotFound(format!(
-            "项目 {} 下不存在 OAuth2 Client {}",
-            project_id, client_id
-        ))
+        AppError::not_found_coded(
+            "idp_client_not_found",
+            format!("项目 {} 下不存在 OAuth2 Client {}", project_id, client_id),
+            serde_json::json!({ "project_id": project_id, "client_id": client_id }),
+        )
     })?;
 
     let new_display_name: String = row.get("display_name");
@@ -989,10 +1061,11 @@ pub async fn rotate_oauth2_client_secret(
     .rows_affected();
 
     if affected == 0 {
-        return Err(AppError::NotFound(format!(
-            "项目 {} 下不存在 OAuth2 Client {}",
-            project_id, client_id
-        )));
+        return Err(AppError::not_found_coded(
+            "idp_client_not_found",
+            format!("项目 {} 下不存在 OAuth2 Client {}", project_id, client_id),
+            serde_json::json!({ "project_id": project_id, "client_id": client_id }),
+        ));
     }
 
     record_oauth_client_op(
@@ -1104,16 +1177,21 @@ pub async fn replace_oauth2_client_providers(
 
     for item in &req.providers {
         let Some(project_enabled) = project_provider_state.get(&item.provider_type) else {
-            return Err(AppError::InvalidQuery(format!(
-                "provider {} 尚未在项目凭证库中配置",
-                item.provider_type
-            )));
+            return Err(AppError::validation(
+                "idp_provider_not_in_credential_store",
+                format!("provider {} 尚未在项目凭证库中配置", item.provider_type),
+                serde_json::json!({ "provider_type": item.provider_type }),
+            ));
         };
         if item.is_enabled && !project_enabled {
-            return Err(AppError::InvalidQuery(format!(
-                "provider {} 在项目层已禁用，不能为应用单独开启",
-                item.provider_type
-            )));
+            return Err(AppError::validation(
+                "idp_provider_disabled_at_project_level",
+                format!(
+                    "provider {} 在项目层已禁用，不能为应用单独开启",
+                    item.provider_type
+                ),
+                serde_json::json!({ "provider_type": item.provider_type }),
+            ));
         }
     }
 
@@ -1271,10 +1349,11 @@ pub async fn revoke_idp_session(
     .rows_affected();
 
     if affected == 0 {
-        return Err(AppError::NotFound(format!(
-            "未找到可撤销的 IdP session family {}",
-            q.family_id
-        )));
+        return Err(AppError::not_found_coded(
+            "idp_session_family_not_found",
+            format!("未找到可撤销的 IdP session family {}", q.family_id),
+            serde_json::json!({ "family_id": q.family_id }),
+        ));
     }
 
     Ok(Json(json!({

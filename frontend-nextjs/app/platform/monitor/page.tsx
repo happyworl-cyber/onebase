@@ -10,6 +10,7 @@
 import { Suspense, useState, useEffect, useCallback } from 'react'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import api from '@/lib/api'
+import { useTranslations, useMessages } from 'next-intl'
 
 type Tab = 'overview' | 'traffic' | 'async' | 'diagnose' | 'alerts'
 
@@ -76,7 +77,7 @@ interface Overview {
     expiring_tokens_7d: number
     webhook_failures_24h: number
   }
-  anomalies?: { level: string; code: string; message: string }[]
+  anomalies?: { level: string; code: string; message: string; params?: Record<string, unknown> }[]
   warnings?: string[]
   signal_samples?: {
     stuck_running: {
@@ -298,13 +299,19 @@ function initialTab(sp: URLSearchParams | null): Tab {
 
 export default function PlatformMonitorPage() {
   return (
-    <Suspense fallback={<div className="p-8 text-sm text-gray-400">加载中…</div>}>
+    <Suspense fallback={<div className="p-8 text-sm text-gray-400">Loading…</div>}>
       <PlatformMonitorPageInner />
     </Suspense>
   )
 }
 
 function PlatformMonitorPageInner() {
+  const tr = useTranslations('platformMonitor')
+  const tp = useTranslations('platformMonitorPage')
+  const tAlerts = useTranslations('monitorAlerts')
+  const allMessages = useMessages() as Record<string, any>
+  const alertLabel = (a: { code: string; message: string; params?: Record<string, unknown> }) =>
+    a.code && allMessages?.monitorAlerts?.[a.code] ? tAlerts(a.code, (a.params ?? {}) as any) : a.message
   const searchParams = useSearchParams()
   const router = useRouter()
   const pathname = usePathname()
@@ -357,7 +364,7 @@ function PlatformMonitorPageInner() {
       if (slow.status === 'fulfilled') setAppSlowQueries(slow.value.data?.data || [])
       if (cb.status === 'fulfilled') setCircuitBreakers(cb.value.data?.data || [])
     } catch (err) {
-      console.error('加载平台监控失败:', err)
+      console.error(tr('loadFailed'), err)
     } finally {
       setLoading(false)
     }
@@ -397,7 +404,7 @@ function PlatformMonitorPageInner() {
       }
       if (tenants.status === 'fulfilled') setTenantRows(tenants.value.data?.data || [])
     } catch (err) {
-      console.error('加载排查数据失败:', err)
+      console.error(tr('loadDiagFailed'), err)
     }
   }, [])
 
@@ -418,7 +425,7 @@ function PlatformMonitorPageInner() {
       if (rules.status === 'fulfilled') setAlertRules(rules.value.data?.data || [])
       if (events.status === 'fulfilled') setAlertEvents(events.value.data?.data || [])
     } catch (err) {
-      console.error('加载告警配置失败:', err)
+      console.error(tr('loadAlertFailed'), err)
     }
   }, [])
 
@@ -456,7 +463,7 @@ function PlatformMonitorPageInner() {
       setAlertConfig(res.data)
     } catch (err) {
       console.error(err)
-      alert('保存告警配置失败')
+      alert(tr('saveAlertFailed'))
     } finally {
       setSavingAlert(false)
     }
@@ -473,12 +480,12 @@ function PlatformMonitorPageInner() {
     }
   }
 
-  const tabs: { id: Tab; label: string }[] = [
-    { id: 'overview', label: '总览' },
-    { id: 'traffic', label: '流量' },
-    { id: 'async', label: '异步' },
-    { id: 'diagnose', label: '排查' },
-    { id: 'alerts', label: '告警' },
+  const tabs: { id: Tab; key: string }[] = [
+    { id: 'overview', key: 'tabOverview' },
+    { id: 'traffic', key: 'tabTraffic' },
+    { id: 'async', key: 'tabAsync' },
+    { id: 'diagnose', key: 'tabDiagnose' },
+    { id: 'alerts', key: 'tabAlerts' },
   ]
 
   const hourlyCounts = overview?.traffic.hourly_24h?.map((h) => h.count) || []
@@ -490,10 +497,10 @@ function PlatformMonitorPageInner() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">
             <i className="fas fa-chart-line mr-2 text-blue-500"></i>
-            平台监控
+            {tr('title')}
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            跨租户运行时健康、流量错误面、异步任务与阈值告警。项目级 pg_stat 请去工作空间 /monitor。
+            {tr('subtitle')}
           </p>
         </div>
         <label className="flex items-center space-x-2 text-sm text-gray-700 whitespace-nowrap">
@@ -503,7 +510,7 @@ function PlatformMonitorPageInner() {
             onChange={(e) => setAutoRefresh(e.target.checked)}
             className="rounded border-gray-300"
           />
-          <span>自动刷新 (5s)</span>
+          <span>{tr('autoRefresh')}</span>
         </label>
       </div>
 
@@ -519,7 +526,7 @@ function PlatformMonitorPageInner() {
                 : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
-            {t.label}
+            {tr(t.key)}
           </button>
         ))}
       </div>
@@ -546,7 +553,7 @@ function PlatformMonitorPageInner() {
           {anomalies.length > 0 ? (
             <div className="rounded-lg border border-gray-200 bg-white px-4 py-3">
               <p className="text-sm font-semibold text-gray-800 mb-2">
-                当前信号 {anomalies.length} 条
+                {tr('currentSignals', { n: anomalies.length })}
               </p>
               <ul className="text-sm space-y-1">
                 {anomalies.map((a) => {
@@ -579,7 +586,7 @@ function PlatformMonitorPageInner() {
                         onClick={() => onAnomalyClick(a.code)}
                         disabled={!clickable}
                       >
-                        {a.message}
+                        {alertLabel(a)}
                       </button>
                     </li>
                   )
@@ -588,13 +595,13 @@ function PlatformMonitorPageInner() {
             </div>
           ) : (
             <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
-              当前未见异常信号
+              {tr('noAnomaly')}
             </div>
           )}
 
           <div className="flex flex-wrap gap-2 text-xs">
             <span className={`px-2.5 py-1 rounded-full font-medium ${healthBadge(overview.health.mgmt_db)}`}>
-              管理库: {overview.health.mgmt_db}
+              {tr('mgmtDb', { v: overview.health.mgmt_db })}
             </span>
             <span className={`px-2.5 py-1 rounded-full font-medium ${healthBadge(overview.health.redis)}`}>
               Redis: {overview.health.redis}
@@ -603,10 +610,10 @@ function PlatformMonitorPageInner() {
               v{overview.health.version}
             </span>
             <span className="px-2.5 py-1 rounded-full font-medium bg-gray-100 text-gray-700">
-              管理池 {overview.health.mgmt_pool.idle}/{overview.health.mgmt_pool.size} idle
+              {tr('mgmtPool', { idle: overview.health.mgmt_pool.idle, size: overview.health.mgmt_pool.size })}
             </span>
             <span className="px-2.5 py-1 rounded-full font-medium bg-gray-100 text-gray-700">
-              租户池 {overview.health.active_pools}
+              {tr('tenantPool', { n: overview.health.active_pools })}
             </span>
           </div>
 
@@ -614,30 +621,30 @@ function PlatformMonitorPageInner() {
             <Kpi label="QPS (5m)" value={fmtNum(overview.traffic.qps_5min, 2)} />
             <Kpi label="P95 (5m)" value={overview.traffic.p95_ms_5min != null ? `${fmtNum(overview.traffic.p95_ms_5min, 0)}ms` : '—'} />
             <Kpi
-              label="错误率 (24h)"
+              label={tr('errRate24h')}
               value={fmtPct(overview.traffic.error_rate_24h)}
               warn={(overview.traffic.error_rate_24h ?? 0) > 0.05}
             />
-            <Kpi label="慢查询 (24h)" value={fmtNum(overview.traffic.slow_queries_24h, 0)} warn={(overview.traffic.slow_queries_5min ?? 0) > 20} />
-            <Kpi label="熔断 Open" value={String(overview.runtime.circuit_open_count)} warn={overview.runtime.circuit_open_count > 0} />
-            <Kpi label="限流降级" value={overview.runtime.rate_limit_degraded ? '是' : '否'} warn={overview.runtime.rate_limit_degraded} />
+            <Kpi label={tr('slow24h')} value={fmtNum(overview.traffic.slow_queries_24h, 0)} warn={(overview.traffic.slow_queries_5min ?? 0) > 20} />
+            <Kpi label={tr('circuitOpen')} value={String(overview.runtime.circuit_open_count)} warn={overview.runtime.circuit_open_count > 0} />
+            <Kpi label={tr('rateLimitDegraded')} value={overview.runtime.rate_limit_degraded ? tr('yes') : tr('no')} warn={overview.runtime.rate_limit_degraded} />
           </div>
 
           <div>
-            <p className="text-xs font-medium text-gray-400 uppercase mb-2">隐患信号</p>
+            <p className="text-xs font-medium text-gray-400 uppercase mb-2">{tr('hazardSignals')}</p>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2">
-              <Kpi label="限流命中 (1h)" value={String(signals.rate_limited_429_1h)} warn={signals.rate_limited_429_1h >= 20} />
-              <Kpi label="认证失败 (1h)" value={String(signals.auth_failures_1h)} warn={signals.auth_failures_1h >= 20} />
+              <Kpi label={tr('rateLimited1h')} value={String(signals.rate_limited_429_1h)} warn={signals.rate_limited_429_1h >= 20} />
+              <Kpi label={tr('authFail1h')} value={String(signals.auth_failures_1h)} warn={signals.auth_failures_1h >= 20} />
               <Kpi
-                label="卡死执行"
+                label={tr('stuckExec')}
                 value={String(signals.stuck_running)}
                 warn={signals.stuck_running > 0}
                 active={expanded === 'stuck_running'}
                 onClick={signals.stuck_running > 0 ? () => toggleExpand('stuck_running') : undefined}
               />
-              <Kpi label="卡死工作流" value={String(signals.stuck_workflow)} warn={signals.stuck_workflow > 0} />
+              <Kpi label={tr('stuckWorkflow')} value={String(signals.stuck_workflow)} warn={signals.stuck_workflow > 0} />
               <Kpi
-                label="Key 将过期"
+                label={tr('keyExpiring')}
                 value={String(signals.expiring_api_keys_7d)}
                 warn={signals.expiring_api_keys_7d > 0}
                 active={expanded === 'expiring_api_keys'}
@@ -645,28 +652,28 @@ function PlatformMonitorPageInner() {
                   signals.expiring_api_keys_7d > 0 ? () => toggleExpand('expiring_api_keys') : undefined
                 }
               />
-              <Kpi label="令牌将过期" value={String(signals.expiring_tokens_7d)} warn={signals.expiring_tokens_7d > 0} />
-              <Kpi label="Webhook 失败 (24h)" value={String(signals.webhook_failures_24h)} warn={signals.webhook_failures_24h > 0} />
+              <Kpi label={tr('tokenExpiring')} value={String(signals.expiring_tokens_7d)} warn={signals.expiring_tokens_7d > 0} />
+              <Kpi label={tr('webhookFail24h')} value={String(signals.webhook_failures_24h)} warn={signals.webhook_failures_24h > 0} />
             </div>
           </div>
 
           {expanded === 'stuck_running' && (
             <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
               <div className="px-4 py-3 border-b border-gray-100 flex justify-between items-center">
-                <h3 className="text-sm font-semibold text-gray-700">卡死执行明细</h3>
+                <h3 className="text-sm font-semibold text-gray-700">{tr('stuckExecDetail')}</h3>
                 <button type="button" className="text-xs text-gray-500" onClick={() => setExpanded(null)}>
-                  收起
+                  {tp('collapse')}
                 </button>
               </div>
               <table className="w-full text-sm">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-4 py-2 text-left text-xs text-gray-500">组织</th>
-                    <th className="px-4 py-2 text-left text-xs text-gray-500">项目</th>
-                    <th className="px-4 py-2 text-left text-xs text-gray-500">来源</th>
-                    <th className="px-4 py-2 text-left text-xs text-gray-500">名称</th>
-                    <th className="px-4 py-2 text-left text-xs text-gray-500">开始</th>
-                    <th className="px-4 py-2 text-right text-xs text-gray-500">已跑</th>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colOrg')}</th>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colProject')}</th>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colSource')}</th>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colName')}</th>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colStart')}</th>
+                    <th className="px-4 py-2 text-right text-xs text-gray-500">{tr('colRan')}</th>
                     <th className="px-4 py-2 text-left text-xs text-gray-500">trace</th>
                   </tr>
                 </thead>
@@ -674,7 +681,7 @@ function PlatformMonitorPageInner() {
                   {samples.stuck_running.items.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="px-4 py-6 text-center text-xs text-gray-400">
-                        无样例（可能刚恢复或查询失败，见 warnings）
+                        {tr('noSample')}
                       </td>
                     </tr>
                   ) : (
@@ -698,7 +705,7 @@ function PlatformMonitorPageInner() {
                           <button
                             type="button"
                             className="text-blue-600 hover:underline"
-                            title="复制 trace_id"
+                            title={tr('copyTrace')}
                             onClick={() => navigator.clipboard.writeText(row.trace_id)}
                           >
                             {row.trace_id.slice(0, 8)}…
@@ -711,7 +718,7 @@ function PlatformMonitorPageInner() {
               </table>
               {samples.stuck_running.total > samples.stuck_running.items.length && (
                 <p className="px-4 py-2 text-xs text-gray-500 border-t border-gray-100">
-                  共 {samples.stuck_running.total} 条，展示前 {samples.stuck_running.items.length}
+                  {tr('countShown', { total: samples.stuck_running.total, shown: samples.stuck_running.items.length })}
                 </p>
               )}
             </div>
@@ -720,20 +727,20 @@ function PlatformMonitorPageInner() {
           {expanded === 'expiring_api_keys' && (
             <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
               <div className="px-4 py-3 border-b border-gray-100 flex justify-between items-center">
-                <h3 className="text-sm font-semibold text-gray-700">即将过期 API Key</h3>
+                <h3 className="text-sm font-semibold text-gray-700">{tr('expiringApiKey')}</h3>
                 <button type="button" className="text-xs text-gray-500" onClick={() => setExpanded(null)}>
-                  收起
+                  {tp('collapse')}
                 </button>
               </div>
               <table className="w-full text-sm">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-4 py-2 text-left text-xs text-gray-500">组织</th>
-                    <th className="px-4 py-2 text-left text-xs text-gray-500">项目</th>
-                    <th className="px-4 py-2 text-left text-xs text-gray-500">名称</th>
-                    <th className="px-4 py-2 text-left text-xs text-gray-500">前缀</th>
-                    <th className="px-4 py-2 text-left text-xs text-gray-500">过期</th>
-                    <th className="px-4 py-2 text-right text-xs text-gray-500">剩余天</th>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colOrg')}</th>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colProject')}</th>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colName')}</th>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colPrefix')}</th>
+                    <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colExpire')}</th>
+                    <th className="px-4 py-2 text-right text-xs text-gray-500">{tr('colDaysLeft')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -755,29 +762,29 @@ function PlatformMonitorPageInner() {
               </table>
               {samples.expiring_api_keys.total > samples.expiring_api_keys.items.length && (
                 <p className="px-4 py-2 text-xs text-gray-500 border-t border-gray-100">
-                  共 {samples.expiring_api_keys.total} 条，展示前 {samples.expiring_api_keys.items.length}
+                  {tr('countShown', { total: samples.expiring_api_keys.total, shown: samples.expiring_api_keys.items.length })}
                 </p>
               )}
             </div>
           )}
 
           <div className="card p-4">
-            <h3 className="text-sm font-semibold text-gray-700 mb-2">近 24h 调用量</h3>
+            <h3 className="text-sm font-semibold text-gray-700 mb-2">{tr('calls24h')}</h3>
             {hourlyCounts.some((v) => v > 0) ? (
               <Sparkline data={hourlyCounts} />
             ) : (
-              <p className="text-xs text-gray-400 py-4">暂无 audit 数据</p>
+              <p className="text-xs text-gray-400 py-4">{tr('noAuditData')}</p>
             )}
             {hourlyErrs.some((v) => v > 0) && (
               <>
-                <h3 className="text-sm font-semibold text-gray-700 mt-4 mb-2">近 24h 5xx</h3>
+                <h3 className="text-sm font-semibold text-gray-700 mt-4 mb-2">{tr('fivexx24h')}</h3>
                 <Sparkline data={hourlyErrs} />
               </>
             )}
           </div>
 
           {(overview.warnings?.length ?? 0) > 0 && (
-            <p className="text-xs text-gray-400">部分指标降级：{overview.warnings!.join('; ')}</p>
+            <p className="text-xs text-gray-400">{tr('degradedMetrics', { w: overview.warnings!.join('; ') })}</p>
           )}
         </div>
         )
@@ -787,7 +794,7 @@ function PlatformMonitorPageInner() {
         <div className="space-y-6">
           <div className="card p-4">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-gray-700">采样趋势</h3>
+              <h3 className="text-sm font-semibold text-gray-700">{tr('sampleTrend')}</h3>
               <select
                 value={tsRange}
                 onChange={(e) => setTsRange(e.target.value as '24h' | '7d')}
@@ -799,7 +806,7 @@ function PlatformMonitorPageInner() {
             </div>
             {tsPoints.length === 0 ? (
               <p className="text-xs text-gray-400 py-4">
-                暂无采样点（需跑 migration 050 且采样任务启动约 1 分钟后可见）
+                {tr('noSamplePoint')}
               </p>
             ) : (
               <div className="space-y-4">
@@ -812,7 +819,7 @@ function PlatformMonitorPageInner() {
                   <Sparkline data={tsPoints.map((p) => p.p95_ms_5min ?? 0)} height={40} />
                 </div>
                 <div>
-                  <p className="text-xs text-gray-500 mb-1">错误率</p>
+                  <p className="text-xs text-gray-500 mb-1">{tr('errRate')}</p>
                   <Sparkline data={tsPoints.map((p) => (p.error_rate_24h ?? 0) * 100)} height={40} />
                 </div>
               </div>
@@ -822,10 +829,10 @@ function PlatformMonitorPageInner() {
           <div className="card p-4">
             <h3 className="text-sm font-semibold text-gray-700 mb-3">
               <i className="fas fa-shield-alt mr-2 text-orange-500"></i>
-              熔断器状态
+              {tr('circuitState')}
             </h3>
             {circuitBreakers.length === 0 ? (
-              <div className="text-sm text-gray-400">暂无熔断器记录。</div>
+              <div className="text-sm text-gray-400">{tr('noCircuit')}</div>
             ) : (
               <div className="flex flex-wrap gap-2">
                 {circuitBreakers.map((cb) => (
@@ -840,7 +847,7 @@ function PlatformMonitorPageInner() {
                     }`}
                   >
                     DB#{cb.database_id}:{' '}
-                    {cb.state === 'Closed' ? '正常' : cb.state === 'Open' ? '熔断中' : '半开探测'}
+                    {cb.state === 'Closed' ? tr('cbClosed') : cb.state === 'Open' ? tr('cbOpen') : tr('cbHalfOpen')}
                   </span>
                 ))}
               </div>
@@ -849,23 +856,23 @@ function PlatformMonitorPageInner() {
 
           {overview?.runtime.rate_limit && (
             <div className="card p-4">
-              <h3 className="text-sm font-semibold text-gray-700 mb-3">限流器</h3>
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">{tr('rateLimiter')}</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
                 <Kpi
-                  label="降级"
-                  value={overview.runtime.rate_limit_degraded ? '是' : '否'}
+                  label={tr('degraded')}
+                  value={overview.runtime.rate_limit_degraded ? tr('yes') : tr('no')}
                   warn={overview.runtime.rate_limit_degraded}
                 />
                 <Kpi
-                  label="Redis 失败 streak"
+                  label={tr('redisFailStreak')}
                   value={String((overview.runtime.rate_limit as { redis_failures_streak?: number }).redis_failures_streak ?? '—')}
                 />
                 <Kpi
-                  label="Fallback 拒绝"
+                  label={tr('fallbackReject')}
                   value={String((overview.runtime.rate_limit as { fallback_rejected_total?: number }).fallback_rejected_total ?? '—')}
                 />
                 <Kpi
-                  label="活跃规则"
+                  label={tr('activeRules')}
                   value={String((overview.runtime.rate_limit as { active_rules?: number }).active_rules ?? '—')}
                 />
               </div>
@@ -876,34 +883,34 @@ function PlatformMonitorPageInner() {
             <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-gray-700">
                 <i className="fas fa-fire mr-2 text-red-500"></i>
-                Top 接口（近 1h）
+                {tr('topEndpoints')}
               </h3>
               <select
                 value={topOrder}
                 onChange={(e) => setTopOrder(e.target.value as 'errors' | 'latency' | 'calls')}
                 className="px-2 py-1 border border-gray-300 rounded text-xs"
               >
-                <option value="errors">按 5xx 排序</option>
-                <option value="latency">按 P95 排序</option>
-                <option value="calls">按调用量排序</option>
+                <option value="errors">{tr('sortErrors')}</option>
+                <option value="latency">{tr('sortLatency')}</option>
+                <option value="calls">{tr('sortCalls')}</option>
               </select>
             </div>
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">路径</th>
-                  <th className="px-4 py-2 text-right text-xs text-gray-500">调用</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colPath')}</th>
+                  <th className="px-4 py-2 text-right text-xs text-gray-500">{tr('colCalls')}</th>
                   <th className="px-4 py-2 text-right text-xs text-gray-500">5xx</th>
                   <th className="px-4 py-2 text-right text-xs text-gray-500">4xx</th>
                   <th className="px-4 py-2 text-right text-xs text-gray-500">P95</th>
-                  <th className="px-4 py-2 text-right text-xs text-gray-500">均值</th>
+                  <th className="px-4 py-2 text-right text-xs text-gray-500">{tr('colAvg')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {topEndpoints.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="px-4 py-6 text-center text-xs text-gray-400">
-                      暂无数据
+                      {tr('noData')}
                     </td>
                   </tr>
                 ) : (
@@ -936,11 +943,11 @@ function PlatformMonitorPageInner() {
             <div className="flex items-end justify-between mb-3">
               <h3 className="text-sm font-semibold text-gray-700">
                 <i className="fas fa-code mr-2 text-purple-500"></i>
-                PlaneOS Auto API 慢查询
+                {tr('autoApiSlow')}
               </h3>
               <div className="flex items-center space-x-3 text-xs text-gray-600">
                 <label className="flex items-center space-x-1.5">
-                  <span>阈值</span>
+                  <span>{tr('threshold')}</span>
                   <input
                     type="number"
                     min={0}
@@ -951,7 +958,7 @@ function PlatformMonitorPageInner() {
                   <span>ms</span>
                 </label>
                 <label className="flex items-center space-x-1.5">
-                  <span>条数</span>
+                  <span>{tr('rowCount')}</span>
                   <select
                     value={limit}
                     onChange={(e) => setLimit(parseInt(e.target.value, 10))}
@@ -969,18 +976,18 @@ function PlatformMonitorPageInner() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">时间</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{tr('colTime')}</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">DB</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Schema.Table</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">SQL</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">耗时</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{tr('colElapsed')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
                   {appSlowQueries.length === 0 ? (
                     <tr>
                       <td colSpan={5} className="text-center py-6 text-gray-400 text-xs">
-                        暂无慢查询记录
+                        {tr('noSlowQuery')}
                       </td>
                     </tr>
                   ) : (
@@ -1023,15 +1030,15 @@ function PlatformMonitorPageInner() {
       {tab === 'async' && overview && (
         <div className="space-y-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <Kpi label="执行失败 (24h)" value={String(overview.async.exec_failed_24h)} warn={overview.async.exec_failed_24h > 50} />
-            <Kpi label="定时任务活跃" value={String(overview.async.scheduler?.active_tasks ?? '—')} />
-            <Kpi label="定时失败 (24h)" value={String(overview.async.scheduler?.failed_24h ?? '—')} warn={(overview.async.scheduler?.failed_24h ?? 0) > 0} />
-            <Kpi label="SSE 连接" value={String(overview.async.sse?.connections.total ?? '—')} />
+            <Kpi label={tr('execFailed24h')} value={String(overview.async.exec_failed_24h)} warn={overview.async.exec_failed_24h > 50} />
+            <Kpi label={tr('schedulerActive')} value={String(overview.async.scheduler?.active_tasks ?? '—')} />
+            <Kpi label={tr('schedulerFailed24h')} value={String(overview.async.scheduler?.failed_24h ?? '—')} warn={(overview.async.scheduler?.failed_24h ?? 0) > 0} />
+            <Kpi label={tr('sseConn')} value={String(overview.async.sse?.connections.total ?? '—')} />
           </div>
 
           <div className="card overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-100">
-              <h3 className="text-sm font-semibold text-gray-700">执行索引 24h（source × status）</h3>
+              <h3 className="text-sm font-semibold text-gray-700">{tr('execIndex24h')}</h3>
             </div>
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
@@ -1045,7 +1052,7 @@ function PlatformMonitorPageInner() {
                 {overview.async.execution_stats.length === 0 ? (
                   <tr>
                     <td colSpan={3} className="px-4 py-6 text-center text-xs text-gray-400">
-                      暂无执行记录
+                      {tr('noExecRecord')}
                     </td>
                   </tr>
                 ) : (
@@ -1064,8 +1071,8 @@ function PlatformMonitorPageInner() {
           {overview.async.sse && (
             <div className="card p-4 text-sm text-gray-600 space-y-1">
               <h3 className="text-sm font-semibold text-gray-700 mb-2">SSE</h3>
-              <p>总连接 {overview.async.sse.connections.total}（public {overview.async.sse.connections.public} / generic {overview.async.sse.connections.generic}）</p>
-              <p>累计推送 {overview.async.sse.pushes_total}</p>
+              <p>{tr('sseTotal', { total: overview.async.sse.connections.total, pub: overview.async.sse.connections.public, gen: overview.async.sse.connections.generic })}</p>
+              <p>{tr('ssePushes', { n: overview.async.sse.pushes_total })}</p>
             </div>
           )}
         </div>
@@ -1077,17 +1084,17 @@ function PlatformMonitorPageInner() {
             <div className="px-4 py-3 border-b border-gray-100">
               <h3 className="text-sm font-semibold text-gray-700">
                 <i className="fas fa-triangle-exclamation mr-2 text-red-500"></i>
-                最近失败执行（可凭 trace 去执行日志追踪）
+                {tr('recentFailedExec')}
               </h3>
             </div>
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">时间</th>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">来源</th>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">名称</th>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">状态</th>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">错误</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colTime')}</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colSource')}</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colName')}</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colStatus')}</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colError')}</th>
                   <th className="px-4 py-2 text-left text-xs text-gray-500">trace</th>
                 </tr>
               </thead>
@@ -1095,7 +1102,7 @@ function PlatformMonitorPageInner() {
                 {failedExecutions.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="px-4 py-6 text-center text-xs text-gray-400">
-                      近期无失败执行
+                      {tr('noRecentFail')}
                     </td>
                   </tr>
                 ) : (
@@ -1126,24 +1133,24 @@ function PlatformMonitorPageInner() {
 
           <div className="card overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-100">
-              <h3 className="text-sm font-semibold text-gray-700">最近 5xx 请求</h3>
+              <h3 className="text-sm font-semibold text-gray-700">{tr('recent5xx')}</h3>
             </div>
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">时间</th>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">方法</th>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">路径</th>
-                  <th className="px-4 py-2 text-right text-xs text-gray-500">状态</th>
-                  <th className="px-4 py-2 text-right text-xs text-gray-500">耗时</th>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">项目</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colTime')}</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colMethod')}</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colPath')}</th>
+                  <th className="px-4 py-2 text-right text-xs text-gray-500">{tr('colStatus')}</th>
+                  <th className="px-4 py-2 text-right text-xs text-gray-500">{tr('colElapsed')}</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colProject')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {http5xx.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="px-4 py-6 text-center text-xs text-gray-400">
-                      近期无 5xx
+                      {tr('noRecent5xx')}
                     </td>
                   </tr>
                 ) : (
@@ -1172,24 +1179,24 @@ function PlatformMonitorPageInner() {
 
           <div className="card overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-100">
-              <h3 className="text-sm font-semibold text-gray-700">按项目分解（近 24h）</h3>
+              <h3 className="text-sm font-semibold text-gray-700">{tr('byProject24h')}</h3>
             </div>
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">项目</th>
-                  <th className="px-4 py-2 text-right text-xs text-gray-500">调用</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colProject')}</th>
+                  <th className="px-4 py-2 text-right text-xs text-gray-500">{tr('colCalls')}</th>
                   <th className="px-4 py-2 text-right text-xs text-gray-500">5xx</th>
-                  <th className="px-4 py-2 text-right text-xs text-gray-500">错误率</th>
+                  <th className="px-4 py-2 text-right text-xs text-gray-500">{tr('colErrRate')}</th>
                   <th className="px-4 py-2 text-right text-xs text-gray-500">P95</th>
-                  <th className="px-4 py-2 text-right text-xs text-gray-500">慢查询</th>
+                  <th className="px-4 py-2 text-right text-xs text-gray-500">{tr('colSlow')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {tenantRows.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="px-4 py-6 text-center text-xs text-gray-400">
-                      暂无数据
+                      {tr('noData')}
                     </td>
                   </tr>
                 ) : (
@@ -1198,7 +1205,7 @@ function PlatformMonitorPageInner() {
                     return (
                       <tr key={String(r.tenant_id)} className="hover:bg-gray-50">
                         <td className="px-4 py-2 text-xs">
-                          {r.tenant_name || (r.tenant_id != null ? `#${r.tenant_id}` : '(无项目)')}
+                          {r.tenant_name || (r.tenant_id != null ? `#${r.tenant_id}` : tr('noProject'))}
                         </td>
                         <td className="px-4 py-2 text-xs text-right tabular-nums">{r.calls}</td>
                         <td className={`px-4 py-2 text-xs text-right tabular-nums ${r.err_5xx > 0 ? 'text-red-600 font-semibold' : ''}`}>
@@ -1226,9 +1233,9 @@ function PlatformMonitorPageInner() {
       {tab === 'alerts' && (
         <div className="space-y-6">
           <div className="card p-4 space-y-3">
-            <h3 className="text-sm font-semibold text-gray-700">平台告警 Webhook</h3>
+            <h3 className="text-sm font-semibold text-gray-700">{tr('alertWebhook')}</h3>
             <p className="text-xs text-gray-500">
-              总开关关闭时不发送。需先执行 migration 050。与工作流/定时任务对象级告警独立。
+              {tr('alertWebhookHint')}
             </p>
             <label className="flex items-center gap-2 text-sm">
               <input
@@ -1237,7 +1244,7 @@ function PlatformMonitorPageInner() {
                 onChange={(e) => setEnabledDraft(e.target.checked)}
                 className="rounded border-gray-300"
               />
-              启用平台阈值告警
+              {tr('enableAlert')}
             </label>
             <label className="block text-xs text-gray-600">
               Webhook URL
@@ -1250,7 +1257,7 @@ function PlatformMonitorPageInner() {
               />
             </label>
             <label className="block text-xs text-gray-600 w-40">
-              默认限流（小时，0=不限）
+              {tr('defaultRateLimit')}
               <input
                 type="number"
                 min={0}
@@ -1266,31 +1273,31 @@ function PlatformMonitorPageInner() {
               disabled={savingAlert}
               className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50"
             >
-              {savingAlert ? '保存中…' : '保存配置'}
+              {savingAlert ? tr('savingAlert') : tr('saveConfig')}
             </button>
             {alertConfig?.updated_at && (
-              <p className="text-xs text-gray-400">上次更新：{alertConfig.updated_at}</p>
+              <p className="text-xs text-gray-400">{tr('lastUpdated', { t: alertConfig.updated_at })}</p>
             )}
           </div>
 
           <div className="card overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-100">
-              <h3 className="text-sm font-semibold text-gray-700">告警规则</h3>
+              <h3 className="text-sm font-semibold text-gray-700">{tr('alertRules')}</h3>
             </div>
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">名称</th>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">条件</th>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">启用</th>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">上次触发</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colName')}</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colCondition')}</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colEnabled')}</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colLastTrigger')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {alertRules.length === 0 ? (
                   <tr>
                     <td colSpan={4} className="px-4 py-6 text-center text-xs text-gray-400">
-                      暂无规则（请跑 migration 050）
+                      {tr('noRule')}
                     </td>
                   </tr>
                 ) : (
@@ -1308,7 +1315,7 @@ function PlatformMonitorPageInner() {
                             r.enabled ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-500'
                           }`}
                         >
-                          {r.enabled ? '开' : '关'}
+                          {r.enabled ? tr('on') : tr('off')}
                         </button>
                       </td>
                       <td className="px-4 py-2 text-xs text-gray-500">
@@ -1323,22 +1330,22 @@ function PlatformMonitorPageInner() {
 
           <div className="card overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-100">
-              <h3 className="text-sm font-semibold text-gray-700">最近告警事件</h3>
+              <h3 className="text-sm font-semibold text-gray-700">{tr('recentAlertEvents')}</h3>
             </div>
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">时间</th>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">规则</th>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">值</th>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500">状态</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colTime')}</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colRule')}</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colValue')}</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500">{tr('colStatus')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {alertEvents.length === 0 ? (
                   <tr>
                     <td colSpan={4} className="px-4 py-6 text-center text-xs text-gray-400">
-                      暂无事件
+                      {tr('noEvent')}
                     </td>
                   </tr>
                 ) : (

@@ -15,6 +15,8 @@ export type Caps = ReturnType<typeof useCurrentProjectCapabilities>
 
 export interface NavItem {
   label: string
+  /** i18n key（messages 的 nav.*）；渲染时优先用 t(labelKey)，label 作 fallback + 稳定标识 */
+  labelKey?: string
   href: string
   icon: string
   /** 该 item 独立可见条件；缺省即跟随分组可见性 */
@@ -23,6 +25,7 @@ export interface NavItem {
 
 export interface NavGroup {
   label: string
+  labelKey?: string
   icon: string
   items: NavItem[]
   /** 该组整体显示门槛；缺省即根据 items 至少有一项可见来判定 */
@@ -31,9 +34,9 @@ export interface NavGroup {
 
 export const NAV_GROUPS: NavGroup[] = [
   {
-    label: '概览',
+    label: '概览', labelKey: 'overview',
     icon: 'fas fa-home',
-    items: [{ label: '项目首页', href: '', icon: 'fas fa-home' }],
+    items: [{ label: '项目首页', labelKey: 'projectHome', href: '', icon: 'fas fa-home' }],
   },
   {
     // W6（2026-07）：数据库组回归"数据对象 + 直接操作"的完整语义。
@@ -42,47 +45,47 @@ export const NAV_GROUPS: NavGroup[] = [
     //   · Schema 浏览器 / 索引 / 扩展 / 数据导入 / 备份与恢复：页面早已实现，但此前
     //     只能靠旧 /dashboard 链接进入，侧栏无入口——本次补齐。
     // 沿用本组约定：数据库页面不设 visibleIf（对成员可见），真实写权限由页面 / 后端收口。
-    label: '数据库',
+    label: '数据库', labelKey: 'database',
     icon: 'fas fa-database',
     items: [
-      { label: '表', href: '/database/tables', icon: 'fas fa-table' },
+      { label: '表', labelKey: 'tables', href: '/database/tables', icon: 'fas fa-table' },
       // M3 可视化建表入口：放在「表」「关系图」之间，与现状心智一致——
       // 用户先看到表清单，再看可视化关系图，最后才是"我想新建/改结构"这种偏写操作。
-      { label: '表设计器', href: '/database/table-designer', icon: 'fas fa-pen-ruler' },
-      { label: '关系图', href: '/database/visualizer', icon: 'fas fa-project-diagram' },
-      { label: 'Schema 浏览器', href: '/database/schemas', icon: 'fas fa-sitemap' },
-      { label: '索引', href: '/database/indexes', icon: 'fas fa-list-ol' },
-      { label: '扩展', href: '/database/extensions', icon: 'fas fa-puzzle-piece' },
+      { label: '表设计器', labelKey: 'tableDesigner', href: '/database/table-designer', icon: 'fas fa-pen-ruler' },
+      { label: '关系图', labelKey: 'erd', href: '/database/visualizer', icon: 'fas fa-project-diagram' },
+      { label: 'Schema 浏览器', labelKey: 'schemaBrowser', href: '/database/schemas', icon: 'fas fa-sitemap' },
+      { label: '索引', labelKey: 'indexes', href: '/database/indexes', icon: 'fas fa-list-ol' },
+      { label: '扩展', labelKey: 'extensions', href: '/database/extensions', icon: 'fas fa-puzzle-piece' },
       // 从「诊断与监控」搬回：直接对库执行 SQL / 事务，属写操作工具。
-      { label: 'SQL 编辑器', href: '/database/query', icon: 'fas fa-terminal' },
-      { label: '事务编辑器', href: '/database/transaction', icon: 'fas fa-layer-group' },
-      { label: '数据导入', href: '/database/import', icon: 'fas fa-file-import' },
-      { label: '备份与恢复', href: '/database/backup', icon: 'fas fa-hdd' },
+      { label: 'SQL 编辑器', labelKey: 'sqlEditor', href: '/database/query', icon: 'fas fa-terminal' },
+      { label: '事务编辑器', labelKey: 'txnEditor', href: '/database/transaction', icon: 'fas fa-layer-group' },
+      { label: '数据导入', labelKey: 'dataImport', href: '/database/import', icon: 'fas fa-file-import' },
+      { label: '备份与恢复', labelKey: 'backup', href: '/database/backup', icon: 'fas fa-hdd' },
     ],
   },
   {
     // W5：把"在 DB 里跑的执行逻辑"全部归到这里。函数 / 触发器原本归在
     // 「数据库」（按对象分类），定时任务原本归在「事件」（按出口分类）——
     // 三者的实际心智是"配一段逻辑，由 DB / 调度器替我执行"，应该同组。
-    label: '自动化',
+    label: '自动化', labelKey: 'automation',
     icon: 'fas fa-bolt',
     items: [
-      { label: '函数', href: '/database/functions', icon: 'fas fa-code' },
-      { label: '触发器', href: '/database/triggers', icon: 'fas fa-bell' },
+      { label: '函数', labelKey: 'functions', href: '/database/functions', icon: 'fas fa-code' },
+      { label: '触发器', labelKey: 'triggers', href: '/database/triggers', icon: 'fas fa-bell' },
       {
-        label: '工作流',
+        label: '工作流', labelKey: 'workflows',
         href: '/automation/workflows',
         icon: 'fas fa-diagram-project',
         visibleIf: (caps) => caps.canManageEvents,
       },
       {
-        label: '定时任务',
+        label: '定时任务', labelKey: 'scheduledTasks',
         href: '/events/scheduled-tasks',
         icon: 'fas fa-clock',
         visibleIf: (caps) => caps.canManageEvents,
       },
       {
-        label: '会话规则',
+        label: '会话规则', labelKey: 'sessionRules',
         href: '/automation/session-rules',
         icon: 'fas fa-sliders-h',
         visibleIf: (caps) => caps.canManageEvents,
@@ -90,49 +93,49 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: 'API & RPC',
+    label: 'API & RPC', labelKey: 'apiRpc',
     icon: 'fas fa-plug',
     items: [
-      { label: 'REST API', href: '/api', icon: 'fas fa-cloud' },
-      { label: 'RPC 调用器', href: '/rpc', icon: 'fas fa-terminal' },
+      { label: 'REST API', labelKey: 'restApi', href: '/api', icon: 'fas fa-cloud' },
+      { label: 'RPC 调用器', labelKey: 'rpcCaller', href: '/rpc', icon: 'fas fa-terminal' },
     ],
   },
   {
     // W5：原「事件」组改名「集成」，移走定时任务后只剩对外通道。
     // W6：补齐「实时推送」（sse-routes / 实时推送规则）——它与 Webhook（推）、
     // ES 代理（转发）同属"对外通道"，此前无侧栏入口，现归入本组。
-    label: '集成',
+    label: '集成', labelKey: 'integrations',
     icon: 'fas fa-share-alt',
     visibleIf: (caps) => caps.canManageEvents,
     items: [
       // 数据源（+凭证）：工作流 db 节点可引用的项目内共享数据库连接。
-      { label: '数据源', href: '/events/datasources', icon: 'fas fa-plug-circle-bolt' },
-      { label: 'Webhook', href: '/events/webhooks', icon: 'fas fa-broadcast-tower' },
-      { label: '实时推送', href: '/automation/sse-routes', icon: 'fas fa-satellite-dish' },
-      { label: 'ES 代理', href: '/events/es-connections', icon: 'fas fa-search-plus' },
-      { label: 'Redis', href: '/events/redis-connections', icon: 'fas fa-database' },
-      { label: 'Kafka', href: '/events/kafka-connections', icon: 'fas fa-stream' },
-      { label: '对象存储', href: '/events/object-storage-connections', icon: 'fas fa-cloud' },
-      { label: 'LLM', href: '/events/llm-connections', icon: 'fas fa-robot' },
+      { label: '数据源', labelKey: 'dataSources', href: '/events/datasources', icon: 'fas fa-plug-circle-bolt' },
+      { label: 'Webhook', labelKey: 'webhook', href: '/events/webhooks', icon: 'fas fa-broadcast-tower' },
+      { label: '实时推送', labelKey: 'realtime', href: '/automation/sse-routes', icon: 'fas fa-satellite-dish' },
+      { label: 'ES 代理', labelKey: 'esProxy', href: '/events/es-connections', icon: 'fas fa-search-plus' },
+      { label: 'Redis', labelKey: 'redis', href: '/events/redis-connections', icon: 'fas fa-database' },
+      { label: 'Kafka', labelKey: 'kafka', href: '/events/kafka-connections', icon: 'fas fa-stream' },
+      { label: '对象存储', labelKey: 'objectStorage', href: '/events/object-storage-connections', icon: 'fas fa-cloud' },
+      { label: 'LLM', labelKey: 'llm', href: '/events/llm-connections', icon: 'fas fa-robot' },
     ],
   },
   {
-    label: '文件',
+    label: '文件', labelKey: 'files',
     icon: 'fas fa-folder-open',
-    items: [{ label: '文件', href: '/files', icon: 'fas fa-folder-open' }],
+    items: [{ label: '文件', labelKey: 'files', href: '/files', icon: 'fas fa-folder-open' }],
   },
   {
-    label: '安全',
+    label: '安全', labelKey: 'security',
     icon: 'fas fa-user-shield',
     visibleIf: (caps) => caps.canManageSecurity,
     items: [
-      { label: '角色', href: '/security/roles', icon: 'fas fa-users-cog' },
-      { label: 'RLS', href: '/security/rls', icon: 'fas fa-shield-alt' },
-      { label: 'RPC ACL', href: '/security/rpc-acl', icon: 'fas fa-key' },
-      { label: '身份提供方', href: '/security/idp', icon: 'fas fa-id-badge' },
-      { label: 'API Key', href: '/security/api-keys', icon: 'fas fa-fingerprint' },
+      { label: '角色', labelKey: 'roles', href: '/security/roles', icon: 'fas fa-users-cog' },
+      { label: 'RLS', labelKey: 'rls', href: '/security/rls', icon: 'fas fa-shield-alt' },
+      { label: 'RPC ACL', labelKey: 'rpcAcl', href: '/security/rpc-acl', icon: 'fas fa-key' },
+      { label: '身份提供方', labelKey: 'idp', href: '/security/idp', icon: 'fas fa-id-badge' },
+      { label: 'API Key', labelKey: 'apiKey', href: '/security/api-keys', icon: 'fas fa-fingerprint' },
       {
-        label: '网关策略',
+        label: '网关策略', labelKey: 'gatewayPolicy',
         href: '/gateway',
         icon: 'fas fa-shield-halved',
         visibleIf: (caps) => caps.canManageSecurity,
@@ -144,81 +147,81 @@ export const NAV_GROUPS: NavGroup[] = [
     // 「数据库」组后，本组只剩"读 / 观测 / 排障"——语义更纯，与上面"写 / 配置"
     // 分组彻底分层。顺序：先看现状（监控大盘 / 执行日志）→ 看性能与阻塞
     // （语句分析 / 慢查询 / 锁与阻塞）。
-    label: '诊断与监控',
+    label: '诊断与监控', labelKey: 'diagnostics',
     icon: 'fas fa-stethoscope',
     items: [
-      { label: '监控大盘', href: '/monitor', icon: 'fas fa-chart-line' },
+      { label: '监控大盘', labelKey: 'dashboard', href: '/monitor', icon: 'fas fa-chart-line' },
       {
-        label: '执行日志',
+        label: '执行日志', labelKey: 'execLogs',
         href: '/logs',
         icon: 'fas fa-stream',
         visibleIf: (caps) => caps.canManageSecurity,
       },
       {
-        label: '云日志',
+        label: '云日志', labelKey: 'cloudLogs',
         href: '/cloud-logs',
         icon: 'fas fa-cloud-download-alt',
         visibleIf: (caps) => caps.canManageSecurity,
       },
       {
-        label: '操作日志',
+        label: '操作日志', labelKey: 'operationLogs',
         href: '/operation-logs',
         icon: 'fas fa-clipboard-list',
         visibleIf: (caps) => caps.canManageSecurity,
       },
-      { label: '语句分析', href: '/database/query-analyzer', icon: 'fas fa-tachometer-alt' },
-      { label: '慢查询', href: '/database/slow-queries', icon: 'fas fa-hourglass-half' },
-      { label: '锁与阻塞', href: '/database/locks', icon: 'fas fa-lock' },
+      { label: '语句分析', labelKey: 'statementAnalysis', href: '/database/query-analyzer', icon: 'fas fa-tachometer-alt' },
+      { label: '慢查询', labelKey: 'slowQueries', href: '/database/slow-queries', icon: 'fas fa-hourglass-half' },
+      { label: '锁与阻塞', labelKey: 'locks', href: '/database/locks', icon: 'fas fa-lock' },
     ],
   },
   {
-    label: '设置',
+    label: '设置', labelKey: 'settings',
     icon: 'fas fa-cog',
     items: [
       {
-        label: '项目信息',
+        label: '项目信息', labelKey: 'projectInfo',
         href: '/settings',
         icon: 'fas fa-id-card',
         visibleIf: (caps) => caps.canManageProjectSettings,
       },
       {
-        label: '成员管理',
+        label: '成员管理', labelKey: 'members',
         href: '/settings/members',
         icon: 'fas fa-users',
         visibleIf: (caps) => caps.canManageMembers,
       },
       {
-        label: '环境变量',
+        label: '环境变量', labelKey: 'envVars',
         href: '/settings/env-vars',
         icon: 'fas fa-sliders-h',
         visibleIf: (caps) => caps.canManageMembers,
       },
       {
-        label: 'AI 模型',
+        label: 'AI 模型', labelKey: 'aiModels',
         href: '/settings/ai-providers',
         icon: 'fas fa-robot',
         visibleIf: (caps) => AI_ASSISTANT_ENABLED && caps.canManageMembers,
       },
       {
-        label: '凭证管理',
+        label: '凭证管理', labelKey: 'credentials',
         href: '/settings/credentials',
         icon: 'fas fa-key',
         visibleIf: (caps) => caps.canManageMembers,
       },
       {
-        label: '云日志源',
+        label: '云日志源', labelKey: 'cloudLogSources',
         href: '/settings/log-sources',
         icon: 'fas fa-cloud',
         visibleIf: (caps) => caps.canManageSecurity,
       },
       {
-        label: '数据库连接',
+        label: '数据库连接', labelKey: 'dbConnections',
         href: '/settings/connections',
         icon: 'fas fa-database',
         visibleIf: (caps) => caps.canManageProjectSettings,
       },
       {
-        label: '网关域名',
+        label: '网关域名', labelKey: 'gatewayDomains',
         href: '/settings/gateway',
         icon: 'fas fa-globe',
         visibleIf: (caps) => caps.canManageMembers,
@@ -232,6 +235,7 @@ const ALL_NAV_ITEMS: NavItem[] = NAV_GROUPS.flatMap((g) => g.items)
 
 export interface NavMeta {
   label: string
+  labelKey?: string
   icon: string
 }
 
@@ -266,15 +270,15 @@ export function tabIdentity(relPath: string): string {
  */
 export function resolveNavMeta(relPath: string): NavMeta {
   if (isHelpPath(relPath)) {
-    return { label: '使用帮助', icon: 'fas fa-circle-question' }
+    return { label: '使用帮助', labelKey: 'help', icon: 'fas fa-circle-question' }
   }
 
   if (isWorkflowVersionsPath(relPath)) {
-    return { label: '工作流版本', icon: 'fas fa-clock-rotate-left' }
+    return { label: '工作流版本', labelKey: 'workflowVersions', icon: 'fas fa-clock-rotate-left' }
   }
 
   const exact = ALL_NAV_ITEMS.find((it) => it.href === relPath)
-  if (exact) return { label: exact.label, icon: exact.icon }
+  if (exact) return { label: exact.label, labelKey: exact.labelKey, icon: exact.icon }
 
   if (relPath !== '') {
     let best: NavItem | null = null
@@ -284,7 +288,7 @@ export function resolveNavMeta(relPath: string): NavMeta {
         if (!best || it.href.length > best.href.length) best = it
       }
     }
-    if (best) return { label: best.label, icon: best.icon }
+    if (best) return { label: best.label, labelKey: best.labelKey, icon: best.icon }
   }
 
   const seg = relPath.split('/').filter(Boolean).pop() || '页面'

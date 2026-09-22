@@ -2,6 +2,8 @@
 
 import { useState, useEffect, Fragment } from 'react'
 import api from '@/lib/api'
+import { useTranslations } from 'next-intl'
+import { buildOperationSummary } from '@/lib/operationSummary'
 
 interface PlatformAdminLog {
   id: number
@@ -72,6 +74,8 @@ interface RawSqlStats {
 type Tab = 'platform' | 'audit' | 'slow' | 'raw-sql'
 
 export default function AuditPage() {
+  const t = useTranslations('platformAudit')
+  const tOp = useTranslations('operationLog')
   const [tab, setTab] = useState<Tab>('platform')
   const [platformLogs, setPlatformLogs] = useState<PlatformAdminLog[]>([])
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([])
@@ -118,7 +122,7 @@ export default function AuditPage() {
       setPlatformLogs(res.data.data || [])
       setTotal(res.data.total || 0)
     } catch (err) {
-      console.error('加载平台操作日志失败:', err)
+      console.error(t('loadPlatformFailed'), err)
     } finally {
       setLoading(false)
     }
@@ -136,7 +140,7 @@ export default function AuditPage() {
       setAuditLogs(res.data.data || [])
       setTotal(res.data.total || 0)
     } catch (err) {
-      console.error('加载审计日志失败:', err)
+      console.error(t('loadAuditFailed'), err)
     } finally {
       setLoading(false)
     }
@@ -148,7 +152,7 @@ export default function AuditPage() {
       const res = await api.get('/api/admin/slow-queries', { params: { limit: 50 } })
       setSlowQueries(res.data.data || [])
     } catch (err) {
-      console.error('加载慢查询失败:', err)
+      console.error(t('loadSlowFailed'), err)
     } finally {
       setLoading(false)
     }
@@ -168,7 +172,7 @@ export default function AuditPage() {
       setRawSqlStats(res.data.stats_by_reason || [])
       setTotal(res.data.total || 0)
     } catch (err) {
-      console.error('加载原始 SQL 审计失败:', err)
+      console.error(t('loadRawSqlFailed'), err)
     } finally {
       setLoading(false)
     }
@@ -192,10 +196,10 @@ export default function AuditPage() {
 
   const categoryLabel = (category: string) => {
     const labels: Record<string, string> = {
-      project: '项目',
-      workflow: '工作流',
+      project: t('typeProject'),
+      workflow: t('typeWorkflow'),
       sql: 'SQL',
-      platform: '平台',
+      platform: t('typePlatform'),
     }
     return labels[category] || category
   }
@@ -229,21 +233,21 @@ export default function AuditPage() {
   const Pagination = () =>
     total > 50 ? (
       <div className="flex items-center justify-between px-4 py-3 border-t bg-gray-50">
-        <span className="text-xs text-gray-500">共 {total} 条</span>
+        <span className="text-xs text-gray-500">{t('countLine', { total })}</span>
         <div className="flex space-x-2">
           <button
             onClick={() => setPage(Math.max(0, page - 1))}
             disabled={page === 0}
             className="btn-default text-xs disabled:opacity-50"
           >
-            上一页
+            {t('prevPage')}
           </button>
           <button
             onClick={() => setPage(page + 1)}
             disabled={(page + 1) * 50 >= total}
             className="btn-default text-xs disabled:opacity-50"
           >
-            下一页
+            {t('nextPage')}
           </button>
         </div>
       </div>
@@ -252,9 +256,9 @@ export default function AuditPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-gray-900">审计日志</h1>
+        <h1 className="text-2xl font-semibold text-gray-900">{t('title')}</h1>
         <p className="text-sm text-gray-500 mt-1">
-          记录项目创建、工作流变更、SQL 执行等平台关键操作，含操作人与时间
+          {t('subtitle')}
         </p>
       </div>
 
@@ -263,25 +267,25 @@ export default function AuditPage() {
           onClick={() => switchTab('platform')}
           className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${tab === 'platform' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
         >
-          <i className="fas fa-crown mr-2"></i>平台操作
+          <i className="fas fa-crown mr-2"></i>{t('tabPlatform')}
         </button>
         <button
           onClick={() => switchTab('audit')}
           className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${tab === 'audit' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
         >
-          <i className="fas fa-shield-alt mr-2"></i>全部审计
+          <i className="fas fa-shield-alt mr-2"></i>{t('tabAll')}
         </button>
         <button
           onClick={() => switchTab('slow')}
           className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${tab === 'slow' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
         >
-          <i className="fas fa-clock mr-2"></i>慢查询
+          <i className="fas fa-clock mr-2"></i>{t('tabSlow')}
         </button>
         <button
           onClick={() => switchTab('raw-sql')}
           className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${tab === 'raw-sql' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
         >
-          <i className="fas fa-terminal mr-2"></i>原始 SQL 审计
+          <i className="fas fa-terminal mr-2"></i>{t('tabRawSql')}
         </button>
       </div>
 
@@ -294,22 +298,22 @@ export default function AuditPage() {
                 onChange={(e) => setPlatformFilters({ ...platformFilters, category: e.target.value })}
                 className="input-base text-sm"
               >
-                <option value="">全部类型</option>
-                <option value="project">项目</option>
-                <option value="workflow">工作流</option>
+                <option value="">{t('allTypes')}</option>
+                <option value="project">{t('typeProject')}</option>
+                <option value="workflow">{t('typeWorkflow')}</option>
                 <option value="sql">SQL</option>
-                <option value="platform">平台配置</option>
+                <option value="platform">{t('typePlatformConfig')}</option>
               </select>
               <input
                 type="text"
-                placeholder="路径筛选，如 /api/admin/workflows..."
+                placeholder={t('pathFilter')}
                 value={platformFilters.resource}
                 onChange={(e) => setPlatformFilters({ ...platformFilters, resource: e.target.value })}
                 className="input-base text-sm flex-1 min-w-[200px]"
               />
               <input
                 type="text"
-                placeholder="用户 ID"
+                placeholder={t('userIdFilter')}
                 value={platformFilters.user_id}
                 onChange={(e) => setPlatformFilters({ ...platformFilters, user_id: e.target.value })}
                 className="input-base text-sm w-24"
@@ -321,7 +325,7 @@ export default function AuditPage() {
                 }}
                 className="btn-primary text-sm"
               >
-                <i className="fas fa-search mr-1"></i>筛选
+                <i className="fas fa-search mr-1"></i>{t('filter')}
               </button>
             </div>
           </div>
@@ -330,12 +334,12 @@ export default function AuditPage() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">时间</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">类型</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">操作详情</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">操作人</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">状态</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">耗时</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colTime')}</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colType')}</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colDetail')}</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colActor')}</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colStatus')}</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colElapsed')}</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">IP</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase"></th>
                 </tr>
@@ -344,13 +348,13 @@ export default function AuditPage() {
                 {loading ? (
                   <tr>
                     <td colSpan={8} className="text-center py-8 text-gray-400">
-                      <i className="fas fa-spinner fa-spin mr-2"></i>加载中...
+                      <i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}
                     </td>
                   </tr>
                 ) : platformLogs.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="text-center py-8 text-gray-400">
-                      暂无平台操作记录
+                      {t('emptyPlatform')}
                     </td>
                   </tr>
                 ) : (
@@ -366,7 +370,7 @@ export default function AuditPage() {
                           </span>
                         </td>
                         <td className="px-4 py-3">
-                          <div className="text-xs text-gray-900 font-medium">{log.summary || log.operation}</div>
+                          <div className="text-xs text-gray-900 font-medium" title={buildOperationSummary(log, tOp)}>{buildOperationSummary(log, tOp)}</div>
                           <div className="text-[11px] font-mono text-gray-400 mt-0.5 truncate max-w-md" title={log.request_path}>
                             {log.request_method} {log.request_path}
                           </div>
@@ -394,7 +398,7 @@ export default function AuditPage() {
                               onClick={() => setExpandedId(expandedId === log.id ? null : log.id)}
                               className="text-blue-600 hover:text-blue-800"
                             >
-                              {expandedId === log.id ? '收起' : '详情'}
+                              {expandedId === log.id ? t('collapse') : t('expand')}
                             </button>
                           )}
                         </td>
@@ -427,7 +431,7 @@ export default function AuditPage() {
                 onChange={(e) => setFilters({ ...filters, action: e.target.value })}
                 className="input-base text-sm"
               >
-                <option value="">全部操作</option>
+                <option value="">{t('allActions')}</option>
                 <option value="POST">POST</option>
                 <option value="PATCH">PATCH</option>
                 <option value="PUT">PUT</option>
@@ -435,14 +439,14 @@ export default function AuditPage() {
               </select>
               <input
                 type="text"
-                placeholder="资源路径筛选..."
+                placeholder={t('resourceFilter')}
                 value={filters.resource}
                 onChange={(e) => setFilters({ ...filters, resource: e.target.value })}
                 className="input-base text-sm flex-1"
               />
               <input
                 type="text"
-                placeholder="用户 ID"
+                placeholder={t('userIdFilter')}
                 value={filters.user_id}
                 onChange={(e) => setFilters({ ...filters, user_id: e.target.value })}
                 className="input-base text-sm w-24"
@@ -454,7 +458,7 @@ export default function AuditPage() {
                 }}
                 className="btn-primary text-sm"
               >
-                <i className="fas fa-search mr-1"></i>筛选
+                <i className="fas fa-search mr-1"></i>{t('filter')}
               </button>
             </div>
           </div>
@@ -463,12 +467,12 @@ export default function AuditPage() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">时间</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">方法</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">路径</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">用户</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">状态</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">耗时</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colTime')}</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colMethod')}</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colPath')}</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colUser')}</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colStatus')}</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colElapsed')}</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">IP</th>
                 </tr>
               </thead>
@@ -476,13 +480,13 @@ export default function AuditPage() {
                 {loading ? (
                   <tr>
                     <td colSpan={7} className="text-center py-8 text-gray-400">
-                      <i className="fas fa-spinner fa-spin mr-2"></i>加载中...
+                      <i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}
                     </td>
                   </tr>
                 ) : auditLogs.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="text-center py-8 text-gray-400">
-                      暂无审计记录
+                      {t('emptyAudit')}
                     </td>
                   </tr>
                 ) : (
@@ -526,7 +530,7 @@ export default function AuditPage() {
         <>
           {rawSqlStats.length > 0 && (
             <div className="card p-4">
-              <h3 className="text-sm font-medium text-gray-700 mb-3">按 blocked_reason 分布（当前筛选条件下）</h3>
+              <h3 className="text-sm font-medium text-gray-700 mb-3">{t('blockedDist')}</h3>
               <div className="flex flex-wrap gap-2">
                 {rawSqlStats.map((s) => (
                   <span
@@ -547,22 +551,22 @@ export default function AuditPage() {
                 onChange={(e) => setRawSqlFilters({ ...rawSqlFilters, action: e.target.value })}
                 className="input-base text-sm"
               >
-                <option value="">全部动作</option>
-                <option value="RAW_SQL_QUERY">RAW_SQL_QUERY (进入)</option>
-                <option value="RAW_SQL_QUERY_DONE">RAW_SQL_QUERY_DONE (成功)</option>
-                <option value="RAW_SQL_QUERY_BLOCKED">RAW_SQL_QUERY_BLOCKED (被拦)</option>
-                <option value="RAW_SQL_TXN">RAW_SQL_TXN (事务)</option>
+                <option value="">{t('allActionsRaw')}</option>
+                <option value="RAW_SQL_QUERY">{t('rawEnter')}</option>
+                <option value="RAW_SQL_QUERY_DONE">{t('rawDone')}</option>
+                <option value="RAW_SQL_QUERY_BLOCKED">{t('rawBlocked')}</option>
+                <option value="RAW_SQL_TXN">{t('rawTxn')}</option>
               </select>
               <input
                 type="text"
-                placeholder="用户 ID"
+                placeholder={t('userIdFilter')}
                 value={rawSqlFilters.user_id}
                 onChange={(e) => setRawSqlFilters({ ...rawSqlFilters, user_id: e.target.value })}
                 className="input-base text-sm w-24"
               />
               <input
                 type="text"
-                placeholder="数据库 ID"
+                placeholder={t('dbIdFilter')}
                 value={rawSqlFilters.database_id}
                 onChange={(e) => setRawSqlFilters({ ...rawSqlFilters, database_id: e.target.value })}
                 className="input-base text-sm w-28"
@@ -573,7 +577,7 @@ export default function AuditPage() {
                   checked={rawSqlFilters.blocked_only}
                   onChange={(e) => setRawSqlFilters({ ...rawSqlFilters, blocked_only: e.target.checked })}
                 />
-                <span>仅看被拦截</span>
+                <span>{t('onlyBlocked')}</span>
               </label>
               <button
                 onClick={() => {
@@ -582,7 +586,7 @@ export default function AuditPage() {
                 }}
                 className="btn-primary text-sm"
               >
-                <i className="fas fa-search mr-1"></i>筛选
+                <i className="fas fa-search mr-1"></i>{t('filter')}
               </button>
             </div>
           </div>
@@ -591,28 +595,28 @@ export default function AuditPage() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">时间</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">动作</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">用户</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colTime')}</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colAction')}</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colUser')}</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">DB</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">SQL 类型</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">长度</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colSqlType')}</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colLength')}</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">ACK</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">拦截原因</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">耗时</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colBlockReason')}</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colElapsed')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {loading ? (
                   <tr>
                     <td colSpan={8} className="text-center py-8 text-gray-400">
-                      <i className="fas fa-spinner fa-spin mr-2"></i>加载中...
+                      <i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}
                     </td>
                   </tr>
                 ) : rawSqlLogs.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="text-center py-8 text-gray-400">
-                      暂无原始 SQL 记录
+                      {t('emptyRawSql')}
                     </td>
                   </tr>
                 ) : (
@@ -663,24 +667,24 @@ export default function AuditPage() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">时间</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colTime')}</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Schema</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Table</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">SQL 预览</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">耗时</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colSqlPreview')}</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('colElapsed')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
               {loading ? (
                 <tr>
                   <td colSpan={5} className="text-center py-8 text-gray-400">
-                    <i className="fas fa-spinner fa-spin mr-2"></i>加载中...
+                    <i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}
                   </td>
                 </tr>
               ) : slowQueries.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="text-center py-8 text-gray-400">
-                    暂无慢查询记录
+                    {t('emptySlow')}
                   </td>
                 </tr>
               ) : (

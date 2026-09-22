@@ -50,8 +50,10 @@ async fn require_tenant_admin(
     if admins.contains(&tenant_id) {
         Ok(())
     } else {
-        Err(AppError::Forbidden(
+        Err(AppError::forbidden_coded(
+            "redis_admin_required",
             "仅超管或该租户 owner/admin 可管理 Redis 连接".to_string(),
+            serde_json::json!({}),
         ))
     }
 }
@@ -69,7 +71,13 @@ async fn fetch_connection_authorized(
     .fetch_optional(pool)
     .await
     .map_err(|e| AppError::Internal(format!("查询 Redis 连接失败: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("Redis 连接 {id} 不存在")))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "redis_connection_not_found",
+            format!("Redis 连接 {id} 不存在"),
+            serde_json::json!({ "id": id }),
+        )
+    })?;
     require_tenant_admin(pool, claims, conn.tenant_id).await?;
     Ok(conn)
 }
@@ -181,7 +189,11 @@ pub async fn create_connection(
     require_tenant_admin(&pool, &claims, req.tenant_id).await?;
 
     if req.connection_name.trim().is_empty() {
-        return Err(AppError::InvalidQuery("connection_name 不能为空".into()));
+        return Err(AppError::validation(
+            "redis_connection_name_required",
+            "connection_name 不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
     validate_host(&req.host)?;
     let port = req.port.unwrap_or(6379);
@@ -372,10 +384,18 @@ fn normalize_opt(v: Option<String>) -> Option<String> {
 fn validate_host(host: &str) -> Result<(), AppError> {
     let t = host.trim();
     if t.is_empty() {
-        return Err(AppError::InvalidQuery("host 不能为空".into()));
+        return Err(AppError::validation(
+            "redis_host_required",
+            "host 不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if t.chars().any(|c| c.is_whitespace()) {
-        return Err(AppError::InvalidQuery("host 含非法空白字符".into()));
+        return Err(AppError::validation(
+            "redis_host_invalid_whitespace",
+            "host 含非法空白字符".to_string(),
+            serde_json::json!({}),
+        ));
     }
     Ok(())
 }
@@ -384,7 +404,11 @@ fn validate_port(port: i32) -> Result<(), AppError> {
     if (1..=65535).contains(&port) {
         Ok(())
     } else {
-        Err(AppError::InvalidQuery("port 必须在 1..=65535".into()))
+        Err(AppError::validation(
+            "redis_port_out_of_range",
+            "port 必须在 1..=65535".to_string(),
+            serde_json::json!({}),
+        ))
     }
 }
 
@@ -392,14 +416,22 @@ fn validate_db_index(db: i32) -> Result<(), AppError> {
     if (0..=255).contains(&db) {
         Ok(())
     } else {
-        Err(AppError::InvalidQuery("db_index 必须在 0..=255".into()))
+        Err(AppError::validation(
+            "redis_db_index_out_of_range",
+            "db_index 必须在 0..=255".to_string(),
+            serde_json::json!({}),
+        ))
     }
 }
 
 fn map_unique_violation(e: sqlx::Error, msg: &str) -> AppError {
     if let sqlx::Error::Database(ref db_err) = e {
         if db_err.code().as_deref() == Some("23505") {
-            return AppError::InvalidQuery(msg.to_string());
+            return AppError::validation(
+                "redis_duplicate_connection_name",
+                msg.to_string(),
+                serde_json::json!({}),
+            );
         }
     }
     AppError::Internal(format!("DB 错误: {e}"))

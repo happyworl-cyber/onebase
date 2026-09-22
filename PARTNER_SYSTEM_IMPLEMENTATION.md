@@ -118,7 +118,7 @@
 ```
 
 **安全措施**：
-- 私钥从环境变量读取（`ONEBASE_LICENSE_PRIVATE_KEY`）
+- 私钥从环境变量读取（`PLANEOS_LICENSE_PRIVATE_KEY`）
 - 公钥编译期内嵌（`src/license_public.pem`）
 - 客户硬件指纹 AES-256-GCM 加密存储
 - 事务保证：配额扣减 + License 创建 + 佣金记录原子性
@@ -225,8 +225,8 @@ WHERE ... AND pc.status = 'pending';
 ### 3.1 License 防破解
 
 **技术栈**：
-- 算法：RSA-2048 + SHA-256（复用 onebase::license）
-- 私钥：环境变量注入（`ONEBASE_LICENSE_PRIVATE_KEY`）
+- 算法：RSA-2048 + SHA-256（复用 planeos::license）
+- 私钥：环境变量注入（`PLANEOS_LICENSE_PRIVATE_KEY`）
 - 公钥：编译期内嵌（`src/license_public.pem`）
 
 **防护措施**：
@@ -273,7 +273,7 @@ WHERE ... AND pc.status = 'pending';
 **生成指纹**：
 ```bash
 # 客户端生成（基于主机名）
-export ONEBASE_DEPLOY_FINGERPRINT=$(hostname | sha256sum | cut -c1-16)
+export PLANEOS_DEPLOY_FINGERPRINT=$(hostname | sha256sum | cut -c1-16)
 ```
 
 **签发时绑定**：
@@ -474,11 +474,11 @@ curl -X POST http://localhost:3010/api/admin/statements/generate \
 
 ```bash
 # 必需
-export ONEBASE_LICENSE_PRIVATE_KEY="$(cat keys/partner_private.pem)"
+export PLANEOS_LICENSE_PRIVATE_KEY="$(cat keys/partner_private.pem)"
 export ENCRYPTION_KEY="<your-base64-key>"
 
 # 可选
-export ONEBASE_LICENSE_ENFORCE="warn"  # off | warn | enforce
+export PLANEOS_LICENSE_ENFORCE="warn"  # off | warn | enforce
 ```
 
 ### 6.2 数据库迁移
@@ -497,10 +497,10 @@ cp keys/partner_public.pem src/license_public.pem
 cargo build --release
 
 # 3. 部署二进制
-cp target/release/onebase /usr/local/bin/
+cp target/release/planeos /usr/local/bin/
 
 # 4. 配置环境变量（Kubernetes Secret / Docker Compose）
-kubectl create secret generic onebase-license \
+kubectl create secret generic planeos-license \
   --from-file=private-key=keys/partner_private.pem
 ```
 

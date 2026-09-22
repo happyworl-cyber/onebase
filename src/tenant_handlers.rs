@@ -61,11 +61,15 @@ fn tenant_pool_global_budget() -> i32 {
 }
 
 /// 校验单库 `max_connections` 是否在 `1..=50`。
-fn validate_tenant_max_connections(requested: i32) -> std::result::Result<(), String> {
+fn validate_tenant_max_connections(requested: i32) -> Result<()> {
     if !(1..=TENANT_MAX_CONNECTIONS_CAP).contains(&requested) {
-        Err(format!(
-            "max_connections 必须在 1..={}",
-            TENANT_MAX_CONNECTIONS_CAP
+        Err(AppError::validation(
+            "tenant_max_connections_out_of_range",
+            format!(
+                "max_connections 必须在 1..={}",
+                TENANT_MAX_CONNECTIONS_CAP
+            ),
+            serde_json::json!({ "min": 1, "max": TENANT_MAX_CONNECTIONS_CAP, "requested": requested }),
         ))
     } else {
         Ok(())
@@ -73,16 +77,21 @@ fn validate_tenant_max_connections(requested: i32) -> std::result::Result<(), St
 }
 
 /// 同一 host:port 上「其他库合计 + 本次」是否不超过预算。
-fn connection_budget_ok(
-    sum_others: i64,
-    requested: i32,
-    budget: i32,
-) -> std::result::Result<(), String> {
+fn connection_budget_ok(sum_others: i64, requested: i32, budget: i32) -> Result<()> {
     let total = sum_others + i64::from(requested);
     if total > i64::from(budget) {
-        Err(format!(
-            "同一 host:port 上租户连接池预算超限：其他库合计 {} + 本次 {} = {}，上限 {}",
-            sum_others, requested, total, budget
+        Err(AppError::validation(
+            "tenant_connection_budget_exceeded",
+            format!(
+                "同一 host:port 上租户连接池预算超限：其他库合计 {} + 本次 {} = {}，上限 {}",
+                sum_others, requested, total, budget
+            ),
+            serde_json::json!({
+                "sum_others": sum_others,
+                "requested": requested,
+                "total": total,
+                "budget": budget,
+            }),
         ))
     } else {
         Ok(())
@@ -110,7 +119,7 @@ async fn ensure_connection_budget(
     exclude_id: Option<i32>,
     requested: i32,
 ) -> Result<()> {
-    validate_tenant_max_connections(requested).map_err(AppError::InvalidQuery)?;
+    validate_tenant_max_connections(requested)?;
     let budget = tenant_pool_global_budget();
     let sum_others: i64 = sqlx::query_scalar(CONNECTION_BUDGET_SUM_SQL)
         .bind(host)
@@ -118,7 +127,7 @@ async fn ensure_connection_budget(
         .bind(exclude_id)
         .fetch_one(pool)
         .await?;
-    connection_budget_ok(sum_others, requested, budget).map_err(AppError::InvalidQuery)?;
+    connection_budget_ok(sum_others, requested, budget)?;
     Ok(())
 }
 
@@ -139,19 +148,27 @@ fn normalize_slug(raw: &str) -> String {
 
 fn ensure_database_slug(slug: &str) -> Result<()> {
     if slug.is_empty() || slug.len() > 50 {
-        return Err(AppError::InvalidQuery("slug 长度需为 1..=50".to_string()));
+        return Err(AppError::validation(
+            "tenant_slug_length",
+            "slug 长度需为 1..=50".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if slug.starts_with('-') || slug.ends_with('-') {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "tenant_slug_dash_edge",
             "slug 不能以连字符开头或结尾".to_string(),
+            serde_json::json!({}),
         ));
     }
     if !slug
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
     {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "tenant_slug_charset",
             "slug 仅允许小写字母、数字、连字符".to_string(),
+            serde_json::json!({}),
         ));
     }
     Ok(())
@@ -334,8 +351,10 @@ pub async fn get_tenant_schemas(
     .await?;
 
     if !has_access {
-        return Err(crate::error::AppError::Unauthorized(
+        return Err(crate::error::AppError::unauthorized_coded(
+            "tenant_no_tenant_access",
             "无权访问该租户".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -381,13 +400,13 @@ pub async fn test_connection(
 
             Ok(Json(TestConnectionResponse {
                 success: true,
-                message: "连接成功".to_string(),
+                message: "Connected".to_string(),
                 server_version: version,
             }))
         }
         Err(e) => Ok(Json(TestConnectionResponse {
             success: false,
-            message: format!("连接失败: {}", e),
+            message: format!("Connection failed: {}", e),
             server_version: None,
         })),
     }
@@ -397,7 +416,7 @@ pub async fn test_connection(
 pub async fn create_database_connection(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
-    license_state: Option<Extension<crate::license::LicenseState>>,
+    license_state: Option<Extension<planeos::license::LicenseState>>,
     Json(req): Json<CreateDatabaseConnectionRequest>,
 ) -> Result<Json<TenantDatabase>> {
     let user_id = claims.sub; // claims.sub 现在是 i32 类型
@@ -424,8 +443,10 @@ pub async fn create_database_connection(
         match user_role.as_deref() {
             Some("owner") | Some("admin") => {}
             _ => {
-                return Err(crate::error::AppError::Unauthorized(
+                return Err(crate::error::AppError::unauthorized_coded(
+                    "tenant_create_connection_role_required",
                     "只有平台超管或租户 owner / admin 可以创建连接".to_string(),
+                    serde_json::json!({}),
                 ))
             }
         }
@@ -443,10 +464,11 @@ pub async fn create_database_connection(
     .fetch_one(&pool)
     .await?;
     if slug_exists {
-        return Err(AppError::InvalidQuery(format!(
-            "数据库 slug '{}' 在该租户内已存在",
-            database_slug
-        )));
+        return Err(AppError::validation(
+            "tenant_database_slug_exists",
+            format!("数据库 slug '{}' 在该租户内已存在", database_slug),
+            serde_json::json!({ "slug": database_slug }),
+        ));
     }
 
     // 加密密码
@@ -511,7 +533,13 @@ pub async fn update_database_connection(
     .bind(database_id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("数据库连接 {} 不存在", database_id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "tenant_database_not_found",
+            format!("数据库连接 {} 不存在", database_id),
+            serde_json::json!({ "database_id": database_id }),
+        )
+    })?;
     let tenant_id: i32 = existing.get("tenant_id");
 
     if !claims.is_superadmin {
@@ -521,8 +549,10 @@ pub async fn update_database_connection(
     let new_name = req.connection_name.as_deref().map(str::trim);
     if let Some(name) = new_name {
         if name.is_empty() {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "tenant_connection_name_empty",
                 "connection_name 不能为空".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -548,10 +578,11 @@ pub async fn update_database_connection(
         .fetch_one(&pool)
         .await?;
         if slug_exists {
-            return Err(AppError::InvalidQuery(format!(
-                "数据库 slug '{}' 在该租户内已存在",
-                slug
-            )));
+            return Err(AppError::validation(
+                "tenant_database_slug_exists",
+                format!("数据库 slug '{}' 在该租户内已存在", slug),
+                serde_json::json!({ "slug": slug }),
+            ));
         }
     }
 
@@ -559,8 +590,10 @@ pub async fn update_database_connection(
     let connection_timeout = req.connection_timeout;
     if let Some(timeout) = connection_timeout {
         if timeout < 1 || timeout > 600 {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "tenant_connection_timeout_range",
                 "connection_timeout 必须在 1..=600".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -578,14 +611,20 @@ pub async fn update_database_connection(
     ] {
         if let Some(v) = val {
             if v.is_empty() {
-                return Err(AppError::InvalidQuery(format!("{label} 不能为空")));
+                return Err(AppError::validation(
+                    "tenant_field_required",
+                    format!("{label} 不能为空"),
+                    serde_json::json!({ "label": label }),
+                ));
             }
         }
     }
     if let Some(port) = req.db_port {
         if port < 1 || port > 65535 {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "tenant_db_port_range",
                 "db_port 必须在 1..=65535".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -674,7 +713,13 @@ pub async fn delete_database_connection(
     .bind(database_id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("数据库连接 {} 不存在", database_id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "tenant_database_not_found",
+            format!("数据库连接 {} 不存在", database_id),
+            serde_json::json!({ "database_id": database_id }),
+        )
+    })?;
     let tenant_id: i32 = existing.get("tenant_id");
     let connection_name: String = existing.get("connection_name");
 
@@ -691,10 +736,14 @@ pub async fn delete_database_connection(
     .fetch_one(&pool)
     .await?;
     if replica_count > 0 {
-        return Err(AppError::InvalidQuery(format!(
-            "该连接下仍有 {} 个只读副本，请先删除副本再删除主连接",
-            replica_count
-        )));
+        return Err(AppError::validation(
+            "tenant_connection_has_replicas",
+            format!(
+                "该连接下仍有 {} 个只读副本，请先删除副本再删除主连接",
+                replica_count
+            ),
+            serde_json::json!({ "replica_count": replica_count }),
+        ));
     }
 
     sqlx::query("DELETE FROM management.tenant_databases WHERE id = $1")
@@ -784,7 +833,11 @@ pub async fn switch_connection(
     .await?;
 
     let row = db_config.ok_or_else(|| {
-        crate::error::AppError::NotFound("数据库连接不存在或无权访问".to_string())
+        crate::error::AppError::not_found_coded(
+            "tenant_switch_connection_not_found",
+            "数据库连接不存在或无权访问".to_string(),
+            serde_json::json!({}),
+        )
     })?;
 
     let config = DatabaseConfig {
@@ -895,7 +948,7 @@ pub async fn list_all_tenants(
 pub async fn create_tenant(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
-    license_state: Option<Extension<crate::license::LicenseState>>,
+    license_state: Option<Extension<planeos::license::LicenseState>>,
     audit_sink: Option<Extension<crate::audit_middleware::AuditDetailSink>>,
     Json(req): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>> {
@@ -906,13 +959,21 @@ pub async fn create_tenant(
         user_id
     );
 
-    let name = req["name"]
-        .as_str()
-        .ok_or_else(|| crate::error::AppError::InvalidQuery("缺少租户名称".to_string()))?;
+    let name = req["name"].as_str().ok_or_else(|| {
+        crate::error::AppError::validation(
+            "tenant_name_missing",
+            "缺少租户名称".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
 
-    let slug = req["slug"]
-        .as_str()
-        .ok_or_else(|| crate::error::AppError::InvalidQuery("缺少租户标识".to_string()))?;
+    let slug = req["slug"].as_str().ok_or_else(|| {
+        crate::error::AppError::validation(
+            "tenant_slug_missing",
+            "缺少租户标识".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
 
     let contact_email = req["contact_email"].as_str();
 
@@ -951,9 +1012,11 @@ pub async fn create_tenant(
         }
 
         if !is_valid_db_name(&db_name) {
-            return Err(crate::error::AppError::InvalidQuery(
+            return Err(crate::error::AppError::validation(
+                "tenant_db_name_invalid_chars",
                 "数据库名称只能包含字母、数字和下划线，且不能以数字开头（最长 63 字符）"
                     .to_string(),
+                serde_json::json!({}),
             ));
         }
 
@@ -978,10 +1041,11 @@ pub async fn create_tenant(
                 .await?;
 
         if db_exists {
-            return Err(crate::error::AppError::InvalidQuery(format!(
-                "数据库 {} 已存在",
-                db_name
-            )));
+            return Err(crate::error::AppError::validation(
+                "tenant_database_exists",
+                format!("数据库 {} 已存在", db_name),
+                serde_json::json!({ "db_name": db_name }),
+            ));
         }
 
         // 创建新数据库
@@ -1011,7 +1075,11 @@ pub async fn create_tenant(
     .await
     .map_err(|e| match &e {
         sqlx::Error::Database(db) if db.constraint() == Some("organizations_slug_key") => {
-            crate::error::AppError::InvalidQuery("组织标识 (slug) 已存在".to_string())
+            crate::error::AppError::validation(
+                "tenant_organization_slug_exists",
+                "组织标识 (slug) 已存在".to_string(),
+                serde_json::json!({}),
+            )
         }
         _ => crate::error::AppError::Database(e),
     })?;
@@ -1135,10 +1203,11 @@ pub async fn update_tenant(
         .await?;
 
     if exists.is_none() {
-        return Err(crate::error::AppError::NotFound(format!(
-            "租户 {} 不存在",
-            tenant_id
-        )));
+        return Err(crate::error::AppError::not_found_coded(
+            "tenant_tenant_not_found",
+            format!("租户 {} 不存在", tenant_id),
+            serde_json::json!({ "tenant_id": tenant_id }),
+        ));
     }
 
     // ===== 1. 更新租户基础信息 =====
@@ -1148,8 +1217,10 @@ pub async fn update_tenant(
 
     if let Some(status) = new_status {
         if !["active", "suspended", "deleted"].contains(&status) {
-            return Err(crate::error::AppError::InvalidQuery(
+            return Err(crate::error::AppError::validation(
+                "tenant_status_invalid",
                 "无效的状态值，只能是 active / suspended / deleted".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -1214,8 +1285,10 @@ pub async fn update_tenant(
         let db_id = match primary {
             Some((id,)) => id,
             None => {
-                return Err(crate::error::AppError::InvalidQuery(
+                return Err(crate::error::AppError::validation(
+                    "tenant_primary_db_missing_setup",
                     "该租户尚未配置主数据库连接，请先在创建项目时设置".to_string(),
+                    serde_json::json!({}),
                 ));
             }
         };
@@ -1346,7 +1419,11 @@ async fn primary_db_id_for_tenant(pool: &PgPool, tenant_id: i32) -> Result<i32> 
     .fetch_optional(pool)
     .await?;
     row.map(|(id,)| id).ok_or_else(|| {
-        crate::error::AppError::InvalidQuery("该租户尚未配置主数据库连接，无法管理副本".to_string())
+        crate::error::AppError::validation(
+            "tenant_primary_db_missing_replica",
+            "该租户尚未配置主数据库连接，无法管理副本".to_string(),
+            serde_json::json!({}),
+        )
     })
 }
 
@@ -1449,14 +1526,26 @@ pub async fn add_tenant_replica(
         .and_then(|v| v.as_str())
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| crate::error::AppError::InvalidQuery("缺少 connection_name".to_string()))?;
+        .ok_or_else(|| {
+            crate::error::AppError::validation(
+                "tenant_replica_connection_name_missing",
+                "缺少 connection_name".to_string(),
+                serde_json::json!({}),
+            )
+        })?;
 
     let db_host = req
         .get("db_host")
         .and_then(|v| v.as_str())
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| crate::error::AppError::InvalidQuery("缺少 db_host".to_string()))?;
+        .ok_or_else(|| {
+            crate::error::AppError::validation(
+                "tenant_replica_db_host_missing",
+                "缺少 db_host".to_string(),
+                serde_json::json!({}),
+            )
+        })?;
 
     let db_port = req
         .get("db_port")
@@ -1464,8 +1553,10 @@ pub async fn add_tenant_replica(
         .map(|v| v as i32)
         .unwrap_or(5432);
     if !(1..=65535).contains(&db_port) {
-        return Err(crate::error::AppError::InvalidQuery(
+        return Err(crate::error::AppError::validation(
+            "tenant_replica_db_port_range",
             "db_port 必须在 1 ~ 65535".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -1495,8 +1586,10 @@ pub async fn add_tenant_replica(
         .map(|v| v as i32)
         .unwrap_or(1);
     if !(1..=1000).contains(&weight) {
-        return Err(crate::error::AppError::InvalidQuery(
+        return Err(crate::error::AppError::validation(
+            "tenant_replica_weight_range",
             "weight 必须在 1 ~ 1000".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -1621,10 +1714,11 @@ pub async fn update_tenant_replica(
     .await?;
 
     if existing.is_none() {
-        return Err(crate::error::AppError::NotFound(format!(
-            "副本 {} 不存在于租户 {}",
-            replica_id, tenant_id
-        )));
+        return Err(crate::error::AppError::not_found_coded(
+            "tenant_replica_not_found",
+            format!("副本 {} 不存在于租户 {}", replica_id, tenant_id),
+            serde_json::json!({ "replica_id": replica_id, "tenant_id": tenant_id }),
+        ));
     }
 
     let new_connection_name = req.get("connection_name").and_then(|v| v.as_str());
@@ -1787,10 +1881,11 @@ pub async fn delete_tenant_replica(
                 "message": format!("副本 {} 已删除", name)
             })))
         }
-        None => Err(crate::error::AppError::NotFound(format!(
-            "副本 {} 不存在于租户 {}",
-            replica_id, tenant_id
-        ))),
+        None => Err(crate::error::AppError::not_found_coded(
+            "tenant_replica_not_found",
+            format!("副本 {} 不存在于租户 {}", replica_id, tenant_id),
+            serde_json::json!({ "replica_id": replica_id, "tenant_id": tenant_id }),
+        )),
     }
 }
 
@@ -1884,7 +1979,7 @@ async fn probe_replica_health(
         .database(db)
         .username(user)
         .password(password)
-        .application_name("onebase-replica-health")
+        .application_name("planeos-replica-health")
         .disable_statement_logging();
 
     let conn_fut = sqlx::PgConnection::connect_with(&opts);
@@ -1975,8 +2070,10 @@ pub async fn delete_tenant(
     .unwrap_or(false);
 
     if !is_superadmin {
-        return Err(crate::error::AppError::Unauthorized(
+        return Err(crate::error::AppError::unauthorized_coded(
+            "tenant_superadmin_required",
             "需要超级管理员权限".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -2020,10 +2117,11 @@ pub async fn delete_tenant(
                 "message": format!("租户 {} 已删除", name)
             })))
         }
-        None => Err(crate::error::AppError::NotFound(format!(
-            "租户 {} 不存在",
-            tenant_id
-        ))),
+        None => Err(crate::error::AppError::not_found_coded(
+            "tenant_tenant_not_found",
+            format!("租户 {} 不存在", tenant_id),
+            serde_json::json!({ "tenant_id": tenant_id }),
+        )),
     }
 }
 
@@ -2100,8 +2198,13 @@ pub async fn assign_user_to_tenant(
 
     let tenant_id = req["tenant_id"]
         .as_i64()
-        .ok_or_else(|| crate::error::AppError::InvalidQuery("缺少租户ID".to_string()))?
-        as i32;
+        .ok_or_else(|| {
+            crate::error::AppError::validation(
+                "tenant_tenant_id_missing",
+                "缺少租户ID".to_string(),
+                serde_json::json!({}),
+            )
+        })? as i32;
 
     let role = req["role"].as_str().unwrap_or("member");
 
@@ -2311,7 +2414,13 @@ pub async fn get_project(
     .bind(project_id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("项目 {} 不存在", project_id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "tenant_project_not_found",
+            format!("项目 {} 不存在", project_id),
+            serde_json::json!({ "project_id": project_id }),
+        )
+    })?;
 
     let organization_id: i32 = tenant_row.get("organization_id");
     let organization_name: String = tenant_row.get("organization_name");
@@ -2351,10 +2460,11 @@ pub async fn get_project(
         match role_opt {
             Some(r) => (r, false),
             None => {
-                return Err(AppError::Forbidden(format!(
-                    "你不是项目 {} 的成员",
-                    project_id
-                )));
+                return Err(AppError::forbidden_coded(
+                    "tenant_not_project_member",
+                    format!("你不是项目 {} 的成员", project_id),
+                    serde_json::json!({ "project_id": project_id }),
+                ));
             }
         }
     };
@@ -2459,10 +2569,14 @@ fn validate_tenant_role(role: &str) -> Result<()> {
     if VALID_TENANT_ROLES.contains(&role) {
         Ok(())
     } else {
-        Err(AppError::InvalidQuery(format!(
-            "无效角色 '{}'，必须是 owner / admin / member / viewer 之一",
-            role
-        )))
+        Err(AppError::validation(
+            "tenant_role_invalid",
+            format!(
+                "无效角色 '{}'，必须是 owner / admin / member / viewer 之一",
+                role
+            ),
+            serde_json::json!({ "role": role }),
+        ))
     }
 }
 
@@ -2479,8 +2593,10 @@ async fn require_manageable_project_member(
 ) -> Result<()> {
     permissions::require_tenant_admin(pool, claims, project_id).await?;
     if forbid_self(claims.sub, target_user_id) {
-        return Err(AppError::Forbidden(
+        return Err(AppError::forbidden_coded(
+            "tenant_cannot_manage_self",
             "不能管理自己的账号；请使用「修改密码」或联系其他管理员".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -2494,7 +2610,11 @@ async fn require_manageable_project_member(
     .fetch_one(pool)
     .await?;
     if !is_member {
-        return Err(AppError::Forbidden("目标用户不是本项目成员".to_string()));
+        return Err(AppError::forbidden_coded(
+            "tenant_target_not_member",
+            "目标用户不是本项目成员".to_string(),
+            serde_json::json!({}),
+        ));
     }
     Ok(())
 }
@@ -2562,10 +2682,11 @@ pub async fn add_project_member(
     .fetch_one(&pool)
     .await?;
     if !project_exists {
-        return Err(AppError::NotFound(format!(
-            "项目 {} 不存在或已停用",
-            project_id
-        )));
+        return Err(AppError::not_found_coded(
+            "tenant_project_not_found_or_disabled",
+            format!("项目 {} 不存在或已停用", project_id),
+            serde_json::json!({ "project_id": project_id }),
+        ));
     }
 
     // 校验目标用户存在
@@ -2574,7 +2695,11 @@ pub async fn add_project_member(
         .fetch_one(&pool)
         .await?;
     if !user_exists {
-        return Err(AppError::NotFound(format!("用户 {} 不存在", req.user_id)));
+        return Err(AppError::not_found_coded(
+            "tenant_user_not_found",
+            format!("用户 {} 不存在", req.user_id),
+            serde_json::json!({ "user_id": req.user_id }),
+        ));
     }
 
     // 两级成员：目标用户必须先是该项目所属组织的成员
@@ -2651,7 +2776,7 @@ pub struct CreateProjectMemberRequest {
 pub async fn create_project_member(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
-    license_state: Option<Extension<crate::license::LicenseState>>,
+    license_state: Option<Extension<planeos::license::LicenseState>>,
     redis: Option<Extension<RedisManager>>,
     Path(project_id): Path<i32>,
     Json(req): Json<CreateProjectMemberRequest>,
@@ -2668,13 +2793,25 @@ pub async fn create_project_member(
     let username = req.username.trim();
     let email = req.email.trim().to_lowercase();
     if username.chars().count() < 3 {
-        return Err(AppError::InvalidQuery("用户名至少 3 个字符".to_string()));
+        return Err(AppError::validation(
+            "tenant_username_too_short",
+            "用户名至少 3 个字符".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if !email.contains('@') || email.len() < 5 {
-        return Err(AppError::InvalidQuery("邮箱格式不正确".to_string()));
+        return Err(AppError::validation(
+            "tenant_email_invalid",
+            "邮箱格式不正确".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if req.password.chars().count() < 6 {
-        return Err(AppError::InvalidQuery("密码至少 6 个字符".to_string()));
+        return Err(AppError::validation(
+            "tenant_password_too_short",
+            "密码至少 6 个字符".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     // 校验项目存在且有效
@@ -2685,10 +2822,11 @@ pub async fn create_project_member(
     .fetch_one(&pool)
     .await?;
     if !project_exists {
-        return Err(AppError::NotFound(format!(
-            "项目 {} 不存在或已停用",
-            project_id
-        )));
+        return Err(AppError::not_found_coded(
+            "tenant_project_not_found_or_disabled",
+            format!("项目 {} 不存在或已停用", project_id),
+            serde_json::json!({ "project_id": project_id }),
+        ));
     }
 
     // 用户名 / 邮箱唯一性预检（DB 也有唯一约束兜底，这里给更友好的报错）
@@ -2698,7 +2836,11 @@ pub async fn create_project_member(
             .fetch_one(&pool)
             .await?;
     if email_taken {
-        return Err(AppError::InvalidQuery("该邮箱已被注册".to_string()));
+        return Err(AppError::validation(
+            "tenant_email_taken",
+            "该邮箱已被注册".to_string(),
+            serde_json::json!({}),
+        ));
     }
     let username_taken: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)")
@@ -2706,7 +2848,11 @@ pub async fn create_project_member(
             .fetch_one(&pool)
             .await?;
     if username_taken {
-        return Err(AppError::InvalidQuery("该用户名已被使用".to_string()));
+        return Err(AppError::validation(
+            "tenant_username_taken",
+            "该用户名已被使用".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let password_hash = crate::auth::hash_password(&req.password)?;
@@ -2923,10 +3069,11 @@ pub async fn update_project_member_status(
         .execute(&pool)
         .await?;
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!(
-            "用户 {} 不存在",
-            target_user_id
-        )));
+        return Err(AppError::not_found_coded(
+            "tenant_user_not_found",
+            format!("用户 {} 不存在", target_user_id),
+            serde_json::json!({ "user_id": target_user_id }),
+        ));
     }
 
     if !req.is_active {
@@ -2982,10 +3129,11 @@ pub async fn reset_project_member_password(
         .execute(&pool)
         .await?;
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!(
-            "用户 {} 不存在",
-            target_user_id
-        )));
+        return Err(AppError::not_found_coded(
+            "tenant_user_not_found",
+            format!("用户 {} 不存在", target_user_id),
+            serde_json::json!({ "user_id": target_user_id }),
+        ));
     }
 
     if let Err(error) =
@@ -3025,8 +3173,10 @@ pub async fn update_project_member_profile(
 ) -> Result<Json<serde_json::Value>> {
     require_manageable_project_member(&pool, &claims, project_id, target_user_id).await?;
     if req.username.is_none() && req.email.is_none() {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "tenant_profile_update_empty",
             "请求体为空，至少需要 username 或 email".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -3035,7 +3185,13 @@ pub async fn update_project_member_profile(
             .bind(target_user_id)
             .fetch_optional(&pool)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("用户 {} 不存在", target_user_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_coded(
+                    "tenant_user_not_found",
+                    format!("用户 {} 不存在", target_user_id),
+                    serde_json::json!({ "user_id": target_user_id }),
+                )
+            })?;
 
     let new_username = if let Some(ref username) = req.username {
         validate_username(username)?;
@@ -3060,7 +3216,11 @@ pub async fn update_project_member_profile(
             .fetch_one(&pool)
             .await?;
             if duplicate {
-                return Err(AppError::InvalidQuery("用户名已被使用".to_string()));
+                return Err(AppError::validation(
+                    "tenant_username_in_use",
+                    "用户名已被使用".to_string(),
+                    serde_json::json!({}),
+                ));
             }
         }
     }
@@ -3074,7 +3234,11 @@ pub async fn update_project_member_profile(
             .fetch_one(&pool)
             .await?;
             if duplicate {
-                return Err(AppError::InvalidQuery("邮箱已被使用".to_string()));
+                return Err(AppError::validation(
+                    "tenant_email_in_use",
+                    "邮箱已被使用".to_string(),
+                    serde_json::json!({}),
+                ));
             }
         }
     }
@@ -3127,8 +3291,10 @@ pub async fn update_project_member(
     // 自我保护——避免一个 admin 不小心把自己降成 viewer 然后再也进不来。
     // 平台超管也走这条限制；他们要改自己的项目角色可以走 /api/admin/* 路径。
     if claims.sub == target_user_id {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "tenant_cannot_change_own_role",
             "不能修改自己的角色；请联系其他 owner / 平台超管".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -3143,18 +3309,21 @@ pub async fn update_project_member(
     .await?;
 
     let current_role = current_role.ok_or_else(|| {
-        AppError::NotFound(format!(
-            "用户 {} 不是项目 {} 的成员",
-            target_user_id, project_id
-        ))
+        AppError::not_found_coded(
+            "tenant_member_not_found",
+            format!("用户 {} 不是项目 {} 的成员", target_user_id, project_id),
+            serde_json::json!({ "user_id": target_user_id, "project_id": project_id }),
+        )
     })?;
 
     // 降级最后一个 owner 的护栏
     if current_role == "owner" && req.role != "owner" {
         let owner_count = permissions::count_tenant_owners(&pool, project_id).await?;
         if owner_count <= 1 {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "tenant_last_owner_demote_blocked",
                 "不能降级项目最后一个 owner；请先把其他成员提升为 owner".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -3219,8 +3388,10 @@ pub async fn remove_project_member(
     permissions::require_tenant_admin(&pool, &claims, project_id).await?;
 
     if claims.sub == target_user_id {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "tenant_cannot_remove_self",
             "不能移除自己；请联系其他 owner / 平台超管".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -3235,17 +3406,20 @@ pub async fn remove_project_member(
     .await?;
 
     let current_role = current_role.ok_or_else(|| {
-        AppError::NotFound(format!(
-            "用户 {} 不是项目 {} 的成员",
-            target_user_id, project_id
-        ))
+        AppError::not_found_coded(
+            "tenant_member_not_found",
+            format!("用户 {} 不是项目 {} 的成员", target_user_id, project_id),
+            serde_json::json!({ "user_id": target_user_id, "project_id": project_id }),
+        )
     })?;
 
     if current_role == "owner" {
         let owner_count = permissions::count_tenant_owners(&pool, project_id).await?;
         if owner_count <= 1 {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "tenant_last_owner_remove_blocked",
                 "不能移除项目最后一个 owner；请先指派其他成员为 owner".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -3317,10 +3491,11 @@ pub async fn patch_project(
         "db_password",
     ] {
         if req.get(*forbidden).is_some() {
-            return Err(AppError::InvalidQuery(format!(
-                "字段 '{}' 不允许通过项目设置编辑；请联系平台管理员",
-                forbidden
-            )));
+            return Err(AppError::validation(
+                "tenant_field_not_editable",
+                format!("字段 '{}' 不允许通过项目设置编辑；请联系平台管理员", forbidden),
+                serde_json::json!({ "field": forbidden }),
+            ));
         }
     }
 
@@ -3332,23 +3507,29 @@ pub async fn patch_project(
     if let Some(name) = new_name {
         let len = name.chars().count();
         if !(1..=200).contains(&len) {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "tenant_project_name_length",
                 "项目名长度必须在 1-200 字符之间".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
     if let Some(email) = new_contact_email {
         // 空字符串视为"清除联系邮箱"
         if !email.is_empty() && (email.len() > 255 || !email.contains('@')) {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "tenant_contact_email_invalid",
                 "contact_email 看起来不是合法邮箱".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
 
     if new_name.is_none() && new_contact_email.is_none() && new_workspace_config.is_none() {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "tenant_patch_project_empty",
             "没有任何可编辑字段；name / contact_email / workspace_config 至少给一个".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -3543,15 +3724,21 @@ async fn resolve_provision_source(
     .filter(|&x| x)
     .count();
     if mode_count != 1 {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "tenant_pg_source_required_four",
             "请指定一种 PG 来源：use_provision_webhook、use_platform_pg、pg_pool_id 或 pg_connection（四选一）"
                 .to_string(),
+            serde_json::json!({}),
         ));
     }
 
     if req.use_provision_webhook {
         let cfg = crate::provision_webhook::load_config().ok_or_else(|| {
-            AppError::InvalidQuery("未配置 PROVISION_WEBHOOK_URL，无法使用运维自动开通".to_string())
+            AppError::validation(
+                "tenant_provision_webhook_not_configured",
+                "未配置 PROVISION_WEBHOOK_URL，无法使用运维自动开通".to_string(),
+                serde_json::json!({}),
+            )
         })?;
         let resources = crate::provision_webhook::normalize_requested_resources(
             req.requested_resources.clone(),
@@ -3586,9 +3773,11 @@ async fn resolve_provision_pg(
     .filter(|&x| x)
     .count();
     if mode_count != 1 {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "tenant_pg_source_required_three",
             "请指定一种 PG 来源：use_platform_pg、pg_pool_id 或 pg_connection（三选一）"
                 .to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -3610,9 +3799,11 @@ async fn resolve_provision_pg(
     .filter(|&x| x)
     .count();
     if mode_count != 1 {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "tenant_pg_source_required_three",
             "请指定一种 PG 来源：use_platform_pg、pg_pool_id 或 pg_connection（三选一）"
                 .to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -3629,10 +3820,11 @@ async fn resolve_provision_pg(
         (Some(pool_id), None) => {
             let pg_pool_entry = crate::pg_pool_helpers::get_pool(pool, pool_id).await?;
             if !pg_pool_entry.is_active {
-                return Err(AppError::InvalidQuery(format!(
-                    "PG 池 {} 已停用，无法 provision",
-                    pool_id
-                )));
+                return Err(AppError::validation(
+                    "tenant_pg_pool_disabled",
+                    format!("PG 池 {} 已停用，无法 provision", pool_id),
+                    serde_json::json!({ "pool_id": pool_id }),
+                ));
             }
             let admin_password = lookup_pool_admin_password(pool, pool_id).await?;
             Ok(ResolvedProvisionPg {
@@ -3660,11 +3852,15 @@ async fn resolve_provision_pg(
                 platform_pg: false,
             })
         }
-        (Some(_), Some(_)) => Err(AppError::InvalidQuery(
+        (Some(_), Some(_)) => Err(AppError::validation(
+            "tenant_pg_source_conflict",
             "pg_pool_id 与 pg_connection 不能同时填写".to_string(),
+            serde_json::json!({}),
         )),
-        (None, None) => Err(AppError::InvalidQuery(
+        (None, None) => Err(AppError::validation(
+            "tenant_pg_source_missing",
             "请指定 pg_pool_id 或 pg_connection".to_string(),
+            serde_json::json!({}),
         )),
     }
 }
@@ -3693,11 +3889,17 @@ pub async fn provision_project(
     let slug = req.slug.trim();
 
     if name.is_empty() || name.chars().count() > 200 {
-        return Err(AppError::InvalidQuery("name 必须 1-200 字符".to_string()));
+        return Err(AppError::validation(
+            "tenant_provision_name_length",
+            "name 必须 1-200 字符".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if !is_valid_slug(slug) {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "tenant_provision_slug_format",
             "slug 必须 1-50 字符，首字符小写字母，仅含 [a-z0-9_-]".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -3714,13 +3916,21 @@ pub async fn provision_project(
     .await?;
 
     let template_row = template_row.ok_or_else(|| {
-        AppError::InvalidQuery(format!("模板 '{}' 不存在或已停用", req.template_slug))
+        AppError::validation(
+            "tenant_template_not_found",
+            format!("模板 '{}' 不存在或已停用", req.template_slug),
+            serde_json::json!({ "template_slug": req.template_slug }),
+        )
     })?;
     if template_row.get::<bool, _>("is_coming_soon") {
-        return Err(AppError::InvalidQuery(format!(
-            "模板 '{}' 还未发布（is_coming_soon=true），请选 'blank'",
-            req.template_slug
-        )));
+        return Err(AppError::validation(
+            "tenant_template_coming_soon",
+            format!(
+                "模板 '{}' 还未发布（is_coming_soon=true），请选 'blank'",
+                req.template_slug
+            ),
+            serde_json::json!({ "template_slug": req.template_slug }),
+        ));
     }
     let ddl_sql: String = template_row.get("ddl_sql");
 
@@ -3772,10 +3982,11 @@ pub async fn provision_project(
             })));
         } else {
             // slug 全局已被占用且非 caller 的项目
-            return Err(AppError::InvalidQuery(format!(
-                "slug '{}' 已被其他项目占用",
-                slug
-            )));
+            return Err(AppError::validation(
+                "tenant_slug_taken",
+                format!("slug '{}' 已被其他项目占用", slug),
+                serde_json::json!({ "slug": slug }),
+            ));
         }
     }
 
@@ -3926,8 +4137,10 @@ pub async fn provision_project(
 
     // 组织归属：必须挂在已有租户下（租户仅平台创建，禁止隐式建组织）
     let explicit_org_id = req.organization_id.ok_or_else(|| {
-        AppError::InvalidQuery(
+        AppError::validation(
+            "tenant_organization_id_required",
             "必须指定 organization_id：请从租户控制台创建项目（租户仅平台超管可创建）".to_string(),
+            serde_json::json!({}),
         )
     })?;
     permissions::require_organization_admin(&pool, &claims, explicit_org_id).await?;
@@ -3938,10 +4151,11 @@ pub async fn provision_project(
     .fetch_one(&pool)
     .await?;
     if !org_ok {
-        return Err(AppError::NotFound(format!(
-            "组织 {} 不存在或已停用",
-            explicit_org_id
-        )));
+        return Err(AppError::not_found_coded(
+            "tenant_organization_not_found",
+            format!("组织 {} 不存在或已停用", explicit_org_id),
+            serde_json::json!({ "organization_id": explicit_org_id }),
+        ));
     }
 
     // 把所有 management.* 写入放进一个 async 块统一拿 Result：任何一步失败（slug 抢注、
@@ -3980,7 +4194,11 @@ pub async fn provision_project(
         .await
         .map_err(|e| match &e {
             sqlx::Error::Database(db) if db.constraint() == Some("tenants_slug_key") => {
-                AppError::InvalidQuery(format!("slug '{}' 已被其他项目占用", slug))
+                AppError::validation(
+                    "tenant_slug_taken",
+                    format!("slug '{}' 已被其他项目占用", slug),
+                    serde_json::json!({ "slug": slug }),
+                )
             }
             _ => AppError::Database(e),
         })?;
@@ -4216,7 +4434,13 @@ async fn lookup_pool_admin_password(pool: &PgPool, pool_id: i32) -> Result<Strin
     .bind(pool_id)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("PG 池 {} 不存在或已停用", pool_id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "tenant_pg_pool_not_found",
+            format!("PG 池 {} 不存在或已停用", pool_id),
+            serde_json::json!({ "pool_id": pool_id }),
+        )
+    })?;
 
     crate::crypto::decrypt_secret(&encrypted)
         .map_err(|e| AppError::Internal(format!("admin 密码解密失败: {}", e)))
@@ -4247,7 +4471,13 @@ async fn require_database_access(pool: &PgPool, claims: &Claims, database_id: i3
     .bind(database_id)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("数据库连接 {} 不存在", database_id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "tenant_database_not_found",
+            format!("数据库连接 {} 不存在", database_id),
+            serde_json::json!({ "database_id": database_id }),
+        )
+    })?;
 
     if !claims.is_superadmin {
         let is_member: Option<i32> = sqlx::query_scalar(
@@ -4259,7 +4489,11 @@ async fn require_database_access(pool: &PgPool, claims: &Claims, database_id: i3
         .fetch_optional(pool)
         .await?;
         if is_member.is_none() {
-            return Err(AppError::Forbidden("你没有该项目的权限".to_string()));
+            return Err(AppError::forbidden_coded(
+                "tenant_no_project_permission",
+                "你没有该项目的权限".to_string(),
+                serde_json::json!({}),
+            ));
         }
     }
     Ok(tenant_id)
@@ -4357,7 +4591,13 @@ pub async fn public_rest_api_doc(
     .bind(&token)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("链接不存在或已失效".to_string()))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "tenant_share_link_invalid",
+            "链接不存在或已失效".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
 
     let database_slug: Option<String> = row.get("database_slug");
     let project_name: String = row.get("project_name");

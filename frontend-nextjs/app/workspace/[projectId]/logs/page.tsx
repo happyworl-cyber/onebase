@@ -1,6 +1,7 @@
 'use client'
 
 import { useParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import ExecutionLogsView from '@/components/ExecutionLogsView'
 
 /**
@@ -12,13 +13,14 @@ import ExecutionLogsView from '@/components/ExecutionLogsView'
  */
 export default function ProjectLogsPage() {
   const params = useParams<{ projectId: string }>()
+  const t = useTranslations('wsLogs')
   const tenantId = Number(params.projectId)
 
   return (
     <ExecutionLogsView
       tenantId={Number.isFinite(tenantId) ? tenantId : undefined}
-      title="执行日志"
-      subtitle="本项目的工作流 / 定时任务 / API / 数据库等执行汇总，按 trace 关联，快速定位失败"
+      title={t('title')}
+      subtitle={t('subtitle')}
     />
   )
 }

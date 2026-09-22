@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useParams } from 'next/navigation'
 import {
   kafkaAPI,
@@ -39,13 +40,15 @@ function usesTls(protocol: KafkaSecurityProtocol) {
 }
 
 export default function KafkaConnectionsPage() {
+  const t = useTranslations('wsKafkaConn')
+  const tc = useTranslations('connCommon')
   const params = useParams<{ projectId: string }>()
   const projectId = parseInt(params.projectId, 10)
   const caps = useCurrentProjectCapabilities()
 
   if (!caps.canManageEvents) {
     return (
-      <ForbiddenPlaceholder reason="Kafka 数据源管理需要 admin+ 角色（owner / admin / 超管）" />
+      <ForbiddenPlaceholder reason={t('forbidden')} />
     )
   }
 
@@ -53,7 +56,7 @@ export default function KafkaConnectionsPage() {
     return (
       <div className="text-center py-12 text-gray-400">
         <i className="fas fa-spinner fa-spin text-2xl"></i>
-        <p className="text-sm mt-2">正在加载项目上下文…</p>
+        <p className="text-sm mt-2">{tc('loadingCtx')}</p>
       </div>
     )
   }
@@ -62,6 +65,8 @@ export default function KafkaConnectionsPage() {
 }
 
 function KafkaConnectionsManager({ tenantId }: { tenantId: number }) {
+  const t = useTranslations('wsKafkaConn')
+  const tc = useTranslations('connCommon')
   const notify = useNotification()
   const [connections, setConnections] = useState<KafkaConnection[]>([])
   const [loading, setLoading] = useState(true)
@@ -102,14 +107,14 @@ function KafkaConnectionsManager({ tenantId }: { tenantId: number }) {
         <div>
           <h1 className="text-2xl font-semibold">
             <i className="fas fa-stream mr-2 text-orange-600"></i>
-            Kafka 数据源
+            {t('title')}
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            管理项目共享的 Kafka 集群连接；签发访问令牌供外部 REST 调用，并供工作流 Kafka 节点复用。
+            {t('subtitle')}
           </p>
         </div>
         <button type="button" onClick={() => setShowCreate(true)} className="btn-primary">
-          <i className="fas fa-plus mr-2"></i>新建连接
+          <i className="fas fa-plus mr-2"></i>{t('newConn')}
         </button>
       </div>
 
@@ -122,13 +127,13 @@ function KafkaConnectionsManager({ tenantId }: { tenantId: number }) {
           ) : connections.length === 0 ? (
             <div className="text-center py-12 bg-gray-50 border border-dashed border-gray-300 rounded">
               <i className="fas fa-stream text-3xl text-gray-300 mb-2"></i>
-              <p className="text-sm text-gray-500">还没有 Kafka 连接</p>
+              <p className="text-sm text-gray-500">{t('empty')}</p>
               <button
                 type="button"
                 onClick={() => setShowCreate(true)}
                 className="mt-3 text-sm text-blue-600 hover:underline"
               >
-                立即创建第一个
+                {t('createFirst')}
               </button>
             </div>
           ) : (
@@ -152,7 +157,7 @@ function KafkaConnectionsManager({ tenantId }: { tenantId: number }) {
             />
           ) : (
             <div className="bg-gray-50 border border-dashed border-gray-300 rounded p-12 text-center text-sm text-gray-400">
-              请从左侧选择一个连接，或新建一个
+              {t('selectOrNew')}
             </div>
           )}
         </div>
@@ -166,7 +171,7 @@ function KafkaConnectionsManager({ tenantId }: { tenantId: number }) {
             setShowCreate(false)
             setActiveId(id)
             loadConnections()
-            notify.success('Kafka 连接已创建')
+            notify.success(t('created'))
           }}
         />
       )}
@@ -183,6 +188,7 @@ function ConnectionListItem({
   active: boolean
   onClick: () => void
 }) {
+  const tc = useTranslations('connCommon')
   return (
     <button
       type="button"
@@ -195,7 +201,7 @@ function ConnectionListItem({
         <div className="font-medium text-sm truncate">{connection.connection_name}</div>
         {!connection.is_active && (
           <span className="shrink-0 text-xs bg-gray-200 text-gray-700 px-1.5 py-0.5 rounded">
-            已停用
+            {tc('disabled')}
           </span>
         )}
       </div>
@@ -220,20 +226,22 @@ function ConnectionDetail({
   connection: KafkaConnection
   onChanged: () => void
 }) {
+  const t = useTranslations('wsKafkaConn')
+  const tc = useTranslations('connCommon')
   const notify = useNotification()
   const [tab, setTab] = useState<'usage' | 'tokens' | 'topics' | 'groups' | 'settings'>('usage')
 
   const remove = async () => {
     if (
       !window.confirm(
-        `确认删除连接「${connection.connection_name}」？引用它的工作流节点会立即失败。`,
+        t('confirmDelete', { name: connection.connection_name }),
       )
     ) {
       return
     }
     try {
       await kafkaAPI.deleteConnection(connection.id)
-      notify.success('连接已删除')
+      notify.success(t('deleted'))
       onChanged()
     } catch {
       // 全局拦截器展示错误。
@@ -253,7 +261,7 @@ function ConnectionDetail({
           type="button"
           onClick={remove}
           className="text-sm text-red-600 hover:text-red-700"
-          title="删除连接"
+          title={t('deleteTitle')}
         >
           <i className="fas fa-trash"></i>
         </button>
@@ -261,11 +269,11 @@ function ConnectionDetail({
 
       <div className="border-b flex text-sm flex-wrap">
         {[
-          { id: 'usage', label: '接入指南', icon: 'fa-book' },
-          { id: 'tokens', label: '访问令牌', icon: 'fa-key' },
+          { id: 'usage', label: t('tabUsage'), icon: 'fa-book' },
+          { id: 'tokens', label: t('tabTokens'), icon: 'fa-key' },
           { id: 'topics', label: 'Topics', icon: 'fa-list' },
-          { id: 'groups', label: '消费组', icon: 'fa-users' },
-          { id: 'settings', label: '连接设置', icon: 'fa-cog' },
+          { id: 'groups', label: t('tabGroups'), icon: 'fa-users' },
+          { id: 'settings', label: t('tabSettings'), icon: 'fa-cog' },
         ].map((item) => (
           <button
             key={item.id}
@@ -295,6 +303,8 @@ function ConnectionDetail({
 }
 
 function UsageTab({ connection }: { connection: KafkaConnection }) {
+  const t = useTranslations('wsKafkaConn')
+  const tc = useTranslations('connCommon')
   const notify = useNotification()
   const { currentConnection, currentProject } = useAppStore()
   const origin =
@@ -311,9 +321,9 @@ function UsageTab({ connection }: { connection: KafkaConnection }) {
   const copy = async (text: string, label: string) => {
     try {
       await navigator.clipboard.writeText(text)
-      notify.success(`已复制：${label}`)
+      notify.success(t('copied', { label }))
     } catch {
-      notify.error('复制失败，请手动选择文本')
+      notify.error(t('copyFail'))
     }
   }
 
@@ -332,24 +342,21 @@ function UsageTab({ connection }: { connection: KafkaConnection }) {
     <div className="space-y-4 text-sm">
       <div className="bg-blue-50 border border-blue-200 text-blue-900 rounded p-3 space-y-1.5 text-xs">
         <div className="font-semibold">
-          <i className="fas fa-lightbulb mr-1"></i>对外 REST（对齐 ES）
+          <i className="fas fa-lightbulb mr-1"></i>{t('restTitle')}
         </div>
         {!databaseSlug && (
           <p className="text-amber-800">
-            当前项目尚未绑定主数据库连接，示例暂用 <code className="bg-white px-1 rounded">/api/kafka/...</code>
-            ；绑定后将自动带上项目 slug。
+            {t('restLi1a')}<code className="bg-white px-1 rounded">/api/kafka/...</code>{t('restLi1b')}
           </p>
         )}
         <ul className="list-disc list-inside space-y-0.5">
           <li>
-            先在「访问令牌」Tab 创建 <code className="bg-white px-1 rounded">obes_kafka_*</code>
-            ，明文仅创建时显示一次。
+            {t('restLi2a')}<code className="bg-white px-1 rounded">obes_kafka_*</code>{t('restLi2b')}
           </li>
           <li>
-            请求头：<code className="bg-white px-1 rounded">Authorization: ApiKey obes_kafka_...</code>
-            （也支持 Bearer / X-Kafka-Token）。
+            {t('restLi3a')}<code className="bg-white px-1 rounded">Authorization: ApiKey obes_kafka_...</code>{t('restLi3b')}
           </li>
-          <li>令牌可限制 allowed_ops 与 topic_allowlist；无需平台登录即可调用。</li>
+          <li>{t('restLi4')}</li>
         </ul>
       </div>
 
@@ -366,7 +373,7 @@ function UsageTab({ connection }: { connection: KafkaConnection }) {
               className="text-xs text-blue-600 hover:underline"
               onClick={() => copy(item.curl, item.title)}
             >
-              复制
+              {t('copy')}
             </button>
           </div>
           <pre className="p-3 text-xs font-mono overflow-x-auto bg-gray-900 text-gray-100 leading-relaxed">
@@ -379,6 +386,8 @@ function UsageTab({ connection }: { connection: KafkaConnection }) {
 }
 
 function TokensTab({ connectionId }: { connectionId: number }) {
+  const tr = useTranslations('wsKafkaConn')
+  const tc = useTranslations('connCommon')
   const notify = useNotification()
   const [tokens, setTokens] = useState<KafkaAccessToken[]>([])
   const [loading, setLoading] = useState(true)
@@ -404,7 +413,7 @@ function TokensTab({ connectionId }: { connectionId: number }) {
   const toggleActive = async (t: KafkaAccessToken) => {
     try {
       await kafkaAPI.updateToken(connectionId, t.id, { is_active: !t.is_active })
-      notify.success(t.is_active ? 'token 已停用' : 'token 已启用')
+      notify.success(tr('tokenToggled', { state: t.is_active ? tr('tokenDisabled') : tr('tokenEnabled') }))
       load()
     } catch {
       /* noop */
@@ -412,10 +421,10 @@ function TokensTab({ connectionId }: { connectionId: number }) {
   }
 
   const remove = async (t: KafkaAccessToken) => {
-    if (!window.confirm(`确认删除 token「${t.name}」？使用中的请求将立即 401。`)) return
+    if (!window.confirm(tr('confirmDeleteToken', { name: t.name }))) return
     try {
       await kafkaAPI.deleteToken(connectionId, t.id)
-      notify.success('token 已删除')
+      notify.success(tr('tokenDeleted'))
       load()
     } catch {
       /* noop */
@@ -426,10 +435,10 @@ function TokensTab({ connectionId }: { connectionId: number }) {
     <div className="space-y-3 text-sm">
       <div className="flex items-center justify-between gap-2">
         <div className="text-gray-600 text-xs">
-          每个 token 独立配置 ops / topic 白名单；明文仅在创建时一次性显示。
+          {tr('tokensDesc')}
         </div>
         <button type="button" onClick={() => setShowCreate(true)} className="btn-primary text-xs shrink-0">
-          <i className="fas fa-plus mr-1"></i>新建 token
+          <i className="fas fa-plus mr-1"></i>{tr('newToken')}
         </button>
       </div>
 
@@ -439,20 +448,20 @@ function TokensTab({ connectionId }: { connectionId: number }) {
         </div>
       ) : tokens.length === 0 ? (
         <div className="text-center py-8 text-gray-400 border border-dashed border-gray-300 rounded">
-          还没有 token
+          {tr('noToken')}
         </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead className="text-left text-gray-500 border-b">
               <tr>
-                <th className="py-2 px-2">名称</th>
-                <th className="py-2 px-2">前缀</th>
+                <th className="py-2 px-2">{tr('colName')}</th>
+                <th className="py-2 px-2">{tr('colPrefix')}</th>
                 <th className="py-2 px-2">ops</th>
                 <th className="py-2 px-2">topics</th>
-                <th className="py-2 px-2">使用</th>
-                <th className="py-2 px-2">状态</th>
-                <th className="py-2 px-2 text-right">操作</th>
+                <th className="py-2 px-2">{tr('colUse')}</th>
+                <th className="py-2 px-2">{tr('colStatus')}</th>
+                <th className="py-2 px-2 text-right">{tr('colActions')}</th>
               </tr>
             </thead>
             <tbody>
@@ -470,7 +479,7 @@ function TokensTab({ connectionId }: { connectionId: number }) {
                     {t.topic_allowlist.join(', ')}
                   </td>
                   <td className="py-2 px-2 text-gray-500">
-                    {t.use_count > 0 ? `${t.use_count} 次` : '—'}
+                    {t.use_count > 0 ? tr('useCount', { n: t.use_count }) : '—'}
                   </td>
                   <td className="py-2 px-2">
                     {t.is_active && !t.revoked_at ? (
@@ -481,10 +490,10 @@ function TokensTab({ connectionId }: { connectionId: number }) {
                   </td>
                   <td className="py-2 px-2 text-right space-x-2 whitespace-nowrap">
                     <button type="button" className="text-blue-600 hover:underline" onClick={() => toggleActive(t)}>
-                      {t.is_active ? '停用' : '启用'}
+                      {t.is_active ? tr('disable') : tr('enable')}
                     </button>
                     <button type="button" className="text-red-600 hover:underline" onClick={() => remove(t)}>
-                      删除
+                      {tr('delete')}
                     </button>
                   </td>
                 </tr>
@@ -509,9 +518,9 @@ function TokensTab({ connectionId }: { connectionId: number }) {
       {revealed && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-lg w-full p-5 space-y-3">
-            <h3 className="font-semibold text-gray-900">Token 已创建：{revealed.name}</h3>
+            <h3 className="font-semibold text-gray-900">{tr('tokenCreated', { name: revealed.name })}</h3>
             <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-              明文仅显示一次，请立即复制保存。关闭后无法再查看。
+              {tr('tokenRevealHint')}
             </p>
             <pre className="text-xs font-mono bg-gray-900 text-gray-100 p-3 rounded break-all whitespace-pre-wrap">
               {revealed.token}
@@ -523,16 +532,16 @@ function TokensTab({ connectionId }: { connectionId: number }) {
                 onClick={async () => {
                   try {
                     await navigator.clipboard.writeText(revealed.token)
-                    notify.success('已复制 token')
+                    notify.success(tr('tokenCopied'))
                   } catch {
-                    notify.error('复制失败')
+                    notify.error(tr('tokenCopyFail'))
                   }
                 }}
               >
-                复制
+                {tr('tokenCopy')}
               </button>
               <button type="button" className="btn-primary text-xs" onClick={() => setRevealed(null)}>
-                我已保存
+                {tr('tokenSaved')}
               </button>
             </div>
           </div>
@@ -551,6 +560,8 @@ function CreateKafkaTokenModal({
   onClose: () => void
   onCreated: (token: string, name: string) => void
 }) {
+  const t = useTranslations('wsKafkaConn')
+  const tc = useTranslations('connCommon')
   const notify = useNotification()
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -564,11 +575,11 @@ function CreateKafkaTokenModal({
 
   const submit = async () => {
     if (!name.trim()) {
-      notify.error('请填写名称')
+      notify.error(t('fillName'))
       return
     }
     if (ops.length === 0) {
-      notify.error('至少选择一个 op')
+      notify.error(t('selectOp'))
       return
     }
     const topic_allowlist = topics
@@ -576,7 +587,7 @@ function CreateKafkaTokenModal({
       .map((s) => s.trim())
       .filter(Boolean)
     if (topic_allowlist.length === 0) {
-      notify.error('topic 白名单不能为空')
+      notify.error(t('topicAllowEmpty'))
       return
     }
     const payload: CreateKafkaTokenInput = {
@@ -588,7 +599,7 @@ function CreateKafkaTokenModal({
     setSaving(true)
     try {
       const res = await kafkaAPI.createToken(connectionId, payload)
-      notify.success('token 已创建')
+      notify.success(t('tokenCreatedShort'))
       onCreated(res.data.token, res.data.record.name)
     } catch {
       /* interceptor */
@@ -600,18 +611,18 @@ function CreateKafkaTokenModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-5 space-y-3">
-        <h3 className="font-semibold">新建 Kafka 访问令牌</h3>
+        <h3 className="font-semibold">{t('createTokenTitle')}</h3>
         <div>
-          <label className="block text-xs text-gray-500 mb-1">名称 *</label>
+          <label className="block text-xs text-gray-500 mb-1">{t('tokenNameReq')}</label>
           <input
             className="w-full border rounded px-3 py-2 text-sm"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="订单服务 produce"
+            placeholder={t('tokenNamePlaceholder')}
           />
         </div>
         <div>
-          <label className="block text-xs text-gray-500 mb-1">说明</label>
+          <label className="block text-xs text-gray-500 mb-1">{t('tokenDescLabel')}</label>
           <input
             className="w-full border rounded px-3 py-2 text-sm"
             value={description}
@@ -630,7 +641,7 @@ function CreateKafkaTokenModal({
           </div>
         </div>
         <div>
-          <label className="block text-xs text-gray-500 mb-1">topic_allowlist（逗号或换行，* 表示不限）</label>
+          <label className="block text-xs text-gray-500 mb-1">{t('topicAllowlist')}</label>
           <textarea
             className="w-full border rounded px-3 py-2 text-sm font-mono"
             rows={3}
@@ -641,10 +652,10 @@ function CreateKafkaTokenModal({
         </div>
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" className="btn-default text-xs" onClick={onClose} disabled={saving}>
-            取消
+            {tc('cancel')}
           </button>
           <button type="button" className="btn-primary text-xs" onClick={submit} disabled={saving}>
-            {saving ? '创建中…' : '创建'}
+            {saving ? t('creating') : t('create')}
           </button>
         </div>
       </div>
@@ -653,6 +664,8 @@ function CreateKafkaTokenModal({
 }
 
 function TopicsTab({ connection }: { connection: KafkaConnection }) {
+  const t = useTranslations('wsKafkaConn')
+  const tc = useTranslations('connCommon')
   const notify = useNotification()
   const [topics, setTopics] = useState<string[]>([])
   const [brokerCount, setBrokerCount] = useState<number | null>(null)
@@ -675,7 +688,7 @@ function TopicsTab({ connection }: { connection: KafkaConnection }) {
       setTopics(res.data.topics)
       setBrokerCount(res.data.broker_count)
     } catch (err: any) {
-      setError(err?.response?.data?.error || err?.message || '获取 topics 失败')
+      setError(err?.response?.data?.error || err?.message || t('getTopicsFailed'))
     } finally {
       setLoading(false)
     }
@@ -690,7 +703,7 @@ function TopicsTab({ connection }: { connection: KafkaConnection }) {
   const submitCreate = async () => {
     const name = form.name.trim()
     if (!name) {
-      setCreateError('请填写 topic 名称')
+      setCreateError(t('fillTopicName'))
       return
     }
     setCreating(true)
@@ -701,12 +714,12 @@ function TopicsTab({ connection }: { connection: KafkaConnection }) {
         num_partitions: Number(form.num_partitions) || 1,
         replication_factor: Number(form.replication_factor) || 1,
       })
-      notify.success(`已创建 topic：${name}`)
+      notify.success(t('topicCreated', { name }))
       setForm({ name: '', num_partitions: 1, replication_factor: 1 })
       setShowCreate(false)
       await loadTopics()
     } catch (err: any) {
-      setCreateError(err?.response?.data?.error || err?.message || '创建 topic 失败')
+      setCreateError(err?.response?.data?.error || err?.message || t('createTopicFailed'))
     } finally {
       setCreating(false)
     }
@@ -715,7 +728,7 @@ function TopicsTab({ connection }: { connection: KafkaConnection }) {
   if (!connection.is_active) {
     return (
       <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded p-3 text-sm">
-        连接已停用，启用后才能读取 topic。
+        {t('disabledTopicWarn')}
       </div>
     )
   }
@@ -727,7 +740,7 @@ function TopicsTab({ connection }: { connection: KafkaConnection }) {
           {brokerCount !== null && (
             <>
               <i className="fas fa-server mr-1"></i>
-              {brokerCount} 个 broker · {topics.length} 个 topic
+              {t('brokerTopicCount', { brokers: brokerCount, topics: topics.length })}
             </>
           )}
         </div>
@@ -741,11 +754,11 @@ function TopicsTab({ connection }: { connection: KafkaConnection }) {
             className="btn-primary"
           >
             <i className="fas fa-plus mr-2"></i>
-            新建 Topic
+            {t('newTopic')}
           </button>
           <button type="button" onClick={loadTopics} disabled={loading} className="btn-default">
             <i className={`fas fa-sync-alt mr-2 ${loading ? 'fa-spin' : ''}`}></i>
-            刷新
+            {t('refresh')}
           </button>
         </div>
       </div>
@@ -754,7 +767,7 @@ function TopicsTab({ connection }: { connection: KafkaConnection }) {
         <div className="border border-gray-200 rounded p-3 space-y-3 bg-gray-50">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <label className="block sm:col-span-1">
-              <span className="text-xs text-gray-500 mb-1 block">名称 *</span>
+              <span className="text-xs text-gray-500 mb-1 block">{t('topicNameReq')}</span>
               <input
                 value={form.name}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
@@ -764,7 +777,7 @@ function TopicsTab({ connection }: { connection: KafkaConnection }) {
               />
             </label>
             <label className="block">
-              <span className="text-xs text-gray-500 mb-1 block">分区数</span>
+              <span className="text-xs text-gray-500 mb-1 block">{t('partitions')}</span>
               <input
                 type="number"
                 min={1}
@@ -778,7 +791,7 @@ function TopicsTab({ connection }: { connection: KafkaConnection }) {
               />
             </label>
             <label className="block">
-              <span className="text-xs text-gray-500 mb-1 block">副本因子</span>
+              <span className="text-xs text-gray-500 mb-1 block">{t('replicaFactor')}</span>
               <input
                 type="number"
                 min={1}
@@ -804,7 +817,7 @@ function TopicsTab({ connection }: { connection: KafkaConnection }) {
               onClick={() => setShowCreate(false)}
               disabled={creating}
             >
-              取消
+              {tc('cancel')}
             </button>
             <button
               type="button"
@@ -812,7 +825,7 @@ function TopicsTab({ connection }: { connection: KafkaConnection }) {
               onClick={submitCreate}
               disabled={creating}
             >
-              {creating ? '创建中…' : '创建'}
+              {creating ? t('creating') : t('create')}
             </button>
           </div>
         </div>
@@ -826,10 +839,10 @@ function TopicsTab({ connection }: { connection: KafkaConnection }) {
       )}
       {loading && topics.length === 0 ? (
         <div className="text-center py-10 text-gray-400">
-          <i className="fas fa-spinner fa-spin mr-2"></i>正在读取 metadata…
+          <i className="fas fa-spinner fa-spin mr-2"></i>{t('readingMeta')}
         </div>
       ) : !error && topics.length === 0 ? (
-        <div className="text-center py-10 text-gray-400">集群未返回 topic</div>
+        <div className="text-center py-10 text-gray-400">{t('noTopic')}</div>
       ) : (
         <div className="border border-gray-200 rounded divide-y max-h-96 overflow-y-auto">
           {topics.map((topic) => (
@@ -845,6 +858,8 @@ function TopicsTab({ connection }: { connection: KafkaConnection }) {
 }
 
 function ConsumerGroupsTab({ connection }: { connection: KafkaConnection }) {
+  const t = useTranslations('wsKafkaConn')
+  const tc = useTranslations('connCommon')
   const [groups, setGroups] = useState<KafkaConsumerGroup[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -858,7 +873,7 @@ function ConsumerGroupsTab({ connection }: { connection: KafkaConnection }) {
       const res = await kafkaAPI.listConsumerGroups(connection.id)
       setGroups(res.data.groups || [])
     } catch (err: any) {
-      setError(err?.response?.data?.error || err?.message || '获取消费组失败')
+      setError(err?.response?.data?.error || err?.message || t('getGroupsFailed'))
     } finally {
       setLoading(false)
     }
@@ -879,7 +894,7 @@ function ConsumerGroupsTab({ connection }: { connection: KafkaConnection }) {
   if (!connection.is_active) {
     return (
       <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded p-3 text-sm">
-        连接已停用，启用后才能读取消费组。
+        {t('disabledGroupWarn')}
       </div>
     )
   }
@@ -888,21 +903,21 @@ function ConsumerGroupsTab({ connection }: { connection: KafkaConnection }) {
     <div className="space-y-3 text-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-gray-500">
-          {groups.length} 个消费组
+          {t('groupCount', { n: groups.length })}
           <span className="ml-2 text-xs text-gray-400">
-            （仅成员与状态，不含 lag；用于确认工作流 consumer 是否已挂载）
+            {t('groupHint')}
           </span>
         </div>
         <div className="flex items-center gap-2">
           <input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder="筛选 group id，如 planeos-ai-close"
+            placeholder={t('filterGroupPlaceholder')}
             className="px-3 py-1.5 border rounded text-xs font-mono min-w-[220px]"
           />
           <button type="button" onClick={loadGroups} disabled={loading} className="btn-default">
             <i className={`fas fa-sync-alt mr-2 ${loading ? 'fa-spin' : ''}`}></i>
-            刷新
+            {t('refresh')}
           </button>
         </div>
       </div>
@@ -916,13 +931,13 @@ function ConsumerGroupsTab({ connection }: { connection: KafkaConnection }) {
 
       {loading && groups.length === 0 ? (
         <div className="text-center py-10 text-gray-400">
-          <i className="fas fa-spinner fa-spin mr-2"></i>正在读取消费组…
+          <i className="fas fa-spinner fa-spin mr-2"></i>{t('readingGroups')}
         </div>
       ) : !error && filtered.length === 0 ? (
         <div className="text-center py-10 text-gray-400">
           {groups.length === 0
-            ? '集群未返回消费组（工作流 Kafka consumer 未挂载时这里通常为空或没有对应 group）'
-            : '无匹配的消费组'}
+            ? t('noGroupEmpty')
+            : t('noGroupMatch')}
         </div>
       ) : (
         <div className="border border-gray-200 rounded divide-y max-h-[28rem] overflow-y-auto">
@@ -960,7 +975,7 @@ function ConsumerGroupsTab({ connection }: { connection: KafkaConnection }) {
                     </div>
                     {noMembers ? (
                       <div className="text-amber-700">
-                        无在线成员：PlaneOS 工作流 consumer 可能未启动，或 group id 与配置不一致。
+                        {t('noOnlineMember')}
                       </div>
                     ) : (
                       <ul className="space-y-1 mt-1">
@@ -990,6 +1005,8 @@ function SettingsTab({
   connection: KafkaConnection
   onUpdated: () => void
 }) {
+  const t = useTranslations('wsKafkaConn')
+  const tc = useTranslations('connCommon')
   const notify = useNotification()
   const [form, setForm] = useState({
     connection_name: connection.connection_name,
@@ -1012,7 +1029,7 @@ function SettingsTab({
 
   const save = async () => {
     if (!form.connection_name.trim() || !form.brokers.trim()) {
-      notify.error('连接名称和 brokers 不能为空')
+      notify.error(t('nameBrokerEmpty'))
       return
     }
     setSaving(true)
@@ -1035,7 +1052,7 @@ function SettingsTab({
       }
       await kafkaAPI.updateConnection(connection.id, payload)
       setForm((current) => ({ ...current, sasl_password: '' }))
-      notify.success('连接已更新')
+      notify.success(t('updated'))
       onUpdated()
     } catch {
       // 全局拦截器展示错误。
@@ -1051,14 +1068,14 @@ function SettingsTab({
       const res = await kafkaAPI.healthCheck(connection.id)
       setHealthResult(res.data)
       if (res.data.ok) {
-        notify.success('Kafka 可达')
+        notify.success(t('reachable'))
       } else {
-        notify.warning('探活失败')
+        notify.warning(t('testFail'))
       }
     } catch (err: any) {
       setHealthResult({
         ok: false,
-        error: err?.response?.data?.error || err?.message || '探活失败',
+        error: err?.response?.data?.error || err?.message || t('testFail'),
       })
     } finally {
       setHealthChecking(false)
@@ -1067,12 +1084,12 @@ function SettingsTab({
 
   return (
     <div className="space-y-3 text-sm">
-      <ConnectionFields form={form} setForm={setForm} passwordHint="留空 = 保留原密码" />
+      <ConnectionFields form={form} setForm={setForm} passwordHint={t('pwHintSettings')} />
 
       <div className="flex items-center space-x-2 pt-3 border-t">
         <button type="button" onClick={save} disabled={saving} className="btn-primary">
           <i className={`fas ${saving ? 'fa-spinner fa-spin' : 'fa-save'} mr-2`}></i>
-          {saving ? '保存中…' : '保存'}
+          {saving ? tc('saving') : tc('save')}
         </button>
         <button
           type="button"
@@ -1081,7 +1098,7 @@ function SettingsTab({
           className="btn-default"
         >
           <i className={`fas ${healthChecking ? 'fa-spinner fa-spin' : 'fa-heartbeat'} mr-2`}></i>
-          {healthChecking ? '探活中…' : '测试连接'}
+          {healthChecking ? t('testing') : t('test')}
         </button>
       </div>
 
@@ -1097,8 +1114,8 @@ function SettingsTab({
             className={`fas ${healthResult.ok ? 'fa-check-circle' : 'fa-times-circle'} mr-1`}
           ></i>
           {healthResult.ok
-            ? `连接正常（${healthResult.broker_count ?? 0} 个 broker）`
-            : healthResult.error || '探活失败'}
+            ? t('healthOk', { n: healthResult.broker_count ?? 0 })
+            : healthResult.error || t('testFail')}
         </div>
       )}
     </div>
@@ -1126,12 +1143,14 @@ function ConnectionFields({
   setForm: React.Dispatch<React.SetStateAction<ConnectionForm>>
   passwordHint: string
 }) {
+  const t = useTranslations('wsKafkaConn')
+  const tc = useTranslations('connCommon')
   const sasl = usesSasl(form.security_protocol)
   const tls = usesTls(form.security_protocol)
 
   return (
     <>
-      <FormRow label="连接名称 *" hint="同项目内不可重名">
+      <FormRow label={t('connNameReq')} hint={t('connNameHint')}>
         <input
           value={form.connection_name}
           onChange={(event) => setForm({ ...form, connection_name: event.target.value })}
@@ -1139,7 +1158,7 @@ function ConnectionFields({
           placeholder="prod-kafka"
         />
       </FormRow>
-      <FormRow label="Brokers *" hint="多个地址用逗号分隔">
+      <FormRow label={t('brokersReq')} hint={t('brokersHint')}>
         <input
           value={form.brokers}
           onChange={(event) => setForm({ ...form, brokers: event.target.value })}
@@ -1148,7 +1167,7 @@ function ConnectionFields({
         />
       </FormRow>
       <div className="grid grid-cols-2 gap-3">
-        <FormRow label="安全协议">
+        <FormRow label={t('securityProtocol')}>
           <select
             value={form.security_protocol}
             onChange={(event) =>
@@ -1164,7 +1183,7 @@ function ConnectionFields({
             ))}
           </select>
         </FormRow>
-        <FormRow label="连接超时（秒）">
+        <FormRow label={t('connTimeout')}>
           <input
             type="number"
             min={1}
@@ -1184,7 +1203,7 @@ function ConnectionFields({
       {sasl && (
         <>
           <div className="grid grid-cols-2 gap-3">
-            <FormRow label="SASL 机制">
+            <FormRow label={t('saslMechanism')}>
               <select
                 value={form.sasl_mechanism}
                 onChange={(event) =>
@@ -1200,7 +1219,7 @@ function ConnectionFields({
                 ))}
               </select>
             </FormRow>
-            <FormRow label="SASL 用户名 *">
+            <FormRow label={t('saslUser')}>
               <input
                 value={form.sasl_username}
                 onChange={(event) => setForm({ ...form, sasl_username: event.target.value })}
@@ -1208,7 +1227,7 @@ function ConnectionFields({
               />
             </FormRow>
           </div>
-          <FormRow label="SASL 密码" hint={passwordHint}>
+          <FormRow label={t('saslPassword')} hint={passwordHint}>
             <input
               type="password"
               value={form.sasl_password}
@@ -1230,7 +1249,7 @@ function ConnectionFields({
                 setForm({ ...form, tls_insecure_skip_verify: event.target.checked })
               }
             />
-            <span>跳过 TLS 证书校验（不安全）</span>
+            <span>{t('skipTlsVerify')}</span>
           </label>
         )}
         <label className="flex items-center space-x-2">
@@ -1239,7 +1258,7 @@ function ConnectionFields({
             checked={form.is_active}
             onChange={(event) => setForm({ ...form, is_active: event.target.checked })}
           />
-          <span>连接启用中</span>
+          <span>{t('connEnabled')}</span>
         </label>
       </div>
     </>
@@ -1255,6 +1274,8 @@ function CreateConnectionDialog({
   onClose: () => void
   onCreated: (id: number) => void
 }) {
+  const t = useTranslations('wsKafkaConn')
+  const tc = useTranslations('connCommon')
   const notify = useNotification()
   const [form, setForm] = useState<ConnectionForm>({
     connection_name: '',
@@ -1271,16 +1292,16 @@ function CreateConnectionDialog({
 
   const submit = async () => {
     if (!form.connection_name.trim()) {
-      notify.error('请填写连接名称')
+      notify.error(t('fillName'))
       return
     }
     if (!form.brokers.trim()) {
-      notify.error('请填写 brokers')
+      notify.error(t('fillBrokers'))
       return
     }
     const sasl = usesSasl(form.security_protocol)
     if (sasl && !form.sasl_username.trim()) {
-      notify.error('SASL 协议需要用户名')
+      notify.error(t('saslNeedUser'))
       return
     }
 
@@ -1310,17 +1331,17 @@ function CreateConnectionDialog({
   }
 
   return (
-    <Dialog title="新建 Kafka 连接" onClose={onClose}>
+    <Dialog title={t('createTitle')} onClose={onClose}>
       <div className="space-y-3 text-sm">
-        <ConnectionFields form={form} setForm={setForm} passwordHint="明文仅在提交时传输" />
+        <ConnectionFields form={form} setForm={setForm} passwordHint={t('pwHintCreate')} />
       </div>
       <div className="flex justify-end space-x-2 pt-4 border-t mt-4">
         <button type="button" onClick={onClose} className="btn-default">
-          取消
+          {tc('cancel')}
         </button>
         <button type="button" onClick={submit} disabled={saving} className="btn-primary">
           <i className={`fas ${saving ? 'fa-spinner fa-spin' : 'fa-plus'} mr-2`}></i>
-          {saving ? '创建中…' : '创建'}
+          {saving ? t('creating') : t('create')}
         </button>
       </div>
     </Dialog>

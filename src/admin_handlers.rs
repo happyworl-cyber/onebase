@@ -111,7 +111,11 @@ pub async fn create_tenant(
     .await?;
 
     if existing {
-        return Err(AppError::InvalidQuery("租户标识 (slug) 已存在".to_string()));
+        return Err(AppError::validation(
+            "admin_tenant_slug_exists",
+            "租户标识 (slug) 已存在".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let mut tx = pool.begin().await?;
@@ -131,7 +135,11 @@ pub async fn create_tenant(
     .await
     .map_err(|e| match &e {
         sqlx::Error::Database(db) if db.constraint() == Some("organizations_slug_key") => {
-            AppError::InvalidQuery("组织标识 (slug) 已存在".to_string())
+            AppError::validation(
+                "admin_org_slug_exists",
+                "组织标识 (slug) 已存在".to_string(),
+                serde_json::json!({}),
+            )
         }
         _ => AppError::Database(e),
     })?;
@@ -188,7 +196,11 @@ pub async fn update_tenant_status(
 
     // 验证 status 值
     if !["active", "suspended", "deleted"].contains(&req.status.as_str()) {
-        return Err(AppError::InvalidQuery("无效的状态值".to_string()));
+        return Err(AppError::validation(
+            "admin_invalid_status_value",
+            "无效的状态值".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let tenant = sqlx::query_as::<_, Tenant>(
@@ -284,7 +296,11 @@ pub async fn add_user_to_tenant(
 
     // 验证角色
     if !["owner", "admin", "member", "viewer"].contains(&req.role.as_str()) {
-        return Err(AppError::InvalidQuery("无效的角色".to_string()));
+        return Err(AppError::validation(
+            "admin_invalid_role",
+            "无效的角色".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     // 检查用户是否存在
@@ -295,7 +311,11 @@ pub async fn add_user_to_tenant(
             .await?;
 
     if !user_exists {
-        return Err(AppError::NotFound("用户不存在".to_string()));
+        return Err(AppError::not_found_coded(
+            "admin_user_not_found",
+            "用户不存在".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     // 检查租户（项目）是否存在
@@ -334,7 +354,11 @@ pub async fn add_user_to_tenant(
     .await?;
 
     if !tenant_exists {
-        return Err(AppError::NotFound("租户不存在".to_string()));
+        return Err(AppError::not_found_coded(
+            "admin_tenant_not_found",
+            "租户不存在".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     // 添加用户到租户（如果已存在则更新）
@@ -594,7 +618,13 @@ async fn fetch_user_flags(pool: &PgPool, user_id: i32) -> Result<(String, String
     .bind(user_id)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("用户 {} 不存在", user_id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "admin_user_id_not_found",
+            format!("用户 {} 不存在", user_id),
+            serde_json::json!({ "user_id": user_id }),
+        )
+    })?;
 
     Ok((
         row.get("username"),
@@ -620,7 +650,11 @@ pub async fn admin_create_user(
         .fetch_one(&pool)
         .await?;
     if dup_email {
-        return Err(AppError::InvalidQuery("邮箱已被注册".to_string()));
+        return Err(AppError::validation(
+            "admin_email_registered",
+            "邮箱已被注册".to_string(),
+            serde_json::json!({}),
+        ));
     }
     let dup_username: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)")
@@ -628,7 +662,11 @@ pub async fn admin_create_user(
             .fetch_one(&pool)
             .await?;
     if dup_username {
-        return Err(AppError::InvalidQuery("用户名已被使用".to_string()));
+        return Err(AppError::validation(
+            "admin_username_taken",
+            "用户名已被使用".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let password_hash = hash_password(&req.password)?;
@@ -680,8 +718,10 @@ pub async fn admin_update_user(
     require_super_admin(&claims)?;
 
     if req.username.is_none() && req.is_superadmin.is_none() {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "admin_update_user_empty_body",
             "请求体为空，至少需要 username 或 is_superadmin".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -701,7 +741,11 @@ pub async fn admin_update_user(
             .fetch_one(&pool)
             .await?;
             if dup {
-                return Err(AppError::InvalidQuery("用户名已被使用".to_string()));
+                return Err(AppError::validation(
+                    "admin_username_taken",
+                    "用户名已被使用".to_string(),
+                    serde_json::json!({}),
+                ));
             }
         }
     }
@@ -711,16 +755,20 @@ pub async fn admin_update_user(
         if target_is_super != current_is_super {
             // 不许把自己降级为非超管，否则当前 token 立刻失效
             if user_id == claims.sub && !target_is_super {
-                return Err(AppError::Forbidden(
+                return Err(AppError::forbidden_coded(
+                    "admin_cannot_revoke_own_superadmin",
                     "不能取消自己的超级管理员身份".to_string(),
+                    serde_json::json!({}),
                 ));
             }
             // 不许降级"最后一个超管"
             if current_is_super && !target_is_super {
                 let total = count_superadmins(&pool).await?;
                 if total <= 1 {
-                    return Err(AppError::Forbidden(
+                    return Err(AppError::forbidden_coded(
+                        "admin_last_superadmin_required",
                         "系统至少需要保留一个超级管理员".to_string(),
+                        serde_json::json!({}),
                     ));
                 }
             }
@@ -819,7 +867,11 @@ pub async fn admin_delete_user(
     require_super_admin(&claims)?;
 
     if user_id == claims.sub {
-        return Err(AppError::Forbidden("不能删除自己".to_string()));
+        return Err(AppError::forbidden_coded(
+            "admin_cannot_delete_self",
+            "不能删除自己".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let (_username, email, target_is_super) = fetch_user_flags(&pool, user_id).await?;
@@ -828,8 +880,10 @@ pub async fn admin_delete_user(
     if target_is_super {
         let total = count_superadmins(&pool).await?;
         if total <= 1 {
-            return Err(AppError::Forbidden(
+            return Err(AppError::forbidden_coded(
+                "admin_last_superadmin_required",
                 "系统至少需要保留一个超级管理员".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -850,7 +904,11 @@ pub async fn admin_delete_user(
         .await?;
 
     if res.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("用户 {} 不存在", user_id)));
+        return Err(AppError::not_found_coded(
+            "admin_user_id_not_found",
+            format!("用户 {} 不存在", user_id),
+            serde_json::json!({ "user_id": user_id }),
+        ));
     }
 
     tx.commit().await?;

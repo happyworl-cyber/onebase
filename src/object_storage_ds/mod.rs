@@ -21,7 +21,13 @@ pub async fn fetch_active(pool: &PgPool, id: i64) -> Result<ObjectStorageConnect
     .fetch_optional(pool)
     .await
     .map_err(|e| AppError::Internal(format!("查询对象存储连接失败: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("对象存储连接 {id} 不存在或已禁用")))
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "objstore_connection_not_found",
+            format!("对象存储连接 {id} 不存在或已禁用"),
+            serde_json::json!({ "id": id }),
+        )
+    })
 }
 
 /// 按 id + tenant_id 取启用中的连接（工作流节点：锁死本租户，杜绝跨租户取数）。
@@ -40,8 +46,10 @@ pub async fn fetch_active_for_tenant(
     .await
     .map_err(|e| AppError::Internal(format!("查询对象存储连接失败: {e}")))?
     .ok_or_else(|| {
-        AppError::NotFound(format!(
-            "对象存储连接 {id} 不存在 / 已禁用 / 不属于当前租户"
-        ))
+        AppError::not_found_coded(
+            "objstore_connection_not_found_tenant",
+            format!("对象存储连接 {id} 不存在 / 已禁用 / 不属于当前租户"),
+            serde_json::json!({ "id": id }),
+        )
     })
 }

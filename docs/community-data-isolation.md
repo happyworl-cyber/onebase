@@ -1,6 +1,6 @@
 # 社区产品：用户数据隔离与扩展性指南
 
-面向把 Onebase 用作社区 / SaaS 业务后端、需要确保"每个用户只能访问自己数据"的场景。
+面向把 PlaneOS 用作社区 / SaaS 业务后端、需要确保"每个用户只能访问自己数据"的场景。
 本文档给出**核心机制 → 典型场景配置 → 角色梯度 → 双重保险 → 性能扩展（20 万 DAU 量级）→ 监控告警 → 端到端验证**的完整落地方案。所有 SQL / 配置都可以直接复制使用。
 
 ---
@@ -206,7 +206,7 @@ CREATE POLICY message_participant ON public.messages
 ## 五、20 万 DAU 性能要点
 
 按经验估算：20 万 DAU × 100 次请求/天 ≈ 2000 万次/天 ≈ 平均 230 QPS，晚高峰 600~1000 QPS。
-Onebase 当前架构能扛，把以下几点调好即可：
+PlaneOS 当前架构能扛，把以下几点调好即可：
 
 ### 1. 权限缓存（已实现，确认开启）
 
@@ -314,7 +314,7 @@ curl -X PATCH "http://.../api/v1/10/public/profiles?user_id=eq.<alice_id>" \
 
 ## 总结
 
-- **每张敏感表配 1~4 条 permission**（SELECT/INSERT/UPDATE/DELETE），用 `$current_user_id` 做行匹配，剩下完全交给 Onebase。
+- **每张敏感表配 1~4 条 permission**（SELECT/INSERT/UPDATE/DELETE），用 `$current_user_id` 做行匹配，剩下完全交给 PlaneOS。
 - INSERT 会**校验请求体的字段**（防伪造 `author_id` 之类）。
 - 业务表的 `owner_id`/`author_id`/`user_id` 列**必须建索引**。
 - 启用 Redis 缓存 + 读写分离 + 定期清 `user_sessions`，20 万 DAU 不需要做架构改动。

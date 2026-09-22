@@ -1,7 +1,7 @@
 //! 迁移脚本：定时任务表
 //! 运行方式: `cargo run --bin migrate_scheduled_tasks`
 
-use onebase::migrate::run_sql_script;
+use planeos::migrate::run_sql_script;
 use sqlx::postgres::PgPoolOptions;
 use std::env;
 

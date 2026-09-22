@@ -214,13 +214,23 @@ impl QueryParams {
                     params.limit = Some(
                         value
                             .parse()
-                            .map_err(|_| AppError::InvalidQuery("limit 必须是数字".to_string()))?,
+                            .map_err(|_| {
+                                AppError::validation(
+                                    "qb_limit_not_a_number",
+                                    "limit 必须是数字".to_string(),
+                                    serde_json::json!({}),
+                                )
+                            })?,
                     );
                 }
                 "offset" => {
                     params.offset =
                         Some(value.parse().map_err(|_| {
-                            AppError::InvalidQuery("offset 必须是数字".to_string())
+                            AppError::validation(
+                                "qb_offset_not_a_number",
+                                "offset 必须是数字".to_string(),
+                                serde_json::json!({}),
+                            )
                         })?);
                 }
                 "order" => {
@@ -321,18 +331,27 @@ impl QueryParams {
     pub fn sanitize_identifier(ident: &str) -> Result<String> {
         // 只允许字母、数字、下划线
         if ident.is_empty() {
-            return Err(AppError::InvalidQuery("标识符不能为空".to_string()));
+            return Err(AppError::validation(
+                "qb_identifier_empty",
+                "标识符不能为空".to_string(),
+                serde_json::json!({}),
+            ));
         }
 
         if !ident.chars().all(|c| c.is_alphanumeric() || c == '_') {
-            return Err(AppError::InvalidQuery(format!(
-                "无效的标识符: {}. 只允许字母、数字和下划线",
-                ident
-            )));
+            return Err(AppError::validation(
+                "qb_identifier_invalid",
+                format!("无效的标识符: {}. 只允许字母、数字和下划线", ident),
+                serde_json::json!({ "ident": ident }),
+            ));
         }
 
         if ident.starts_with(|c: char| c.is_ascii_digit()) {
-            return Err(AppError::InvalidQuery("标识符不能以数字开头".to_string()));
+            return Err(AppError::validation(
+                "qb_identifier_starts_with_digit",
+                "标识符不能以数字开头".to_string(),
+                serde_json::json!({}),
+            ));
         }
 
         Ok(ident.to_string())
@@ -534,12 +553,20 @@ impl SqlBuilder {
     pub fn build_insert(&self, data: &serde_json::Value) -> Result<(String, PgArguments)> {
         let mut args = PgArguments::default();
 
-        let obj = data
-            .as_object()
-            .ok_or_else(|| AppError::InvalidQuery("期望 JSON 对象".to_string()))?;
+        let obj = data.as_object().ok_or_else(|| {
+            AppError::validation(
+                "qb_expected_json_object",
+                "期望 JSON 对象".to_string(),
+                serde_json::json!({}),
+            )
+        })?;
 
         if obj.is_empty() {
-            return Err(AppError::InvalidQuery("插入数据不能为空".to_string()));
+            return Err(AppError::validation(
+                "qb_insert_data_empty",
+                "插入数据不能为空".to_string(),
+                serde_json::json!({}),
+            ));
         }
 
         let mut columns = Vec::new();
@@ -569,18 +596,28 @@ impl SqlBuilder {
         let mut args = PgArguments::default();
         let mut arg_index = 1;
 
-        let obj = data
-            .as_object()
-            .ok_or_else(|| AppError::InvalidQuery("期望 JSON 对象".to_string()))?;
+        let obj = data.as_object().ok_or_else(|| {
+            AppError::validation(
+                "qb_expected_json_object",
+                "期望 JSON 对象".to_string(),
+                serde_json::json!({}),
+            )
+        })?;
 
         if obj.is_empty() {
-            return Err(AppError::InvalidQuery("更新数据不能为空".to_string()));
+            return Err(AppError::validation(
+                "qb_update_data_empty",
+                "更新数据不能为空".to_string(),
+                serde_json::json!({}),
+            ));
         }
 
         // 强制 UPDATE 必须带 WHERE，避免无差别全表更新（与 DELETE 对齐）
         if self.params.filters.is_empty() {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "qb_update_requires_where",
                 "UPDATE 操作必须提供 WHERE 条件，禁止全表无差别更新".to_string(),
+                serde_json::json!({}),
             ));
         }
 
@@ -648,8 +685,10 @@ impl SqlBuilder {
 
         // WHERE 条件 (DELETE 必须有条件)
         if self.params.filters.is_empty() {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "qb_delete_requires_where",
                 "DELETE 操作必须提供 WHERE 条件".to_string(),
+                serde_json::json!({}),
             ));
         }
 

@@ -30,7 +30,11 @@ async fn require_monitor_access(
     let database_id = db_id
         .map(|Extension(CurrentDatabaseId(id))| id)
         .ok_or_else(|| {
-            AppError::InvalidQuery("缺少 X-Database-Id 请求头，无法定位监控目标数据库".to_string())
+            AppError::validation(
+                "mon_missing_database_id",
+                "缺少 X-Database-Id 请求头，无法定位监控目标数据库",
+                serde_json::json!({}),
+            )
         })?;
     permissions::require_database_admin(main_pool, claims, database_id).await?;
     Ok(database_id)
@@ -591,8 +595,17 @@ pub enum VerdictLevel {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Verdict {
     pub level: VerdictLevel,
+    /// 中文兜底文案（历史字段，前端在找不到 i18n 词条时回退到它）。
     pub summary: String,
+    /// 中文兜底 hints（历史字段，同上）。
     pub hints: Vec<String>,
+    /// 可翻译的结论 code，配合 `summary_params` 供前端 i18n 渲染。
+    pub summary_code: String,
+    #[serde(default)]
+    pub summary_params: Value,
+    /// 与 `hints` 一一对应、按相同顺序排列的 `{code, params}`。
+    #[serde(default)]
+    pub hints_coded: Vec<Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -643,10 +656,19 @@ pub fn diagnose(input: &VerdictInput) -> Verdict {
             "去「PG 会话」页找 idle in transaction / 长查询，确认是否有慢 SQL 占连接".into(),
             "确认 WORKFLOW_DB_STATEMENT_TIMEOUT_MS 已生效（默认 30s）".into(),
         ];
+        let mut hints_coded = vec![
+            json!({"code": "verdicthint_pool_reset", "params": {}}),
+            json!({"code": "verdicthint_check_pg_sessions", "params": {}}),
+            json!({"code": "verdicthint_check_statement_timeout", "params": {}}),
+        ];
         if let Some(env) = input.env_override {
             hints.insert(
                 1,
                 format!("当前 TENANT_DB_MAX_CONNECTIONS={}，可调大后重启进程", env),
+            );
+            hints_coded.insert(
+                1,
+                json!({"code": "verdicthint_env_override_present", "params": {"env": env}}),
             );
         } else {
             hints.insert(
@@ -656,26 +678,46 @@ pub fn diagnose(input: &VerdictInput) -> Verdict {
                     input.app_max
                 ),
             );
+            hints_coded.insert(
+                1,
+                json!({"code": "verdicthint_env_override_absent", "params": {"app_max": input.app_max}}),
+            );
         }
-        let summary = if pg_usage < 50.0 {
-            format!(
-                "应用连接池已满 ({}/{})，PG 侧健康 ({}/{}) — 瓶颈在 PlaneOS 池",
-                input.app_in_use, input.app_max, input.pg_instance_backends, input.pg_max
+        let (summary, summary_code) = if pg_usage < 50.0 {
+            (
+                format!(
+                    "应用连接池已满 ({}/{})，PG 侧健康 ({}/{}) — 瓶颈在 PlaneOS 池",
+                    input.app_in_use, input.app_max, input.pg_instance_backends, input.pg_max
+                ),
+                "verdict_app_pool_saturated_pg_ok",
             )
         } else {
-            format!(
-                "应用连接池已满 ({}/{})，且 PG 实例连接偏高 ({}/{})",
-                input.app_in_use, input.app_max, input.pg_instance_backends, input.pg_max
+            (
+                format!(
+                    "应用连接池已满 ({}/{})，且 PG 实例连接偏高 ({}/{})",
+                    input.app_in_use, input.app_max, input.pg_instance_backends, input.pg_max
+                ),
+                "verdict_app_pool_saturated_pg_high",
             )
         };
+        let summary_params = json!({
+            "app_in_use": input.app_in_use,
+            "app_max": input.app_max,
+            "pg_instance_backends": input.pg_instance_backends,
+            "pg_max": input.pg_max,
+        });
         return Verdict {
             level: VerdictLevel::Critical,
             summary,
             hints,
+            summary_code: summary_code.to_string(),
+            summary_params,
+            hints_coded,
         };
     }
 
     if pg_usage > 90.0 {
+        let pg_usage_fmt = format!("{:.0}", pg_usage);
         return Verdict {
             level: VerdictLevel::Critical,
             summary: format!(
@@ -686,11 +728,22 @@ pub fn diagnose(input: &VerdictInput) -> Verdict {
                 "检查是否有连接泄漏或其它客户端占满 max_connections".into(),
                 "在 PG 会话页按耗时排序，终止异常长会话".into(),
             ],
+            summary_code: "verdict_pg_near_limit".to_string(),
+            summary_params: json!({
+                "pg_instance_backends": input.pg_instance_backends,
+                "pg_max": input.pg_max,
+                "pg_usage": pg_usage_fmt,
+            }),
+            hints_coded: vec![
+                json!({"code": "verdicthint_check_leak_or_other_clients", "params": {}}),
+                json!({"code": "verdicthint_kill_long_sessions", "params": {}}),
+            ],
         };
     }
 
     if let Some(secs) = input.longest_idle_in_transaction_seconds {
         if secs > 60.0 {
+            let secs_fmt = format!("{:.0}", secs);
             return Verdict {
                 level: VerdictLevel::Warn,
                 summary: format!(
@@ -700,6 +753,12 @@ pub fn diagnose(input: &VerdictInput) -> Verdict {
                 hints: vec![
                     "去「PG 会话」页找到 idle in transaction 会话并排查来源".into(),
                     "确认 idle_in_transaction_session_timeout 是否已配置".into(),
+                ],
+                summary_code: "verdict_idle_in_transaction".to_string(),
+                summary_params: json!({"secs": secs_fmt}),
+                hints_coded: vec![
+                    json!({"code": "verdicthint_find_idle_in_tx", "params": {}}),
+                    json!({"code": "verdicthint_check_idle_timeout_setting", "params": {}}),
                 ],
             };
         }
@@ -716,6 +775,16 @@ pub fn diagnose(input: &VerdictInput) -> Verdict {
                 "关注下方趋势曲线是否持续上升".into(),
                 "检查慢查询与 LISTEN 独立连接占比".into(),
             ],
+            summary_code: "verdict_app_pool_usage_high".to_string(),
+            summary_params: json!({
+                "app_in_use": input.app_in_use,
+                "app_max": input.app_max,
+                "app_usage": app_usage,
+            }),
+            hints_coded: vec![
+                json!({"code": "verdicthint_watch_trend", "params": {}}),
+                json!({"code": "verdicthint_check_slow_query_listen_ratio", "params": {}}),
+            ],
         };
     }
 
@@ -727,6 +796,9 @@ pub fn diagnose(input: &VerdictInput) -> Verdict {
                 input.dedicated_connections
             ),
             hints: vec!["检查 pg_listen_hub 是否对同一 database_id 重复建连".into()],
+            summary_code: "verdict_listen_leak".to_string(),
+            summary_params: json!({"dedicated_connections": input.dedicated_connections}),
+            hints_coded: vec![json!({"code": "verdicthint_check_listen_hub_dup", "params": {}})],
         };
     }
 
@@ -738,6 +810,11 @@ pub fn diagnose(input: &VerdictInput) -> Verdict {
                 input.dedicated_connections
             ),
             hints: vec!["检查 sse_notify_bridges 与 notify 工作流是否有冗余 channel".into()],
+            summary_code: "verdict_listen_many".to_string(),
+            summary_params: json!({"dedicated_connections": input.dedicated_connections}),
+            hints_coded: vec![
+                json!({"code": "verdicthint_check_sse_notify_redundant", "params": {}}),
+            ],
         };
     }
 
@@ -752,6 +829,12 @@ pub fn diagnose(input: &VerdictInput) -> Verdict {
                 "结合应用池水位与 PG 会话判断是否仍在发生".into(),
                 "开启自动刷新观察趋势".into(),
             ],
+            summary_code: "verdict_acquire_failures".to_string(),
+            summary_params: json!({"acquire_failures_for_db": input.acquire_failures_for_db}),
+            hints_coded: vec![
+                json!({"code": "verdicthint_cross_check_watermark_session", "params": {}}),
+                json!({"code": "verdicthint_enable_auto_refresh", "params": {}}),
+            ],
         };
     }
 
@@ -760,21 +843,40 @@ pub fn diagnose(input: &VerdictInput) -> Verdict {
             level: VerdictLevel::Warn,
             summary: format!("有 {} 个会话在等锁", input.waiting_on_locks),
             hints: vec!["查看 /api/monitor/locks 或查询性能页的锁等待".into()],
+            summary_code: "verdict_lock_waits".to_string(),
+            summary_params: json!({"waiting_on_locks": input.waiting_on_locks}),
+            hints_coded: vec![json!({"code": "verdicthint_check_locks_page", "params": {}})],
         };
     }
 
-    let summary = if input.app_loaded {
-        format!(
-            "一切正常 — 应用池 {}/{}，PG {}/{}",
-            input.app_in_use, input.app_max, input.pg_instance_backends, input.pg_max
+    let (summary, summary_code, summary_params) = if input.app_loaded {
+        (
+            format!(
+                "一切正常 — 应用池 {}/{}，PG {}/{}",
+                input.app_in_use, input.app_max, input.pg_instance_backends, input.pg_max
+            ),
+            "verdict_ok",
+            json!({
+                "app_in_use": input.app_in_use,
+                "app_max": input.app_max,
+                "pg_instance_backends": input.pg_instance_backends,
+                "pg_max": input.pg_max,
+            }),
         )
     } else {
-        "一切正常 — 该库业务池尚未加载（尚无请求命中）".to_string()
+        (
+            "一切正常 — 该库业务池尚未加载（尚无请求命中）".to_string(),
+            "verdict_ok_not_loaded",
+            json!({}),
+        )
     };
     Verdict {
         level: VerdictLevel::Ok,
         summary,
         hints: vec![],
+        summary_code: summary_code.to_string(),
+        summary_params,
+        hints_coded: vec![],
     }
 }
 
@@ -789,8 +891,10 @@ pub async fn get_pool_health(
     let database_id = require_monitor_access(&main_pool, &claims, db_id).await?;
     // 绝不能回退到管理库：否则 pg_stat_activity 会是平台元数据，结论完全误导。
     let tenant_pool = dynamic_pool.as_ref().map(|Extension(p)| p).ok_or_else(|| {
-        AppError::InvalidQuery(
-            "无法加载目标数据库连接池，请确认 X-Database-Id 有效且库可连".to_string(),
+        AppError::validation(
+            "mon_pool_load_failed",
+            "无法加载目标数据库连接池，请确认 X-Database-Id 有效且库可连",
+            serde_json::json!({}),
         )
     })?;
 

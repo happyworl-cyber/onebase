@@ -32,7 +32,7 @@ pub fn parse_kafka_trigger_config(
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
-        .unwrap_or_else(|| format!("onebase-wf-{workflow_id}"));
+        .unwrap_or_else(|| format!("planeos-wf-{workflow_id}"));
 
     let auto_offset_reset = trigger_config
         .get("auto_offset_reset")
@@ -103,7 +103,7 @@ mod tests {
     fn default_group_id_uses_workflow_id() {
         let cfg = parse_kafka_trigger_config(42, &json!({ "connection_id": 1, "topic": "orders" }))
             .unwrap();
-        assert_eq!(cfg.group_id, "onebase-wf-42");
+        assert_eq!(cfg.group_id, "planeos-wf-42");
         assert_eq!(cfg.auto_offset_reset, "latest");
         assert_eq!(cfg.value_format, "json");
     }

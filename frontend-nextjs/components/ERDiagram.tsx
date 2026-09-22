@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState, useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import ReactFlow, {
   Node,
   Edge,
@@ -41,6 +42,7 @@ interface ERDiagramProps {
 
 // 自定义表节点组件
 function TableNodeComponent({ data }: { data: TableNode }) {
+  const t = useTranslations('erDiagram')
   return (
     <div className="bg-white border-2 border-gray-300 rounded-lg shadow-md min-w-[250px] relative">
       {/* 连接点 - 四个方向都可以连接 */}
@@ -67,7 +69,7 @@ function TableNodeComponent({ data }: { data: TableNode }) {
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2 flex-1 min-w-0">
                 {col.is_primary_key && (
-                  <i className="fas fa-key text-yellow-500 text-xs flex-shrink-0" title="主键"></i>
+                  <i className="fas fa-key text-yellow-500 text-xs flex-shrink-0" title={t('primaryKey')}></i>
                 )}
                 <span className="text-xs font-mono text-gray-900 truncate">
                   {col.column_name}
@@ -81,7 +83,7 @@ function TableNodeComponent({ data }: { data: TableNode }) {
         ))}
         {data.columns.length > 10 && (
           <div className="px-3 py-1.5 text-center text-xs text-gray-400">
-            ... 还有 {data.columns.length - 10} 个字段
+            {t('moreFields', { n: data.columns.length - 10 })}
           </div>
         )}
       </div>
@@ -90,6 +92,7 @@ function TableNodeComponent({ data }: { data: TableNode }) {
 }
 
 export default function ERDiagram({ tables, foreignKeys }: ERDiagramProps) {
+  const t = useTranslations('erDiagram')
   // 使用 useMemo 避免每次渲染都创建新的 nodeTypes 对象
   const nodeTypes = useMemo(() => ({
     tableNode: TableNodeComponent,
@@ -212,7 +215,7 @@ export default function ERDiagram({ tables, foreignKeys }: ERDiagramProps) {
         
         {/* 布局切换面板 */}
         <Panel position="top-right" className="bg-white rounded-lg shadow-lg p-2 space-y-1">
-          <div className="text-xs font-semibold text-gray-700 px-2 py-1">布局</div>
+          <div className="text-xs font-semibold text-gray-700 px-2 py-1">{t('layout')}</div>
           <button
             onClick={() => handleLayoutChange('grid')}
             className={`w-full px-3 py-1.5 text-xs rounded transition-colors ${
@@ -221,7 +224,7 @@ export default function ERDiagram({ tables, foreignKeys }: ERDiagramProps) {
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
             }`}
           >
-            <i className="fas fa-th mr-2"></i>网格
+            <i className="fas fa-th mr-2"></i>{t('layoutGrid')}
           </button>
           <button
             onClick={() => handleLayoutChange('circular')}
@@ -231,7 +234,7 @@ export default function ERDiagram({ tables, foreignKeys }: ERDiagramProps) {
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
             }`}
           >
-            <i className="fas fa-circle-notch mr-2"></i>环形
+            <i className="fas fa-circle-notch mr-2"></i>{t('layoutCircular')}
           </button>
           <button
             onClick={() => handleLayoutChange('hierarchical')}
@@ -241,7 +244,7 @@ export default function ERDiagram({ tables, foreignKeys }: ERDiagramProps) {
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
             }`}
           >
-            <i className="fas fa-sitemap mr-2"></i>层级
+            <i className="fas fa-sitemap mr-2"></i>{t('layoutHierarchical')}
           </button>
         </Panel>
 
@@ -251,20 +254,20 @@ export default function ERDiagram({ tables, foreignKeys }: ERDiagramProps) {
             <div className="flex items-center space-x-2 text-xs">
               <i className="fas fa-table text-blue-500"></i>
               <span className="text-gray-700">
-                {tables.length} 张表
+                {t('tablesCount', { n: tables.length })}
               </span>
             </div>
             <div className="flex items-center space-x-2 text-xs">
               <i className="fas fa-link text-green-500"></i>
               <span className="text-gray-700">
-                {foreignKeys.length} 个关系
+                {t('relationsCount', { n: foreignKeys.length })}
               </span>
             </div>
             {foreignKeys.length === 0 && tables.length > 0 && (
               <div className="mt-3 pt-2 border-t border-gray-200">
                 <div className="text-xs text-amber-600 flex items-start space-x-1">
                   <i className="fas fa-info-circle mt-0.5 flex-shrink-0"></i>
-                  <span>未检测到外键约束</span>
+                  <span>{t('noForeignKeys')}</span>
                 </div>
               </div>
             )}

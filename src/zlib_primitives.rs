@@ -1,6 +1,6 @@
 //! RFC 1950 zlib 压缩 / 解压，供 Lua `zlib.*` builtins 使用。
 //!
-//! JS 工作流不走本模块：`onebase-runtime` 直接调 Node `zlib.deflateSync`。
+//! JS 工作流不走本模块：`planeos-runtime` 直接调 Node `zlib.deflateSync`。
 
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
@@ -138,7 +138,7 @@ mod tests {
             return;
         }
         let runtime =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("js-runtime/onebase-runtime/index.js");
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("js-runtime/planeos-runtime/index.js");
         let output = Command::new("node")
             .arg("--require")
             .arg(&runtime)
@@ -158,13 +158,13 @@ mod tests {
                   process.stderr.write('binary mismatch');
                   process.exit(1);
                 }
-                if (process.env.ONEBASE_HOST_SOCK) {
+                if (process.env.PLANEOS_HOST_SOCK) {
                   process.stderr.write('host sock should be unset');
                   process.exit(1);
                 }
                 "#,
             )
-            .env_remove("ONEBASE_HOST_SOCK")
+            .env_remove("PLANEOS_HOST_SOCK")
             .output()
             .expect("node starts");
         assert!(

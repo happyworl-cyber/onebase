@@ -4,12 +4,12 @@
 -- 此迁移在【业务库】（即 tenant_databases 里挂载的库）执行，
 -- 不在 management 库里执行。
 --
--- 核心：Onebase 每次请求会在事务里执行
+-- 核心：PlaneOS 每次请求会在事务里执行
 --      SELECT set_config('app.current_user_id', '<jwt.sub>', true);
 -- 业务表的 RLS POLICY 可以直接调用 app.current_user_id() 拿到当前用户 ID，
 -- 写起来比 NULLIF(current_setting(...), '')::int 更短、更可读。
 --
--- 注意：迁移管理目前是 Onebase 容器启动时自动跑控制库的 SQL；
+-- 注意：迁移管理目前是 PlaneOS 容器启动时自动跑控制库的 SQL；
 --      业务库的 RLS 启用 / POLICY 由 DBA 手动 / CI 流水线在业务库执行。
 --      本文件可以直接 psql -f 到业务库，**不会**对控制库产生影响。
 
@@ -30,7 +30,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION app.current_user_id() IS
-    'Onebase 当前请求 JWT 用户 ID；未登录或匿名（API Key）返回 NULL';
+    'PlaneOS 当前请求 JWT 用户 ID；未登录或匿名（API Key）返回 NULL';
 
 -- 给所有可登录角色 USAGE 权限（business DB 里的应用角色都需要能调用）
 GRANT USAGE ON SCHEMA app TO PUBLIC;

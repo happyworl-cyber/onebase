@@ -33,7 +33,13 @@ async fn require_admin_for_existing_webhook(
         .bind(webhook_id)
         .fetch_optional(pool)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("Webhook {} 不存在", webhook_id)))?;
+        .ok_or_else(|| {
+            AppError::not_found_coded(
+                "webhook_not_found",
+                format!("Webhook {} 不存在", webhook_id),
+                serde_json::json!({ "id": webhook_id }),
+            )
+        })?;
     let tenant_id: i32 = row.get("tenant_id");
     require_webhook_admin(pool, claims, tenant_id).await?;
     Ok(tenant_id)
@@ -210,7 +216,11 @@ pub async fn update_webhook(
     .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("Webhook {} 不存在", id)));
+        return Err(AppError::not_found_coded(
+            "webhook_not_found",
+            format!("Webhook {} 不存在", id),
+            serde_json::json!({ "id": id }),
+        ));
     }
 
     tracing::info!(
@@ -235,7 +245,11 @@ pub async fn delete_webhook(
         .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("Webhook {} 不存在", id)));
+        return Err(AppError::not_found_coded(
+            "webhook_not_found",
+            format!("Webhook {} 不存在", id),
+            serde_json::json!({ "id": id }),
+        ));
     }
 
     tracing::info!(
@@ -258,7 +272,13 @@ pub async fn test_webhook(
         .bind(id)
         .fetch_optional(&pool)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("Webhook {} 不存在", id)))?;
+        .ok_or_else(|| {
+            AppError::not_found_coded(
+                "webhook_not_found",
+                format!("Webhook {} 不存在", id),
+                serde_json::json!({ "id": id }),
+            )
+        })?;
 
     let url: String = row.get("url");
     let headers: serde_json::Value = row.get("headers");

@@ -295,6 +295,71 @@ fn record_workflow_op(
         Some(t) => t,
         None => return,
     };
+    // 取 "v数字" 结尾的版本号（恢复/发布摘要专用）。
+    let trailing_version = || -> String {
+        summary
+            .rfind('v')
+            .map(|i| {
+                summary[i + 1..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect::<String>()
+            })
+            .unwrap_or_default()
+    };
+    let (summary_code, summary_params) = if summary.contains("（批量）") {
+        let code = if summary.starts_with("启用") {
+            "oplog_workflow_batch_enable"
+        } else if summary.starts_with("禁用") {
+            "oplog_workflow_batch_disable"
+        } else if summary.starts_with("删除") {
+            "oplog_workflow_batch_delete"
+        } else if summary.starts_with("移动") {
+            "oplog_workflow_batch_move"
+        } else {
+            "oplog_generic"
+        };
+        (code, json!({ "name": wf.name }))
+    } else if summary.contains("复制工作流为") {
+        ("oplog_workflow_duplicate", json!({ "name": wf.name }))
+    } else if summary.starts_with("通过 MCP 创建工作流") {
+        ("oplog_workflow_create_mcp", json!({ "name": wf.name }))
+    } else if summary.starts_with("创建工作流") {
+        ("oplog_workflow_create", json!({ "name": wf.name }))
+    } else if summary.starts_with("删除工作流") {
+        ("oplog_workflow_delete", json!({ "name": wf.name }))
+    } else if summary.starts_with("导出工作流") {
+        ("oplog_workflow_export", json!({ "name": wf.name }))
+    } else if summary.starts_with("手动触发工作流") {
+        ("oplog_workflow_trigger", json!({ "name": wf.name }))
+    } else if summary.starts_with("恢复工作流") {
+        (
+            "oplog_workflow_restore_version",
+            json!({ "name": wf.name, "version": trailing_version() }),
+        )
+    } else if summary.starts_with("发布工作流") {
+        (
+            "oplog_workflow_publish",
+            json!({ "name": wf.name, "version": trailing_version() }),
+        )
+    } else if summary.starts_with("修改工作流") {
+        ("oplog_workflow_modify", json!({ "name": wf.name }))
+    } else if summary.starts_with("启用工作流") {
+        ("oplog_workflow_enable", json!({ "name": wf.name }))
+    } else if summary.starts_with("停用工作流") {
+        ("oplog_workflow_disable", json!({ "name": wf.name }))
+    } else if summary.contains("配置") {
+        ("oplog_workflow_update_config", json!({ "name": wf.name }))
+    } else {
+        (
+            "oplog_generic",
+            json!({
+                "verb": action,
+                "resource_type": operation_log::resource_type::WORKFLOW,
+                "resource_name": wf.name,
+            }),
+        )
+    };
     let mut input = OperationLogInput::new(
         tenant_id,
         Actor::User {
@@ -312,7 +377,8 @@ fn record_workflow_op(
         wf.name.clone(),
         Some(wf.id.to_string()),
     )
-    .detail(json!({ "slug": wf.slug, "database_id": wf.database_id }));
+    .detail(json!({ "slug": wf.slug, "database_id": wf.database_id }))
+    .summary_code(summary_code, summary_params);
     if let Some(c) = change {
         input = input.change(c);
     }
@@ -538,8 +604,10 @@ fn normalize_alert_webhook_url(url: Option<&str>) -> Result<Option<String>> {
         return Ok(None);
     }
     if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "wf_alert_webhook_url_scheme",
             "告警 Webhook URL 必须以 http:// 或 https:// 开头".to_string(),
+            serde_json::json!({}),
         ));
     }
     Ok(Some(trimmed.to_string()))
@@ -548,8 +616,10 @@ fn normalize_alert_webhook_url(url: Option<&str>) -> Result<Option<String>> {
 fn validate_alert_webhook_template(template: Option<&Value>) -> Result<()> {
     if let Some(v) = template {
         if !v.is_object() {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "wf_alert_webhook_template_type",
                 "告警 Webhook 模板必须是 JSON object".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -559,8 +629,10 @@ fn validate_alert_webhook_template(template: Option<&Value>) -> Result<()> {
 fn validate_alert_throttle_hours(hours: Option<i32>) -> Result<()> {
     if let Some(h) = hours {
         if !(0..=720).contains(&h) {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "wf_alert_throttle_hours_range",
                 "告警限流小时数必须在 0 到 720 之间".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -599,7 +671,13 @@ pub(crate) async fn fetch_workflow_for_admin(
             .bind(id)
             .fetch_optional(pool)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("工作流 {} 不存在", id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_coded(
+                    "wf_workflow_not_found",
+                    format!("工作流 {} 不存在", id),
+                    serde_json::json!({ "id": id }),
+                )
+            })?;
     require_admin_for_workflow(pool, claims, &workflow).await?;
     Ok(workflow)
 }
@@ -658,15 +736,27 @@ fn publish_version_note(req_note: Option<&str>, draft_note: Option<&str>) -> Opt
 
 fn publish_missing_draft_error(published_version: Option<i32>) -> AppError {
     if published_version.is_none() {
-        AppError::Conflict("没有可发布的定义".into())
+        AppError::conflict_coded(
+            "wf_publish_no_draft",
+            "没有可发布的定义".to_string(),
+            serde_json::json!({}),
+        )
     } else {
-        AppError::Conflict("没有未发布的修改".into())
+        AppError::conflict_coded(
+            "wf_publish_no_unpublished_changes",
+            "没有未发布的修改".to_string(),
+            serde_json::json!({}),
+        )
     }
 }
 
 fn require_published_to_trigger(published_version: Option<i32>) -> Result<()> {
     if published_version.is_none() {
-        return Err(AppError::Conflict("工作流尚未发布".into()));
+        return Err(AppError::conflict_coded(
+            "wf_trigger_not_published",
+            "工作流尚未发布".to_string(),
+            serde_json::json!({}),
+        ));
     }
     Ok(())
 }
@@ -684,10 +774,11 @@ async fn resolve_tenant_for_workflow_input(
             let actual_tenant_id =
                 crate::permissions::lookup_tenant_for_database(pool, database_id).await?;
             if actual_tenant_id != tenant_id {
-                return Err(AppError::InvalidQuery(format!(
-                    "database_id={} 不属于 tenant_id={}",
-                    database_id, tenant_id
-                )));
+                return Err(AppError::validation(
+                    "wf_database_tenant_mismatch",
+                    format!("database_id={} 不属于 tenant_id={}", database_id, tenant_id),
+                    serde_json::json!({ "database_id": database_id, "tenant_id": tenant_id }),
+                ));
             }
             crate::permissions::require_database_member(pool, claims, database_id).await?;
             Ok(Some(actual_tenant_id))
@@ -1662,8 +1753,13 @@ fn validate_cron_in_trigger_config(cfg: Option<&Value>) -> Result<()> {
     if schedule.is_empty() {
         return Ok(());
     }
-    crate::workflow_cron_trigger::validate_cron(schedule)
-        .map_err(|e| AppError::InvalidQuery(format!("cron 表达式非法：{}", e)))
+    crate::workflow_cron_trigger::validate_cron(schedule).map_err(|e| {
+        AppError::validation(
+            "wf_cron_expression_invalid",
+            format!("cron 表达式非法：{}", e),
+            serde_json::json!({ "detail": e }),
+        )
+    })
 }
 
 fn spawn_javascript_deps_install(workflow: &Workflow) {
@@ -1718,27 +1814,39 @@ fn spawn_python_deps_install(workflow: &Workflow) {
 pub async fn create_workflow(
     State(pool): State<PgPool>,
     axum::Extension(claims): axum::Extension<Claims>,
-    license_state: Option<axum::Extension<crate::license::LicenseState>>,
+    license_state: Option<axum::Extension<planeos::license::LicenseState>>,
     audit_sink: Option<axum::Extension<AuditDetailSink>>,
     op_source: Option<axum::Extension<OpSourceHint>>,
     Json(req): Json<CreateWorkflowRequest>,
 ) -> Result<(StatusCode, Json<Value>)> {
     if req.name.is_empty() {
-        return Err(AppError::InvalidQuery("工作流名称不能为空".to_string()));
+        return Err(AppError::validation(
+            "wf_name_required",
+            "工作流名称不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if req.slug.is_empty() {
-        return Err(AppError::InvalidQuery("工作流 slug 不能为空".to_string()));
+        return Err(AppError::validation(
+            "wf_slug_required",
+            "工作流 slug 不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if !is_valid_slug(&req.slug) {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "wf_slug_invalid_chars",
             "slug 只能包含小写字母、数字、下划线、连字符和斜杠（/）".to_string(),
+            serde_json::json!({}),
         ));
     }
 
     let trigger_type = req.trigger_type.unwrap_or_else(|| "endpoint".to_string());
     if !["endpoint", "hook", "cron", "manual", "notify", "kafka"].contains(&trigger_type.as_str()) {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "wf_trigger_type_invalid",
             "trigger_type 必须是 endpoint / hook / cron / manual / notify / kafka".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -1766,7 +1874,11 @@ pub async fn create_workflow(
     workflow_engine::validate_definition(&def)?;
 
     if crate::workflow_draft::draft_slug_taken(&pool, req.database_id, &req.slug, None).await? {
-        return Err(AppError::Conflict("slug 已被占用".into()));
+        return Err(AppError::conflict_coded(
+            "wf_slug_taken",
+            "slug 已被占用".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let resolved_tenant_id =
@@ -1902,8 +2014,10 @@ pub async fn update_workflow(
 
     if let Some(ref slug) = req.slug {
         if !is_valid_slug(slug) {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "wf_slug_invalid_chars",
                 "slug 只能包含小写字母、数字、下划线、连字符和斜杠（/）".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -1911,8 +2025,10 @@ pub async fn update_workflow(
         if !["endpoint", "hook", "cron", "manual", "notify", "kafka"]
             .contains(&trigger_type.as_str())
         {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "wf_trigger_type_invalid",
                 "trigger_type 必须是 endpoint / hook / cron / manual / notify / kafka".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -1939,8 +2055,10 @@ pub async fn update_workflow(
             .unwrap_or(false);
     if has_patch {
         if req.nodes.is_some() {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "wf_node_patch_conflicts_with_nodes",
                 "node_patch/remove_node_ids 不能与全量 nodes 同时使用".to_string(),
+                serde_json::json!({}),
             ));
         }
         let merged = merge_node_patch(
@@ -2020,7 +2138,11 @@ pub async fn update_workflow(
                 if crate::workflow_draft::draft_slug_taken(&pool, database_id, slug, Some(id))
                     .await?
                 {
-                    return Err(AppError::Conflict("slug 已被占用".into()));
+                    return Err(AppError::conflict_coded(
+                        "wf_slug_taken",
+                        "slug 已被占用".to_string(),
+                        serde_json::json!({}),
+                    ));
                 }
             }
         }
@@ -2193,7 +2315,11 @@ pub async fn delete_workflow(
         .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("工作流 {} 不存在", id)));
+        return Err(AppError::not_found_coded(
+            "wf_workflow_not_found",
+            format!("工作流 {} 不存在", id),
+            serde_json::json!({ "id": id }),
+        ));
     }
 
     audit_workflow(
@@ -2229,8 +2355,10 @@ fn parse_batch_action(action: &str) -> Result<&'static str> {
         "disable" => Ok("disable"),
         "delete" => Ok("delete"),
         "move" => Ok("move"),
-        _ => Err(AppError::InvalidQuery(
+        _ => Err(AppError::validation(
+            "wf_batch_action_invalid",
             "action 必须是 enable / disable / delete / move".to_string(),
+            serde_json::json!({}),
         )),
     }
 }
@@ -2255,7 +2383,11 @@ pub async fn batch_workflows(
 ) -> Result<Json<Value>> {
     let action = parse_batch_action(&req.action)?;
     if req.ids.is_empty() {
-        return Err(AppError::InvalidQuery("ids 不能为空".to_string()));
+        return Err(AppError::validation(
+            "wf_batch_ids_empty",
+            "ids 不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     // 去重并保持原始顺序
@@ -2268,10 +2400,11 @@ pub async fn batch_workflows(
         .collect();
 
     if ids.len() > BATCH_MAX_IDS {
-        return Err(AppError::InvalidQuery(format!(
-            "单次批量操作不能超过 {} 个工作流",
-            BATCH_MAX_IDS
-        )));
+        return Err(AppError::validation(
+            "wf_batch_ids_too_many",
+            format!("单次批量操作不能超过 {} 个工作流", BATCH_MAX_IDS),
+            serde_json::json!({ "max": BATCH_MAX_IDS }),
+        ));
     }
 
     // 一次查出全部目标，逐条校验管理员权限
@@ -2295,13 +2428,10 @@ pub async fn batch_workflows(
     }
 
     let move_target = if action == "move" {
-        Some(
-            workflow_taxonomy::resolve_batch_move_target(
-                req.department.as_deref(),
-                req.category.as_deref(),
-            )
-            .map_err(AppError::InvalidQuery)?,
-        )
+        Some(workflow_taxonomy::resolve_batch_move_target(
+            req.department.as_deref(),
+            req.category.as_deref(),
+        )?)
     } else {
         None
     };
@@ -2523,13 +2653,18 @@ pub async fn import_workflows(
     Json(req): Json<ImportWorkflowsRequest>,
 ) -> Result<Json<Value>> {
     if req.items.is_empty() {
-        return Err(AppError::InvalidQuery("items 不能为空".to_string()));
+        return Err(AppError::validation(
+            "wf_import_items_empty",
+            "items 不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if req.items.len() > IMPORT_MAX_ITEMS {
-        return Err(AppError::InvalidQuery(format!(
-            "单次批量导入不能超过 {} 个文件",
-            IMPORT_MAX_ITEMS
-        )));
+        return Err(AppError::validation(
+            "wf_import_items_too_many",
+            format!("单次批量导入不能超过 {} 个文件", IMPORT_MAX_ITEMS),
+            serde_json::json!({ "max": IMPORT_MAX_ITEMS }),
+        ));
     }
 
     // 统一目标库；权限只校验一次（导入全部落到当前工作区库）。
@@ -2616,7 +2751,15 @@ pub async fn import_workflows(
                 "succeeded": succeeded.len(),
                 "failed": failed.len(),
                 "total": req.items.len(),
-            })),
+            }))
+            .summary_code(
+                "oplog_workflow_import",
+                json!({
+                    "succeeded": succeeded.len(),
+                    "failed": failed.len(),
+                    "total": req.items.len(),
+                }),
+            ),
         );
     }
 
@@ -2863,11 +3006,17 @@ async fn import_one_workflow(
 ) -> Result<Value> {
     let wf = &item.workflow;
     if wf.name.trim().is_empty() {
-        return Err(AppError::InvalidQuery("工作流名称不能为空".to_string()));
+        return Err(AppError::validation(
+            "wf_name_required",
+            "工作流名称不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if !is_valid_slug(&item.slug) {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "wf_slug_invalid_chars",
             "slug 只能包含小写字母、数字、下划线、连字符和斜杠（/）".to_string(),
+            serde_json::json!({}),
         ));
     }
     let trigger_type = wf
@@ -2875,8 +3024,10 @@ async fn import_one_workflow(
         .clone()
         .unwrap_or_else(|| "endpoint".to_string());
     if !["endpoint", "hook", "cron", "manual", "notify", "kafka"].contains(&trigger_type.as_str()) {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "wf_trigger_type_invalid",
             "trigger_type 必须是 endpoint / hook / cron / manual / notify / kafka".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -2892,7 +3043,13 @@ async fn import_one_workflow(
         .fetch_optional(pool)
         .await
         .map_err(map_workflow_write_err)?
-        .ok_or_else(|| AppError::NotFound(format!("待覆盖的工作流 slug='{}' 不存在", item.slug)))?;
+        .ok_or_else(|| {
+            AppError::not_found_coded(
+                "wf_import_overwrite_target_not_found",
+                format!("待覆盖的工作流 slug='{}' 不存在", item.slug),
+                serde_json::json!({ "slug": item.slug }),
+            )
+        })?;
         require_admin_for_workflow(pool, claims, &ex).await?;
         let editor = crate::workflow_draft::editor_view(
             ex.clone(),
@@ -2965,7 +3122,11 @@ async fn import_one_workflow(
             // 定义只写草稿；告警若随文件提供则即时写主表。线上 nodes/edges /
             // is_enabled / published_version / id 保持不变，且不打版本快照。
             let (existing, _) = existing_for_overwrite.ok_or_else(|| {
-                AppError::NotFound(format!("待覆盖的工作流 slug='{}' 不存在", item.slug))
+                AppError::not_found_coded(
+                    "wf_import_overwrite_target_not_found",
+                    format!("待覆盖的工作流 slug='{}' 不存在", item.slug),
+                    serde_json::json!({ "slug": item.slug }),
+                )
             })?;
             let draft = import_draft(existing.id);
             let mut tx = pool.begin().await?;
@@ -3043,10 +3204,11 @@ async fn import_one_workflow(
                 "warnings": ds_warnings,
             }))
         }
-        other => Err(AppError::InvalidQuery(format!(
-            "未知的 action：{}（应为 create / overwrite / rename）",
-            other
-        ))),
+        other => Err(AppError::validation(
+            "wf_import_action_invalid",
+            format!("未知的 action：{}（应为 create / overwrite / rename）", other),
+            serde_json::json!({ "action": other }),
+        )),
     }
 }
 
@@ -3157,7 +3319,11 @@ pub async fn trigger_workflow(
 ) -> Result<(StatusCode, Json<Value>)> {
     let workflow = fetch_workflow_for_admin(&pool, &claims, id).await?;
     if !workflow.is_enabled {
-        return Err(AppError::InvalidQuery("工作流已禁用，无法触发".to_string()));
+        return Err(AppError::validation(
+            "wf_trigger_disabled",
+            "工作流已禁用，无法触发".to_string(),
+            serde_json::json!({}),
+        ));
     }
     require_published_to_trigger(workflow.published_version)?;
 
@@ -3252,11 +3418,19 @@ pub async fn qa_workflow(
         resolve_tenant_for_workflow_input(&pool, &claims, req.database_id, req.tenant_id).await?;
     let trigger = req.trigger_type.as_deref().unwrap_or("manual");
     let schema = req.input_schema.as_ref().filter(|v| !v.is_null());
-    let mut findings = onebase::workflow_qa::lint_unsaved(trigger, schema, &req.nodes, &req.edges)
-        .map_err(AppError::InvalidQuery)?;
+    let mut findings = planeos::workflow_qa::lint_unsaved(trigger, schema, &req.nodes, &req.edges)
+        .map_err(|e| match e {
+            planeos::error::AppError::Coded {
+                status,
+                code,
+                message,
+                params,
+            } => AppError::coded(status, code, message, params),
+            other => AppError::Internal(other.to_string()),
+        })?;
     let slug = req.slug.as_deref().unwrap_or("").trim();
     if !slug.is_empty() {
-        let wf = onebase::workflow_qa::WorkflowSnapshot {
+        let wf = planeos::workflow_qa::WorkflowSnapshot {
             id: req.id.unwrap_or(0),
             slug: slug.to_string(),
             name: String::new(),
@@ -3266,7 +3440,7 @@ pub async fn qa_workflow(
             nodes: req.nodes,
             edges: req.edges,
         };
-        onebase::workflow_qa::attach_call_graph(&pool, &wf, tenant_id, None, &mut findings).await;
+        planeos::workflow_qa::attach_call_graph(&pool, &wf, tenant_id, None, &mut findings).await;
     }
     Ok(Json(json!({ "findings": findings })))
 }
@@ -3483,7 +3657,13 @@ pub async fn get_workflow_run_detail(
     .bind(id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("运行记录 {} 不存在", run_id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "wf_run_not_found",
+            format!("运行记录 {} 不存在", run_id),
+            serde_json::json!({ "run_id": run_id }),
+        )
+    })?;
 
     Ok(Json(json!(run)))
 }
@@ -3560,7 +3740,13 @@ pub async fn get_workflow_version(
     .bind(version)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("工作流 {} 不存在版本 {}", id, version)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "wf_version_not_found",
+            format!("工作流 {} 不存在版本 {}", id, version),
+            serde_json::json!({ "id": id, "version": version }),
+        )
+    })?;
 
     Ok(Json(json!({ "version": v })))
 }
@@ -3586,7 +3772,13 @@ pub async fn restore_workflow_version(
     .bind(version)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("工作流 {} 不存在版本 {}", id, version)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "wf_version_not_found",
+            format!("工作流 {} 不存在版本 {}", id, version),
+            serde_json::json!({ "id": id, "version": version }),
+        )
+    })?;
 
     let d = crate::workflow_draft::WorkflowDraft {
         workflow_id: id,
@@ -3610,7 +3802,11 @@ pub async fn restore_workflow_version(
     if crate::workflow_draft::draft_slug_taken(&pool, existing.database_id, &d.slug, Some(id))
         .await?
     {
-        return Err(AppError::Conflict("slug 已被占用".into()));
+        return Err(AppError::conflict_coded(
+            "wf_slug_taken",
+            "slug 已被占用".to_string(),
+            serde_json::json!({}),
+        ));
     }
     crate::workflow_draft::upsert_draft(&pool, &d).await?;
     let workflow = crate::workflow_draft::editor_view(existing.clone(), Some(d));
@@ -3661,7 +3857,13 @@ pub async fn publish_workflow(
     .bind(id)
     .fetch_optional(&mut *tx)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("工作流 {} 不存在", id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "wf_workflow_not_found",
+            format!("工作流 {} 不存在", id),
+            serde_json::json!({ "id": id }),
+        )
+    })?;
     let draft = crate::workflow_draft::fetch_draft_for_update(&mut *tx, id)
         .await?
         .ok_or_else(|| publish_missing_draft_error(existing.published_version))?;
@@ -3688,7 +3890,13 @@ pub async fn publish_workflow(
         .fetch_optional(&mut *tx)
         .await
         .map_err(map_workflow_write_err)?
-        .ok_or_else(|| AppError::NotFound(format!("工作流 {} 不存在", id)))?;
+        .ok_or_else(|| {
+            AppError::not_found_coded(
+                "wf_workflow_not_found",
+                format!("工作流 {} 不存在", id),
+                serde_json::json!({ "id": id }),
+            )
+        })?;
 
     let note = publish_version_note(req.version_note.as_deref(), draft.note.as_deref());
     let version =
@@ -3748,7 +3956,11 @@ pub async fn discard_workflow_draft(
     fetch_workflow_for_admin(&pool, &claims, id).await?;
     let n = crate::workflow_draft::delete_draft(&pool, id).await?;
     if n == 0 {
-        return Err(AppError::Conflict("没有可丢弃的草稿".into()));
+        return Err(AppError::conflict_coded(
+            "wf_no_draft_to_discard",
+            "没有可丢弃的草稿".to_string(),
+            serde_json::json!({}),
+        ));
     }
     let workflow = fetch_workflow_for_admin(&pool, &claims, id).await?;
     let workflow = crate::workflow_draft::editor_view(workflow, None);
@@ -3808,7 +4020,13 @@ async fn resolve_endpoint_caller(
         .bind(key)
         .fetch_optional(pool)
         .await?;
-        let row = row.ok_or_else(|| AppError::Unauthorized("API Key 无效或已过期".to_string()))?;
+        let row = row.ok_or_else(|| {
+            AppError::unauthorized_coded(
+                "wf_api_key_invalid_or_expired",
+                "API Key 无效或已过期".to_string(),
+                serde_json::json!({}),
+            )
+        })?;
         let key_database_id: i32 = row.get("database_id");
         let permissions: Value = row.try_get("permissions").unwrap_or_else(|_| json!({}));
         return Ok(EndpointCaller::ApiKey {
@@ -3821,8 +4039,10 @@ async fn resolve_endpoint_caller(
         return Ok(EndpointCaller::User(claims.0.clone()));
     }
 
-    Err(AppError::Unauthorized(
+    Err(AppError::unauthorized_coded(
+        "wf_missing_credentials",
         "缺少有效的 JWT 或 API Key".to_string(),
+        serde_json::json!({}),
     ))
 }
 
@@ -3848,7 +4068,11 @@ async fn resolve_database_for_caller(
             .fetch_optional(pool)
             .await?;
             let row = row.ok_or_else(|| {
-                AppError::Forbidden("API Key 无权触发该 database_slug 下的 workflow".to_string())
+                AppError::forbidden_coded(
+                    "wf_api_key_database_forbidden",
+                    "API Key 无权触发该 database_slug 下的 workflow".to_string(),
+                    serde_json::json!({}),
+                )
             })?;
             Ok((row.get("id"), row.try_get("tenant_id").ok()))
         }
@@ -3862,7 +4086,11 @@ async fn resolve_database_for_caller(
             .fetch_optional(pool)
             .await?
             .ok_or_else(|| {
-                AppError::NotFound(format!("database_slug '{}' 不存在", database_slug))
+                AppError::not_found_coded(
+                    "wf_database_slug_not_found",
+                    format!("database_slug '{}' 不存在", database_slug),
+                    serde_json::json!({ "database_slug": database_slug }),
+                )
             })?;
             Ok((row.get("id"), row.try_get("tenant_id").ok()))
         }
@@ -3900,15 +4128,20 @@ async fn resolve_database_for_caller(
                 .await?
             };
             match rows.len() {
-                0 => Err(AppError::NotFound(format!(
-                    "database_slug '{}' 不存在或未启用",
-                    database_slug
-                ))),
+                0 => Err(AppError::not_found_coded(
+                    "wf_database_slug_not_found_or_disabled",
+                    format!("database_slug '{}' 不存在或未启用", database_slug),
+                    serde_json::json!({ "database_slug": database_slug }),
+                )),
                 1 => Ok((rows[0].get("id"), rows[0].try_get("tenant_id").ok())),
-                _ => Err(AppError::InvalidQuery(format!(
-                    "database_slug '{}' 存在歧义，请改用 API Key 或确保租户唯一",
-                    database_slug
-                ))),
+                _ => Err(AppError::validation(
+                    "wf_database_slug_ambiguous",
+                    format!(
+                        "database_slug '{}' 存在歧义，请改用 API Key 或确保租户唯一",
+                        database_slug
+                    ),
+                    serde_json::json!({ "database_slug": database_slug }),
+                )),
             }
         }
     }
@@ -4085,7 +4318,11 @@ fn finalize_endpoint_response(
                 // 只读 API Key 护栏拦截是权限问题而非服务端故障，映射成 403 让调用方
                 // 一眼看出是「这把 key 不许写」，而不是以为后端挂了去重试。
                 if is_api_key_readonly_block(&err) {
-                    return Err(AppError::Forbidden(err));
+                    return Err(AppError::forbidden_coded(
+                        "wf_readonly_key_write_blocked",
+                        err.clone(),
+                        serde_json::json!({ "reason": err }),
+                    ));
                 }
                 // 工作流节点失败且没有 response 节点被执行，返回 5xx 而不是假成功
                 return Err(AppError::Internal(err));
@@ -4425,7 +4662,7 @@ pub async fn endpoint_trigger(
     headers: HeaderMap,
     claims: Option<axum::Extension<Claims>>,
     api_key_ctx: Option<axum::Extension<ApiKeyContext>>,
-    license_state: Option<axum::Extension<crate::license::LicenseState>>,
+    license_state: Option<axum::Extension<planeos::license::LicenseState>>,
     redis: Option<axum::Extension<crate::redis_manager::RedisManager>>,
     body_bytes: Bytes,
 ) -> Result<Response> {
@@ -4444,10 +4681,11 @@ pub async fn endpoint_trigger(
     .fetch_optional(&pool)
     .await?
     .ok_or_else(|| {
-        AppError::NotFound(format!(
-            "工作流 {}/{} 不存在或未启用",
-            database_slug, workflow_slug
-        ))
+        AppError::not_found_coded(
+            "wf_endpoint_not_found",
+            format!("工作流 {}/{} 不存在或未启用", database_slug, workflow_slug),
+            serde_json::json!({ "database_slug": database_slug, "workflow_slug": workflow_slug }),
+        )
     })?;
 
     // 解析 JSON body，保留原始字节供 Webhook 验签
@@ -4477,7 +4715,7 @@ pub async fn endpoint_trigger(
         if let Some(ref claims) = snapshot.claims {
             if matches!(
                 snapshot.status,
-                crate::license::LicenseStatus::Active | crate::license::LicenseStatus::Grace
+                planeos::license::LicenseStatus::Active | planeos::license::LicenseStatus::Grace
             ) {
                 if let Some(max_executions) = claims.max_executions_per_month {
                     let tracker =
@@ -4511,7 +4749,7 @@ pub async fn endpoint_trigger_get(
     Query(params): Query<HashMap<String, String>>,
     claims: Option<axum::Extension<Claims>>,
     api_key_ctx: Option<axum::Extension<ApiKeyContext>>,
-    license_state: Option<axum::Extension<crate::license::LicenseState>>,
+    license_state: Option<axum::Extension<planeos::license::LicenseState>>,
     redis: Option<axum::Extension<crate::redis_manager::RedisManager>>,
 ) -> Result<Response> {
     let body = serde_json::to_value(&params).unwrap_or(json!({}));
@@ -4530,10 +4768,11 @@ pub async fn endpoint_trigger_get(
     .fetch_optional(&pool)
     .await?
     .ok_or_else(|| {
-        AppError::NotFound(format!(
-            "工作流 {}/{} 不存在或未启用",
-            database_slug, workflow_slug
-        ))
+        AppError::not_found_coded(
+            "wf_endpoint_not_found",
+            format!("工作流 {}/{} 不存在或未启用", database_slug, workflow_slug),
+            serde_json::json!({ "database_slug": database_slug, "workflow_slug": workflow_slug }),
+        )
     })?;
 
     // License 配额检查：月度执行次数限制
@@ -4544,7 +4783,7 @@ pub async fn endpoint_trigger_get(
         if let Some(ref claims) = snapshot.claims {
             if matches!(
                 snapshot.status,
-                crate::license::LicenseStatus::Active | crate::license::LicenseStatus::Grace
+                planeos::license::LicenseStatus::Active | planeos::license::LicenseStatus::Grace
             ) {
                 if let Some(max_executions) = claims.max_executions_per_month {
                     let tracker =
@@ -4575,7 +4814,7 @@ pub async fn endpoint_trigger_public(
     State(pool): State<PgPool>,
     Path((database_slug, workflow_slug)): Path<(String, String)>,
     headers: HeaderMap,
-    license_state: Option<axum::Extension<crate::license::LicenseState>>,
+    license_state: Option<axum::Extension<planeos::license::LicenseState>>,
     redis: Option<axum::Extension<crate::redis_manager::RedisManager>>,
     body_bytes: Bytes,
 ) -> Result<Response> {
@@ -4593,10 +4832,11 @@ pub async fn endpoint_trigger_public(
     .fetch_optional(&pool)
     .await?
     .ok_or_else(|| {
-        AppError::NotFound(format!(
-            "工作流 {}/{} 不存在或未启用",
-            database_slug, workflow_slug
-        ))
+        AppError::not_found_coded(
+            "wf_endpoint_not_found",
+            format!("工作流 {}/{} 不存在或未启用", database_slug, workflow_slug),
+            serde_json::json!({ "database_slug": database_slug, "workflow_slug": workflow_slug }),
+        )
     })?;
 
     let parsed_body: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
@@ -4621,7 +4861,7 @@ pub async fn endpoint_trigger_public(
         if let Some(ref claims) = snapshot.claims {
             if matches!(
                 snapshot.status,
-                crate::license::LicenseStatus::Active | crate::license::LicenseStatus::Grace
+                planeos::license::LicenseStatus::Active | planeos::license::LicenseStatus::Grace
             ) {
                 if let Some(max_executions) = claims.max_executions_per_month {
                     let tracker =
@@ -4751,10 +4991,11 @@ pub async fn execute_workflow_with_bridge(
             trigger_type,
             "拒绝执行已禁用的工作流：触发入口本应已过滤 is_enabled，此处为兜底拦截"
         );
-        return Err(AppError::InvalidQuery(format!(
-            "工作流 {} 已禁用，拒绝执行",
-            workflow.slug
-        )));
+        return Err(AppError::validation(
+            "wf_execute_disabled",
+            format!("工作流 {} 已禁用，拒绝执行", workflow.slug),
+            serde_json::json!({ "slug": workflow.slug }),
+        ));
     }
 
     let start = std::time::Instant::now();
@@ -5311,15 +5552,23 @@ fn merge_node_patch(
 
     // upsert
     if let Some(patch_val) = patch {
-        let patch_arr = patch_val
-            .as_array()
-            .ok_or_else(|| AppError::InvalidQuery("node_patch 必须是节点对象数组".to_string()))?;
+        let patch_arr = patch_val.as_array().ok_or_else(|| {
+            AppError::validation(
+                "wf_node_patch_type",
+                "node_patch 必须是节点对象数组".to_string(),
+                serde_json::json!({}),
+            )
+        })?;
         for pnode in patch_arr {
             let pid = pnode
                 .get("id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    AppError::InvalidQuery("node_patch 中每个节点必须带 id".to_string())
+                    AppError::validation(
+                        "wf_node_patch_missing_id",
+                        "node_patch 中每个节点必须带 id".to_string(),
+                        serde_json::json!({}),
+                    )
                 })?
                 .to_string();
             if let Some(slot) = list
@@ -5337,10 +5586,20 @@ fn merge_node_patch(
 }
 
 fn parse_definition(nodes: &Value, edges: &Value) -> Result<WorkflowDefinition> {
-    let nodes_vec = serde_json::from_value(nodes.clone())
-        .map_err(|e| AppError::InvalidQuery(format!("nodes 格式错误: {}", e)))?;
-    let edges_vec = serde_json::from_value(edges.clone())
-        .map_err(|e| AppError::InvalidQuery(format!("edges 格式错误: {}", e)))?;
+    let nodes_vec = serde_json::from_value(nodes.clone()).map_err(|e| {
+        AppError::validation(
+            "wf_nodes_parse_error",
+            format!("nodes 格式错误: {}", e),
+            serde_json::json!({ "detail": e.to_string() }),
+        )
+    })?;
+    let edges_vec = serde_json::from_value(edges.clone()).map_err(|e| {
+        AppError::validation(
+            "wf_edges_parse_error",
+            format!("edges 格式错误: {}", e),
+            serde_json::json!({ "detail": e.to_string() }),
+        )
+    })?;
 
     Ok(WorkflowDefinition {
         nodes: nodes_vec,
@@ -5414,8 +5673,10 @@ async fn generate_unique_slug(
             return Ok(candidate);
         }
     }
-    Err(AppError::InvalidQuery(
+    Err(AppError::validation(
+        "wf_slug_generation_failed",
         "无法生成唯一 slug，请手动指定".to_string(),
+        serde_json::json!({}),
     ))
 }
 
@@ -5424,8 +5685,10 @@ async fn generate_unique_slug(
 fn map_workflow_write_err(e: sqlx::Error) -> AppError {
     if let sqlx::Error::Database(ref db) = e {
         if db.code().as_deref() == Some("23505") {
-            return AppError::InvalidQuery(
+            return AppError::validation(
+                "wf_slug_unique_violation",
                 "该数据库下已存在相同 slug 的工作流，请换一个 slug".to_string(),
+                serde_json::json!({}),
             );
         }
     }
@@ -5604,7 +5867,15 @@ pub async fn set_workflow_doc_share(
             wf.name.clone(),
             Some(wf.id.to_string()),
         )
-        .detail(json!({ "doc_share_enabled": enabled, "slug": wf.slug }));
+        .detail(json!({ "doc_share_enabled": enabled, "slug": wf.slug }))
+        .summary_code(
+            if req.enabled {
+                "oplog_workflow_doc_share_enable"
+            } else {
+                "oplog_workflow_doc_share_disable"
+            },
+            json!({ "name": wf.name }),
+        );
         if req.enabled {
             input.high_risk = Some(true);
         }
@@ -5629,7 +5900,13 @@ pub async fn public_workflow_doc(
     .bind(&token)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("链接不存在或已失效".to_string()))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "wf_doc_share_link_invalid",
+            "链接不存在或已失效".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
 
     let name: String = row.get("name");
     let description: Option<String> = row.get("description");
@@ -5807,11 +6084,11 @@ mod tests {
     #[test]
     fn publish_without_draft_messages() {
         match publish_missing_draft_error(None) {
-            AppError::Conflict(m) => assert_eq!(m, "没有可发布的定义"),
+            AppError::Coded { message, .. } => assert_eq!(message, "没有可发布的定义"),
             other => panic!("{other:?}"),
         }
         match publish_missing_draft_error(Some(1)) {
-            AppError::Conflict(m) => assert_eq!(m, "没有未发布的修改"),
+            AppError::Coded { message, .. } => assert_eq!(message, "没有未发布的修改"),
             other => panic!("{other:?}"),
         }
     }
@@ -5819,7 +6096,7 @@ mod tests {
     #[test]
     fn trigger_unpublished_is_conflict() {
         match require_published_to_trigger(None) {
-            Err(AppError::Conflict(m)) => assert_eq!(m, "工作流尚未发布"),
+            Err(AppError::Coded { message, .. }) => assert_eq!(message, "工作流尚未发布"),
             other => panic!("{other:?}"),
         }
         assert!(require_published_to_trigger(Some(1)).is_ok());

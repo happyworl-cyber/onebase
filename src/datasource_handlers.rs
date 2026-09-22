@@ -42,28 +42,27 @@ const MAX_NAME_LEN: usize = 100;
 fn validate_name(name: &str) -> Result<()> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
-        return Err(AppError::InvalidQuery("名称不能为空".to_string()));
+        return Err(AppError::validation(
+            "ds_name_required",
+            "名称不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if trimmed.chars().count() > MAX_NAME_LEN {
-        return Err(AppError::InvalidQuery(format!(
-            "名称过长（上限 {} 字符）",
-            MAX_NAME_LEN
-        )));
+        return Err(AppError::validation(
+            "ds_name_too_long",
+            format!("名称过长（上限 {} 字符）", MAX_NAME_LEN),
+            serde_json::json!({ "max_len": MAX_NAME_LEN }),
+        ));
     }
     Ok(())
-}
-
-fn map_cred_err(msg: String) -> AppError {
-    AppError::InvalidQuery(msg)
 }
 
 fn resolve_credential_fields(
     req: &CredentialRequest,
 ) -> Result<(String, Option<String>, Option<String>)> {
-    let kind = workflow_credentials::validate_kind(req.kind.as_deref().unwrap_or("basic"))
-        .map_err(map_cred_err)?;
-    workflow_credentials::validate_kind_fields(&kind, req.username.as_deref())
-        .map_err(map_cred_err)?;
+    let kind = workflow_credentials::validate_kind(req.kind.as_deref().unwrap_or("basic"))?;
+    workflow_credentials::validate_kind_fields(&kind, req.username.as_deref())?;
     let username = if kind == "basic" || kind == "aliyun_ak" {
         req.username
             .as_deref()
@@ -73,8 +72,7 @@ fn resolve_credential_fields(
         None
     };
     let header_name = if kind == "api_key" {
-        workflow_credentials::validate_header_name(req.header_name.as_deref().unwrap_or(""))
-            .map_err(map_cred_err)?
+        workflow_credentials::validate_header_name(req.header_name.as_deref().unwrap_or(""))?
     } else {
         None
     };
@@ -91,6 +89,20 @@ fn record_credential_op(
     summary: String,
     change: serde_json::Value,
 ) {
+    let (summary_code, summary_params) = match action {
+        operation_log::action::CREATE => (
+            "oplog_credential_create",
+            json!({ "name": cred_name }),
+        ),
+        operation_log::action::DELETE => (
+            "oplog_credential_delete",
+            json!({ "id": cred_id }),
+        ),
+        _ => (
+            "oplog_credential_update",
+            json!({ "name": cred_name }),
+        ),
+    };
     let input = OperationLogInput::new(
         tenant_id,
         Actor::from_claims(claims),
@@ -104,7 +116,8 @@ fn record_credential_op(
         cred_name.to_string(),
         Some(cred_id.to_string()),
     )
-    .change(change);
+    .change(change)
+    .summary_code(summary_code, summary_params);
     operation_log::record(pool, input);
 }
 
@@ -209,7 +222,13 @@ pub async fn create_credential(
         .secret
         .as_deref()
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| AppError::InvalidQuery("新建凭证必须填写密码 / 令牌".to_string()))?;
+        .ok_or_else(|| {
+            AppError::validation(
+                "ds_credential_secret_required",
+                "新建凭证必须填写密码 / 令牌".to_string(),
+                serde_json::json!({}),
+            )
+        })?;
     let secret_encrypted = crypto::encrypt_secret(secret)?;
 
     let row = sqlx::query(
@@ -288,7 +307,13 @@ pub async fn update_credential(
     .bind(project_id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("凭证 {} 不存在", cred_id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "ds_credential_not_found",
+            format!("凭证 {} 不存在", cred_id),
+            serde_json::json!({ "cred_id": cred_id }),
+        )
+    })?;
 
     evict_pools_for_credential(&pool, project_id, cred_id).await;
 
@@ -336,7 +361,11 @@ pub async fn delete_credential(
     .fetch_one(&pool)
     .await?;
     if let Some(msg) = credential_in_use_message(ds_refs, log_refs) {
-        return Err(AppError::InvalidQuery(msg));
+        return Err(AppError::validation(
+            "ds_credential_in_use",
+            msg,
+            serde_json::json!({ "ds_refs": ds_refs, "log_refs": log_refs }),
+        ));
     }
 
     let affected =
@@ -347,7 +376,11 @@ pub async fn delete_credential(
             .await?
             .rows_affected();
     if affected == 0 {
-        return Err(AppError::NotFound(format!("凭证 {} 不存在", cred_id)));
+        return Err(AppError::not_found_coded(
+            "ds_credential_not_found",
+            format!("凭证 {} 不存在", cred_id),
+            serde_json::json!({ "cred_id": cred_id }),
+        ));
     }
 
     record_credential_op(
@@ -472,10 +505,11 @@ pub async fn list_datasources(
 
 fn validate_ds_type(ds_type: &str) -> Result<()> {
     if !ALLOWED_DS_TYPES.contains(&ds_type) {
-        return Err(AppError::InvalidQuery(format!(
-            "非法数据源类型：{}（仅支持 postgresql / mysql）",
-            ds_type
-        )));
+        return Err(AppError::validation(
+            "ds_type_invalid",
+            format!("非法数据源类型：{}（仅支持 postgresql / mysql）", ds_type),
+            serde_json::json!({ "ds_type": ds_type }),
+        ));
     }
     Ok(())
 }
@@ -495,11 +529,17 @@ async fn ensure_credential_in_project(
         .fetch_optional(pool)
         .await?;
         let Some(kind) = kind else {
-            return Err(AppError::InvalidQuery(format!("凭证 {} 不存在", cid)));
+            return Err(AppError::validation(
+                "ds_credential_ref_not_found",
+                format!("凭证 {} 不存在", cid),
+                serde_json::json!({ "credential_id": cid }),
+            ));
         };
         if !workflow_credentials::datasource_accepts_kind(&kind) {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "ds_credential_kind_not_supported",
                 "数据源只能绑定 basic 凭证".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -593,7 +633,13 @@ pub async fn update_datasource(
     .bind(project_id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("数据源 {} 不存在", ds_id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "ds_datasource_not_found",
+            format!("数据源 {} 不存在", ds_id),
+            serde_json::json!({ "ds_id": ds_id }),
+        )
+    })?;
 
     // 淘汰内存池（PG/MySQL 两处缓存），下次执行按新配置重建。
     crate::workflow_engine::evict_datasource_pool(ds_id).await;
@@ -620,10 +666,14 @@ pub async fn delete_datasource(
     let ref_map = datasource_ref_counts(&pool, project_id).await;
     if let Some(&cnt) = ref_map.get(&ds_id) {
         if cnt > 0 {
-            return Err(AppError::InvalidQuery(format!(
-                "该数据源仍被 {} 个工作流引用，请先在相关节点改回默认或换用其它数据源",
-                cnt
-            )));
+            return Err(AppError::validation(
+                "ds_datasource_in_use",
+                format!(
+                    "该数据源仍被 {} 个工作流引用，请先在相关节点改回默认或换用其它数据源",
+                    cnt
+                ),
+                serde_json::json!({ "count": cnt }),
+            ));
         }
     }
 
@@ -635,7 +685,11 @@ pub async fn delete_datasource(
             .await?
             .rows_affected();
     if affected == 0 {
-        return Err(AppError::NotFound(format!("数据源 {} 不存在", ds_id)));
+        return Err(AppError::not_found_coded(
+            "ds_datasource_not_found",
+            format!("数据源 {} 不存在", ds_id),
+            serde_json::json!({ "ds_id": ds_id }),
+        ));
     }
 
     crate::workflow_engine::evict_datasource_pool(ds_id).await;

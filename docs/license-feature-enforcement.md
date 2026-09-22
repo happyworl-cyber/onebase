@@ -420,7 +420,7 @@ let license_routes = Router::new()
 
 设置环境变量：
 ```bash
-export ONEBASE_LICENSE_ENFORCE=off
+export PLANEOS_LICENSE_ENFORCE=off
 ```
 
 ### Q2: 如何查看当前 License 信息？

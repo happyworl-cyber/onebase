@@ -93,7 +93,7 @@ pub async fn execute_rpc(
         .get("X-Database-Id")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<i32>().ok())
-        .ok_or_else(|| AppError::InvalidQuery("缺少 X-Database-Id 请求头".to_string()))?;
+        .ok_or_else(|| AppError::validation("rpc_missing_database_id_header", "缺少 X-Database-Id 请求头".to_string(), serde_json::json!({})))?;
     let body_value = body
         .map(|Json(v)| v)
         .unwrap_or(Value::Object(Default::default()));
@@ -101,8 +101,10 @@ pub async fn execute_rpc(
         Value::Object(map) => map,
         Value::Null => serde_json::Map::new(),
         _ => {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "rpc_body_must_be_object",
                 "RPC 请求体必须是 JSON 对象".to_string(),
+                serde_json::json!({}),
             ));
         }
     };
@@ -151,7 +153,7 @@ pub async fn execute_rpc_get(
         .get("X-Database-Id")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<i32>().ok())
-        .ok_or_else(|| AppError::InvalidQuery("缺少 X-Database-Id 请求头".to_string()))?;
+        .ok_or_else(|| AppError::validation("rpc_missing_database_id_header", "缺少 X-Database-Id 请求头".to_string(), serde_json::json!({})))?;
     let schema_override = raw_query.get("schema").cloned();
     let mut args = serde_json::Map::new();
     for (key, raw_value) in raw_query.into_iter() {
@@ -345,7 +347,7 @@ async fn run_rpc(
     // 包一层事务，把调用方身份注入到事务局部 GUC（`set_config(_, _, true)` 等价
     // SET LOCAL，COMMIT 后自动清，不污染连接池里这条连接的下次复用）。
     //
-    // 这是 Onebase 给业务函数提供"调用方上下文"的标准通道，与 `auto_api_handlers`
+    // 这是 PlaneOS 给业务函数提供"调用方上下文"的标准通道，与 `auto_api_handlers`
     // 的 `inject_session_user_id` 同款做法。业务函数可以读：
     //   - `current_setting('app.current_user_id', true)` —— JWT 调用是用户 ID；
     //     API Key 调用统一写 `'0'`，与现有 RLS helper（migrations/013_rls_helpers.sql
@@ -514,10 +516,11 @@ async fn lookup_function_shape(
     .await?;
 
     if rows.is_empty() {
-        return Err(AppError::NotFound(format!(
-            "函数 {}.{}() 不存在",
-            schema, fn_name
-        )));
+        return Err(AppError::not_found_coded(
+            "rpc_function_not_found",
+            format!("函数 {}.{}() 不存在", schema, fn_name),
+            serde_json::json!({ "schema": schema, "function": fn_name }),
+        ));
     }
 
     // 返回形态：取第一行（同名重载理论上返回 shape 一致；即使不一致下游也会按
@@ -965,15 +968,17 @@ async fn resolve_rpc_database_id_for_user(
         .map_err(AppError::Database)?
     };
     match rows.len() {
-        0 => Err(AppError::NotFound(format!(
-            "database_slug '{}' 不存在或无权访问",
-            db_seg
-        ))),
+        0 => Err(AppError::not_found_coded(
+            "rpc_database_slug_not_found",
+            format!("database_slug '{}' 不存在或无权访问", db_seg),
+            serde_json::json!({ "slug": db_seg }),
+        )),
         1 => Ok(rows[0].get("id")),
-        _ => Err(AppError::InvalidQuery(format!(
-            "database_slug '{}' 存在歧义，请使用 API Key 或确保租户唯一",
-            db_seg
-        ))),
+        _ => Err(AppError::validation(
+            "rpc_database_slug_ambiguous",
+            format!("database_slug '{}' 存在歧义，请使用 API Key 或确保租户唯一", db_seg),
+            serde_json::json!({ "slug": db_seg }),
+        )),
     }
 }
 
@@ -1073,7 +1078,13 @@ pub async fn rpc_auth_middleware(
         .await
         .map_err(|e| AppError::Internal(format!("校验 API Key 失败: {}", e)))?;
 
-        let row = row.ok_or_else(|| AppError::Unauthorized("API Key 无效或已过期".to_string()))?;
+        let row = row.ok_or_else(|| {
+            AppError::unauthorized_coded(
+                "rpc_api_key_invalid_or_expired",
+                "API Key 无效或已过期".to_string(),
+                serde_json::json!({}),
+            )
+        })?;
         let key_database_id: i32 = row.get("database_id");
         let permissions: Value = row.get("permissions");
 
@@ -1092,8 +1103,10 @@ pub async fn rpc_auth_middleware(
             row.is_some()
         };
         if !key_path_match {
-            return Err(AppError::Unauthorized(
+            return Err(AppError::unauthorized_coded(
+                "rpc_api_key_database_mismatch",
                 "URL 中的 database_slug 与 API Key 绑定的数据库不一致".to_string(),
+                serde_json::json!({}),
             ));
         }
 
@@ -1118,8 +1131,10 @@ pub async fn rpc_auth_middleware(
         return Ok(next.run(req).await);
     }
 
-    Err(AppError::Unauthorized(
+    Err(AppError::unauthorized_coded(
+        "rpc_missing_credentials",
         "缺少有效的 JWT 或 API Key".to_string(),
+        serde_json::json!({}),
     ))
 }
 
@@ -1175,7 +1190,13 @@ async fn enforce_rpc_user(
     .fetch_optional(main_pool)
     .await?;
     let tenant_id: i32 = tenant_row
-        .ok_or_else(|| AppError::NotFound(format!("数据库连接 {} 不存在", database_id)))?
+        .ok_or_else(|| {
+            AppError::not_found_coded(
+                "rpc_database_connection_not_found",
+                format!("数据库连接 {} 不存在", database_id),
+                serde_json::json!({ "database_id": database_id }),
+            )
+        })?
         .get("tenant_id");
 
     let schema_wildcard = format!("{}.*", schema);
@@ -1222,10 +1243,11 @@ async fn enforce_rpc_user(
     };
 
     if perms.is_empty() {
-        return Err(AppError::Forbidden(format!(
-            "您没有调用 {}.{}() 的权限",
-            schema, fn_name
-        )));
+        return Err(AppError::forbidden_coded(
+            "rpc_function_execute_forbidden",
+            format!("您没有调用 {}.{}() 的权限", schema, fn_name),
+            serde_json::json!({ "schema": schema, "function": fn_name }),
+        ));
     }
     Ok(())
 }
@@ -1410,8 +1432,10 @@ async fn enforce_rpc_api_key(
     let new_format =
         perms.get("allowed_actions").is_some() || perms.get("allowed_resources").is_some();
     if !new_format {
-        return Err(AppError::Forbidden(
+        return Err(AppError::forbidden_coded(
+            "rpc_api_key_legacy_scope_unsupported",
             "该 API Key 使用旧版 scope 格式，不支持 RPC 调用；请重建 key 并启用 allowed_resources/allowed_actions".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -1429,8 +1453,10 @@ async fn enforce_rpc_api_key(
             .iter()
             .any(|a| a == "*" || a == "ALL" || a == "EXECUTE")
     {
-        return Err(AppError::Forbidden(
+        return Err(AppError::forbidden_coded(
+            "rpc_api_key_execute_not_allowed",
             "API Key 不允许执行 EXECUTE 操作".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -1449,10 +1475,11 @@ async fn enforce_rpc_api_key(
             .iter()
             .any(|r| r == "*" || r == "*.*" || r == resource || r == &schema_wildcard);
         if !allowed {
-            return Err(AppError::Forbidden(format!(
-                "API Key 不允许调用 {}",
-                resource
-            )));
+            return Err(AppError::forbidden_coded(
+                "rpc_api_key_resource_forbidden",
+                format!("API Key 不允许调用 {}", resource),
+                serde_json::json!({ "resource": resource }),
+            ));
         }
     }
 
@@ -1506,6 +1533,18 @@ fn record_rpc_acl_op(
     summary: String,
     change: Value,
 ) {
+    // 角色名只存在于已格式化的 summary 文本里（"…角色「X」执行 RPC「resource」的权限"），从中摘取。
+    let role_name = summary
+        .split('「')
+        .nth(1)
+        .and_then(|rest| rest.split('」').next())
+        .unwrap_or_default()
+        .to_string();
+    let summary_code = if action == operation_log::action::DELETE {
+        "oplog_rpc_acl_revoke"
+    } else {
+        "oplog_rpc_acl_grant"
+    };
     let mut input = OperationLogInput::new(
         tenant_id,
         Actor::from_claims(claims),
@@ -1519,7 +1558,8 @@ fn record_rpc_acl_op(
         resource.to_string(),
         Some(permission_id.to_string()),
     )
-    .change(change);
+    .change(change)
+    .summary_code(summary_code, json!({ "role": role_name, "resource": resource }));
     input.high_risk = Some(true);
     operation_log::record(pool, input);
 }
@@ -1541,7 +1581,13 @@ async fn require_tenant_admin_for_db(
     .fetch_optional(pool)
     .await?;
     let tenant_id: i32 = tenant_row
-        .ok_or_else(|| AppError::NotFound(format!("数据库连接 {} 不存在", database_id)))?
+        .ok_or_else(|| {
+            AppError::not_found_coded(
+                "rpc_database_connection_not_found",
+                format!("数据库连接 {} 不存在", database_id),
+                serde_json::json!({ "database_id": database_id }),
+            )
+        })?
         .get("tenant_id");
 
     if claims.is_superadmin {
@@ -1557,13 +1603,20 @@ async fn require_tenant_admin_for_db(
     .fetch_optional(pool)
     .await?;
     let role: String = role_row
-        .ok_or_else(|| AppError::Forbidden("您不属于该租户".to_string()))?
+        .ok_or_else(|| {
+            AppError::forbidden_coded(
+                "rpc_not_tenant_member",
+                "您不属于该租户".to_string(),
+                serde_json::json!({}),
+            )
+        })?
         .get("role");
     if role != "owner" && role != "admin" {
-        return Err(AppError::Forbidden(format!(
-            "需要租户管理员权限（当前角色：{}）",
-            role
-        )));
+        return Err(AppError::forbidden_coded(
+            "rpc_tenant_admin_required",
+            format!("需要租户管理员权限（当前角色：{}）", role),
+            serde_json::json!({ "role": role }),
+        ));
     }
     Ok(tenant_id)
 }
@@ -1655,7 +1708,13 @@ pub async fn grant_rpc_acl(
             .fetch_optional(&pool)
             .await?;
     let role_name: String = role_row
-        .ok_or_else(|| AppError::NotFound("角色不存在或不属于当前租户".to_string()))?
+        .ok_or_else(|| {
+            AppError::not_found_coded(
+                "rpc_role_not_found_or_not_in_tenant",
+                "角色不存在或不属于当前租户".to_string(),
+                serde_json::json!({}),
+            )
+        })?
         .get("name");
 
     // 1) UPSERT permission
@@ -1743,7 +1802,13 @@ pub async fn revoke_rpc_acl(
             .bind(req.permission_id)
             .fetch_optional(&pool)
             .await?;
-    let tenant_row = tenant_row.ok_or_else(|| AppError::NotFound("权限不存在".to_string()))?;
+    let tenant_row = tenant_row.ok_or_else(|| {
+        AppError::not_found_coded(
+            "rpc_permission_not_found",
+            "权限不存在".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
     let tenant_id: i32 = tenant_row.get("tenant_id");
     let resource: String = tenant_row.get("resource");
 
@@ -1757,13 +1822,20 @@ pub async fn revoke_rpc_acl(
         .fetch_optional(&pool)
         .await?;
         let role: String = role_row
-            .ok_or_else(|| AppError::Forbidden("您不属于该租户".to_string()))?
+            .ok_or_else(|| {
+                AppError::forbidden_coded(
+                    "rpc_not_tenant_member",
+                    "您不属于该租户".to_string(),
+                    serde_json::json!({}),
+                )
+            })?
             .get("role");
         if role != "owner" && role != "admin" {
-            return Err(AppError::Forbidden(format!(
-                "需要租户管理员权限（当前角色：{}）",
-                role
-            )));
+            return Err(AppError::forbidden_coded(
+                "rpc_tenant_admin_required",
+                format!("需要租户管理员权限（当前角色：{}）", role),
+                serde_json::json!({ "role": role }),
+            ));
         }
     }
 
@@ -1787,7 +1859,13 @@ pub async fn revoke_rpc_acl(
             .bind(tenant_id)
             .fetch_optional(&pool)
             .await?
-            .ok_or_else(|| AppError::NotFound("角色不存在".to_string()))?
+            .ok_or_else(|| {
+                AppError::not_found_coded(
+                    "rpc_role_not_found",
+                    "角色不存在".to_string(),
+                    serde_json::json!({}),
+                )
+            })?
             .get("name");
 
     record_rpc_acl_op(

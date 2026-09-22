@@ -1,5 +1,7 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
+
 export type BatchModalType = 'export' | 'status' | 'delete' | 'move' | null
 
 interface WorkflowBatchBarProps {
@@ -21,30 +23,31 @@ export default function WorkflowBatchBar({
   onDelete,
   onClear,
 }: WorkflowBatchBarProps) {
+  const t = useTranslations('wfList')
   return (
     <div className={`workflow-batch-bar ${visible ? 'show' : ''}`}>
       <div className="workflow-batch-bar-num">{count}</div>
-      <span className="workflow-batch-bar-label">已选中</span>
+      <span className="workflow-batch-bar-label">{t('selected')}</span>
       <button type="button" className="workflow-batch-btn workflow-batch-btn-export" onClick={onExport}>
         <i className="fas fa-arrow-down-to-line" />
-        导出
+        {t('export')}
       </button>
       <div className="workflow-batch-sep" />
       <button type="button" className="workflow-batch-btn workflow-batch-btn-status" onClick={onStatus}>
         <i className="fas fa-toggle-on" />
-        修改状态
+        {t('changeStatus')}
       </button>
       <div className="workflow-batch-sep" />
       <button type="button" className="workflow-batch-btn workflow-batch-btn-status" onClick={onMove}>
         <i className="fas fa-folder-tree" />
-        移动
+        {t('move')}
       </button>
       <div className="workflow-batch-sep" />
       <button type="button" className="workflow-batch-btn workflow-batch-btn-del" onClick={onDelete}>
         <i className="fas fa-trash" />
-        删除
+        {t('delete')}
       </button>
-      <button type="button" className="workflow-batch-btn-x" onClick={onClear} title="取消批量操作" aria-label="取消批量操作">
+      <button type="button" className="workflow-batch-btn-x" onClick={onClear} title={t('cancelBatch')} aria-label={t('cancelBatch')}>
         <i className="fas fa-xmark" />
       </button>
     </div>

@@ -21,6 +21,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import api, {
   scheduledTaskAPI,
   tenantAPI,
@@ -98,7 +99,7 @@ const DEFAULT_ALERT_WEBHOOK_TEMPLATE = JSON.stringify(
   {
     msg_type: 'markdown',
     content:
-      '### 🚨 报警\n- **类型**: {{source}}\n- **名称**: {{name}}\n- **状态**: {{status}}\n- **错误**: {{error}}\n- **时间**: {{time}}\n- **Run ID**: {{run_id}}',
+      '### 🚨 Alert\n- **Source**: {{source}}\n- **Name**: {{name}}\n- **Status**: {{status}}\n- **Error**: {{error}}\n- **Time**: {{time}}\n- **Run ID**: {{run_id}}',
   },
   null,
   2,
@@ -137,13 +138,13 @@ const EMPTY_FORM: FormState = {
 /** 后端 ShellExecutor 接受的解释器白名单（与 src/scheduler/executors.rs 同步）。 */
 const SHELL_INTERPRETERS = ['/bin/sh', '/bin/bash', '/bin/dash', '/bin/zsh', '/usr/bin/python3', '/usr/bin/node', '/usr/bin/ruby']
 
-const CRON_PRESETS: { label: string; value: string }[] = [
-  { label: '每分钟', value: '* * * * *' },
-  { label: '每 5 分钟', value: '*/5 * * * *' },
-  { label: '每小时整', value: '0 * * * *' },
-  { label: '每 6 小时', value: '0 */6 * * *' },
-  { label: '每天 00:00', value: '0 0 * * *' },
-  { label: '每周一 02:00', value: '0 2 * * 1' },
+const CRON_PRESETS: { labelKey: string; value: string }[] = [
+  { labelKey: 'preEveryMin', value: '* * * * *' },
+  { labelKey: 'preEvery5', value: '*/5 * * * *' },
+  { labelKey: 'preHourly', value: '0 * * * *' },
+  { labelKey: 'preEvery6h', value: '0 */6 * * *' },
+  { labelKey: 'preDaily', value: '0 0 * * *' },
+  { labelKey: 'preWeekly', value: '0 2 * * 1' },
 ]
 
 const COMMON_TIMEZONES = [
@@ -185,6 +186,7 @@ function statusColor(status: string | null | undefined): string {
 export default function ScheduledTasksManager({
   lockedTenantId,
 }: ScheduledTasksManagerProps) {
+  const tr = useTranslations('wsScheduled')
   const notify = useNotification()
   const tenantMode = lockedTenantId !== undefined
   // shell kind 自 migration 017 起允许租户级：
@@ -347,7 +349,7 @@ export default function ScheduledTasksManager({
       } catch (err: any) {
         if (!cancelled) {
           setCronPreview(null)
-          setCronError(err?.response?.data?.error || 'cron 表达式或时区无效')
+          setCronError(err?.response?.data?.error || tr('cronInvalid'))
         }
       }
     }, 400)
@@ -446,7 +448,7 @@ export default function ScheduledTasksManager({
       .map((c) => ({
         id: c.database_id,
         label: `${c.connection_name || c.db_name} (${c.db_host}:${c.db_port}/${c.db_name})${
-          c.is_primary ? ' · 主' : ''
+          c.is_primary ? tr('dbPrimarySuffix') : ''
         }`,
       }))
     // 去重（同一 db 可能在多 user_role 下重复）
@@ -458,7 +460,7 @@ export default function ScheduledTasksManager({
       editing.database_id != null &&
       !result.some((r) => r.id === editing.database_id)
     ) {
-      result.unshift({ id: editing.database_id, label: `db#${editing.database_id}（无访问权限）` })
+      result.unshift({ id: editing.database_id, label: tr('dbNoAccess', { id: editing.database_id }) })
     }
     return result
   }, [connections, tenantMode, lockedTenantId, selectedTenantNum, editing])
@@ -540,12 +542,12 @@ export default function ScheduledTasksManager({
     try {
       const parsed = JSON.parse(trimmed)
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        notify.error(`${label} 必须是 JSON 对象`)
+        notify.error(tr('mustObject', { label }))
         return null
       }
       return parsed as Record<string, unknown>
     } catch {
-      notify.error(`${label} JSON 解析失败`)
+      notify.error(tr('jsonParseFailed', { label }))
       return null
     }
   }
@@ -559,15 +561,15 @@ export default function ScheduledTasksManager({
    */
   const buildCreatePayload = (): CreateScheduledTaskInput | null => {
     if (!form.name.trim()) {
-      notify.error('请填写任务名称')
+      notify.error(tr('errName'))
       return null
     }
     if (cronError) {
-      notify.error('cron 表达式无效，请先修正')
+      notify.error(tr('errCron'))
       return null
     }
     if (tenantMode && !form.tenant_id.trim()) {
-      notify.error('当前项目上下文缺失 tenant_id；请刷新页面后重试')
+      notify.error(tr('errTenantMissing'))
       return null
     }
 
@@ -587,7 +589,7 @@ export default function ScheduledTasksManager({
         try {
           httpBody = JSON.parse(bodyTrim)
         } catch {
-          notify.error('http_body JSON 解析失败')
+          notify.error(tr('errHttpBody'))
           return null
         }
       } else {
@@ -595,24 +597,24 @@ export default function ScheduledTasksManager({
       }
     } else if (form.kind === 'shell') {
       if (!form.shell_script.trim()) {
-        notify.error('请填写 shell 脚本内容')
+        notify.error(tr('errShellScript'))
         return null
       }
       shellEnv = parseJsonField(form.shell_env, 'shell_env')
       if (shellEnv === null) return null
     } else if (form.kind === 'workflow') {
       if (!form.tenant_id.trim()) {
-        notify.error('工作流任务必须属于一个项目')
+        notify.error(tr('errWorkflowProject'))
         return null
       }
       if (!form.workflow_id.trim()) {
-        notify.error('请选择工作流')
+        notify.error(tr('errSelectWorkflow'))
         return null
       }
       if (parseJsonField(form.workflow_input, 'workflow_input') === null) return null
     }
     if (form.alert_webhook_url.trim()) {
-      alertTemplate = parseJsonField(form.alert_webhook_template, '告警 Webhook 模板')
+      alertTemplate = parseJsonField(form.alert_webhook_template, tr('alertTplLabel'))
       if (alertTemplate === null) return null
     }
 
@@ -694,10 +696,10 @@ export default function ScheduledTasksManager({
           alert_webhook_template: payload.alert_webhook_template,
           alert_throttle_hours: payload.alert_throttle_hours,
         })
-        notify.success('任务已更新')
+        notify.success(tr('taskUpdated'))
       } else {
         await scheduledTaskAPI.create(payload)
-        notify.success('任务已创建')
+        notify.success(tr('taskCreated'))
       }
       setShowForm(false)
       resetForm()
@@ -742,7 +744,7 @@ export default function ScheduledTasksManager({
       })
     } catch (err: any) {
       // 鉴权失败 / 入参不合法等真·HTTP 错误：手动展示，不依赖全局 toast（已 suppressed）
-      const msg = err?.response?.data?.error || err?.message || '试运行请求失败'
+      const msg = err?.response?.data?.error || err?.message || tr('dryRunFailed')
       setDryRunResult({
         status: 'failed',
         output: null,
@@ -755,10 +757,10 @@ export default function ScheduledTasksManager({
   }
 
   const handleDelete = async (task: ScheduledTask) => {
-    if (!confirm(`确认删除任务「${task.name}」？执行历史会一并清除。`)) return
+    if (!confirm(tr('confirmDelete', { name: task.name }))) return
     try {
       await scheduledTaskAPI.delete(task.id)
-      notify.success('已删除')
+      notify.success(tr('deleted'))
       load()
       loadStats()
     } catch {
@@ -779,7 +781,7 @@ export default function ScheduledTasksManager({
   const handleRunNow = async (task: ScheduledTask) => {
     try {
       await scheduledTaskAPI.runNow(task.id)
-      notify.success(`「${task.name}」已派发执行；几秒后可在执行历史里看结果`)
+      notify.success(tr('dispatched', { name: task.name }))
       setTimeout(() => {
         if (runsTask?.id === task.id) loadRuns(task)
         load()
@@ -813,16 +815,16 @@ export default function ScheduledTasksManager({
   }
 
   const handleCleanupZombies = async () => {
-    const hours = window.prompt('清理停留在 running 状态超过多少小时的执行记录？（默认 24）', '24')
+    const hours = window.prompt(tr('promptCleanHours'), '24')
     if (hours === null) return
     const n = parseInt(hours, 10)
     if (!Number.isFinite(n) || n < 1) {
-      notify.error('请输入 ≥1 的正整数')
+      notify.error(tr('errPositiveInt'))
       return
     }
     try {
       const res = await scheduledTaskAPI.cleanupZombies(n)
-      notify.success(`已清理 ${res.data.cleaned} 条僵尸 run`)
+      notify.success(tr('cleanedZombie', { n: res.data.cleaned }))
     } catch {
       /* noop */
     }
@@ -838,17 +840,17 @@ export default function ScheduledTasksManager({
       {/* 标题 + 操作区 */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">定时任务</h1>
+          <h1 className="text-2xl font-semibold text-gray-900">{tr('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
             {tenantMode
-              ? '本项目内按 cron 表达式调用 PG 函数（RPC）或发起 HTTP 请求；多实例自动去重。'
-              : '按 cron 表达式调用 PG 函数（RPC）或发起 HTTP 请求；多实例自动去重。'}
+              ? tr('subtitleProject')
+              : tr('subtitlePlatform')}
           </p>
         </div>
         <div className="flex items-center space-x-2">
           {stats && (
             <button onClick={handleCleanupZombies} className="btn-default text-xs">
-              <i className="fas fa-broom mr-1"></i>清理僵尸 run
+              <i className="fas fa-broom mr-1"></i>{tr('cleanZombie')}
             </button>
           )}
           <button
@@ -859,7 +861,7 @@ export default function ScheduledTasksManager({
             className="btn-primary"
           >
             <i className={`fas ${showForm ? 'fa-times' : 'fa-plus'} text-xs mr-2`}></i>
-            {showForm ? '取消' : '新建任务'}
+            {showForm ? tr('cancel') : tr('newTask')}
           </button>
         </div>
       </div>
@@ -867,11 +869,11 @@ export default function ScheduledTasksManager({
       {/* 项目页按租户；平台页全量 */}
       {stats && (
         <div className="grid grid-cols-4 gap-3">
-          <StatCard label="任务总数" value={stats.total_tasks} />
-          <StatCard label="启用中" value={stats.active_tasks} />
-          <StatCard label="24h 执行次数" value={stats.runs_24h} />
+          <StatCard label={tr('statTotal')} value={stats.total_tasks} />
+          <StatCard label={tr('statActive')} value={stats.active_tasks} />
+          <StatCard label={tr('statRuns24h')} value={stats.runs_24h} />
           <StatCard
-            label="24h 失败 / 超时"
+            label={tr('statFail24h')}
             value={stats.failed_24h}
             danger={stats.failed_24h > 0}
           />
@@ -881,10 +883,10 @@ export default function ScheduledTasksManager({
       {/* 表单区 */}
       {showForm && (
         <div className="card p-6">
-          <h2 className="text-lg font-semibold mb-4">{editing ? `编辑：${editing.name}` : '新建任务'}</h2>
+          <h2 className="text-lg font-semibold mb-4">{editing ? tr('editTitle', { name: editing.name }) : tr('newTask')}</h2>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
-              <FormField label="名称 *">
+              <FormField label={tr('fName')}>
                 <input
                   type="text"
                   value={form.name}
@@ -896,8 +898,8 @@ export default function ScheduledTasksManager({
               {/* 租户选择器：仅 platform 模式可见；tenant 模式由 lockedTenantId 强制锁定 */}
               {!tenantMode && (
                 <FormField
-                  label="租户"
-                  hint={editing ? '编辑模式下不允许迁移租户归属' : '留空 = 平台级任务（仅超管可见）'}
+                  label={tr('fTenant')}
+                  hint={editing ? tr('hintTenantEdit') : tr('hintTenantNew')}
                 >
                   <select
                     value={form.tenant_id}
@@ -914,7 +916,7 @@ export default function ScheduledTasksManager({
                     className="input-base w-full"
                     disabled={!!editing}
                   >
-                    <option value="">— 平台级（仅超管）—</option>
+                    <option value="">{tr('platformLevelOpt')}</option>
                     {tenantOptions.map((t) => (
                       <option key={t.id} value={t.id}>
                         {t.name}（#{t.id}）
@@ -925,7 +927,7 @@ export default function ScheduledTasksManager({
               )}
             </div>
 
-            <FormField label="描述">
+            <FormField label={tr('fDesc')}>
               <textarea
                 value={form.description}
                 onChange={(e) => setForm({ ...form, description: e.target.value })}
@@ -936,14 +938,14 @@ export default function ScheduledTasksManager({
 
             {/* cron 区块 */}
             <div className="grid grid-cols-3 gap-4">
-              <FormField label="cron 表达式 *" className="col-span-2">
+              <FormField label={tr('fCron')} className="col-span-2">
                 <div className="flex items-center space-x-2">
                   <input
                     type="text"
                     value={form.cron_expr}
                     onChange={(e) => setForm({ ...form, cron_expr: e.target.value })}
                     className="input-base flex-1 font-mono"
-                    placeholder="* * * * * (5 字段 cron)"
+                    placeholder={tr('phCron')}
                     required
                   />
                   {/*
@@ -964,18 +966,18 @@ export default function ScheduledTasksManager({
                   >
                     {!CRON_PRESETS.some((p) => p.value === form.cron_expr) && (
                       <option value={form.cron_expr}>
-                        {form.cron_expr ? `自定义：${form.cron_expr}` : '选预设…'}
+                        {form.cron_expr ? tr('customPre', { cron: form.cron_expr }) : tr('selectPreset')}
                       </option>
                     )}
                     {CRON_PRESETS.map((p) => (
                       <option key={p.value} value={p.value}>
-                        {p.label}
+                        {tr(p.labelKey)}
                       </option>
                     ))}
                   </select>
                 </div>
               </FormField>
-              <FormField label="时区">
+              <FormField label={tr('fTimezone')}>
                 <select
                   value={form.timezone}
                   onChange={(e) => setForm({ ...form, timezone: e.target.value })}
@@ -999,7 +1001,7 @@ export default function ScheduledTasksManager({
             {cronPreview && (
               <div className="text-xs text-gray-600 bg-blue-50 p-3 rounded border border-blue-100">
                 <div className="font-medium text-blue-800 mb-1">
-                  接下来 5 次触发（{cronPreview.timezone}）：
+                  {tr('next5', { tz: cronPreview.timezone })}
                 </div>
                 <ul className="list-disc list-inside space-y-0.5 font-mono text-gray-700">
                   {cronPreview.preview.map((t, i) => (
@@ -1012,12 +1014,12 @@ export default function ScheduledTasksManager({
             {/* kind 区分 */}
             <div className="grid grid-cols-2 gap-4">
               <FormField
-                label="任务类型 *"
+                label={tr('fTaskType')}
                 hint={
                   shellAvailable
                     ? tenantMode
-                      ? 'shell 以服务进程身份在本租户上下文执行，已默认走 bwrap 沙盒；解释器走白名单，env 不会泄露平台自身 secret'
-                      : 'shell 在平台级模式下对超管开放；以服务进程身份执行，已默认走 bwrap 沙盒'
+                      ? tr('hintShellTenant')
+                      : tr('hintShellPlatform')
                     : undefined
                 }
               >
@@ -1032,21 +1034,21 @@ export default function ScheduledTasksManager({
                   className="input-base w-full"
                   disabled={!!editing}
                 >
-                  <option value="http">HTTP 请求</option>
-                  <option value="rpc">PG 函数（RPC）</option>
+                  <option value="http">{tr('typeHttp')}</option>
+                  <option value="rpc">{tr('typeRpc')}</option>
                   {/* shell 选项：
                       - 平台模式 → 仅平台超管
                       - 租户模式 → 当前租户的 owner/admin
                       编辑既有 shell 任务时即便条件不满足也补一条 option 让 select 不闪烁 */}
                   {(shellAvailable || (editing && editing.kind === 'shell')) && (
                     <option value="shell">
-                      Shell 脚本{tenantMode ? '（本租户）' : '（平台级 / 超管）'}
+                      {tenantMode ? tr('shellTenant') : tr('shellPlatform')}
                     </option>
                   )}
-                  {workflowKindAvailable && <option value="workflow">工作流</option>}
+                  {workflowKindAvailable && <option value="workflow">{tr('typeWorkflow')}</option>}
                 </select>
               </FormField>
-              <FormField label="overlap_policy（上次未结束又到点了怎么办）">
+              <FormField label={tr('fOverlap')}>
                 <select
                   value={form.overlap_policy}
                   onChange={(e) =>
@@ -1057,8 +1059,8 @@ export default function ScheduledTasksManager({
                   }
                   className="input-base w-full"
                 >
-                  <option value="skip">skip — 跳过本次</option>
-                  <option value="allow">allow — 并发触发</option>
+                  <option value="skip">{tr('overlapSkip')}</option>
+                  <option value="allow">{tr('overlapAllow')}</option>
                 </select>
               </FormField>
             </div>
@@ -1068,12 +1070,12 @@ export default function ScheduledTasksManager({
               <div className="space-y-3 border-l-2 border-purple-200 pl-4">
                 <div className="grid grid-cols-3 gap-4">
                   <FormField
-                    label="数据库 *"
+                    label={tr('fDatabase')}
                     hint={
                       !tenantMode && selectedTenantNum == null
-                        ? '请先选择租户'
+                        ? tr('hintSelectTenantFirst')
                         : databaseOptions.length === 0
-                          ? '当前租户下无可用数据库'
+                          ? tr('hintNoDbForTenant')
                           : undefined
                     }
                   >
@@ -1095,7 +1097,7 @@ export default function ScheduledTasksManager({
                       }
                       required
                     >
-                      <option value="">— 选择数据库 —</option>
+                      <option value="">{tr('selectDb')}</option>
                       {databaseOptions.map((d) => (
                         <option key={d.id} value={d.id}>
                           {d.label}
@@ -1107,11 +1109,11 @@ export default function ScheduledTasksManager({
                     label="schema"
                     hint={
                       schemaLoading
-                        ? '加载中…'
+                        ? tr('loading')
                         : !form.database_id
-                          ? '请先选择数据库'
+                          ? tr('hintSelectDbFirst')
                           : schemaList.length === 0
-                            ? '该库没有可见 schema'
+                            ? tr('hintNoSchema')
                             : undefined
                     }
                   >
@@ -1135,14 +1137,14 @@ export default function ScheduledTasksManager({
                     </select>
                   </FormField>
                   <FormField
-                    label="函数名 *"
+                    label={tr('fFnName')}
                     hint={
                       functionLoading
-                        ? '加载中…'
+                        ? tr('loading')
                         : !form.rpc_schema || !form.database_id
-                          ? '请先选择 schema'
+                          ? tr('hintSelectSchemaFirst')
                           : functionList.length === 0
-                            ? '该 schema 下无函数'
+                            ? tr('hintNoFn')
                             : undefined
                     }
                   >
@@ -1153,12 +1155,12 @@ export default function ScheduledTasksManager({
                       disabled={!!editing || functionList.length === 0}
                       required
                     >
-                      <option value="">— 选择函数 —</option>
+                      <option value="">{tr('selectFn')}</option>
                       {/* 编辑兼容：若当前值不在拉取结果里，先填一条 */}
                       {form.rpc_fn_name &&
                         !functionList.some((f) => f.function_name === form.rpc_fn_name) && (
                           <option value={form.rpc_fn_name}>
-                            {form.rpc_fn_name}（已保存）
+                            {tr('fnSaved', { name: form.rpc_fn_name })}
                           </option>
                         )}
                       {/*
@@ -1183,7 +1185,7 @@ export default function ScheduledTasksManager({
                     </select>
                   </FormField>
                 </div>
-                <FormField label="参数（JSON object）">
+                <FormField label={tr('fParamsJson')}>
                   <textarea
                     value={form.rpc_args}
                     onChange={(e) => setForm({ ...form, rpc_args: e.target.value })}
@@ -1198,15 +1200,15 @@ export default function ScheduledTasksManager({
             {form.kind === 'workflow' && (
               <div className="space-y-3 border-l-2 border-teal-200 pl-4">
                 <FormField
-                  label="工作流 *"
+                  label={tr('fWorkflow')}
                   hint={
                     workflowTenantId == null
-                      ? '请先选择项目'
+                      ? tr('hintSelectProjectFirst')
                       : workflowLoading
-                        ? '正在加载已启用工作流…'
+                        ? tr('hintLoadingWf')
                         : workflowOptions.length === 0
-                          ? '当前项目没有已启用的工作流'
-                          : '仅列出本项目已启用的工作流'
+                          ? tr('hintNoEnabledWf')
+                          : tr('hintOnlyEnabledWf')
                   }
                 >
                   <select
@@ -1214,12 +1216,12 @@ export default function ScheduledTasksManager({
                     onChange={(e) => setForm({ ...form, workflow_id: e.target.value })}
                     className="input-base w-full"
                   >
-                    <option value="">— 选择工作流 —</option>
+                    <option value="">{tr('selectWorkflow')}</option>
                     {editing?.kind === 'workflow' &&
                       editing.workflow_id != null &&
                       !workflowOptions.some((w) => w.id === editing.workflow_id) && (
                         <option value={String(editing.workflow_id)}>
-                          {editing.workflow_slug ?? `工作流 #${editing.workflow_id}`}（当前）
+                          {tr('wfCurrent', { slug: editing.workflow_slug ?? tr('wfNumFallback', { id: editing.workflow_id }) })}
                         </option>
                       )}
                     {workflowOptions.map((w) => (
@@ -1230,8 +1232,8 @@ export default function ScheduledTasksManager({
                   </select>
                 </FormField>
                 <FormField
-                  label="入参 (JSON 对象)"
-                  hint="作为 trigger_data；可留空，等价 {}"
+                  label={tr('fInputJson')}
+                  hint={tr('hintInputJson')}
                 >
                   <textarea
                     value={form.workflow_input}
@@ -1271,7 +1273,7 @@ export default function ScheduledTasksManager({
                     />
                   </FormField>
                 </div>
-                <FormField label="自定义 Headers (JSON)">
+                <FormField label={tr('fCustomHeaders')}>
                   <textarea
                     value={form.http_headers}
                     onChange={(e) => setForm({ ...form, http_headers: e.target.value })}
@@ -1288,11 +1290,11 @@ export default function ScheduledTasksManager({
                   />
                 </FormField>
                 <FormField
-                  label="HMAC 签名密钥"
+                  label={tr('fHmacSecret')}
                   hint={
                     editing
-                      ? '留空保留原值；填入新值会覆盖；明文密钥不会回显'
-                      : '可选；不填则不附签名头'
+                      ? tr('hintHmacEdit')
+                      : tr('hintHmacNew')
                   }
                 >
                   <input
@@ -1312,37 +1314,37 @@ export default function ScheduledTasksManager({
                 <div className="text-xs bg-red-50 border border-red-200 text-red-800 p-3 rounded space-y-1">
                   <div className="font-semibold">
                     <i className="fas fa-shield-alt mr-1"></i>
-                    Shell 任务安全须知
+                    {tr('shellSecTitle')}
                   </div>
                   <ul className="list-disc list-inside space-y-0.5">
                     <li>
-                      鉴权：
+                      {tr('shellSecAuth')}
                       {tenantMode ? (
                         <>
-                          本租户的 <b>owner / admin</b> 即可创建；脚本运行在宿主机上但走沙盒隔离
+                          {tr.rich('shellSecTenant', { b: (c) => <b>{c}</b> })}
                         </>
                       ) : (
                         <>
-                          平台级仅 <b>超管</b> 可创建；本项目跨租户/无 tenant 归属
+                          {tr.rich('shellSecPlatform', { b: (c) => <b>{c}</b> })}
                         </>
                       )}
                     </li>
                     <li>
-                      运行时沙盒由 <code>SCHEDULER_SHELL_SANDBOX_MODE</code> 决定（默认 <code>auto</code>：bwrap → nsjail → direct）
+                      {tr.rich('shellSandbox', { c: (c) => <code>{c}</code> })}
                     </li>
                     <li>
-                      <code>direct</code> 模式无沙盒，脚本以平台服务进程身份执行；生产环境请用 <code>bwrap</code> 或 <code>off</code>
+                      {tr.rich('shellDirect', { c: (c) => <code>{c}</code> })}
                     </li>
                     <li>
-                      子进程 <code>env_clear</code> 后只注入白名单（PATH/HOME + 你在 shell_env 里显式填的项），不会泄露平台自身的 secret
+                      {tr.rich('shellEnv', { c: (c) => <code>{c}</code> })}
                     </li>
                     <li>
-                      解释器走白名单（sh / bash / dash / zsh / python3 / node / ruby），无法直接调 <code>rm</code> / <code>dd</code> 等危险二进制
+                      {tr.rich('shellInterp', { c: (c) => <code>{c}</code> })}
                     </li>
                   </ul>
                 </div>
                 <div className="grid grid-cols-3 gap-4">
-                  <FormField label="解释器" hint="后端白名单：sh/bash/dash/zsh/python3/node/ruby">
+                  <FormField label={tr('fInterpreter')} hint={tr('hintInterpreter')}>
                     <select
                       value={form.shell_interpreter}
                       onChange={(e) => setForm({ ...form, shell_interpreter: e.target.value })}
@@ -1350,7 +1352,7 @@ export default function ScheduledTasksManager({
                       disabled={!!editing}
                     >
                       {!SHELL_INTERPRETERS.includes(form.shell_interpreter) && form.shell_interpreter && (
-                        <option value={form.shell_interpreter}>{form.shell_interpreter}（自定义）</option>
+                        <option value={form.shell_interpreter}>{tr('interpCustom', { v: form.shell_interpreter })}</option>
                       )}
                       {SHELL_INTERPRETERS.map((interp) => (
                         <option key={interp} value={interp}>
@@ -1360,8 +1362,8 @@ export default function ScheduledTasksManager({
                     </select>
                   </FormField>
                   <FormField
-                    label="工作目录 (cwd)"
-                    hint="留空 → 沙盒内的 /tmp"
+                    label={tr('fCwd')}
+                    hint={tr('hintCwd')}
                     className="col-span-2"
                   >
                     <input
@@ -1374,8 +1376,8 @@ export default function ScheduledTasksManager({
                   </FormField>
                 </div>
                 <FormField
-                  label="脚本内容 *"
-                  hint='以 `<interpreter> -c <script>` 形式执行；stdout/stderr 各 64KB 上限。'
+                  label={tr('fScript')}
+                  hint={tr('hintScript')}
                 >
                   <textarea
                     value={form.shell_script}
@@ -1387,8 +1389,8 @@ export default function ScheduledTasksManager({
                   />
                 </FormField>
                 <FormField
-                  label="环境变量 (JSON object，key/val 都是字符串)"
-                  hint="支持 number/bool（会被 stringify），其它类型会被忽略。key 含 `=` 或 NUL 会被丢弃。"
+                  label={tr('fShellEnv')}
+                  hint={tr('hintShellEnv')}
                 >
                   <textarea
                     value={form.shell_env}
@@ -1402,7 +1404,7 @@ export default function ScheduledTasksManager({
             )}
 
             <div className="grid grid-cols-3 gap-4">
-              <FormField label="单次超时 (秒)" hint="1–86400">
+              <FormField label={tr('fTimeout')} hint={tr('hintTimeout')}>
                 <input
                   type="number"
                   value={form.timeout_secs}
@@ -1414,7 +1416,7 @@ export default function ScheduledTasksManager({
                   max={86400}
                 />
               </FormField>
-              <FormField label="最大重试次数" hint="0–10">
+              <FormField label={tr('fMaxRetries')} hint={tr('hintMaxRetries')}>
                 <input
                   type="number"
                   value={form.max_retries}
@@ -1440,20 +1442,20 @@ export default function ScheduledTasksManager({
                       alertOpen ? 'rotate-90' : ''
                     }`}
                   />
-                  <span className="text-sm font-medium text-gray-800">失败告警 Webhook</span>
+                  <span className="text-sm font-medium text-gray-800">{tr('alertWebhook')}</span>
                   {form.alert_webhook_url.trim() ? (
                     <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-emerald-50 text-emerald-700">
-                      已配置
+                      {tr('configured')}
                     </span>
                   ) : (
-                    <span className="text-xs text-gray-400">点击展开设置</span>
+                    <span className="text-xs text-gray-400">{tr('clickExpand')}</span>
                   )}
                 </div>
               </button>
               {alertOpen && (
                 <>
                   <div className="text-xs text-gray-500">
-                    仅最终失败后发送；同一任务按限流小时数最多发送一次。URL 留空即关闭告警。
+                    {tr('alertDesc')}
                   </div>
                   <div className="grid grid-cols-3 gap-4">
                     <FormField label="Webhook URL" className="col-span-2">
@@ -1465,7 +1467,7 @@ export default function ScheduledTasksManager({
                         placeholder="https://example.com/webhook"
                       />
                     </FormField>
-                    <FormField label="限流小时数" hint="0 = 不限流；默认 24">
+                    <FormField label={tr('fRateLimitHours')} hint={tr('hintRateLimit')}>
                       <input
                         type="number"
                         value={form.alert_throttle_hours}
@@ -1482,8 +1484,8 @@ export default function ScheduledTasksManager({
                     </FormField>
                   </div>
                   <FormField
-                    label="消息模板（JSON object）"
-                    hint="可用变量：{{source}} {{name}} {{status}} {{error}} {{time}} {{run_id}} {{object_id}} {{trigger_type}} {{trace_id}}"
+                    label={tr('fMsgTemplate')}
+                    hint={tr('hintMsgTemplate', { vars: '{{source}} {{name}} {{status}} {{error}} {{time}} {{run_id}} {{object_id}} {{trigger_type}} {{trace_id}}' })}
                   >
                     <textarea
                       value={form.alert_webhook_template}
@@ -1518,7 +1520,7 @@ export default function ScheduledTasksManager({
                             : 'bg-red-100'
                       }`}
                     >
-                      试运行 · {dryRunResult.status}
+                      {tr('dryRunLabel', { status: dryRunResult.status })}
                     </span>
                     <span className="text-gray-500 ml-2">
                       <i className="fas fa-clock mr-1"></i>
@@ -1530,7 +1532,7 @@ export default function ScheduledTasksManager({
                     onClick={() => setDryRunResult(null)}
                     className="text-xs text-gray-400 hover:text-gray-600"
                   >
-                    <i className="fas fa-times mr-1"></i>关闭
+                    <i className="fas fa-times mr-1"></i>{tr('close')}
                   </button>
                 </div>
                 {dryRunResult.error_message && (
@@ -1541,7 +1543,7 @@ export default function ScheduledTasksManager({
                 {dryRunResult.output !== null && dryRunResult.output !== undefined && (
                   <details open className="bg-gray-50 border border-gray-200 rounded">
                     <summary className="cursor-pointer text-xs px-2 py-1 text-gray-700 hover:bg-gray-100">
-                      输出 (JSON)
+                      {tr('outputJson')}
                     </summary>
                     <pre className="text-xs p-2 overflow-x-auto max-h-64 whitespace-pre-wrap break-all">
                       {JSON.stringify(dryRunResult.output, null, 2)}
@@ -1553,7 +1555,7 @@ export default function ScheduledTasksManager({
 
             <div className="flex space-x-3 pt-4 border-t">
               <button type="submit" className="btn-primary">
-                <i className="fas fa-save mr-2"></i>{editing ? '保存' : '创建'}
+                <i className="fas fa-save mr-2"></i>{editing ? tr('save') : tr('create')}
               </button>
               {/*
                 测试运行按钮：与"保存"用同一份 buildCreatePayload，所以必填校验 / JSON
@@ -1568,15 +1570,15 @@ export default function ScheduledTasksManager({
                 onClick={handleDryRun}
                 disabled={dryRunning}
                 className="btn-default"
-                title="使用当前表单立即执行一次；不持久化为任务、不入运行历史。注意：脚本/HTTP/RPC 的实际副作用会真实发生。"
+                title={tr('testRunTitle')}
               >
                 {dryRunning ? (
                   <>
-                    <i className="fas fa-spinner fa-spin mr-2"></i>测试中…
+                    <i className="fas fa-spinner fa-spin mr-2"></i>{tr('testing')}
                   </>
                 ) : (
                   <>
-                    <i className="fas fa-vial mr-2"></i>测试运行
+                    <i className="fas fa-vial mr-2"></i>{tr('testRun')}
                   </>
                 )}
               </button>
@@ -1588,7 +1590,7 @@ export default function ScheduledTasksManager({
                 }}
                 className="btn-default"
               >
-                取消
+                {tr('cancel')}
               </button>
             </div>
           </form>
@@ -1598,9 +1600,9 @@ export default function ScheduledTasksManager({
       {/* 过滤器 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-2 text-xs">
-          <span className="text-gray-500">筛选：</span>
+          <span className="text-gray-500">{tr('filterBy')}</span>
           <FilterChip
-            label="全部类型"
+            label={tr('filterAllTypes')}
             active={filterKind === 'all'}
             onClick={() => setFilterKind('all')}
           />
@@ -1613,7 +1615,7 @@ export default function ScheduledTasksManager({
             onClick={() => setFilterKind('shell')}
           />
           <FilterChip
-            label="工作流"
+            label={tr('filterWorkflow')}
             active={filterKind === 'workflow'}
             onClick={() => setFilterKind('workflow')}
           />
@@ -1621,23 +1623,23 @@ export default function ScheduledTasksManager({
               017 删除该约束后已无意义) */}
           <span className="text-gray-300 px-1">|</span>
           <FilterChip
-            label="全部状态"
+            label={tr('filterAllStatus')}
             active={filterActive === 'all'}
             onClick={() => setFilterActive('all')}
           />
           <FilterChip
-            label="启用"
+            label={tr('filterActive')}
             active={filterActive === 'on'}
             onClick={() => setFilterActive('on')}
           />
           <FilterChip
-            label="停用"
+            label={tr('filterInactive')}
             active={filterActive === 'off'}
             onClick={() => setFilterActive('off')}
           />
         </div>
         <button onClick={load} className="text-xs text-gray-500 hover:text-primary-600">
-          <i className="fas fa-sync-alt mr-1"></i>刷新
+          <i className="fas fa-sync-alt mr-1"></i>{tr('refresh')}
         </button>
       </div>
 
@@ -1650,7 +1652,7 @@ export default function ScheduledTasksManager({
         ) : filteredTasks.length === 0 ? (
           <div className="text-center py-12 card">
             <i className="fas fa-clock text-5xl text-gray-300 mb-4"></i>
-            <p className="text-gray-500">暂无定时任务</p>
+            <p className="text-gray-500">{tr('emptyTasks')}</p>
           </div>
         ) : (
           filteredTasks.map((task) => (
@@ -1778,6 +1780,7 @@ function TaskRow({
   onRunNow: () => void
   onViewRuns: () => void
 }) {
+  const tr = useTranslations('wsScheduled')
   // 列表展示目标：rpc 显示函数签名，http 显示 method+url，shell 显示
   // 解释器 + 脚本首行（避免把整段脚本铺开）。脚本首行还做了截断。
   const shellFirstLine = task.shell_script?.split('\n')[0] ?? ''
@@ -1789,9 +1792,9 @@ function TaskRow({
       : task.kind === 'shell'
         ? `${task.shell_interpreter ?? '/bin/sh'} -c '${shellPreview}'`
         : task.kind === 'workflow'
-          ? `工作流 ${task.workflow_slug ?? (task.workflow_id != null ? `#${task.workflow_id}` : '—')}`
+          ? tr('taskWorkflow', { slug: task.workflow_slug ?? (task.workflow_id != null ? `#${task.workflow_id}` : '—') })
           : `${task.http_method} ${task.http_url}`
-  const tenantBadge = task.tenant_id === null ? '平台级' : tenantName ?? `租户 #${task.tenant_id}`
+  const tenantBadge = task.tenant_id === null ? tr('platformLevel') : tenantName ?? tr('tenantNum', { id: task.tenant_id })
   return (
     <div className={`card p-5 ${!task.is_active ? 'opacity-60' : ''}`}>
       <div className="flex items-start justify-between">
@@ -1805,7 +1808,7 @@ function TaskRow({
                   : 'bg-gray-100 text-gray-500'
               }`}
             >
-              {task.is_active ? '启用' : '停用'}
+              {task.is_active ? tr('active') : tr('inactive')}
             </span>
             <span
               className={`px-2 py-0.5 rounded text-xs font-mono ${
@@ -1818,7 +1821,7 @@ function TaskRow({
                       : 'bg-blue-100 text-blue-700'
               }`}
             >
-              {task.kind === 'workflow' ? '工作流' : task.kind.toUpperCase()}
+              {task.kind === 'workflow' ? tr('typeWorkflow') : task.kind.toUpperCase()}
             </span>
             <span className="px-2 py-0.5 rounded text-xs font-mono bg-gray-100 text-gray-700">
               {task.cron_expr} · {task.timezone}
@@ -1827,7 +1830,7 @@ function TaskRow({
               <span
                 className={`px-2 py-0.5 rounded text-xs ${statusColor(task.last_run_status)}`}
               >
-                上次：{task.last_run_status}
+                {tr('lastRun', { status: task.last_run_status })}
               </span>
             )}
             {showTenant && (
@@ -1842,41 +1845,41 @@ function TaskRow({
           <p className="text-xs text-gray-500 font-mono break-all">{target}</p>
           <div className="text-xs text-gray-400 mt-1 space-x-4">
             <span title={task.created_by_email || undefined}>
-              <i className="fas fa-user text-gray-300 mr-1"></i>创建人：
-              {task.created_by_name || '未知'}
+              <i className="fas fa-user text-gray-300 mr-1"></i>{tr('createdBy')}
+              {task.created_by_name || tr('unknown')}
             </span>
             <span>
-              <i className="fas fa-arrow-right text-gray-300 mr-1"></i>下次：
+              <i className="fas fa-arrow-right text-gray-300 mr-1"></i>{tr('nextRun')}
               {formatDateTime(task.next_run_at)}
             </span>
             <span>
-              <i className="fas fa-history text-gray-300 mr-1"></i>上次：
+              <i className="fas fa-history text-gray-300 mr-1"></i>{tr('lastRunLine')}
               {formatDateTime(task.last_run_at)}
             </span>
             <span>
-              超时 {task.timeout_secs}s · 重试 {task.max_retries} · overlap=
+              {tr('timeoutRetryLine', { timeout: task.timeout_secs, retries: task.max_retries })}
               {task.overlap_policy}
             </span>
           </div>
         </div>
         <div className="flex items-center space-x-2 flex-shrink-0 ml-3">
           <button onClick={onRunNow} className="btn-default text-xs" disabled={!task.is_active}>
-            <i className="fas fa-bolt mr-1"></i>立即运行
+            <i className="fas fa-bolt mr-1"></i>{tr('runNow')}
           </button>
           <button onClick={onViewRuns} className="btn-default text-xs">
-            <i className="fas fa-list mr-1"></i>历史
+            <i className="fas fa-list mr-1"></i>{tr('history')}
           </button>
           <button onClick={onEdit} className="btn-default text-xs">
-            <i className="fas fa-edit mr-1"></i>编辑
+            <i className="fas fa-edit mr-1"></i>{tr('edit')}
           </button>
           <button onClick={onToggle} className="btn-default text-xs">
             <i className={`fas ${task.is_active ? 'fa-pause' : 'fa-play'} mr-1`}></i>
-            {task.is_active ? '停用' : '启用'}
+            {task.is_active ? tr('inactive') : tr('active')}
           </button>
           <button
             onClick={onDelete}
             className="text-red-500 hover:text-red-700 text-xs px-2 py-1"
-            title="删除"
+            title={tr('delete')}
           >
             <i className="fas fa-trash"></i>
           </button>
@@ -1899,6 +1902,7 @@ function RunsDrawer({
   onClose: () => void
   onRefresh: () => void
 }) {
+  const tr = useTranslations('wsScheduled')
   const [expanded, setExpanded] = useState<number | null>(null)
   return (
     <div
@@ -1910,11 +1914,11 @@ function RunsDrawer({
         <div className="px-5 py-4 border-b flex items-center justify-between">
           <div className="min-w-0">
             <h3 className="font-semibold text-gray-900 truncate">{task.name}</h3>
-            <p className="text-xs text-gray-500 mt-0.5">执行历史 · 最近 50 行</p>
+            <p className="text-xs text-gray-500 mt-0.5">{tr('runsHistoryDesc')}</p>
           </div>
           <div className="flex items-center space-x-2">
             <button onClick={onRefresh} className="btn-default text-xs">
-              <i className="fas fa-sync-alt mr-1"></i>刷新
+              <i className="fas fa-sync-alt mr-1"></i>{tr('refresh')}
             </button>
             <button onClick={onClose} className="text-gray-400 hover:text-gray-700">
               <i className="fas fa-times text-lg"></i>
@@ -1929,7 +1933,7 @@ function RunsDrawer({
           ) : runs.length === 0 ? (
             <div className="text-center py-12 text-gray-400">
               <i className="fas fa-history text-3xl mb-2"></i>
-              <p className="text-sm">尚无执行记录</p>
+              <p className="text-sm">{tr('noRuns')}</p>
             </div>
           ) : (
             runs.map((run) => (
@@ -1952,7 +1956,7 @@ function RunsDrawer({
                       {run.duration_ms != null ? `${run.duration_ms}ms` : '—'}
                     </span>
                     <span className="text-xs text-gray-400">
-                      尝试 #{run.attempt_number} · {run.triggered_by}
+                      {tr('attemptLine', { n: run.attempt_number, by: run.triggered_by })}
                     </span>
                   </div>
                   <i
@@ -1963,7 +1967,7 @@ function RunsDrawer({
                   <div className="px-4 pb-3 text-xs space-y-2 border-t bg-gray-50">
                     {run.error_message && (
                       <div className="pt-2">
-                        <div className="font-medium text-red-700 mb-1">错误信息</div>
+                        <div className="font-medium text-red-700 mb-1">{tr('errorInfo')}</div>
                         <pre className="bg-red-50 text-red-800 p-2 rounded whitespace-pre-wrap break-all">
                           {run.error_message}
                         </pre>
@@ -1971,7 +1975,7 @@ function RunsDrawer({
                     )}
                     {run.output !== null && run.output !== undefined && (
                       <div className="pt-2">
-                        <div className="font-medium text-gray-700 mb-1">输出</div>
+                        <div className="font-medium text-gray-700 mb-1">{tr('output')}</div>
                         <pre className="bg-white border border-gray-200 p-2 rounded font-mono overflow-x-auto max-h-64">
                           {typeof run.output === 'string'
                             ? run.output

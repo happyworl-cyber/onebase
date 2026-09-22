@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import api, { rbacAPI, rpcAclAPI, type RpcAclEntry } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
 import { useNotification } from '@/hooks/useNotification'
+import { useTranslations } from 'next-intl'
 import PermissionGate from '@/components/PermissionGate'
 
 interface FunctionInfo {
@@ -37,14 +38,16 @@ interface Role {
 }
 
 export default function RpcAclPage() {
+  const t = useTranslations('wsRpcAcl')
   return (
-    <PermissionGate requires="canManageRbac" pageName="RPC 授权管理">
+    <PermissionGate requires="canManageRbac" pageName={t('gate')}>
       <RpcAclPageInner />
     </PermissionGate>
   )
 }
 
 function RpcAclPageInner() {
+  const t = useTranslations('wsRpcAcl')
   const notify = useNotification()
   const currentConnection = useAppStore((s) => s.currentConnection)
   const storeSchema = useAppStore((s) => s.currentSchema)
@@ -110,9 +113,9 @@ function RpcAclPageInner() {
     } catch (err: any) {
       const status = err?.response?.status
       if (status === 403) {
-        setFnError('当前账号无 /query 访问权限，无法列出函数（仅平台超管可枚举）。已配置的授权可正常查看与收回。')
+        setFnError(t('fnErrNoAccess'))
       } else {
-        setFnError(err?.response?.data?.error || err?.message || '加载函数失败')
+        setFnError(err?.response?.data?.error || err?.message || t('fnLoadFailed'))
         notify.error(err)
       }
       setFunctions([])
@@ -181,15 +184,15 @@ function RpcAclPageInner() {
 
   const grant = async () => {
     if (!databaseId) {
-      notify.warning('请先选择数据库连接')
+      notify.warning(t('errSelectConn'))
       return
     }
     if (!formSchema.trim() || !formFunction.trim()) {
-      notify.warning('请选择 schema 和函数')
+      notify.warning(t('errSelectFn'))
       return
     }
     if (!formRoleId) {
-      notify.warning('请选择角色')
+      notify.warning(t('errSelectRole'))
       return
     }
     setGranting(true)
@@ -200,7 +203,7 @@ function RpcAclPageInner() {
         function_name: formFunction.trim(),
         role_id: Number(formRoleId),
       })
-      notify.success('授权成功')
+      notify.success(t('grantOk'))
       setFormFunction('')
       loadAcls()
     } catch (err: any) {
@@ -212,12 +215,12 @@ function RpcAclPageInner() {
 
   const revoke = async (entry: RpcAclEntry) => {
     const confirmed = window.confirm(
-      `确定要从角色「${entry.role_name}」移除对 ${entry.resource} 的 EXECUTE 权限吗？`,
+      t('confirmRevoke', { role: entry.role_name, resource: entry.resource }),
     )
     if (!confirmed) return
     try {
       await rpcAclAPI.revoke(entry.permission_id, entry.role_id)
-      notify.success('已收回')
+      notify.success(t('revoked'))
       loadAcls()
     } catch (err: any) {
       notify.error(err)
@@ -239,17 +242,14 @@ function RpcAclPageInner() {
     return (
       <div className="space-y-4">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-800">RPC 授权</h1>
+          <h1 className="text-2xl font-semibold text-gray-800">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            管理当前项目 PostgreSQL 函数（
-            <code className="px-1 bg-gray-100 rounded">/api/v1/&#123;database_id&#125;/rpc/&lt;fn&gt;</code>
-            ）的基于角色 EXECUTE 权限。
+            {t.rich('desc', { code: () => <code className="px-1 bg-gray-100 rounded">{'/api/v1/{database_id}/rpc/<fn>'}</code> })}
           </p>
         </div>
         <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-900">
           <i className="fas fa-exclamation-triangle mr-2"></i>
-          当前未选数据库连接。请到 <code className="px-1 bg-yellow-100 rounded">数据库连接</code> 页选一个项目数据库，
-          再回到本页配置 RPC 授权。
+          {t.rich('noConnWarn', { code: (c) => <code className="px-1 bg-yellow-100 rounded">{c}</code> })}
         </div>
       </div>
     )
@@ -258,14 +258,12 @@ function RpcAclPageInner() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-gray-800">RPC 授权</h1>
+        <h1 className="text-2xl font-semibold text-gray-800">{t('title')}</h1>
         <p className="text-sm text-gray-500 mt-1">
-          管理当前项目 PostgreSQL 函数（
-          <code className="px-1 bg-gray-100 rounded">/api/v1/&#123;database_id&#125;/rpc/&lt;fn&gt;</code>
-          ）的基于角色 EXECUTE 权限。
+          {t.rich('desc', { code: () => <code className="px-1 bg-gray-100 rounded">{'/api/v1/{database_id}/rpc/<fn>'}</code> })}
         </p>
         <p className="mt-1 text-xs text-gray-400">
-          当前连接：
+          {t('currentConn')}
           <code className="px-1 bg-gray-100 rounded">
             {currentConnection?.db_host || '?'}:{currentConnection?.db_port ?? '?'}/{currentConnection?.db_name ?? '?'}
           </code>
@@ -279,17 +277,13 @@ function RpcAclPageInner() {
           <i className="fas fa-info-circle text-blue-500 mt-0.5"></i>
           <div className="space-y-1">
             <p>
-              <span className="font-semibold">opt-in 工作模式：</span>
-              一个函数 <span className="font-semibold">从未</span> 被配过任何 EXECUTE
-              授权时，处于「兼容模式」，任何登录用户都能调用。
+              {t.rich('optInPara', { b: (c) => <span className="font-semibold">{c}</span> })}
             </p>
             <p>
-              一旦你给某个函数配了哪怕一行授权，它会立即转入「严格模式」——
-              <span className="font-semibold">未授权角色调用会得到 403</span>。
+              {t.rich('strictPara', { b: (c) => <span className="font-semibold">{c}</span> })}
             </p>
             <p className="text-blue-700">
-              超级管理员永远跳过 ACL 检查；普通用户调用 RPC 必须带{' '}
-              <code className="px-1 bg-blue-100 rounded">X-Database-Id</code> 头。
+              {t.rich('superAdminPara', { code: (c) => <code className="px-1 bg-blue-100 rounded">{c}</code> })}
             </p>
           </div>
         </div>
@@ -306,7 +300,7 @@ function RpcAclPageInner() {
       {/* 授予表单 */}
       <div className="card p-4">
         <div className="text-sm font-semibold text-gray-700 mb-3">
-          <i className="fas fa-plus-circle mr-2 text-blue-500"></i>新增授权
+          <i className="fas fa-plus-circle mr-2 text-blue-500"></i>{t('addGrant')}
         </div>
         <div className="grid grid-cols-12 gap-3 items-end">
           <div className="col-span-2">
@@ -322,7 +316,7 @@ function RpcAclPageInner() {
           </div>
           <div className="col-span-5">
             <label className="block text-xs font-medium text-gray-700 mb-1">
-              函数（来自 {formSchema} schema）
+              {t('fnFromSchema', { schema: formSchema })}
               {loadingFns && (
                 <span className="ml-2 text-gray-400">
                   <i className="fas fa-spinner fa-spin"></i>
@@ -338,15 +332,15 @@ function RpcAclPageInner() {
               <option value="">
                 {functions.length === 0
                   ? fnError
-                    ? '— 无法枚举函数 —'
-                    : '— 该 schema 下无函数 —'
-                  : '— 选择函数 —'}
+                    ? t('fnCantEnum')
+                    : t('fnNoneInSchema')
+                  : t('fnSelect')}
               </option>
               {uniqueFunctions.map((f) => {
                 const resKey = `${f.schema_name}.${f.function_name}`
                 const isConfigured = aclResources.has(resKey)
                 const overloadHint =
-                  f.overloadCount > 1 ? `  · 共 ${f.overloadCount} 个重载共享授权` : ''
+                  f.overloadCount > 1 ? t('overloadHint', { n: f.overloadCount }) : ''
                 return (
                   <option key={resKey} value={f.function_name}>
                     {isConfigured ? '● ' : '○ '}
@@ -358,7 +352,7 @@ function RpcAclPageInner() {
             </select>
           </div>
           <div className="col-span-3">
-            <label className="block text-xs font-medium text-gray-700 mb-1">角色</label>
+            <label className="block text-xs font-medium text-gray-700 mb-1">{t('roleLabel')}</label>
             <select
               value={formRoleId}
               onChange={(e) =>
@@ -366,7 +360,7 @@ function RpcAclPageInner() {
               }
               className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
             >
-              <option value="">— 选择角色 —</option>
+              <option value="">{t('selectRole')}</option>
               {roles.map((r) => (
                 <option key={r.id} value={r.id}>
                   {r.name}
@@ -383,44 +377,42 @@ function RpcAclPageInner() {
             >
               {granting ? (
                 <>
-                  <i className="fas fa-spinner fa-spin mr-2"></i>授予中…
+                  <i className="fas fa-spinner fa-spin mr-2"></i>{t('granting')}
                 </>
               ) : (
                 <>
-                  <i className="fas fa-check mr-2"></i>授予
+                  <i className="fas fa-check mr-2"></i>{t('grant')}
                 </>
               )}
             </button>
           </div>
         </div>
         <p className="mt-2 text-xs text-gray-500">
-          下拉里 ● 表示已配过 ACL（严格模式）；○ 表示尚处兼容模式。
+          {t('dropdownLegend')}
         </p>
       </div>
 
       {/* ACL 列表 */}
       <div className="card">
         <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
-          <span className="text-sm font-semibold text-gray-700">已配置授权</span>
+          <span className="text-sm font-semibold text-gray-700">{t('configuredGrants')}</span>
           <button
             onClick={loadAcls}
             disabled={loadingAcls}
             className="text-xs text-blue-600 hover:text-blue-700"
           >
-            <i className={`fas fa-sync mr-1 ${loadingAcls ? 'fa-spin' : ''}`}></i>刷新
+            <i className={`fas fa-sync mr-1 ${loadingAcls ? 'fa-spin' : ''}`}></i>{t('refresh')}
           </button>
         </div>
         {grouped.length === 0 ? (
           <div className="p-8 text-center text-sm text-gray-500">
             {loadingAcls ? (
               <>
-                <i className="fas fa-spinner fa-spin mr-2"></i>加载中…
+                <i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}
               </>
             ) : (
               <>
-                当前还没有任何 RPC 授权。所有函数都在「兼容模式」下：
-                <br />
-                登录用户都可调用，直到你为它新增第一条授权为止。
+                {t('emptyGrants')}
               </>
             )}
           </div>
@@ -431,7 +423,7 @@ function RpcAclPageInner() {
                 <div className="flex items-center justify-between mb-2">
                   <code className="text-sm font-mono text-gray-900">{resource}()</code>
                   <span className="text-[10px] px-1.5 py-0.5 bg-orange-100 text-orange-700 rounded font-medium">
-                    严格模式
+                    {t('strictMode')}
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -445,7 +437,7 @@ function RpcAclPageInner() {
                       <button
                         onClick={() => revoke(e)}
                         className="text-red-500 hover:text-red-700 transition-colors"
-                        title="收回"
+                        title={t('revoke')}
                       >
                         <i className="fas fa-times"></i>
                       </button>

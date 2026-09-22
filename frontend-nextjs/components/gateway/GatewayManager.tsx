@@ -25,6 +25,7 @@ import type {
   GatewaySecretAsset,
 } from '@/lib/gatewayApi'
 import { useNotification } from '@/hooks/useNotification'
+import { useTranslations } from 'next-intl'
 
 type MainTab = 'routes' | 'blacklist' | 'monitoring' | 'plugins' | 'keys' | 'cli' | 'audit'
 type PluginSubTab = 'registry' | 'assign'
@@ -67,23 +68,18 @@ const EMPTY_POLICY: GatewayRoutePolicy = {
 }
 
 const PLUGIN_PHASE_LABEL: Record<GatewayPluginType, string> = {
-  auth: '入站身份',
-  inject: '后端凭据',
+  auth: 'slotAuth',
+  inject: 'slotInject',
 }
 
-function formatPluginPhase(type: GatewayPluginType) {
-  return PLUGIN_PHASE_LABEL[type] || type
+function formatPluginPhase(type: GatewayPluginType, t: (k: string) => string) {
+  return PLUGIN_PHASE_LABEL[type] ? t(PLUGIN_PHASE_LABEL[type]) : type
 }
 
-const GATEWAY_PIPELINE_NOTE =
-  '执行顺序：Host/Route IP 黑名单 → Route IP Allowlist → timestamp / WAF / 限流（Allowlist 只做准入，不跳过安全策略）' +
-  ' → 入站身份 auth 槽（选一：none / im_token / optional_im_token / supabase）' +
-  ' → 后端凭据注入 inject（按需：workflow_token_inject → Bearer，es_app_token_inject → ApiKey；与 auth 正交组合）'
-
-const ACCESS_STATS_RANGES: Array<{ value: GatewayAccessStatsRange; label: string }> = [
-  { value: '1h', label: '最近 1 小时' },
-  { value: '24h', label: '最近 24 小时' },
-  { value: '7d', label: '最近 7 天' },
+const ACCESS_STATS_RANGES: Array<{ value: GatewayAccessStatsRange; labelKey: string }> = [
+  { value: '1h', labelKey: 'range1h' },
+  { value: '24h', labelKey: 'range24h' },
+  { value: '7d', labelKey: 'range7d' },
 ]
 
 function linesToList(text: string) {
@@ -284,15 +280,15 @@ function formatPercent(value?: number) {
   return `${((value || 0) * 100).toFixed(2)}%`
 }
 
-function formatChange(current?: number, previous?: number) {
+function formatChange(current: number | undefined, previous: number | undefined, t: (k: string, p?: any) => string) {
   const curr = current || 0
   const prev = previous || 0
   if (prev <= 0) {
-    return curr > 0 ? '较上期新增' : '较上期持平'
+    return curr > 0 ? t('trendNew') : t('trendFlat')
   }
   const change = (curr - prev) / prev
   const sign = change > 0 ? '+' : ''
-  return `较上期 ${sign}${(change * 100).toFixed(1)}%`
+  return t('trendPct', { sign, pct: (change * 100).toFixed(1) })
 }
 
 function formatRT(value?: number) {
@@ -364,6 +360,7 @@ function TrendChart({
   formatValue: (value: number) => string
 }) {
   const chartPoints = points || []
+  const t = useTranslations('wsGateway')
   const max = Math.max(...chartPoints.map(value), 1)
   const width = 640
   const height = 180
@@ -382,7 +379,7 @@ function TrendChart({
     <div className="border border-gray-200 rounded-lg p-4 bg-white">
       <div className="flex items-center justify-between mb-3">
         <div className="text-sm font-semibold text-gray-900">{title}</div>
-        <div className="text-xs text-gray-500">最新 {formatValue(latest)}</div>
+        <div className="text-xs text-gray-500">{t('latest', { v: formatValue(latest) })}</div>
       </div>
       <svg viewBox={`0 0 ${width + axisWidth} ${height + axisBottom}`} className="w-full h-48 overflow-visible">
         {ticks.map((tick) => {
@@ -418,7 +415,7 @@ function TrendChart({
       <div className="text-[11px] text-gray-400 mt-2">
         {chartPoints.length > 0
           ? `${formatTime(chartPoints[0].ts)} → ${formatTime(chartPoints[chartPoints.length - 1].ts)}`
-          : '暂无统计点'}
+          : t('noStatsPoint')}
       </div>
     </div>
   )
@@ -426,6 +423,7 @@ function TrendChart({
 
 function LatencyPercentileChart({ points }: { points: GatewayAccessStatsPoint[] }) {
   const chartPoints = points || []
+  const t = useTranslations('wsGateway')
   const series = [
     { key: 'p50_rt', label: 'P50', color: '#16a34a', get: (point: GatewayAccessStatsPoint) => point.p50_rt },
     { key: 'p95_rt', label: 'P95', color: '#2563eb', get: (point: GatewayAccessStatsPoint) => point.p95_rt },
@@ -449,7 +447,7 @@ function LatencyPercentileChart({ points }: { points: GatewayAccessStatsPoint[] 
   return (
     <div className="border border-gray-200 rounded-lg p-4 bg-white">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-        <div className="text-sm font-semibold text-gray-900">延迟分位趋势</div>
+        <div className="text-sm font-semibold text-gray-900">{t('latencyPercentileTrend')}</div>
         <div className="flex flex-wrap gap-3 text-xs">
           {series.map((item) => (
             <span key={item.key} className="flex items-center gap-1 text-gray-600">
@@ -497,13 +495,14 @@ function LatencyPercentileChart({ points }: { points: GatewayAccessStatsPoint[] 
       <div className="text-[11px] text-gray-400 mt-2">
         {chartPoints.length > 0
           ? `${formatTime(chartPoints[0].ts)} → ${formatTime(chartPoints[chartPoints.length - 1].ts)}`
-          : '暂无统计点'}
+          : t('noStatsPoint')}
       </div>
     </div>
   )
 }
 
 function DistributionBars({ title, values }: { title: string; values: Record<string, number> }) {
+  const t = useTranslations('wsGateway')
   const entries = Object.entries(values || {})
     .sort((a, b) => b[1] - a[1])
     .slice(0, 8)
@@ -523,13 +522,14 @@ function DistributionBars({ title, values }: { title: string; values: Record<str
             </div>
           </div>
         ))}
-        {entries.length === 0 && <div className="text-sm text-gray-400">暂无分布数据</div>}
+        {entries.length === 0 && <div className="text-sm text-gray-400">{t('noDistData')}</div>}
       </div>
     </div>
   )
 }
 
 function UriList({ title, items, kind }: { title: string; items: GatewayAccessStatsURIItem[]; kind: 'top' | 'error' }) {
+  const t = useTranslations('wsGateway')
   return (
     <div className="border border-gray-200 rounded-lg bg-white overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-100 text-sm font-semibold text-gray-900">{title}</div>
@@ -544,15 +544,16 @@ function UriList({ title, items, kind }: { title: string; items: GatewayAccessSt
           )}
         </div>
       ))}
-      {(!items || items.length === 0) && <div className="p-6 text-sm text-gray-400 text-center">暂无数据</div>}
+      {(!items || items.length === 0) && <div className="p-6 text-sm text-gray-400 text-center">{t('noData')}</div>}
     </div>
   )
 }
 
 function SlowRequestList({ items }: { items: GatewayAccessStatsSlowRequest[] }) {
+  const t = useTranslations('wsGateway')
   return (
     <div className="border border-gray-200 rounded-lg bg-white overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-100 text-sm font-semibold text-gray-900">慢请求样本</div>
+      <div className="px-4 py-3 border-b border-gray-100 text-sm font-semibold text-gray-900">{t('slowSample')}</div>
       {(items || []).slice(0, 10).map((item, index) => (
         <div key={`${item.uri}-${item.rt}-${index}`} className="grid grid-cols-[1fr_70px_70px] gap-3 px-4 py-3 border-b border-gray-100 text-sm">
           <div>
@@ -563,7 +564,7 @@ function SlowRequestList({ items }: { items: GatewayAccessStatsSlowRequest[] }) 
           <span className="font-mono text-xs text-gray-500">{item.status || '-'}</span>
         </div>
       ))}
-      {(!items || items.length === 0) && <div className="p-6 text-sm text-gray-400 text-center">暂无慢请求</div>}
+      {(!items || items.length === 0) && <div className="p-6 text-sm text-gray-400 text-center">{t('noSlow')}</div>}
     </div>
   )
 }
@@ -574,6 +575,7 @@ export default function GatewayManager({
   workspaceConfig,
 }: GatewayManagerProps = {}) {
   const notify = useNotification()
+  const t = useTranslations('wsGateway')
   const initialGatewayConfig = readGatewayWorkspaceConfig(workspaceConfig)
   const [tab, setTab] = useState<MainTab>('routes')
   const [pluginTab, setPluginTab] = useState<PluginSubTab>('registry')
@@ -725,7 +727,7 @@ export default function GatewayManager({
   const routePreview = `HSET gateway:policy:${host || '{host}'}:routes \\\n  "${selectedPrefix || '/'}" \\\n  '${JSON.stringify(previewPolicy, null, 2)}'`
   const blacklistPreview = linesToList(globalBlacklistText).length
     ? `SET gateway:policy:${host || '{host}'}:global_blacklist \\\n  '${JSON.stringify(linesToList(globalBlacklistText), null, 2)}'`
-    : `# 列表为空时删除 key\n# DEL gateway:policy:${host || '{host}'}:global_blacklist`
+    : `# ${t('delKeyComment').split('\n')[0].replace(/^# /, '')}\n# DEL gateway:policy:${host || '{host}'}:global_blacklist`
 
   const findMonitoringTarget = (targetEnv: GatewayEnv, targetHost: string) =>
     monitoringTargets.find((target) => target.env === targetEnv && target.host === targetHost)
@@ -748,7 +750,7 @@ export default function GatewayManager({
 
   const saveGatewayConfig = async () => {
     if (!project) {
-      notify.warning('当前页面缺少项目标识，无法保存网关域名配置')
+      notify.warning(t('errNoProjectSave'))
       return
     }
 
@@ -757,7 +759,7 @@ export default function GatewayManager({
       intranet: linesToList(configuredHostsText.intranet),
     }
     if (hosts.prod.length === 0 && hosts.intranet.length === 0) {
-      notify.warning('请至少配置一个网关域名')
+      notify.warning(t('errAtLeastOneHost'))
       return
     }
 
@@ -766,7 +768,7 @@ export default function GatewayManager({
       const nextTargets = buildMonitoringTargets(hosts)
       const targetsResp = await gatewayControlAPI.setMonitoringTargets(project, nextTargets)
       setMonitoringTargets(targetsResp.data.targets || nextTargets)
-      notify.success('网关域名配置已保存到控制面')
+      notify.success(t('hostsSaved'))
     } catch (err) {
       notify.error(err)
     } finally {
@@ -862,7 +864,7 @@ export default function GatewayManager({
   const createCliToken = async (event: FormEvent) => {
     event.preventDefault()
     if (!cliTokenForm.name || !cliTokenForm.username) {
-      notify.warning('请填写 token 名称和用户名')
+      notify.warning(t('errTokenNameUser'))
       return
     }
     try {
@@ -874,18 +876,18 @@ export default function GatewayManager({
       })
       setCreatedCliToken(resp.data.token.token || '')
       await loadCliTokens()
-      notify.success('CLI token 已创建，明文只展示一次')
+      notify.success(t('cliCreated'))
     } catch (err) {
       notify.error(getGatewayErrorMessage(err))
     }
   }
 
   const revokeCliToken = async (token: GatewayCliToken) => {
-    if (!window.confirm(`确认吊销 ${token.name} ?`)) return
+    if (!window.confirm(t('confirmRevoke', { name: token.name }))) return
     try {
       await gatewayControlAPI.revokeCliToken(token.id)
       await loadCliTokens()
-      notify.success('CLI token 已吊销')
+      notify.success(t('cliRevoked'))
     } catch (err) {
       notify.error(getGatewayErrorMessage(err))
     }
@@ -1021,58 +1023,58 @@ export default function GatewayManager({
 
   const publishRoute = async () => {
     if (!host) {
-      notify.warning('请先选择或填写 host')
+      notify.warning(t('errSelectHost'))
       return
     }
     if (!selectedPrefix || !selectedPrefix.startsWith('/')) {
-      notify.warning('Route Prefix 必须以 / 开头')
+      notify.warning(t('errRoutePrefix'))
       return
     }
     if (isDraftRoute && routes.some((row) => row.prefix === selectedPrefix)) {
-      notify.warning('Route Prefix 与已有 route 重复，请修改后再发布')
+      notify.warning(t('errRouteDup'))
       return
     }
     const auth = policy.auth || 'none'
     const effectiveWorkflowAsset = auth === 'supabase' ? '' : workflowAsset
     const effectiveEsAsset = auth === 'supabase' ? '' : esAsset
     if (effectiveWorkflowAsset && effectiveEsAsset) {
-      notify.warning('Workflow Token 与 ES App Key 不能同时注入，请只选择一种后端凭据')
+      notify.warning(t('errBothTokens'))
       return
     }
     if (auth !== 'supabase' && (routeType === 'workflow' || policy.workflow_token)
       && effectiveWorkflowAsset === '' && policy.workflow_token?.redacted) {
-      notify.warning('当前 workflow token 已脱敏，重新发布前请选择一个 workflow 资产')
+      notify.warning(t('errWfTokenMasked'))
       return
     }
     if (auth !== 'supabase' && (routeType === 'es_app' || policy.es_app_token)
       && effectiveEsAsset === '' && policy.es_app_token?.redacted) {
-      notify.warning('当前 ES App token 已脱敏，重新发布前请选择一个 ES App 资产')
+      notify.warning(t('errEsTokenMasked'))
       return
     }
 
     const allowlist = linesToList(routeAllowlistText)
     if (policy.ip_filter?.allowlist_enabled && allowlist.length === 0) {
-      notify.warning('启用 Route IP Allowlist 时，至少需要填写一个 IPv4 或 CIDR')
+      notify.warning(t('errAllowlistEmpty'))
       return
     }
     const invalidAllowlistRule = allowlist.find((rule) => !isValidIPv4OrCIDR(rule))
     if (policy.ip_filter?.allowlist_enabled && invalidAllowlistRule) {
-      notify.warning(`Allowlist 包含无效的 IPv4 或 CIDR：${invalidAllowlistRule}`)
+      notify.warning(t('errAllowlistInvalid', { rule: invalidAllowlistRule }))
       return
     }
 
     const nextPolicy = buildRoutePolicyPayload(policy, routeBlacklistText, routeAllowlistText)
     const authKey = nextPolicy.auth || 'none'
     if (!projectPluginKeys.includes(authKey)) {
-      notify.warning(`鉴权插件 ${authKey} 未在本项目启用，请先到「项目插件 → 项目关联」勾选`)
+      notify.warning(t('errAuthNotEnabled', { key: authKey }))
       return
     }
     if (effectiveWorkflowAsset && !projectPluginKeys.includes('workflow_token_inject')) {
-      notify.warning('Workflow Token 注入未在本项目启用')
+      notify.warning(t('errWfInjectNotEnabled'))
       return
     }
     if (effectiveEsAsset && !projectPluginKeys.includes('es_app_token_inject')) {
-      notify.warning('ES App Key 注入未在本项目启用')
+      notify.warning(t('errEsInjectNotEnabled'))
       return
     }
 
@@ -1085,7 +1087,7 @@ export default function GatewayManager({
         workflow_token_asset: effectiveWorkflowAsset || undefined,
         es_app_token_asset: effectiveEsAsset || undefined,
       })
-      notify.success('Route policy 已发布到 Redis')
+      notify.success(t('routePublished'))
       setIsDraftRoute(false)
       await loadGatewayData()
     } catch (err) {
@@ -1096,13 +1098,13 @@ export default function GatewayManager({
   const deleteRoute = async () => {
     if (!host || !selectedPrefix) return
     if (!project) {
-      notify.warning('当前页面缺少项目标识，无法删除路由')
+      notify.warning(t('errNoProjectDel'))
       return
     }
-    if (!window.confirm(`确认删除 route ${selectedPrefix}？`)) return
+    if (!window.confirm(t('confirmDeleteRoute', { prefix: selectedPrefix }))) return
     try {
       await gatewayControlAPI.deleteRoute(host, selectedPrefix, project)
-      notify.success('Route policy 已删除')
+      notify.success(t('routeDeleted'))
       setSelectedPrefix('')
       setPolicy(clonePolicy(EMPTY_POLICY))
       setRouteBlacklistText('')
@@ -1115,12 +1117,12 @@ export default function GatewayManager({
 
   const saveBlacklist = async () => {
     if (!host) {
-      notify.warning('请先选择或填写 host')
+      notify.warning(t('errSelectHost'))
       return
     }
     try {
       await gatewayControlAPI.putGlobalBlacklist(host, linesToList(globalBlacklistText))
-      notify.success('Host 黑名单已发布')
+      notify.success(t('hostBlacklistPublished'))
     } catch (err) {
       notify.error(getGatewayErrorMessage(err))
     }
@@ -1129,7 +1131,7 @@ export default function GatewayManager({
   const savePlugin = async (event: FormEvent) => {
     event.preventDefault()
     if (!pluginForm.key.trim() || !pluginForm.label.trim()) {
-      notify.warning('插件 key 和显示名称不能为空')
+      notify.warning(t('errPluginKeyLabel'))
       return
     }
     try {
@@ -1141,7 +1143,7 @@ export default function GatewayManager({
         desc: pluginForm.desc.trim(),
         requires: (pluginForm.requires || []).filter(Boolean),
       })
-      notify.success('插件已保存')
+      notify.success(t('pluginSaved'))
       setPluginForm({ key: '', type: 'auth', label: '', module: '', desc: '', requires: [] })
       await loadGatewayData()
     } catch (err) {
@@ -1151,10 +1153,10 @@ export default function GatewayManager({
 
   const deletePlugin = async (plugin: GatewayPlugin) => {
     if (plugin.builtin) return
-    if (!window.confirm(`确认删除插件 ${plugin.key}？`)) return
+    if (!window.confirm(t('confirmDeletePlugin', { key: plugin.key }))) return
     try {
       await gatewayControlAPI.deletePlugin(plugin.key)
-      notify.success('插件已删除')
+      notify.success(t('pluginDeleted'))
       await loadGatewayData()
     } catch (err) {
       notify.error(getGatewayErrorMessage(err))
@@ -1169,9 +1171,9 @@ export default function GatewayManager({
       setProjectPluginKeys(saved)
       const autoEnabled = saved.filter((item) => !previous.includes(item))
       if (autoEnabled.length > 0) {
-        notify.success(`项目插件已保存，并自动启用依赖：${autoEnabled.join(', ')}`)
+        notify.success(t('projPluginSavedAuto', { deps: autoEnabled.join(', ') }))
       } else {
-        notify.success('项目插件关联已保存')
+        notify.success(t('projPluginSaved'))
       }
       if (!enabled) {
         if (workflowAsset && !saved.includes('workflow_token_inject')) setWorkflowAsset('')
@@ -1185,7 +1187,7 @@ export default function GatewayManager({
   const saveAsset = async (event: FormEvent) => {
     event.preventDefault()
     if (!assetForm.name.trim() || !assetForm.plaintext.trim()) {
-      notify.warning('资产名称和明文 API Key 不能为空')
+      notify.warning(t('errAssetNameKey'))
       return
     }
     try {
@@ -1196,7 +1198,7 @@ export default function GatewayManager({
         key_id: assetForm.key_id || undefined,
         desc: assetForm.desc?.trim(),
       })
-      notify.success('资产已加密保存')
+      notify.success(t('assetSaved'))
       setAssetForm({
         name: '',
         type: 'workflow_token',
@@ -1212,7 +1214,7 @@ export default function GatewayManager({
   }
 
   const replaceAsset = async (asset: GatewaySecretAsset) => {
-    const plaintext = window.prompt(`输入 ${asset.name} 的新明文 API Key`)
+    const plaintext = window.prompt(t('promptNewKey', { name: asset.name }))
     if (!plaintext) return
     try {
       await gatewayControlAPI.replaceAsset(asset.name, {
@@ -1223,7 +1225,7 @@ export default function GatewayManager({
         plaintext,
         desc: asset.desc,
       })
-      notify.success('资产已替换并重加密')
+      notify.success(t('assetReplaced'))
       await loadGatewayData()
     } catch (err) {
       notify.error(getGatewayErrorMessage(err))
@@ -1235,9 +1237,9 @@ export default function GatewayManager({
       <div className="bg-white border border-gray-200 rounded-xl p-4">
         <div className="flex flex-wrap items-center gap-3">
           <div>
-            <h1 className="text-lg font-semibold text-gray-900">网关策略</h1>
+            <h1 className="text-lg font-semibold text-gray-900">{t('title')}</h1>
             <p className="text-xs text-gray-500 mt-1">
-              独立控制面，调用 {gatewayBaseLabel}，不侵入业务 API 路径。
+              {t('subtitle', { label: gatewayBaseLabel })}
             </p>
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -1250,9 +1252,9 @@ export default function GatewayManager({
                     : 'bg-gray-50 text-gray-600'
               }`}
             >
-              {health === 'ok' && 'Go 控制面在线'}
-              {health === 'down' && 'Go 控制面不可达'}
-              {health === 'checking' && '检查连接中'}
+              {health === 'ok' && t('cpOnline')}
+              {health === 'down' && t('cpDown')}
+              {health === 'checking' && t('cpChecking')}
             </span>
             <button
               onClick={loadGatewayData}
@@ -1260,7 +1262,7 @@ export default function GatewayManager({
               className="px-3 py-2 text-xs rounded-md border border-gray-200 hover:bg-gray-50 disabled:opacity-60"
             >
               <i className={`fas fa-rotate mr-1 ${loading ? 'fa-spin' : ''}`}></i>
-              刷新
+              {t('refresh')}
             </button>
           </div>
         </div>
@@ -1286,7 +1288,7 @@ export default function GatewayManager({
             </select>
           </label>
           <label className="text-xs text-gray-500">
-            当前操作域名
+            {t('activeHost')}
             <select
               value={activeConfiguredHost}
               disabled={hostOptions.length === 0 || !!manualHost.trim()}
@@ -1300,12 +1302,12 @@ export default function GatewayManager({
                   </option>
                 ))
               ) : (
-                <option value="">无预设域名</option>
+                <option value="">{t('noPresetHost')}</option>
               )}
             </select>
           </label>
           <label className="text-xs text-gray-500">
-            手动域名
+            {t('manualHost')}
             <input
               value={manualHost}
               onChange={(event) => setManualHost(event.target.value)}
@@ -1316,23 +1318,24 @@ export default function GatewayManager({
         </div>
         {manualHostOverridesPreset && (
           <p className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-            手动域名已覆盖预设域名：策略将写到 <span className="font-mono">{manualHost.trim()}</span>，
-            与当前操作域名（<span className="font-mono">{activeConfiguredHost}</span>）不是同一套 Redis 数据。
-            本地联调结束后请清空手动域名，避免和线上下拉选项错位。
+            {t.rich('manualOverride', {
+              manual: () => <span className="font-mono">{manualHost.trim()}</span>,
+              active: () => <span className="font-mono">{activeConfiguredHost}</span>,
+            })}
           </p>
         )}
 
         <div className="mt-4 border border-blue-100 bg-blue-50/40 rounded-lg p-3">
           <div className="flex flex-wrap items-start gap-3">
             <div className="min-w-[180px]">
-              <h3 className="text-sm font-semibold text-gray-900">域名接入</h3>
+              <h3 className="text-sm font-semibold text-gray-900">{t('hostAccessH')}</h3>
               <p className="text-xs text-gray-500 mt-1">
-                保存到网关控制面，用于 Route Policy、Host 黑名单和请求监控采集。
+                {t('hostAccessDesc')}
               </p>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 flex-1">
               <label className="text-xs text-gray-500">
-                生产域名（每行一个）
+                {t('prodHosts')}
                 <textarea
                   value={configuredHostsText.prod}
                   onChange={(event) =>
@@ -1345,7 +1348,7 @@ export default function GatewayManager({
                 />
               </label>
               <label className="text-xs text-gray-500">
-                内网 / 测试域名（每行一个）
+                {t('internalHosts')}
                 <textarea
                   value={configuredHostsText.intranet}
                   onChange={(event) =>
@@ -1365,7 +1368,7 @@ export default function GatewayManager({
               className="px-3 py-2 text-xs rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
             >
               <i className={`fas fa-save mr-1 ${savingGatewayConfig ? 'fa-spin' : ''}`}></i>
-              保存配置
+              {t('saveConfig')}
             </button>
           </div>
         </div>
@@ -1375,12 +1378,12 @@ export default function GatewayManager({
         <div className="flex border-b border-gray-200 px-3">
           {[
             ['routes', 'Route Policies', 'fa-route'],
-            ['blacklist', 'Host 黑名单', 'fa-ban'],
-            ['monitoring', '请求监控', 'fa-chart-line'],
-            ['plugins', '项目插件', 'fa-plug'],
-            ['keys', '密钥管理', 'fa-key'],
+            ['blacklist', t('tabBlacklist'), 'fa-ban'],
+            ['monitoring', t('tabMonitoring'), 'fa-chart-line'],
+            ['plugins', t('tabPlugins'), 'fa-plug'],
+            ['keys', t('tabKeys'), 'fa-key'],
             ['cli', 'CLI Token', 'fa-terminal'],
-            ['audit', '审计日志', 'fa-clipboard-list'],
+            ['audit', t('tabAudit'), 'fa-clipboard-list'],
           ].map(([key, label, icon]) => (
             <button
               key={key}
@@ -1416,7 +1419,7 @@ export default function GatewayManager({
                 <input
                   value={routeSearch}
                   onChange={(event) => setRouteSearch(event.target.value)}
-                  placeholder="搜索 prefix / auth / desc"
+                  placeholder={t('phSearchRoute')}
                   className="w-full border border-gray-200 rounded-md px-3 py-2 text-xs"
                 />
                 <div className="flex flex-wrap gap-1 mt-2">
@@ -1469,7 +1472,7 @@ export default function GatewayManager({
                   )
                 })}
                 {filteredRoutes.length === 0 && (
-                  <div className="p-6 text-center text-sm text-gray-400">暂无 route policy</div>
+                  <div className="p-6 text-center text-sm text-gray-400">{t('noRoutePolicy')}</div>
                 )}
               </div>
             </aside>
@@ -1478,14 +1481,14 @@ export default function GatewayManager({
               <div className="flex flex-wrap items-center gap-3">
                 <div>
                   <h2 className="font-mono text-base font-semibold text-gray-900">
-                    {isDraftRoute ? '新建 Route' : selectedPrefix || '请选择 Route'}
+                    {isDraftRoute ? t('newRoute') : selectedPrefix || t('selectRoute')}
                   </h2>
                   {isDraftRoute && (
                     <p className="text-xs text-blue-600 mt-1">
-                      草稿模式：请确认 Route Prefix 不与左侧已有项重复，再发布到 Redis。
+                      {t('draftHint')}
                     </p>
                   )}
-                  <p className="text-xs text-gray-500 mt-1">HSET gateway:policy:{'{host}'}:routes 的单 field 更新。</p>
+                  <p className="text-xs text-gray-500 mt-1">{t('hsetHint')}</p>
                 </div>
                 <div className="ml-auto flex gap-2">
                   <button
@@ -1493,13 +1496,13 @@ export default function GatewayManager({
                     disabled={!selectedPrefix || isDraftRoute}
                     className="px-3 py-2 rounded-md text-xs border border-red-200 text-red-600 bg-red-50 disabled:opacity-50"
                   >
-                    删除 route
+                    {t('delRoute')}
                   </button>
                   <button
                     onClick={publishRoute}
                     className="px-4 py-2 rounded-md text-xs bg-blue-600 text-white hover:bg-blue-700"
                   >
-                    发布到 Redis
+                    {t('publishRedis')}
                   </button>
                 </div>
               </div>
@@ -1527,18 +1530,18 @@ export default function GatewayManager({
                   </select>
                 </label>
                 <label className="text-xs text-gray-500">
-                  状态
+                  {t('status')}
                   <select
                     value={policy.enabled ? 'enabled' : 'disabled'}
                     onChange={(event) => updatePolicy({ enabled: event.target.value === 'enabled' })}
                     className="mt-1 w-full border border-gray-200 rounded-md px-3 py-2 text-sm bg-white"
                   >
-                    <option value="enabled">启用</option>
-                    <option value="disabled">禁用</option>
+                    <option value="enabled">{t('statusEnabled')}</option>
+                    <option value="disabled">{t('statusDisabled')}</option>
                   </select>
                 </label>
                 <label className="md:col-span-3 text-xs text-gray-500">
-                  描述
+                  {t('descLabel')}
                   <input
                     value={policy.description || ''}
                     onChange={(event) => updatePolicy({ description: event.target.value })}
@@ -1549,17 +1552,17 @@ export default function GatewayManager({
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <div className="border border-gray-200 rounded-lg p-4 space-y-3">
-                  <h3 className="text-sm font-semibold text-gray-900">入站身份（auth 槽，选一）</h3>
+                  <h3 className="text-sm font-semibold text-gray-900">{t('inboundIdentityH')}</h3>
                   <p className="text-xs text-gray-500">
-                    控制是否校验 Im-Token / 走 Supabase 链路等。<code className="px-1 bg-gray-100 rounded">optional_im_token</code>{' '}
-                    会在有 Im-Token 时校验并注入 X-Way-UID；<code className="px-1 bg-gray-100 rounded">none</code>{' '}
-                    为占位，不做入站身份校验。
+                    {t.rich('inboundIdentityDesc', {
+                      c: (chunks) => <code className="px-1 bg-gray-100 rounded">{chunks}</code>,
+                    })}
                   </p>
                   <label className="text-xs text-gray-500 block">
-                    Auth Plugin（入站身份）
+                    {t('authPlugin')}
                     {authPlugins.length === 0 ? (
                       <div className="mt-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                        请先在「项目插件 → 项目关联」中启用至少一个 auth 插件。
+                        {t('authNeedEnable')}
                       </div>
                     ) : (
                       <select
@@ -1569,7 +1572,7 @@ export default function GatewayManager({
                       >
                         {currentAuthDisabled && (
                           <option value={currentAuthKey}>
-                            {currentAuthKey}（未启用，需调整）
+                            {t('authNotEnabledOpt', { key: currentAuthKey })}
                           </option>
                         )}
                         {authPlugins.map((plugin) => (
@@ -1582,12 +1585,12 @@ export default function GatewayManager({
                   </label>
                   {currentAuthDisabled && (
                     <p className="text-xs text-amber-700">
-                      当前 route 使用 {currentAuthKey}，但该项目未启用此入站身份插件。
+                      {t('authRouteWarn', { key: currentAuthKey })}
                     </p>
                   )}
                   <p className="text-xs text-gray-400">
-                    项目已启用：
-                    {projectPluginKeys.length > 0 ? projectPluginKeys.join(', ') : '无'}
+                    {t('projEnabled')}
+                    {projectPluginKeys.length > 0 ? projectPluginKeys.join(', ') : t('none')}
                   </p>
                   {policy.auth === 'supabase' && (
                     <label className="text-xs text-gray-500 block">
@@ -1605,7 +1608,7 @@ export default function GatewayManager({
                 </div>
 
                 <div className="border border-gray-200 rounded-lg p-4 space-y-3">
-                  <h3 className="text-sm font-semibold text-gray-900">Timestamp 签名</h3>
+                  <h3 className="text-sm font-semibold text-gray-900">{t('timestampSign')}</h3>
                   <label className="flex items-center gap-2 text-sm">
                     <input
                       type="checkbox"
@@ -1614,7 +1617,7 @@ export default function GatewayManager({
                         timestamp: { ...(policy.timestamp || {}), enabled: event.target.checked },
                       })}
                     />
-                    启用 MD5(timestamp + salt)
+                    {t('enableMd5')}
                   </label>
                   <div className="grid grid-cols-2 gap-3">
                     <label className="text-xs text-gray-500">
@@ -1628,7 +1631,7 @@ export default function GatewayManager({
                       />
                     </label>
                     <label className="text-xs text-gray-500">
-                      window 秒
+                      {t('windowSec')}
                       <input
                         type="number"
                         value={policy.timestamp?.window || 60}
@@ -1643,7 +1646,7 @@ export default function GatewayManager({
               </div>
 
               <div className="border border-gray-200 rounded-lg p-4 space-y-3">
-                <h3 className="text-sm font-semibold text-gray-900">安全插件</h3>
+                <h3 className="text-sm font-semibold text-gray-900">{t('securityPlugins')}</h3>
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                   <label className="flex items-center gap-2 text-sm">
                     <input
@@ -1663,7 +1666,7 @@ export default function GatewayManager({
                         ip_filter: { ...(policy.ip_filter || { blacklist: [] }), enabled: event.target.checked },
                       })}
                     />
-                    Route IP 黑名单
+                    {t('routeIpBlacklist')}
                   </label>
                   <label className="flex items-center gap-2 text-sm">
                     <input
@@ -1700,12 +1703,12 @@ export default function GatewayManager({
                         })}
                         className="mt-1 w-full border border-gray-200 rounded-md px-3 py-2 text-sm bg-white"
                       >
-                        <option value="basic">basic - 低误报基础规则</option>
-                        <option value="strict">strict - 增强规则</option>
+                        <option value="basic">{t('wafBasic')}</option>
+                        <option value="strict">{t('wafStrict')}</option>
                       </select>
                     </label>
                     <label className="text-xs text-gray-500 block">
-                      请求体扫描上限（bytes）
+                      {t('wafBodyLimit')}
                       <input
                         type="number"
                         min={1}
@@ -1715,13 +1718,13 @@ export default function GatewayManager({
                         })}
                         className="mt-1 w-full border border-gray-200 rounded-md px-3 py-2 text-sm font-mono"
                       />
-                      <span className="block mt-1 text-[11px] text-gray-400">超过此大小的请求体不进行 WAF body 扫描，默认 8192。</span>
+                      <span className="block mt-1 text-[11px] text-gray-400">{t('wafBodyLimitHint')}</span>
                     </label>
                   </div>
                 )}
                 {policy.ip_filter?.enabled && (
                   <label className="text-xs text-gray-500 block">
-                    黑名单（每行一个 IPv4 或 CIDR）
+                    {t('blacklistLabel')}
                     <textarea
                       value={routeBlacklistText}
                       onChange={(event) => setRouteBlacklistText(event.target.value)}
@@ -1731,7 +1734,7 @@ export default function GatewayManager({
                 )}
                 {policy.ip_filter?.allowlist_enabled && (
                   <label className="text-xs text-gray-500 block">
-                    Allowlist（必填，每行一个 IPv4 或 CIDR）
+                    {t('allowlistLabel')}
                     <textarea
                       value={routeAllowlistText}
                       onChange={(event) => setRouteAllowlistText(event.target.value)}
@@ -1739,7 +1742,7 @@ export default function GatewayManager({
                       className="mt-1 w-full min-h-[90px] border border-gray-200 rounded-md px-3 py-2 text-sm font-mono"
                     />
                     <span className="block mt-1 text-[11px] text-gray-400">
-                      开启后仅名单内 IP 可访问；Host/Route 黑名单仍优先，命中后仍执行 timestamp、WAF、限流、Auth 与 Token 注入。
+                      {t('allowlistHint')}
                     </span>
                   </label>
                 )}
@@ -1757,7 +1760,7 @@ export default function GatewayManager({
                       />
                     </label>
                     <label className="text-xs text-gray-500">
-                      维度
+                      {t('dimension')}
                       <select
                         value={policy.rate_limit?.dim || 'ip'}
                         onChange={(event) => updatePolicy({
@@ -1769,7 +1772,7 @@ export default function GatewayManager({
                       </select>
                     </label>
                     <label className="text-xs text-gray-500">
-                      超限 code
+                      {t('limitCode')}
                       <input
                         type="number"
                         value={policy.rate_limit?.code || 429}
@@ -1784,19 +1787,18 @@ export default function GatewayManager({
               </div>
 
               <div className="border border-gray-200 rounded-lg p-4 space-y-3">
-                <h3 className="text-sm font-semibold text-gray-900">后端凭据注入</h3>
+                <h3 className="text-sm font-semibold text-gray-900">{t('backendInjectH')}</h3>
                 <p className="text-xs text-gray-500">
-                  与入站身份分离：解密 route 中的加密资产，向后端写入 Authorization。
-                  Workflow 注入 Bearer（workflow_token_inject）；ES App 注入 ApiKey（es_app_token_inject）。
+                  {t('backendInjectDesc')}
                 </p>
                 {isSupabaseAuth ? (
                   <>
                     <p className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-md px-3 py-2">
-                      Supabase Auth 会自行注入 anon-key，不允许再配置 Workflow 或 ES 后端凭据。
+                      {t('supabaseNoInject')}
                     </p>
                     {hasLegacySupabaseCredential && (
                       <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-                        检测到历史 Token 配置，本次重新发布时会自动移除。
+                        {t('legacyTokenRemove')}
                       </p>
                     )}
                   </>
@@ -1804,13 +1806,13 @@ export default function GatewayManager({
                   <>
                     {!showWorkflowAsset && !showEsAsset && (
                       <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-                        请先在「项目插件 → 项目关联」启用 workflow_token_inject / es_app_token_inject。
+                        {t('injectNeedEnable')}
                       </p>
                     )}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                       {showWorkflowAsset && (
                         <label className="text-xs text-gray-500">
-                          Workflow API Key 资产
+                          {t('wfKeyAsset')}
                           <select
                             value={workflowAsset}
                             onChange={(event) => {
@@ -1820,7 +1822,7 @@ export default function GatewayManager({
                             }}
                             className="mt-1 w-full border border-gray-200 rounded-md px-3 py-2 text-sm bg-white"
                           >
-                            <option value="">不注入 workflow token</option>
+                            <option value="">{t('noInjectWfToken')}</option>
                             {workflowAssets.map((asset) => (
                               <option key={asset.name} value={asset.name}>
                                 {asset.name} · {asset.masked} · {asset.key_id}
@@ -1831,7 +1833,7 @@ export default function GatewayManager({
                       )}
                       {showEsAsset && (
                         <label className="text-xs text-gray-500">
-                          ES App API Key 资产
+                          {t('esKeyAsset')}
                           <select
                             value={esAsset}
                             onChange={(event) => {
@@ -1841,7 +1843,7 @@ export default function GatewayManager({
                             }}
                             className="mt-1 w-full border border-gray-200 rounded-md px-3 py-2 text-sm bg-white"
                           >
-                            <option value="">不注入 es_app token</option>
+                            <option value="">{t('noInjectEsToken')}</option>
                             {esAssets.map((asset) => (
                               <option key={asset.name} value={asset.name}>
                                 {asset.name} · {asset.masked} · {asset.key_id}
@@ -1853,7 +1855,7 @@ export default function GatewayManager({
                     </div>
                     {(policy.workflow_token?.redacted || policy.es_app_token?.redacted) && (
                       <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-2">
-                        当前 route 中已有 token 但列表接口已脱敏；重新发布该 route 前请选择对应资产，否则会拒绝保存以避免误删注入配置。
+                        {t('tokenMaskedWarn')}
                       </div>
                     )}
                   </>
@@ -1861,7 +1863,7 @@ export default function GatewayManager({
               </div>
 
               <div>
-                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Redis 写入预览</div>
+                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{t('redisWritePreview')}</div>
                 <pre className="bg-slate-950 text-sky-100 rounded-lg p-4 text-xs overflow-auto max-h-[360px]">
                   {routePreview}
                 </pre>
@@ -1873,9 +1875,9 @@ export default function GatewayManager({
         {tab === 'blacklist' && (
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_420px] min-h-[520px]">
             <section className="p-6 max-w-2xl">
-              <h2 className="text-base font-semibold text-gray-900">Host 级 IP 黑名单</h2>
+              <h2 className="text-base font-semibold text-gray-900">{t('hostBlacklistH')}</h2>
               <p className="text-sm text-gray-500 mt-2 leading-6">
-                作用于当前 host 下所有 route，Lua 会与 route 级黑名单聚合后执行。空列表会删除 Redis key。
+                {t('hostBlacklistDesc')}
               </p>
               <textarea
                 value={globalBlacklistText}
@@ -1887,11 +1889,11 @@ export default function GatewayManager({
                 onClick={saveBlacklist}
                 className="mt-4 px-4 py-2 rounded-md text-sm bg-blue-600 text-white hover:bg-blue-700"
               >
-                发布 Host 黑名单
+                {t('publishHostBlacklist')}
               </button>
             </section>
             <aside className="border-l border-gray-200 p-5 bg-gray-50">
-              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Redis 写入预览</div>
+              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{t('redisWritePreview')}</div>
               <pre className="bg-slate-950 text-sky-100 rounded-lg p-4 text-xs overflow-auto">
                 {blacklistPreview}
               </pre>
@@ -1903,12 +1905,12 @@ export default function GatewayManager({
           <div className="p-5 space-y-5 bg-gray-50/40 min-h-[640px]">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h2 className="text-base font-semibold text-gray-900">网关请求监控</h2>
+                <h2 className="text-base font-semibold text-gray-900">{t('gwMonitorH')}</h2>
                 <p className="text-xs text-gray-500 mt-1">
-                  数据来自 SLS 每 5 分钟聚合写入 PostgreSQL，用于观察当前 Host 的请求量、错误和延迟趋势。
+                  {t('gwMonitorDesc')}
                 </p>
                 <div className="text-[11px] text-gray-400 font-mono mt-1">
-                  {env} / {host || '-'} · 粒度 {accessStats?.granularity || '-'}
+                  {t('monitorMeta', { env, host: host || '-', gran: accessStats?.granularity || '-' })}
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -1918,7 +1920,7 @@ export default function GatewayManager({
                   className="border border-gray-200 rounded-md px-3 py-2 text-xs bg-white"
                 >
                   {ACCESS_STATS_RANGES.map((item) => (
-                    <option key={item.value} value={item.value}>{item.label}</option>
+                    <option key={item.value} value={item.value}>{t(item.labelKey)}</option>
                   ))}
                 </select>
                 <label className="flex items-center gap-2 text-xs text-gray-500 border border-gray-200 rounded-md px-3 py-2 bg-white">
@@ -1927,7 +1929,7 @@ export default function GatewayManager({
                     checked={statsAutoRefresh}
                     onChange={(event) => setStatsAutoRefresh(event.target.checked)}
                   />
-                  自动刷新
+                  {t('autoRefresh')}
                 </label>
                 <button
                   type="button"
@@ -1936,14 +1938,14 @@ export default function GatewayManager({
                   className="px-3 py-2 text-xs rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
                 >
                   <i className={`fas fa-sync mr-1 ${statsLoading ? 'fa-spin' : ''}`}></i>
-                  刷新
+                  {t('refresh')}
                 </button>
               </div>
             </div>
 
             {!host && (
               <div className="border border-amber-200 bg-amber-50 text-amber-800 rounded-lg px-4 py-3 text-sm">
-                请先选择或填写 Host 后查看请求监控。
+                {t('selectHostFirst')}
               </div>
             )}
 
@@ -1951,36 +1953,35 @@ export default function GatewayManager({
               <>
                 {accessStats && accessStats.series.length === 0 && !statsLoading && (
                   <div className="border border-amber-200 bg-amber-50 text-amber-800 rounded-lg px-4 py-3 text-sm leading-6">
-                    当前域名暂无监控数据。可能原因：项目域名配置尚未保存、CronJob 尚未运行、
-                    SLS 中没有该域名的 access log，或 SLS base_query 与日志字段不匹配。
+                    {t('noMonitorData')}
                   </div>
                 )}
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
                   <MetricCard
-                    label="总请求量"
+                    label={t('mTotalReq')}
                     value={formatCount(accessStats?.summary.total_requests)}
-                    hint={formatChange(accessStats?.summary.total_requests, accessStats?.previous?.total_requests)}
+                    hint={formatChange(accessStats?.summary.total_requests, accessStats?.previous?.total_requests, t)}
                   />
                   <MetricCard
-                    label="错误率"
+                    label={t('mErrorRate')}
                     value={formatPercent(accessStats?.summary.error_rate)}
                     hint={`4xx ${formatCount(accessStats?.summary.err_4xx)} · 5xx ${formatCount(accessStats?.summary.err_5xx)}`}
                   />
                   <MetricCard
-                    label="平均延迟"
+                    label={t('mAvgLatency')}
                     value={formatRT(accessStats?.summary.avg_rt)}
                     hint={`P50 ${formatRT(accessStats?.summary.p50_rt)} · P95 ${formatRT(accessStats?.summary.p95_rt)} · P99 ${formatRT(accessStats?.summary.p99_rt)}`}
                   />
                   <MetricCard
-                    label="最后聚合"
+                    label={t('mLastAgg')}
                     value={formatTime(accessStats?.summary.last_ts)}
-                    hint={statsLoading ? '正在刷新' : '按 SLS 聚合窗口延迟展示'}
+                    hint={statsLoading ? t('mRefreshing') : t('mAggHint')}
                   />
                 </div>
 
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                   <TrendChart
-                    title="请求量趋势"
+                    title={t('reqTrend')}
                     points={accessStats?.series || []}
                     value={(point) => point.total_requests}
                     formatValue={formatCount}
@@ -1989,13 +1990,13 @@ export default function GatewayManager({
                 </div>
 
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                  <DistributionBars title="状态码分布" values={accessStats?.status_dist || {}} />
-                  <DistributionBars title="Method 分布" values={accessStats?.method_dist || {}} />
+                  <DistributionBars title={t('statusDist')} values={accessStats?.status_dist || {}} />
+                  <DistributionBars title={t('methodDist')} values={accessStats?.method_dist || {}} />
                 </div>
 
                 <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
                   <UriList title="Top URI" items={accessStats?.top_uri || []} kind="top" />
-                  <UriList title="错误接口" items={accessStats?.error_uri || []} kind="error" />
+                  <UriList title={t('errorUri')} items={accessStats?.error_uri || []} kind="error" />
                   <SlowRequestList items={accessStats?.slow_req || []} />
                 </div>
               </>
@@ -2010,43 +2011,44 @@ export default function GatewayManager({
                 onClick={() => setPluginTab('registry')}
                 className={`px-4 py-3 text-sm border-b-2 ${pluginTab === 'registry' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500'}`}
               >
-                插件注册表
+                {t('pluginRegistry')}
               </button>
               <button
                 onClick={() => setPluginTab('assign')}
                 className={`px-4 py-3 text-sm border-b-2 ${pluginTab === 'assign' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500'}`}
               >
-                项目关联
+                {t('projAssoc')}
               </button>
             </div>
             {pluginTab === 'registry' && (
               <div className="p-5 space-y-5">
                 <p className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-md px-3 py-2 leading-6">
-                  {GATEWAY_PIPELINE_NOTE}
+                  {t('orderHint')}
                 </p>
                 <form onSubmit={savePlugin} className="border border-gray-200 rounded-lg p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <h3 className="md:col-span-2 text-sm font-semibold text-gray-900">注册 / 更新插件</h3>
+                  <h3 className="md:col-span-2 text-sm font-semibold text-gray-900">{t('registerPlugin')}</h3>
                   <p className="md:col-span-2 text-xs text-gray-500">
-                    由研发提供 Lua 模块后，由网关管理员在此登记。type 表示执行阶段：
-                    <span className="font-medium"> auth = 入站身份</span>，
-                    <span className="font-medium"> inject = 后端凭据</span>（与 auth 槽位不同，见上方说明）。
+                    {t.rich('registerPluginDesc', {
+                      b1: (chunks) => <span className="font-medium">{chunks}</span>,
+                      b2: (chunks) => <span className="font-medium">{chunks}</span>,
+                    })}
                   </p>
-                  <input value={pluginForm.key} onChange={(event) => setPluginForm((p) => ({ ...p, key: event.target.value }))} placeholder="插件 key" className="border border-gray-200 rounded-md px-3 py-2 text-sm font-mono" />
+                  <input value={pluginForm.key} onChange={(event) => setPluginForm((p) => ({ ...p, key: event.target.value }))} placeholder={t('phPluginKey')} className="border border-gray-200 rounded-md px-3 py-2 text-sm font-mono" />
                   <select value={pluginForm.type} onChange={(event) => setPluginForm((p) => ({ ...p, type: event.target.value as GatewayPlugin['type'] }))} className="border border-gray-200 rounded-md px-3 py-2 text-sm bg-white">
-                    <option value="auth">auth — 入站身份（auth 槽，Route 里 Auth Plugin 可选）</option>
-                    <option value="inject">inject — 后端凭据（Authorization 注入能力开关）</option>
+                    <option value="auth">{t('optAuthStage')}</option>
+                    <option value="inject">{t('optInjectStage')}</option>
                   </select>
-                  <input value={pluginForm.label} onChange={(event) => setPluginForm((p) => ({ ...p, label: event.target.value }))} placeholder="显示名称" className="border border-gray-200 rounded-md px-3 py-2 text-sm" />
-                  <input value={pluginForm.module} onChange={(event) => setPluginForm((p) => ({ ...p, module: event.target.value }))} placeholder="Lua 模块，如 auth.im_token / plugins.token_inject" className="border border-gray-200 rounded-md px-3 py-2 text-sm font-mono" />
-                  <input value={pluginForm.desc} onChange={(event) => setPluginForm((p) => ({ ...p, desc: event.target.value }))} placeholder="说明（写清是校验 Im-Token 还是注入 ApiKey/Bearer）" className="md:col-span-2 border border-gray-200 rounded-md px-3 py-2 text-sm" />
-                  <input value={(pluginForm.requires || []).join(',')} onChange={(event) => setPluginForm((p) => ({ ...p, requires: event.target.value.split(',').map((v) => v.trim()).filter(Boolean) }))} placeholder="依赖插件 key，逗号分隔（如 im_token 依赖 workflow_token_inject）" className="md:col-span-2 border border-gray-200 rounded-md px-3 py-2 text-sm font-mono" />
-                  <button className="md:col-span-2 justify-self-start px-4 py-2 rounded-md bg-blue-600 text-white text-sm">保存插件</button>
+                  <input value={pluginForm.label} onChange={(event) => setPluginForm((p) => ({ ...p, label: event.target.value }))} placeholder={t('phDisplayName')} className="border border-gray-200 rounded-md px-3 py-2 text-sm" />
+                  <input value={pluginForm.module} onChange={(event) => setPluginForm((p) => ({ ...p, module: event.target.value }))} placeholder={t('phLuaModule')} className="border border-gray-200 rounded-md px-3 py-2 text-sm font-mono" />
+                  <input value={pluginForm.desc} onChange={(event) => setPluginForm((p) => ({ ...p, desc: event.target.value }))} placeholder={t('phPluginDesc')} className="md:col-span-2 border border-gray-200 rounded-md px-3 py-2 text-sm" />
+                  <input value={(pluginForm.requires || []).join(',')} onChange={(event) => setPluginForm((p) => ({ ...p, requires: event.target.value.split(',').map((v) => v.trim()).filter(Boolean) }))} placeholder={t('phRequires')} className="md:col-span-2 border border-gray-200 rounded-md px-3 py-2 text-sm font-mono" />
+                  <button className="md:col-span-2 justify-self-start px-4 py-2 rounded-md bg-blue-600 text-white text-sm">{t('savePlugin')}</button>
                 </form>
                 <div className="space-y-4">
                   {(
                     [
-                      { title: '入站身份（auth）', items: identityPlugins },
-                      { title: '后端凭据（inject）', items: credentialPlugins },
+                      { title: t('groupAuth'), items: identityPlugins },
+                      { title: t('groupInject'), items: credentialPlugins },
                     ] as const
                   ).map(({ title, items }) => (
                     <div key={title} className="border border-gray-200 rounded-lg overflow-hidden">
@@ -2055,7 +2057,7 @@ export default function GatewayManager({
                         <div key={plugin.key} className="grid grid-cols-[160px_100px_1fr_180px_80px] gap-3 items-center px-4 py-3 border-b border-gray-100 text-sm">
                           <span className="font-mono font-semibold">{plugin.key}</span>
                           <span className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700 justify-self-start">
-                            {formatPluginPhase(plugin.type)}
+                            {formatPluginPhase(plugin.type, t)}
                           </span>
                           <span className="text-gray-600 text-xs">{plugin.desc}</span>
                           <span className="font-mono text-xs text-gray-500">{plugin.module || '-'}</span>
@@ -2064,7 +2066,7 @@ export default function GatewayManager({
                             disabled={plugin.builtin}
                             className="text-xs text-red-600 disabled:text-gray-400"
                           >
-                            {plugin.builtin ? '内置' : '删除'}
+                            {plugin.builtin ? t('builtin') : t('delete')}
                           </button>
                         </div>
                       ))}
@@ -2075,17 +2077,19 @@ export default function GatewayManager({
             )}
             {pluginTab === 'assign' && (
               <div className="p-5">
-                <h3 className="text-sm font-semibold text-gray-900 mb-2">{projectName} 可用插件</h3>
+                <h3 className="text-sm font-semibold text-gray-900 mb-2">{t('projAvailPlugins', { name: projectName })}</h3>
                 <p className="text-xs text-gray-500 mb-3 leading-6">
-                  勾选结果写入 <code className="px-1 bg-gray-100 rounded">gateway_admin.project_plugins</code>，
-                  限制本项目在 Route 中可选的<strong>入站身份</strong>与<strong>后端凭据注入</strong>能力；发布 route 时后端会校验。
-                  勾选带依赖的插件（如 im_token）会自动启用 requires 中的插件。
+                  {t.rich('projAssocDesc', {
+                    c: (chunks) => <code className="px-1 bg-gray-100 rounded">{chunks}</code>,
+                    b1: (chunks) => <strong>{chunks}</strong>,
+                    b2: (chunks) => <strong>{chunks}</strong>,
+                  })}
                 </p>
                 <div className="space-y-4">
                   {(
                     [
-                      { title: '入站身份（auth）', items: identityPlugins },
-                      { title: '后端凭据（inject）', items: credentialPlugins },
+                      { title: t('groupAuth'), items: identityPlugins },
+                      { title: t('groupInject'), items: credentialPlugins },
                     ] as const
                   ).map(({ title, items }) => (
                     <div key={title} className="border border-gray-200 rounded-lg overflow-hidden">
@@ -2097,13 +2101,13 @@ export default function GatewayManager({
                             <div className="font-mono text-xs text-gray-400">{plugin.key}</div>
                           </div>
                           <span className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700 justify-self-start">
-                            {formatPluginPhase(plugin.type)}
+                            {formatPluginPhase(plugin.type, t)}
                           </span>
                           <span className="text-xs text-gray-600">{plugin.desc}</span>
                           <label className="flex justify-end items-center gap-2">
                             {(plugin.requires || []).length > 0 && (
                               <span className="text-[10px] text-gray-400 font-mono">
-                                依赖 {(plugin.requires || []).join(', ')}
+                                {t('dependsOn', { deps: (plugin.requires || []).join(', ') })}
                               </span>
                             )}
                             <input
@@ -2129,7 +2133,7 @@ export default function GatewayManager({
                 onClick={() => setKeyTab('assets')}
                 className={`px-4 py-3 text-sm border-b-2 ${keyTab === 'assets' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500'}`}
               >
-                API Key 资产
+                {t('apiKeyAssets')}
               </button>
               <button
                 onClick={() => setKeyTab('versions')}
@@ -2141,16 +2145,16 @@ export default function GatewayManager({
             {keyTab === 'assets' && (
               <div className="p-5 space-y-5">
                 <form onSubmit={saveAsset} className="border border-gray-200 rounded-lg p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <h3 className="md:col-span-2 text-sm font-semibold text-gray-900">新建 API Key 资产</h3>
-                  <input value={assetForm.name} onChange={(event) => setAssetForm((p) => ({ ...p, name: event.target.value }))} placeholder="资产名称" className="border border-gray-200 rounded-md px-3 py-2 text-sm font-mono" />
+                  <h3 className="md:col-span-2 text-sm font-semibold text-gray-900">{t('newApiKeyAsset')}</h3>
+                  <input value={assetForm.name} onChange={(event) => setAssetForm((p) => ({ ...p, name: event.target.value }))} placeholder={t('phAssetName')} className="border border-gray-200 rounded-md px-3 py-2 text-sm font-mono" />
                   <select value={assetForm.type} onChange={(event) => setAssetForm((p) => ({ ...p, type: event.target.value as GatewayAssetType }))} className="border border-gray-200 rounded-md px-3 py-2 text-sm bg-white">
                     <option value="workflow_token">workflow_token</option>
                     <option value="es_app_token">es_app_token</option>
                   </select>
                   <input value={assetForm.key_id || ''} onChange={(event) => setAssetForm((p) => ({ ...p, key_id: event.target.value }))} placeholder={activeKeyId || 'key_id'} className="border border-gray-200 rounded-md px-3 py-2 text-sm font-mono" />
-                  <input value={assetForm.plaintext} onChange={(event) => setAssetForm((p) => ({ ...p, plaintext: event.target.value }))} placeholder="明文 API Key（不会落库）" type="password" className="border border-gray-200 rounded-md px-3 py-2 text-sm font-mono" />
-                  <input value={assetForm.desc || ''} onChange={(event) => setAssetForm((p) => ({ ...p, desc: event.target.value }))} placeholder="描述" className="md:col-span-2 border border-gray-200 rounded-md px-3 py-2 text-sm" />
-                  <button className="md:col-span-2 justify-self-start px-4 py-2 rounded-md bg-blue-600 text-white text-sm">提交加密并保存</button>
+                  <input value={assetForm.plaintext} onChange={(event) => setAssetForm((p) => ({ ...p, plaintext: event.target.value }))} placeholder={t('phPlaintextKey')} type="password" className="border border-gray-200 rounded-md px-3 py-2 text-sm font-mono" />
+                  <input value={assetForm.desc || ''} onChange={(event) => setAssetForm((p) => ({ ...p, desc: event.target.value }))} placeholder={t('phAssetDesc')} className="md:col-span-2 border border-gray-200 rounded-md px-3 py-2 text-sm" />
+                  <button className="md:col-span-2 justify-self-start px-4 py-2 rounded-md bg-blue-600 text-white text-sm">{t('submitEncrypt')}</button>
                 </form>
                 <div className="border border-gray-200 rounded-lg overflow-hidden">
                   {assets.map((asset) => (
@@ -2160,10 +2164,10 @@ export default function GatewayManager({
                       <span className="text-xs text-gray-600">{asset.project}</span>
                       <span className="font-mono text-xs text-gray-600">{asset.key_id}</span>
                       <span className="font-mono text-xs text-gray-500">{asset.masked}</span>
-                      <button onClick={() => replaceAsset(asset)} className="text-xs text-blue-600">替换</button>
+                      <button onClick={() => replaceAsset(asset)} className="text-xs text-blue-600">{t('replace')}</button>
                     </div>
                   ))}
-                  {assets.length === 0 && <div className="p-8 text-center text-sm text-gray-400">暂无资产</div>}
+                  {assets.length === 0 && <div className="p-8 text-center text-sm text-gray-400">{t('noAssets')}</div>}
                 </div>
               </div>
             )}
@@ -2176,10 +2180,10 @@ export default function GatewayManager({
                       <span className={`text-xs px-2 py-1 rounded-full justify-self-start ${version === activeKeyId ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
                         {version === activeKeyId ? 'active' : 'loaded'}
                       </span>
-                      <span className="text-xs text-gray-500">主密钥来自 Go 后端环境变量，不在 UI 中展示。</span>
+                      <span className="text-xs text-gray-500">{t('masterKeyHint')}</span>
                     </div>
                   ))}
-                  {keyVersions.length === 0 && <div className="p-8 text-center text-sm text-gray-400">未读取到 key versions</div>}
+                  {keyVersions.length === 0 && <div className="p-8 text-center text-sm text-gray-400">{t('noKeyVersions')}</div>}
                 </div>
               </div>
             )}
@@ -2189,16 +2193,16 @@ export default function GatewayManager({
         {tab === 'cli' && (
           <div className="p-5 space-y-5">
             <form onSubmit={createCliToken} className="border border-gray-200 rounded-lg p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-              <h3 className="md:col-span-2 text-sm font-semibold text-gray-900">创建 CLI Token</h3>
-              <input value={cliTokenForm.name} onChange={(event) => setCliTokenForm((p) => ({ ...p, name: event.target.value }))} placeholder="Token 名称，如 acme-release-bot" className="border border-gray-200 rounded-md px-3 py-2 text-sm" />
-              <input value={cliTokenForm.username} onChange={(event) => setCliTokenForm((p) => ({ ...p, username: event.target.value }))} placeholder="归属人 / 机器人名称" className="border border-gray-200 rounded-md px-3 py-2 text-sm" />
-              <input value={cliTokenForm.email} onChange={(event) => setCliTokenForm((p) => ({ ...p, email: event.target.value }))} placeholder="邮箱（可选）" className="border border-gray-200 rounded-md px-3 py-2 text-sm" />
-              <input value={cliTokenForm.scopes} onChange={(event) => setCliTokenForm((p) => ({ ...p, scopes: event.target.value }))} placeholder="scopes，逗号分隔" className="border border-gray-200 rounded-md px-3 py-2 text-sm font-mono" />
-              <button className="md:col-span-2 justify-self-start px-4 py-2 rounded-md bg-blue-600 text-white text-sm">创建 Token</button>
+              <h3 className="md:col-span-2 text-sm font-semibold text-gray-900">{t('createCliToken')}</h3>
+              <input value={cliTokenForm.name} onChange={(event) => setCliTokenForm((p) => ({ ...p, name: event.target.value }))} placeholder={t('phTokenName')} className="border border-gray-200 rounded-md px-3 py-2 text-sm" />
+              <input value={cliTokenForm.username} onChange={(event) => setCliTokenForm((p) => ({ ...p, username: event.target.value }))} placeholder={t('phOwner')} className="border border-gray-200 rounded-md px-3 py-2 text-sm" />
+              <input value={cliTokenForm.email} onChange={(event) => setCliTokenForm((p) => ({ ...p, email: event.target.value }))} placeholder={t('phEmailOptional')} className="border border-gray-200 rounded-md px-3 py-2 text-sm" />
+              <input value={cliTokenForm.scopes} onChange={(event) => setCliTokenForm((p) => ({ ...p, scopes: event.target.value }))} placeholder={t('phScopes')} className="border border-gray-200 rounded-md px-3 py-2 text-sm font-mono" />
+              <button className="md:col-span-2 justify-self-start px-4 py-2 rounded-md bg-blue-600 text-white text-sm">{t('createToken')}</button>
             </form>
             {createdCliToken && (
               <div className="border border-amber-200 bg-amber-50 rounded-lg p-4">
-                <div className="text-sm font-semibold text-amber-900">请立即保存 Token，关闭后不再展示</div>
+                <div className="text-sm font-semibold text-amber-900">{t('saveTokenNow')}</div>
                 <pre className="mt-2 bg-white border border-amber-100 rounded-md p-3 text-xs font-mono overflow-auto">{createdCliToken}</pre>
               </div>
             )}
@@ -2210,12 +2214,12 @@ export default function GatewayManager({
                     <div className="font-semibold">{token.name}</div>
                     <div className="text-xs text-gray-400">{token.username}</div>
                   </div>
-                  <span className="text-xs text-gray-500">{token.revoked_at ? '已吊销' : '有效'}</span>
+                  <span className="text-xs text-gray-500">{token.revoked_at ? t('revoked') : t('valid')}</span>
                   <span className="text-xs font-mono text-gray-500 truncate">{(token.scopes || []).join(', ')}</span>
-                  <button disabled={!!token.revoked_at} onClick={() => revokeCliToken(token)} className="text-xs text-red-600 disabled:text-gray-400">吊销</button>
+                  <button disabled={!!token.revoked_at} onClick={() => revokeCliToken(token)} className="text-xs text-red-600 disabled:text-gray-400">{t('revoke')}</button>
                 </div>
               ))}
-              {cliTokens.length === 0 && <div className="p-8 text-center text-sm text-gray-400">暂无 CLI Token</div>}
+              {cliTokens.length === 0 && <div className="p-8 text-center text-sm text-gray-400">{t('noCliToken')}</div>}
             </div>
           </div>
         )}
@@ -2224,10 +2228,10 @@ export default function GatewayManager({
           <div className="p-5 space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-sm font-semibold text-gray-900">审计日志</h3>
-                <p className="text-xs text-gray-500 mt-1">记录 route、资产、插件、域名接入、CLI Token 等控制面写操作。</p>
+                <h3 className="text-sm font-semibold text-gray-900">{t('auditH')}</h3>
+                <p className="text-xs text-gray-500 mt-1">{t('auditDesc')}</p>
               </div>
-              <button onClick={loadAuditLogs} className="px-3 py-2 text-xs rounded-md border border-gray-200 text-gray-600">刷新</button>
+              <button onClick={loadAuditLogs} className="px-3 py-2 text-xs rounded-md border border-gray-200 text-gray-600">{t('refresh')}</button>
             </div>
             <div className="border border-gray-200 rounded-lg overflow-hidden">
               {auditLogs.map((entry) => (
@@ -2242,7 +2246,7 @@ export default function GatewayManager({
                   <span className="text-xs text-gray-500">{entry.actor_name || entry.actor_type}</span>
                 </div>
               ))}
-              {auditLogs.length === 0 && <div className="p-8 text-center text-sm text-gray-400">暂无审计日志</div>}
+              {auditLogs.length === 0 && <div className="p-8 text-center text-sm text-gray-400">{t('noAuditLogs')}</div>}
             </div>
           </div>
         )}

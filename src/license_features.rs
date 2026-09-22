@@ -4,7 +4,7 @@
 
 use crate::error::{AppError, Result};
 use crate::license_enforcement::LicenseContext;
-use onebase::license::{LicenseClaims, LicenseStatus};
+use planeos::license::{LicenseClaims, LicenseStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -276,7 +276,7 @@ pub fn get_available_features(license: &LicenseContext) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use onebase::license::{LicenseClaims, LicenseStatus};
+    use planeos::license::{LicenseClaims, LicenseStatus};
 
     fn mock_license(edition: &str, modules: Vec<&str>) -> LicenseContext {
         LicenseContext {
@@ -285,9 +285,17 @@ mod tests {
                 customer: "测试客户".to_string(),
                 edition: edition.to_string(),
                 modules: modules.iter().map(|s| s.to_string()).collect(),
+                enforce: None,
                 max_nodes: Some(1),
                 max_tenants: Some(1),
                 max_accounts_per_tenant: Some(10),
+                max_projects: None,
+                max_workflows: None,
+                max_executions_per_month: None,
+                max_api_endpoints: None,
+                max_scheduled_jobs: None,
+                max_database_connections: None,
+                max_team_members: None,
                 issued_at: 0,
                 expires_at: 9999999999,
                 grace_days: 30,

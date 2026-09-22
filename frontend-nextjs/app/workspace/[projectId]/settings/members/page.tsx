@@ -3,7 +3,7 @@
 /**
  * `/workspace/[projectId]/settings/members` —— 项目成员管理（W4 / PASE Stage E）。
  *
- * 鉴权：admin+（含 owner / 平台超管）。后端各接口走
+ * 鉴权：admin+（含 owner / {t('badgeSuperAdmin')}）。后端各接口走
  * `permissions::require_tenant_admin`。前端用 `canManageMembers` 决定是否
  * 渲染。
  *
@@ -24,6 +24,7 @@ import {
 import { useAppStore } from '@/lib/store'
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import { useNotification } from '@/hooks/useNotification'
+import { useTranslations } from 'next-intl'
 import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
 import Drawer from '@/components/Drawer'
 import { closeOnBackdropPress } from '@/lib/utils'
@@ -42,11 +43,11 @@ const isStrongPassword = (p: string) =>
   p.length >= 8 && /[A-Z]/.test(p) && /[a-z]/.test(p) && /\d/.test(p)
 
 /** 添加成员对话框里的 4 张角色卡——名称 / 一句话职责。 */
-const ROLE_CARDS: Array<{ value: RoleOption; title: string; desc: string }> = [
-  { value: 'owner',  title: 'Owner',  desc: '可改项目元信息、可管理成员，权限最高' },
-  { value: 'admin',  title: 'Admin',  desc: '可管理成员、可读写数据，但不能改项目元信息' },
-  { value: 'member', title: 'Member', desc: '日常协作角色：可读写业务数据，不能管理成员' },
-  { value: 'viewer', title: 'Viewer', desc: '只读：可看数据但不能修改' },
+const ROLE_CARDS: Array<{ value: RoleOption; title: string; descKey: string }> = [
+  { value: 'owner',  title: 'Owner',  descKey: 'roleOwnerDesc' },
+  { value: 'admin',  title: 'Admin',  descKey: 'roleAdminDesc' },
+  { value: 'member', title: 'Member', descKey: 'roleMemberDesc' },
+  { value: 'viewer', title: 'Viewer', descKey: 'roleViewerDesc' },
 ]
 
 export default function ProjectMembersPage() {
@@ -54,6 +55,7 @@ export default function ProjectMembersPage() {
   const projectId = parseInt(params.projectId, 10)
   const currentUser = useAppStore((s) => s.currentUser)
   const caps = useCurrentProjectCapabilities()
+  const t = useTranslations('wsMembers')
   const notify = useNotification()
 
   const [members, setMembers] = useState<ProjectMember[] | null>(null)
@@ -118,7 +120,7 @@ export default function ProjectMembersPage() {
         (prev) =>
           prev?.map((x) => (x.user_id === m.user_id ? res.data : x)) ?? null,
       )
-      notify.success(`已把 ${m.username} 改为 ${role}`)
+      notify.success(t('roleChanged', { name: m.username, role }))
     } catch (err: any) {
       notify.error(err)
       // 回滚 UI——重新拉一次最简单
@@ -130,8 +132,7 @@ export default function ProjectMembersPage() {
 
   const handleRemove = async (m: ProjectMember) => {
     const ok = window.confirm(
-      `确认要把 ${m.username} (${m.email}) 从项目里移除吗？\n` +
-        `移除后该用户在本项目的 RBAC 角色也会被清除。`,
+      t('confirmRemove', { name: m.username, email: m.email }),
     )
     if (!ok) return
 
@@ -139,7 +140,7 @@ export default function ProjectMembersPage() {
     try {
       await projectMembersAPI.remove(projectId, m.user_id)
       setMembers((prev) => prev?.filter((x) => x.user_id !== m.user_id) ?? null)
-      notify.success(`已移除 ${m.username}`)
+      notify.success(t('removed', { name: m.username }))
     } catch (err: any) {
       notify.error(err)
     } finally {
@@ -158,8 +159,8 @@ export default function ProjectMembersPage() {
     const targetUserId = manageTarget.user_id
     const username = profileForm.username.trim()
     const email = profileForm.email.trim()
-    if (!username) return notify.warning('用户名不能为空')
-    if (!email || !email.includes('@')) return notify.warning('请输入合法邮箱')
+    if (!username) return notify.warning(t('errUsername'))
+    if (!email || !email.includes('@')) return notify.warning(t('errEmail'))
 
     setSavingProfile(true)
     try {
@@ -173,7 +174,7 @@ export default function ProjectMembersPage() {
         setProfileForm({ username: res.data.username, email: res.data.email })
         return { ...prev, username: res.data.username, email: res.data.email }
       })
-      notify.success('用户资料已更新')
+      notify.success(t('profileUpdated'))
       await loadMembers()
     } catch (err: any) {
       notify.error(err)
@@ -186,9 +187,9 @@ export default function ProjectMembersPage() {
     if (!manageTarget) return
     const targetUserId = manageTarget.user_id
     if (!isStrongPassword(pwdForm.p1))
-      return notify.warning('密码至少 8 位，且需包含大写字母、小写字母和数字')
+      return notify.warning(t('errPwdRule'))
     if (pwdForm.p1 !== pwdForm.p2)
-      return notify.warning('两次输入的密码不一致')
+      return notify.warning(t('errPwdMismatch'))
 
     setResettingPwd(true)
     try {
@@ -202,7 +203,7 @@ export default function ProjectMembersPage() {
         setPwdForm({ p1: '', p2: '' })
         return prev
       })
-      notify.success('密码已重置，对方需要重新登录')
+      notify.success(t('pwdReset'))
     } catch (err: any) {
       notify.error(err)
     } finally {
@@ -215,9 +216,8 @@ export default function ProjectMembersPage() {
     const targetUserId = manageTarget.user_id
     const next = !manageTarget.is_active
     const confirmMessage = next
-      ? `确认启用用户 "${manageTarget.email}" 吗？`
-      : `确认停用用户 "${manageTarget.email}" 吗？\n\n` +
-        '此操作全局生效：该用户将无法登录任何项目，所有会话立即失效。'
+      ? t('confirmEnable', { email: manageTarget.email })
+      : t('confirmDisable', { email: manageTarget.email })
     if (!window.confirm(confirmMessage)) return
 
     setTogglingActive(true)
@@ -226,7 +226,7 @@ export default function ProjectMembersPage() {
       setManageTarget((prev) =>
         prev?.user_id === targetUserId ? { ...prev, is_active: next } : prev,
       )
-      notify.success(`用户已${next ? '启用' : '停用'}`)
+      notify.success(next ? t('userEnabled') : t('userDisabled'))
       await loadMembers()
     } catch (err: any) {
       notify.error(err)
@@ -288,7 +288,7 @@ export default function ProjectMembersPage() {
 
   const handleAdd = async () => {
     if (!selectedUser) {
-      notify.warning('请先在搜索结果里选一个用户')
+      notify.warning(t('errSelectUser'))
       return
     }
     setAddSaving(true)
@@ -298,7 +298,7 @@ export default function ProjectMembersPage() {
         role: newRole,
       })
       upsertMember(res.data)
-      notify.success(`已添加 ${res.data.username} 为 ${res.data.role}`)
+      notify.success(t('added', { name: res.data.username, role: res.data.role }))
       closeAddDrawer()
     } catch (err: any) {
       notify.error(err)
@@ -314,7 +314,7 @@ export default function ProjectMembersPage() {
 
   const handleCreateUser = async () => {
     if (!createFormValid) {
-      notify.warning('请填写用户名（≥3）、有效邮箱、密码（≥6）')
+      notify.warning(t('errCreateForm'))
       return
     }
     setAddSaving(true)
@@ -326,7 +326,7 @@ export default function ProjectMembersPage() {
         role: newRole,
       })
       upsertMember(res.data)
-      notify.success(`已创建账号 ${res.data.username} 并加入项目（${res.data.role}）`)
+      notify.success(t('created', { name: res.data.username, role: res.data.role }))
       closeAddDrawer()
     } catch (err: any) {
       notify.error(err)
@@ -337,7 +337,7 @@ export default function ProjectMembersPage() {
 
   if (!caps.canManageMembers) {
     return (
-      <ForbiddenPlaceholder reason="成员管理需要项目 admin 或 owner 角色（或平台超管）" />
+      <ForbiddenPlaceholder reason={t('forbidden')} />
     )
   }
 
@@ -345,10 +345,9 @@ export default function ProjectMembersPage() {
     <div className="p-6 max-w-5xl space-y-6">
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">成员管理</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            添加 / 移除项目成员，调整他们在本项目的角色。owner 才能改项目元信息；
-            admin 可以管理成员；member / viewer 不能进本页。
+            {t('subtitle')}
           </p>
         </div>
         <button
@@ -356,7 +355,7 @@ export default function ProjectMembersPage() {
           className="btn-primary"
         >
           <i className="fas fa-user-plus mr-2"></i>
-          添加成员
+          {t('addMember')}
         </button>
       </div>
 
@@ -365,24 +364,24 @@ export default function ProjectMembersPage() {
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50 text-xs uppercase text-gray-500 tracking-wider">
             <tr>
-              <th className="px-5 py-3 text-left font-medium">用户</th>
-              <th className="px-5 py-3 text-left font-medium">角色</th>
-              <th className="px-5 py-3 text-left font-medium">加入时间</th>
-              <th className="px-5 py-3 text-right font-medium">操作</th>
+              <th className="px-5 py-3 text-left font-medium">{t('thUser')}</th>
+              <th className="px-5 py-3 text-left font-medium">{t('thRole')}</th>
+              <th className="px-5 py-3 text-left font-medium">{t('thJoined')}</th>
+              <th className="px-5 py-3 text-right font-medium">{t('thActions')}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {loading && (
               <tr>
                 <td colSpan={4} className="px-5 py-12 text-center text-gray-400">
-                  <i className="fas fa-spinner fa-spin mr-2"></i>加载中...
+                  <i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}
                 </td>
               </tr>
             )}
             {!loading && (members?.length ?? 0) === 0 && (
               <tr>
                 <td colSpan={4} className="px-5 py-12 text-center text-gray-400">
-                  项目暂无成员（异常状态——至少应有一名 owner）
+                  {t('emptyMembers')}
                 </td>
               </tr>
             )}
@@ -410,20 +409,20 @@ export default function ProjectMembersPage() {
                             {m.username}
                             {isSelf && (
                               <span className="text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">
-                                你
+                                {t('badgeYou')}
                               </span>
                             )}
                             {!m.is_active && (
                               <span className="text-xs text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded">
-                                已停用
+                                {t('badgeDisabled')}
                               </span>
                             )}
                             {m.is_superadmin && (
                               <span
                                 className="text-xs text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded"
-                                title="平台超级管理员，本表角色对其无 UI 限制作用"
+                                title={t('badgeSuperAdminTitle')}
                               >
-                                平台超管
+                                {t('badgeSuperAdmin')}
                               </span>
                             )}
                           </div>
@@ -447,10 +446,10 @@ export default function ProjectMembersPage() {
                           className="text-xs border border-gray-300 rounded px-1.5 py-0.5 disabled:opacity-40"
                           title={
                             isSelf
-                              ? '不能修改自己的角色'
+                              ? t('roleSelfTitle')
                               : isLastOwner
-                                ? '不能降级项目最后一个 owner'
-                                : '改成员角色'
+                                ? t('roleLastOwnerTitle')
+                                : t('roleChangeTitle')
                           }
                         >
                           {ROLE_OPTIONS.map((r) => (
@@ -473,7 +472,7 @@ export default function ProjectMembersPage() {
                             className="text-blue-600 hover:text-blue-800 text-sm disabled:opacity-40"
                           >
                             <i className="fas fa-user-cog mr-1"></i>
-                            管理
+                            {t('manage')}
                           </button>
                         )}
                         <button
@@ -482,10 +481,10 @@ export default function ProjectMembersPage() {
                           className="text-red-600 hover:text-red-800 text-sm disabled:opacity-40 disabled:hover:text-red-600"
                           title={
                             isSelf
-                              ? '不能移除自己'
+                              ? t('removeSelfTitle')
                               : isLastOwner
-                                ? '不能移除项目最后一个 owner'
-                                : '从项目移除该成员'
+                                ? t('removeLastOwnerTitle')
+                                : t('removeTitle')
                           }
                         >
                           {saving ? (
@@ -493,7 +492,7 @@ export default function ProjectMembersPage() {
                           ) : (
                             <>
                               <i className="fas fa-user-minus mr-1"></i>
-                              移除
+                              {t('remove')}
                             </>
                           )}
                         </button>
@@ -509,23 +508,23 @@ export default function ProjectMembersPage() {
       <Drawer
         isOpen={!!manageTarget}
         onClose={() => setManageTarget(null)}
-        title={manageTarget ? `管理用户 · ${manageTarget.username}` : ''}
+        title={manageTarget ? t('manageTitle', { name: manageTarget.username }) : ''}
         size="lg"
       >
         {manageTarget && (
           <div className="space-y-6">
             <p className="text-sm text-amber-700 bg-amber-50 border border-amber-100 rounded-lg p-3">
-              修改资料 / 密码 / 启停会影响该用户在所有项目中的账号。
+              {t('manageNote')}
             </p>
 
             <section>
               <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">
-                资料
+                {t('tabProfile')}
               </h4>
               <div className="border border-gray-200 rounded-lg p-4 space-y-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                    用户名
+                    {t('fUsername')}
                   </label>
                   <input
                     type="text"
@@ -538,7 +537,7 @@ export default function ProjectMembersPage() {
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                    邮箱
+                    {t('fEmail')}
                   </label>
                   <input
                     type="email"
@@ -561,9 +560,9 @@ export default function ProjectMembersPage() {
                   className="btn-primary w-full disabled:opacity-50"
                 >
                   {savingProfile ? (
-                    <><i className="fas fa-spinner fa-spin mr-2"></i>保存中...</>
+                    <><i className="fas fa-spinner fa-spin mr-2"></i>{t('savingProfile')}</>
                   ) : (
-                    '保存资料'
+                    t('saveProfile')
                   )}
                 </button>
               </div>
@@ -571,30 +570,30 @@ export default function ProjectMembersPage() {
 
             <section>
               <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">
-                密码
+                {t('tabPassword')}
               </h4>
               <div className="border border-gray-200 rounded-lg p-4 space-y-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                    新密码
+                    {t('fNewPwd')}
                   </label>
                   <input
                     type="password"
                     value={pwdForm.p1}
                     onChange={(e) => setPwdForm((form) => ({ ...form, p1: e.target.value }))}
-                    placeholder="≥ 8 位，含大小写和数字"
+                    placeholder={t('phPwd')}
                     className="w-full input-base"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                    确认新密码
+                    {t('fConfirmPwd')}
                   </label>
                   <input
                     type="password"
                     value={pwdForm.p2}
                     onChange={(e) => setPwdForm((form) => ({ ...form, p2: e.target.value }))}
-                    placeholder="再次输入"
+                    placeholder={t('phRepeat')}
                     className="w-full input-base"
                   />
                 </div>
@@ -604,9 +603,9 @@ export default function ProjectMembersPage() {
                   className="w-full h-10 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50"
                 >
                   {resettingPwd ? (
-                    <><i className="fas fa-spinner fa-spin mr-2"></i>重置中...</>
+                    <><i className="fas fa-spinner fa-spin mr-2"></i>{t('resetting')}</>
                   ) : (
-                    <><i className="fas fa-key mr-2"></i>重置密码</>
+                    <><i className="fas fa-key mr-2"></i>{t('resetPwd')}</>
                   )}
                 </button>
               </div>
@@ -614,16 +613,16 @@ export default function ProjectMembersPage() {
 
             <section>
               <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">
-                状态
+                {t('tabStatus')}
               </h4>
               <div className="border border-gray-200 rounded-lg p-4">
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <p className="text-sm font-medium text-gray-900">
-                      当前：{manageTarget.is_active ? '正常' : '已停用'}
+                      {t('currentLabel')}{manageTarget.is_active ? t('statusNormal') : t('statusDisabled')}
                     </p>
                     <p className="text-xs text-gray-500 mt-1">
-                      停用将禁止该账号登录所有项目，并立即吊销所有会话。
+                      {t('disableWarn')}
                     </p>
                   </div>
                   <button
@@ -636,10 +635,10 @@ export default function ProjectMembersPage() {
                     }`}
                   >
                     {togglingActive
-                      ? '处理中...'
+                      ? t('processing')
                       : manageTarget.is_active
-                        ? '停用用户'
-                        : '启用用户'}
+                        ? t('disableUser')
+                        : t('enableUser')}
                   </button>
                 </div>
               </div>
@@ -658,7 +657,7 @@ export default function ProjectMembersPage() {
             className="bg-white w-full max-w-lg rounded-xl shadow-xl p-6 m-4"
           >
             <h3 className="text-lg font-semibold text-gray-900 mb-3">
-              添加项目成员
+              {t('addMemberTitle')}
             </h3>
 
             {/* 模式切换：搜索已有账号 / 新建账号 */}
@@ -672,7 +671,7 @@ export default function ProjectMembersPage() {
                     : 'text-gray-500 hover:text-gray-700'
                 }`}
               >
-                <i className="fas fa-search mr-1.5"></i>添加已有账号
+                <i className="fas fa-search mr-1.5"></i>{t('tabSearch')}
               </button>
               <button
                 type="button"
@@ -683,14 +682,14 @@ export default function ProjectMembersPage() {
                     : 'text-gray-500 hover:text-gray-700'
                 }`}
               >
-                <i className="fas fa-user-plus mr-1.5"></i>新建账号
+                <i className="fas fa-user-plus mr-1.5"></i>{t('tabCreate')}
               </button>
             </div>
 
             <p className="text-sm text-gray-500 mb-4">
               {addMode === 'search'
-                ? '按用户名或邮箱搜索本租户成员（须先加入租户），选中后加入本项目。'
-                : '为还没有账号的人直接创建平台账号并加入本项目。请把初始密码线下告知对方，建议其登录后自行修改。'}
+                ? t('searchHint')
+                : t('createHint')}
             </p>
 
             <div className="space-y-4">
@@ -698,7 +697,7 @@ export default function ProjectMembersPage() {
               {addMode === 'search' && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  用户 <span className="text-red-500">*</span>
+                  {t('fUser')} <span className="text-red-500">*</span>
                 </label>
                 {selectedUser ? (
                   <div className="flex items-center justify-between border border-blue-300 bg-blue-50/40 rounded-lg px-3 py-2">
@@ -711,7 +710,7 @@ export default function ProjectMembersPage() {
                           {selectedUser.username}
                           {selectedUser.is_superadmin && (
                             <span className="text-xs text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded">
-                              平台超管
+                              {t('badgeSuperAdmin')}
                             </span>
                           )}
                         </div>
@@ -729,7 +728,7 @@ export default function ProjectMembersPage() {
                       }}
                       className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1"
                     >
-                      重新选择
+                      {t('reselect')}
                     </button>
                   </div>
                 ) : (
@@ -741,7 +740,7 @@ export default function ProjectMembersPage() {
                         value={searchText}
                         onChange={(e) => handleSearchChange(e.target.value)}
                         className="w-full input-base pl-9"
-                        placeholder="输入用户名或邮箱（至少 2 字符）"
+                        placeholder={t('phSearch')}
                         autoFocus
                       />
                     </div>
@@ -750,12 +749,12 @@ export default function ProjectMembersPage() {
                       <div className="mt-1.5 border border-gray-200 rounded-lg overflow-hidden max-h-64 overflow-y-auto">
                         {searching && (
                           <div className="px-3 py-3 text-sm text-gray-500">
-                            <i className="fas fa-spinner fa-spin mr-2"></i>搜索中...
+                            <i className="fas fa-spinner fa-spin mr-2"></i>{t('searching')}
                           </div>
                         )}
                         {!searching && searchResults?.length === 0 && (
                           <div className="px-3 py-3 text-sm text-gray-500">
-                            没找到匹配的用户。请确认对方已在平台注册。
+                            {t('noMatch')}
                           </div>
                         )}
                         {!searching &&
@@ -781,7 +780,7 @@ export default function ProjectMembersPage() {
                                     {u.username}
                                     {u.is_superadmin && (
                                       <span className="text-[10px] text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded">
-                                        平台超管
+                                        {t('badgeSuperAdmin')}
                                       </span>
                                     )}
                                   </div>
@@ -791,7 +790,7 @@ export default function ProjectMembersPage() {
                                 </div>
                                 {disabled && (
                                   <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded shrink-0">
-                                    已在项目
+                                    {t('alreadyIn')}
                                   </span>
                                 )}
                               </button>
@@ -809,20 +808,20 @@ export default function ProjectMembersPage() {
                 <div className="space-y-3">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                      用户名 <span className="text-red-500">*</span>
+                      {t('fUsername')} <span className="text-red-500">*</span>
                     </label>
                     <input
                       type="text"
                       value={createForm.username}
                       onChange={(e) => setCreateForm((f) => ({ ...f, username: e.target.value }))}
                       className="w-full input-base"
-                      placeholder="至少 3 个字符"
+                      placeholder={t('phUsername3')}
                       autoFocus
                     />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                      邮箱 <span className="text-red-500">*</span>
+                      {t('fEmail')} <span className="text-red-500">*</span>
                     </label>
                     <input
                       type="email"
@@ -834,17 +833,17 @@ export default function ProjectMembersPage() {
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                      初始密码 <span className="text-red-500">*</span>
+                      {t('fInitPwd')} <span className="text-red-500">*</span>
                     </label>
                     <input
                       type="text"
                       value={createForm.password}
                       onChange={(e) => setCreateForm((f) => ({ ...f, password: e.target.value }))}
                       className="w-full input-base font-mono"
-                      placeholder="至少 6 个字符"
+                      placeholder={t('phPwd6')}
                     />
                     <p className="text-xs text-gray-400 mt-1">
-                      明文展示便于复制告知对方；建议其登录后自行修改密码。
+                      {t('initPwdNote')}
                     </p>
                   </div>
                 </div>
@@ -853,7 +852,7 @@ export default function ProjectMembersPage() {
               {/* 步骤 2：角色卡片 */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  初始角色
+                  {t('initRole')}
                 </label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {ROLE_CARDS.map((card) => {
@@ -882,7 +881,7 @@ export default function ProjectMembersPage() {
                           )}
                         </div>
                         <p className="text-xs text-gray-600 leading-relaxed">
-                          {card.desc}
+                          {t(card.descKey)}
                         </p>
                       </button>
                     )
@@ -897,7 +896,7 @@ export default function ProjectMembersPage() {
                 disabled={addSaving}
                 className="px-4 py-2 text-sm text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
               >
-                取消
+                {t('cancel')}
               </button>
               <button
                 onClick={addMode === 'create' ? handleCreateUser : handleAdd}
@@ -909,11 +908,11 @@ export default function ProjectMembersPage() {
               >
                 {addSaving
                   ? addMode === 'create'
-                    ? '创建中...'
-                    : '添加中...'
+                    ? t('creating')
+                    : t('adding')
                   : addMode === 'create'
-                    ? '创建并加入'
-                    : '添加'}
+                    ? t('createAndJoin')
+                    : t('add')}
               </button>
             </div>
           </div>

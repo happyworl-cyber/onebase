@@ -384,7 +384,7 @@ mod tests {
     fn with_temp_deps_root<F: FnOnce(PathBuf)>(f: F) {
         let _guard = ENV_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join(format!(
-            "onebase_js_deps_test_{}_{}",
+            "planeos_js_deps_test_{}_{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -452,7 +452,7 @@ mod tests {
     async fn ensure_empty_deps_is_idle_without_npm() {
         let _guard = ENV_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join(format!(
-            "onebase_js_deps_test_empty_{}",
+            "planeos_js_deps_test_empty_{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -481,7 +481,7 @@ mod tests {
     async fn ensure_missing_npm_returns_failed_when_install_required() {
         let _guard = ENV_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join(format!(
-            "onebase_js_deps_test_failed_{}",
+            "planeos_js_deps_test_failed_{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

@@ -141,7 +141,11 @@ pub async fn rbac_middleware(
             .cloned()
         {
             if ctx.database_id != database_id {
-                return Err(AppError::Unauthorized("API Key 与数据库不匹配".to_string()));
+                return Err(AppError::unauthorized_coded(
+                    "rbacmw_api_key_database_mismatch",
+                    "API Key 与数据库不匹配".to_string(),
+                    serde_json::json!({}),
+                ));
             }
             if let Some(header_db_id) = req
                 .headers()
@@ -189,7 +193,11 @@ pub async fn rbac_middleware(
                 action = %action,
                 "RBAC 拒绝：API Key 无效或已过期"
             );
-            AppError::Unauthorized("API Key 无效或已过期".to_string())
+            AppError::unauthorized_coded(
+                "rbacmw_api_key_invalid_or_expired",
+                "API Key 无效或已过期".to_string(),
+                serde_json::json!({}),
+            )
         })?;
 
         let key_db_id: i32 = row.get("database_id");
@@ -201,7 +209,11 @@ pub async fn rbac_middleware(
                 resource = %resource,
                 "RBAC 拒绝：API Key 与数据库不匹配"
             );
-            return Err(AppError::Unauthorized("API Key 与数据库不匹配".to_string()));
+            return Err(AppError::unauthorized_coded(
+                "rbacmw_api_key_database_mismatch",
+                "API Key 与数据库不匹配".to_string(),
+                serde_json::json!({}),
+            ));
         }
 
         // Also validate X-Database-Id header if present to prevent header spoofing
@@ -279,10 +291,11 @@ pub async fn rbac_middleware(
             let tenant_id = match tenant_row {
                 Some(r) => r.get::<i32, _>("tenant_id"),
                 None => {
-                    return Err(AppError::NotFound(format!(
-                        "数据库连接 {} 不存在",
-                        database_id
-                    )));
+                    return Err(AppError::not_found_coded(
+                        "rbacmw_database_not_found",
+                        format!("数据库连接 {} 不存在", database_id),
+                        serde_json::json!({ "database_id": database_id }),
+                    ));
                 }
             };
 
@@ -322,10 +335,11 @@ pub async fn rbac_middleware(
                     action = %action,
                     "RBAC 权限拒绝：用户对该资源无任何授权"
                 );
-                return Err(AppError::Forbidden(format!(
-                    "没有权限对 {} 执行 {} 操作",
-                    resource, action
-                )));
+                return Err(AppError::forbidden_coded(
+                    "rbacmw_no_resource_permission",
+                    format!("没有权限对 {} 执行 {} 操作", resource, action),
+                    serde_json::json!({ "resource": resource, "action": action }),
+                ));
             }
 
             let result = merge_permissions(&permissions, user_id);
@@ -340,8 +354,10 @@ pub async fn rbac_middleware(
                 action = %action,
                 "RBAC 拒绝：既无 JWT 也无 API Key"
             );
-            return Err(AppError::Unauthorized(
+            return Err(AppError::unauthorized_coded(
+                "rbacmw_missing_credentials",
                 "请提供有效的 API Key 或 JWT Token".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -374,10 +390,11 @@ fn check_api_key_scope(
 ) -> Result<(), AppError> {
     // action 判定复用单一事实来源（与工作流只读护栏同源，杜绝口径漂移）。
     if !crate::permissions::api_key_action_allowed(permissions, action) {
-        return Err(AppError::Forbidden(format!(
-            "API Key 不允许执行 {} 操作",
-            action
-        )));
+        return Err(AppError::forbidden_coded(
+            "rbacmw_api_key_action_denied",
+            format!("API Key 不允许执行 {} 操作", action),
+            serde_json::json!({ "action": action }),
+        ));
     }
 
     // resource 校验仅新格式且 allowed_resources 非空时生效（旧格式视为通配，保持历史行为）。
@@ -400,10 +417,11 @@ fn check_api_key_scope(
                 .iter()
                 .any(|r| r == "*" || r == "*.*" || r == resource || r == &schema_wildcard);
             if !allowed {
-                return Err(AppError::Forbidden(format!(
-                    "API Key 不允许访问资源: {}",
-                    resource
-                )));
+                return Err(AppError::forbidden_coded(
+                    "rbacmw_api_key_resource_denied",
+                    format!("API Key 不允许访问资源: {}", resource),
+                    serde_json::json!({ "resource": resource }),
+                ));
             }
         }
     }

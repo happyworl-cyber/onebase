@@ -19,6 +19,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useParams } from 'next/navigation'
 import {
   esAPI,
@@ -35,13 +36,15 @@ import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
 import { closeOnBackdropPress } from '@/lib/utils'
 
 export default function EsConnectionsPage() {
+  const t = useTranslations('wsEsConn')
+  const tc = useTranslations('connCommon')
   const params = useParams<{ projectId: string }>()
   const projectId = parseInt(params.projectId, 10)
   const caps = useCurrentProjectCapabilities()
 
   if (!caps.canManageEvents) {
     return (
-      <ForbiddenPlaceholder reason="ES 反向代理管理需要 admin+ 角色（owner / admin / 超管）" />
+      <ForbiddenPlaceholder reason={t('forbidden')} />
     )
   }
 
@@ -50,7 +53,7 @@ export default function EsConnectionsPage() {
     return (
       <div className="text-center py-12 text-gray-400">
         <i className="fas fa-spinner fa-spin text-2xl"></i>
-        <p className="text-sm mt-2">正在加载项目上下文…</p>
+        <p className="text-sm mt-2">{tc('loadingCtx')}</p>
       </div>
     )
   }
@@ -61,6 +64,8 @@ export default function EsConnectionsPage() {
 // ── 内部组件 ──────────────────────────────────────────────────────────
 
 function EsConnectionsManager({ tenantId }: { tenantId: number }) {
+  const t = useTranslations('wsEsConn')
+  const tc = useTranslations('connCommon')
   const notify = useNotification()
   const [connections, setConnections] = useState<EsConnection[]>([])
   const [loading, setLoading] = useState(true)
@@ -104,11 +109,10 @@ function EsConnectionsManager({ tenantId }: { tenantId: number }) {
         <div>
           <h1 className="text-2xl font-semibold">
             <i className="fas fa-search-plus mr-2 text-blue-600"></i>
-            Elasticsearch 反向代理
+            {t('title')}
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            平台保管 ES 真实地址 / ApiKey；业务端用平台代理 URL + obes_es_* token 访问，
-            避免把生产凭据散落到各业务端。
+            {t('subtitle')}
           </p>
         </div>
         <button
@@ -116,7 +120,7 @@ function EsConnectionsManager({ tenantId }: { tenantId: number }) {
           onClick={() => setShowCreate(true)}
           className="btn-primary"
         >
-          <i className="fas fa-plus mr-2"></i>新建连接
+          <i className="fas fa-plus mr-2"></i>{t('newConn')}
         </button>
       </div>
 
@@ -130,13 +134,13 @@ function EsConnectionsManager({ tenantId }: { tenantId: number }) {
           ) : connections.length === 0 ? (
             <div className="text-center py-12 bg-gray-50 border border-dashed border-gray-300 rounded">
               <i className="fas fa-search text-3xl text-gray-300 mb-2"></i>
-              <p className="text-sm text-gray-500">还没有 ES 连接</p>
+              <p className="text-sm text-gray-500">{t('empty')}</p>
               <button
                 type="button"
                 onClick={() => setShowCreate(true)}
                 className="mt-3 text-sm text-blue-600 hover:underline"
               >
-                立即创建第一个
+                {t('createFirst')}
               </button>
             </div>
           ) : (
@@ -161,7 +165,7 @@ function EsConnectionsManager({ tenantId }: { tenantId: number }) {
             />
           ) : (
             <div className="bg-gray-50 border border-dashed border-gray-300 rounded p-12 text-center text-sm text-gray-400">
-              请从左侧选择一个连接，或新建一个
+              {t('selectOrNew')}
             </div>
           )}
         </div>
@@ -175,7 +179,7 @@ function EsConnectionsManager({ tenantId }: { tenantId: number }) {
             setShowCreate(false)
             setActiveId(id)
             loadConnections()
-            notify.success('ES 连接已创建')
+            notify.success(t('created'))
           }}
         />
       )}
@@ -194,6 +198,8 @@ function ConnectionListItem({
   active: boolean
   onClick: () => void
 }) {
+  const t = useTranslations('wsEsConn')
+  const tc = useTranslations('connCommon')
   return (
     <button
       type="button"
@@ -208,7 +214,7 @@ function ConnectionListItem({
         <div className="font-medium text-sm truncate">{connection.connection_name}</div>
         {!connection.is_active && (
           <span className="text-xs bg-gray-200 text-gray-700 px-1.5 py-0.5 rounded">
-            已停用
+            {tc('disabled')}
           </span>
         )}
       </div>
@@ -221,7 +227,7 @@ function ConnectionListItem({
           {connection.auth_type}
         </span>
         {!connection.verify_tls && (
-          <span className="text-amber-600" title="未校验 TLS 证书">
+          <span className="text-amber-600" title={t('tlsUnverified')}>
             <i className="fas fa-shield-alt"></i> TLS off
           </span>
         )}
@@ -241,19 +247,21 @@ function ConnectionDetail({
   onChanged: () => void
   onDeleted: () => void
 }) {
+  const tr = useTranslations('wsEsConn')
+  const tc = useTranslations('connCommon')
   const notify = useNotification()
   const [tab, setTab] = useState<'usage' | 'tokens' | 'settings'>('usage')
 
   const handleDelete = async () => {
     if (
       !window.confirm(
-        `确认删除连接「${connection.connection_name}」？所有挂在它下面的 token 会一并被级联删除，业务端访问立即 401。`,
+        tr('confirmDelete', { name: connection.connection_name }),
       )
     )
       return
     try {
       await esAPI.deleteConnection(connection.id)
-      notify.success('连接已删除')
+      notify.success(tr('deleted'))
       onDeleted()
     } catch {
       // 全局拦截器已弹错误
@@ -271,7 +279,7 @@ function ConnectionDetail({
           type="button"
           onClick={handleDelete}
           className="text-sm text-red-600 hover:text-red-700"
-          title="删除连接（级联清理所有 token）"
+          title={tr('deleteTitle')}
         >
           <i className="fas fa-trash"></i>
         </button>
@@ -279,9 +287,9 @@ function ConnectionDetail({
 
       <div className="border-b flex text-sm">
         {[
-          { id: 'usage', label: '接入指南', icon: 'fa-book' },
-          { id: 'tokens', label: '代理 Token', icon: 'fa-key' },
-          { id: 'settings', label: '连接设置', icon: 'fa-cog' },
+          { id: 'usage', label: tr('tabUsage'), icon: 'fa-book' },
+          { id: 'tokens', label: tr('tabTokens'), icon: 'fa-key' },
+          { id: 'settings', label: tr('tabSettings'), icon: 'fa-cog' },
         ].map((t) => (
           <button
             key={t.id}
@@ -315,6 +323,8 @@ function ConnectionDetail({
 // ── 接入指南 ──────────────────────────────────────────────────────────
 
 function UsageTab({ connection }: { connection: EsConnection }) {
+  const t = useTranslations('wsEsConn')
+  const tc = useTranslations('connCommon')
   const notify = useNotification()
   const { currentConnection, currentProject } = useAppStore()
   const origin =
@@ -336,9 +346,9 @@ function UsageTab({ connection }: { connection: EsConnection }) {
   const copy = async (text: string, label: string) => {
     try {
       await navigator.clipboard.writeText(text)
-      notify.success(`已复制：${label}`)
+      notify.success(t('copied', { label }))
     } catch {
-      notify.error('复制失败，请手动选择文本')
+      notify.error(t('copyFail'))
     }
   }
 
@@ -346,26 +356,23 @@ function UsageTab({ connection }: { connection: EsConnection }) {
     <div className="space-y-4 text-sm">
       <div className="bg-blue-50 border border-blue-200 text-blue-900 rounded p-3 space-y-1.5 text-xs">
         <div className="font-semibold">
-          <i className="fas fa-lightbulb mr-1"></i>两种接入方式
+          <i className="fas fa-lightbulb mr-1"></i>{t('twoModes')}
         </div>
         {!databaseSlug && (
           <p className="text-amber-800">
-            当前项目尚未绑定主数据库连接，接入地址暂用旧版路径；绑定后将自动带上项目 slug（
+            {t('twoModesIntro')}
             <code className="bg-white px-1 rounded">/api/v1/&#123;slug&#125;/es-app</code>）。
           </p>
         )}
         <ul className="list-disc list-inside space-y-0.5">
           <li>
-            <strong>应用 API</strong>（推荐）：发简化 JSON 完成增删改查，业务端
-            <strong>无需</strong>引入 ES SDK，也不用学 Query DSL。
+            {t.rich('appApiRich', { code: (c: any) => <code className="bg-white px-1 rounded">{c}</code>, b: (c: any) => <strong>{c}</strong> })}。
           </li>
           <li>
-            <strong>原生代理</strong>：直接转发 ES REST API，配 elasticsearch-py /
-            @elastic/elasticsearch 等官方 SDK 用，适合需要 scroll / KNN / 复杂 agg 的场景。
+            {t.rich('nativeRich', { code: (c: any) => <code className="bg-white px-1 rounded">{c}</code>, b: (c: any) => <strong>{c}</strong> })}
           </li>
           <li>
-            两种模式共用同一个 <code className="bg-white px-1 rounded">obes_es_xxx</code> token，
-            按 method / index 白名单约束。
+            {t.rich('sharedTokenRich', { code: (c: any) => <code className="bg-white px-1 rounded">{c}</code>, b: (c: any) => <strong>{c}</strong> })}
           </li>
         </ul>
       </div>
@@ -376,14 +383,14 @@ function UsageTab({ connection }: { connection: EsConnection }) {
           onClick={() => setMode('app')}
           className={`px-3 py-1.5 ${mode === 'app' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
         >
-          应用 API（推荐）
+          {t('appApiTab')}
         </button>
         <button
           type="button"
           onClick={() => setMode('proxy')}
           className={`px-3 py-1.5 ${mode === 'proxy' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
         >
-          原生代理（带 SDK）
+          {t('nativeTab')}
         </button>
       </div>
 
@@ -394,8 +401,7 @@ function UsageTab({ connection }: { connection: EsConnection }) {
       )}
 
       <div className="text-xs text-gray-500 pt-2 border-t">
-        当前连接默认超时 <strong>{connection.default_timeout_secs}s</strong>；
-        TLS 校验 {connection.verify_tls ? '开启' : <span className="text-amber-600 font-semibold">关闭（仅自签证书测试用）</span>}。
+        {t.rich(connection.verify_tls ? 'timeoutTlsOn' : 'timeoutTlsOff', { b: (c: any) => <strong>{c}</strong>, amber: (c: any) => <span className="text-amber-600 font-semibold">{c}</span>, secs: connection.default_timeout_secs })}
       </div>
     </div>
   )
@@ -410,17 +416,19 @@ function AppApiGuide({
   base: string
   copy: (text: string, label: string) => void
 }) {
-  const createDoc = `# 创建文档（auto id；body 里写 "_id" 则按指定 id upsert）
+  const t = useTranslations('wsEsConn')
+  const tc = useTranslations('connCommon')
+  const createDoc = `# Create a document (auto id; put "_id" in the body to upsert by a specific id)
 curl -X POST "${base}/orders/docs" \\
   -H "Authorization: ApiKey obes_es_<your_token>" \\
   -H "Content-Type: application/json" \\
   -d '{"order_id":"ORD-1001","amount":199.9,"status":"paid"}'`
 
-  const getDoc = `# 按 id 获取（找不到返回 404 + {"found": false}）
+  const getDoc = `# Get by id (returns 404 + {"found": false} if not found)
 curl "${base}/orders/docs/ORD-1001" \\
   -H "Authorization: ApiKey obes_es_<your_token>"`
 
-  const patchDoc = `# 部分更新（裸字段 = {"doc": {...}} 的语法糖）
+  const patchDoc = `# Partial update (bare fields = syntactic sugar for {"doc": {...}})
 curl -X PATCH "${base}/orders/docs/ORD-1001" \\
   -H "Authorization: ApiKey obes_es_<your_token>" \\
   -H "Content-Type: application/json" \\
@@ -429,7 +437,7 @@ curl -X PATCH "${base}/orders/docs/ORD-1001" \\
   const deleteDoc = `curl -X DELETE "${base}/orders/docs/ORD-1001" \\
   -H "Authorization: ApiKey obes_es_<your_token>"`
 
-  const searchDoc = `# 搜索：扁平的 where + q + sort + page/size + select
+  const searchDoc = `# Search: flat where + q + sort + page/size + select
 curl -X POST "${base}/orders/search" \\
   -H "Authorization: ApiKey obes_es_<your_token>" \\
   -H "Content-Type: application/json" \\
@@ -438,21 +446,21 @@ curl -X POST "${base}/orders/search" \\
       "status": "paid",
       "amount": {"gte": 10, "lte": 500},
       "tags":   {"in": ["promo", "vip"]},
-      "remark": {"contains": "首单"},
+      "remark": {"contains": "first order"},
       "name":   {"wildcard": {"value": "*iphone*", "case_insensitive": true, "rewrite": "constant_score"}},
       "deleted_at": {"exists": false}
     },
-    "q": "急单 OR 紧急",
+    "q": "urgent OR rush",
     "q_fields": ["remark", "title"],
     "sort":   [{"field": "created_at", "order": "desc"}],
     "page": 1, "size": 20,
     "select": ["order_id","amount","status"]
   }'
 
-# 响应（已去掉 hits.hits 嵌套）：
+# Response (hits.hits nesting removed):
 # {"total":123,"page":1,"size":20,"took_ms":12,"data":[{"_id":"...","order_id":"..."}]}`
 
-  const aggregateDoc = `# terms 聚合：先按 where 过滤，再按字段分桶
+  const aggregateDoc = `# terms aggregation: filter by where first, then bucket by field
 curl -X POST "${base}/articles/search" \\
   -H "Authorization: ApiKey obes_es_<your_token>" \\
   -H "Content-Type: application/json" \\
@@ -466,10 +474,10 @@ curl -X POST "${base}/articles/search" \\
     }
   }'
 
-# 响应：
+# Response:
 # {"total":123,"size":0,"data":[],"aggregations":{"topic_counts":{"buckets":[{"key":"AI","doc_count":42}]}}}
 
-# composite 聚合：完整遍历高基数字段；首屏省略 after
+# composite aggregation: fully traverse high-cardinality fields; omit after on the first page
 curl -X POST "${base}/articles/search" \\
   -H "Authorization: ApiKey obes_es_<your_token>" \\
   -H "Content-Type: application/json" \\
@@ -488,10 +496,10 @@ curl -X POST "${base}/articles/search" \\
     }
   }'
 
-# 下一页把上次响应的 after_key 原样放入 composite.after：
-# "after": {"topic": "上一页最后一个值"}`
+# For the next page, put the previous response's after_key verbatim into composite.after:
+# "after": {"topic": "last value of previous page"}`
 
-  const bulkDoc = `# 批量：一次最多 1000 条；results 与 operations 顺序一致
+  const bulkDoc = `# Bulk: up to 1000 per call; results match the order of operations
 curl -X POST "${base}/orders/bulk" \\
   -H "Authorization: ApiKey obes_es_<your_token>" \\
   -H "Content-Type: application/json" \\
@@ -503,7 +511,7 @@ curl -X POST "${base}/orders/bulk" \\
     ]
   }'`
 
-  const initIndex = `# 简化建表：直接给字段类型字典；shards/replicas 是 ES number_of_* 的别名
+  const initIndex = `# Simplified index creation: give a field-type dict directly; shards/replicas are aliases for ES number_of_*
 curl -X POST "${base}/orders/_init" \\
   -H "Authorization: ApiKey obes_es_<your_token>" \\
   -H "Content-Type: application/json" \\
@@ -519,19 +527,19 @@ curl -X POST "${base}/orders/_init" \\
     }
   }'`
 
-  const pythonExample = `# 不需要 elasticsearch SDK；标准 requests 即可
+  const pythonExample = `# No elasticsearch SDK needed; standard requests works
 import requests
 
 BASE = "${base}"
 HEADERS = {"Authorization": "ApiKey obes_es_<your_token>"}
 
-# 创建
+# Create
 r = requests.post(f"{BASE}/orders/docs", json={
     "order_id": "ORD-1001", "amount": 199.9, "status": "paid",
 }, headers=HEADERS)
 print(r.json())
 
-# 搜索
+# Search
 r = requests.post(f"{BASE}/orders/search", json={
     "where": {"status": "paid", "amount": {"gte": 100}},
     "sort":  [{"field": "created_at", "order": "desc"}],
@@ -539,11 +547,11 @@ r = requests.post(f"{BASE}/orders/search", json={
 }, headers=HEADERS)
 print(r.json()["data"])
 
-# 部分更新
+# Partial update
 requests.patch(f"{BASE}/orders/docs/ORD-1001",
     json={"status": "refunded"}, headers=HEADERS)`
 
-  const nodeExample = `// 不需要 @elastic/elasticsearch；用 fetch / axios 即可
+  const nodeExample = `// No @elastic/elasticsearch needed; use fetch / axios
 const BASE = '${base}'
 const headers = {
   'Authorization': 'ApiKey obes_es_<your_token>',
@@ -566,48 +574,44 @@ console.log(total, data)`
     <div className="space-y-3">
       <div className="bg-gray-50 border border-gray-200 rounded p-3 text-xs text-gray-700 space-y-1">
         <div className="font-semibold">
-          <i className="fas fa-cube mr-1"></i>路径速查（base = <code>{base}</code>）
+          <i className="fas fa-cube mr-1"></i>{t('pathQuickRef')}<code>{base}</code>)
         </div>
         <ul className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-0.5 list-disc list-inside">
-          <li><code>POST /:index/docs</code> 创建</li>
-          <li><code>GET /:index/docs/:id</code> 读取</li>
-          <li><code>PUT /:index/docs/:id</code> 整体替换</li>
-          <li><code>PATCH /:index/docs/:id</code> 部分更新</li>
-          <li><code>DELETE /:index/docs/:id</code> 删除</li>
-          <li><code>POST /:index/search</code> 搜索</li>
-          <li><code>POST /:index/count</code> 计数</li>
-          <li><code>POST /:index/bulk</code> 批量</li>
-          <li><code>POST /:index/_init</code> 建索引</li>
-          <li><code>DELETE /:index</code> 删索引</li>
+          <li><code>POST /:index/docs</code> {t('opCreate')}</li>
+          <li><code>GET /:index/docs/:id</code> {t('opRead')}</li>
+          <li><code>PUT /:index/docs/:id</code> {t('opReplace')}</li>
+          <li><code>PATCH /:index/docs/:id</code> {t('opPatch')}</li>
+          <li><code>DELETE /:index/docs/:id</code> {t('opDelete')}</li>
+          <li><code>POST /:index/search</code> {t('opSearch')}</li>
+          <li><code>POST /:index/count</code> {t('opCount')}</li>
+          <li><code>POST /:index/bulk</code> {t('opBulk')}</li>
+          <li><code>POST /:index/_init</code> {t('opInit')}</li>
+          <li><code>DELETE /:index</code> {t('opDropIndex')}</li>
           <li><code>GET /:index</code> mapping/settings</li>
-          <li><code>GET /_indices</code> 列表（按 allowlist 过滤）</li>
+          <li><code>GET /_indices</code> {t('opList')}</li>
         </ul>
       </div>
 
-      <CodeBlock label="① 创建文档" code={createDoc} onCopy={() => copy(createDoc, '创建文档')} />
-      <CodeBlock label="② 读取 / 删除" code={`${getDoc}\n\n${deleteDoc}`} onCopy={() => copy(`${getDoc}\n\n${deleteDoc}`, '读取 / 删除')} />
-      <CodeBlock label="③ 部分更新" code={patchDoc} onCopy={() => copy(patchDoc, '部分更新')} />
-      <CodeBlock label="④ 搜索（无需 ES DSL）" code={searchDoc} onCopy={() => copy(searchDoc, '搜索')} />
-      <CodeBlock label="⑤ terms / composite 聚合" code={aggregateDoc} onCopy={() => copy(aggregateDoc, '聚合')} />
-      <CodeBlock label="⑥ 批量" code={bulkDoc} onCopy={() => copy(bulkDoc, '批量')} />
-      <CodeBlock label="⑦ 建索引（简化 schema）" code={initIndex} onCopy={() => copy(initIndex, '建索引')} />
-      <CodeBlock label="Python（不引 SDK，requests 即可）" code={pythonExample} onCopy={() => copy(pythonExample, 'Python 示例')} />
-      <CodeBlock label="Node.js（不引 SDK，fetch 即可）" code={nodeExample} onCopy={() => copy(nodeExample, 'Node 示例')} />
+      <CodeBlock label={t('cbCreateDoc')} code={createDoc} onCopy={() => copy(createDoc, t('lblCreateDoc'))} />
+      <CodeBlock label={t('cbReadDelete')} code={`${getDoc}\n\n${deleteDoc}`} onCopy={() => copy(`${getDoc}\n\n${deleteDoc}`, t('lblReadDelete'))} />
+      <CodeBlock label={t('cbPatch')} code={patchDoc} onCopy={() => copy(patchDoc, t('lblPatch'))} />
+      <CodeBlock label={t('cbSearch')} code={searchDoc} onCopy={() => copy(searchDoc, t('lblSearch'))} />
+      <CodeBlock label={t('cbAgg')} code={aggregateDoc} onCopy={() => copy(aggregateDoc, t('lblAgg'))} />
+      <CodeBlock label={t('cbBulk')} code={bulkDoc} onCopy={() => copy(bulkDoc, t('lblBulk'))} />
+      <CodeBlock label={t('cbInit')} code={initIndex} onCopy={() => copy(initIndex, t('lblInit'))} />
+      <CodeBlock label={t('cbPython')} code={pythonExample} onCopy={() => copy(pythonExample, t('lblPython'))} />
+      <CodeBlock label={t('cbNode')} code={nodeExample} onCopy={() => copy(nodeExample, t('lblNode'))} />
 
       <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded p-2.5 text-xs space-y-1">
         <div className="font-semibold">
-          <i className="fas fa-exclamation-triangle mr-1"></i>where 支持的操作符
+          <i className="fas fa-exclamation-triangle mr-1"></i>{t('whereOps')}
         </div>
         <p>
           <code>eq / ne / in / nin / gt / gte / lt / lte / contains / prefix / exists / wildcard</code>；
-          标量值默认按 <code>eq</code>，数组按 <code>in</code>，<code>null</code> 等价 <code>exists:false</code>；
-          多个 range 操作符自动合并到同字段。<code>prefix / wildcard</code> 除字符串简写外，也支持
-          <code>{'{ value, case_insensitive, rewrite, boost }'}</code> 参数对象。
+          {t.rich('whereOpsDetail1', { code: (c: any) => <code>{c}</code> })}
         </p>
         <p>
-          <code>aggs</code> 支持受限的顶层 <code>terms / composite</code> 聚合。composite 每页最多
-          1000 个 buckets、最多 10 个 terms sources，下一页使用响应中的 <code>after_key</code>；
-          每次最多 20 项聚合，所有 size 总和最多 10000。复杂聚合请使用原生代理。
+          {t.rich('whereOpsDetail2', { code: (c: any) => <code>{c}</code> })}
         </p>
       </div>
     </div>
@@ -623,6 +627,8 @@ function ProxyGuide({
   base: string
   copy: (text: string, label: string) => void
 }) {
+  const t = useTranslations('wsEsConn')
+  const tc = useTranslations('connCommon')
   const curlExample = `curl -H "Authorization: ApiKey obes_es_<your_token>" \\
      ${base}/_cluster/health`
 
@@ -648,13 +654,12 @@ console.log(await es.info())`
     <div className="space-y-3">
       <div className="bg-gray-50 border border-gray-200 text-gray-700 rounded p-2.5 text-xs">
         <i className="fas fa-info-circle mr-1"></i>
-        透传层把 <code>/api/es/*</code> 一对一转给上游 ES，可继续用 elasticsearch-py /
-        @elastic/elasticsearch 等官方 SDK；response 流式直传，scroll / async search 全部支持。
+        {t.rich('nativeIntroRich', { code: (c: any) => <code>{c}</code> })}
       </div>
-      <CodeBlock label="代理 URL" code={base} onCopy={() => copy(base, '代理 URL')} />
-      <CodeBlock label="curl 示例" code={curlExample} onCopy={() => copy(curlExample, 'curl 示例')} />
-      <CodeBlock label="Python (elasticsearch-py)" code={pythonExample} onCopy={() => copy(pythonExample, 'Python 示例')} />
-      <CodeBlock label="Node.js (@elastic/elasticsearch)" code={nodeExample} onCopy={() => copy(nodeExample, 'Node 示例')} />
+      <CodeBlock label={t('aggProxyLbl')} code={base} onCopy={() => copy(base, t('aggProxyLbl'))} />
+      <CodeBlock label={t('aggCurlLbl')} code={curlExample} onCopy={() => copy(curlExample, t('aggCurlLbl'))} />
+      <CodeBlock label="Python (elasticsearch-py)" code={pythonExample} onCopy={() => copy(pythonExample, t('lblPython'))} />
+      <CodeBlock label="Node.js (@elastic/elasticsearch)" code={nodeExample} onCopy={() => copy(nodeExample, t('lblNode'))} />
     </div>
   )
 }
@@ -668,6 +673,7 @@ function CodeBlock({
   code: string
   onCopy: () => void
 }) {
+  const tc = useTranslations('connCommon')
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
@@ -677,7 +683,7 @@ function CodeBlock({
           onClick={onCopy}
           className="text-xs text-blue-600 hover:underline"
         >
-          <i className="fas fa-copy mr-1"></i>复制
+          <i className="fas fa-copy mr-1"></i>{tc('copy')}
         </button>
       </div>
       <pre className="bg-gray-900 text-gray-100 text-xs p-3 rounded overflow-x-auto whitespace-pre-wrap break-all">
@@ -690,6 +696,8 @@ function CodeBlock({
 // ── Token 列表 ────────────────────────────────────────────────────────
 
 function TokensTab({ connectionId }: { connectionId: number }) {
+  const tr = useTranslations('wsEsConn')
+  const tc = useTranslations('connCommon')
   const notify = useNotification()
   const [tokens, setTokens] = useState<EsAccessToken[]>([])
   const [loading, setLoading] = useState(true)
@@ -716,7 +724,7 @@ function TokensTab({ connectionId }: { connectionId: number }) {
   const toggleActive = async (t: EsAccessToken) => {
     try {
       await esAPI.updateToken(connectionId, t.id, { is_active: !t.is_active })
-      notify.success(t.is_active ? 'token 已停用' : 'token 已启用')
+      notify.success(t.is_active ? tr('tokenDisabled') : tr('tokenEnabled'))
       load()
     } catch {
       /* noop */
@@ -726,13 +734,13 @@ function TokensTab({ connectionId }: { connectionId: number }) {
   const remove = async (t: EsAccessToken) => {
     if (
       !window.confirm(
-        `确认删除 token「${t.name}」？业务端正在用这个 token 的请求将立即 401。`,
+        tr('confirmDeleteToken', { name: t.name }),
       )
     )
       return
     try {
       await esAPI.deleteToken(connectionId, t.id)
-      notify.success('token 已删除')
+      notify.success(tr('tokenDeleted'))
       load()
     } catch {
       /* noop */
@@ -743,14 +751,14 @@ function TokensTab({ connectionId }: { connectionId: number }) {
     <div className="space-y-3 text-sm">
       <div className="flex items-center justify-between">
         <div className="text-gray-600 text-xs">
-          每个 token 独立配置 method / index / path 黑白名单；明文仅在创建时一次性显示。
+          {tr('tokensDesc')}
         </div>
         <button
           type="button"
           onClick={() => setShowCreate(true)}
           className="btn-primary text-xs"
         >
-          <i className="fas fa-plus mr-1"></i>新建 token
+          <i className="fas fa-plus mr-1"></i>{tr('newToken')}
         </button>
       </div>
 
@@ -760,20 +768,20 @@ function TokensTab({ connectionId }: { connectionId: number }) {
         </div>
       ) : tokens.length === 0 ? (
         <div className="text-center py-8 text-gray-400 border border-dashed border-gray-300 rounded">
-          还没有 token
+          {tr('noToken')}
         </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead className="text-left text-gray-500 border-b">
               <tr>
-                <th className="py-2 px-2">名称</th>
-                <th className="py-2 px-2">前缀</th>
+                <th className="py-2 px-2">{tr('colName')}</th>
+                <th className="py-2 px-2">{tr('colPrefix')}</th>
                 <th className="py-2 px-2">methods</th>
                 <th className="py-2 px-2">indices</th>
-                <th className="py-2 px-2">使用</th>
-                <th className="py-2 px-2">状态</th>
-                <th className="py-2 px-2 text-right">操作</th>
+                <th className="py-2 px-2">{tr('colUse')}</th>
+                <th className="py-2 px-2">{tr('colStatus')}</th>
+                <th className="py-2 px-2 text-right">{tr('colActions')}</th>
               </tr>
             </thead>
             <tbody>
@@ -797,7 +805,7 @@ function TokensTab({ connectionId }: { connectionId: number }) {
                     {t.index_allowlist.join(', ')}
                   </td>
                   <td className="py-2 px-2 text-gray-500">
-                    {t.use_count > 0 ? `${t.use_count} 次` : '—'}
+                    {t.use_count > 0 ? tr('useCount', { n: t.use_count }) : '—'}
                     {t.last_used_at && (
                       <div className="text-gray-400 text-[10px]">
                         {new Date(t.last_used_at).toLocaleString()}
@@ -821,14 +829,14 @@ function TokensTab({ connectionId }: { connectionId: number }) {
                       onClick={() => toggleActive(t)}
                       className="text-blue-600 hover:underline"
                     >
-                      {t.is_active ? '停用' : '启用'}
+                      {t.is_active ? tr('disable') : tr('enable')}
                     </button>
                     <button
                       type="button"
                       onClick={() => remove(t)}
                       className="text-red-600 hover:underline"
                     >
-                      删除
+                      {tr('delete')}
                     </button>
                   </td>
                 </tr>
@@ -871,6 +879,8 @@ function SettingsTab({
   onUpdated: () => void
 }) {
   const notify = useNotification()
+  const t = useTranslations('wsEsConn')
+  const tc = useTranslations('connCommon')
   const [form, setForm] = useState({
     connection_name: connection.connection_name,
     base_url: connection.base_url,
@@ -908,7 +918,7 @@ function SettingsTab({
         payload.credential = form.credential
       }
       await esAPI.updateConnection(connection.id, payload)
-      notify.success('连接已更新')
+      notify.success(t('updated'))
       setForm({ ...form, credential: '' })
       onUpdated()
     } catch {
@@ -925,9 +935,9 @@ function SettingsTab({
       const res = await esAPI.healthCheck(connection.id)
       setHealthResult(res.data)
       if (res.data.ok) {
-        notify.success('上游 ES 可达')
+        notify.success(t('reachable'))
       } else {
-        notify.warning(`上游返回 ${res.data.status_code}`)
+        notify.warning(t('upstreamReturned', { code: res.data.status_code }))
       }
     } catch (err: any) {
       setHealthResult({
@@ -935,7 +945,7 @@ function SettingsTab({
         status_code: 0,
         cluster_name: null,
         version: null,
-        raw: err?.response?.data?.error || err?.message || '探活失败',
+        raw: err?.response?.data?.error || err?.message || t('testFail'),
       })
     } finally {
       setHealthChecking(false)
@@ -944,7 +954,7 @@ function SettingsTab({
 
   return (
     <div className="space-y-3 text-sm">
-      <FormRow label="连接名称">
+      <FormRow label={t('connName')}>
         <input
           value={form.connection_name}
           onChange={(e) => setForm({ ...form, connection_name: e.target.value })}
@@ -960,7 +970,7 @@ function SettingsTab({
         />
       </FormRow>
       <div className="grid grid-cols-2 gap-3">
-        <FormRow label="鉴权类型">
+        <FormRow label={t('authType')}>
           <select
             value={form.auth_type}
             onChange={(e) => setForm({ ...form, auth_type: e.target.value as typeof form.auth_type })}
@@ -968,10 +978,10 @@ function SettingsTab({
           >
             <option value="api_key">ApiKey</option>
             <option value="basic">Basic（user:pass）</option>
-            <option value="none">无鉴权</option>
+            <option value="none">{t('noAuth')}</option>
           </select>
         </FormRow>
-        <FormRow label="超时（秒）">
+        <FormRow label={t('timeout')}>
           <input
             type="number"
             min={1}
@@ -985,15 +995,15 @@ function SettingsTab({
         </FormRow>
       </div>
       <FormRow
-        label="凭据"
-        hint="留空 = 保留原凭据。新输入会替换并加密入库；DB 永远拿不回明文。"
+        label={t('credLabel')}
+        hint={t('credHint')}
       >
         <input
           type="password"
           value={form.credential}
           onChange={(e) => setForm({ ...form, credential: e.target.value })}
           disabled={form.auth_type === 'none'}
-          placeholder={form.auth_type === 'none' ? '无鉴权模式下不需要凭据' : '••••••••（输入新值以替换）'}
+          placeholder={form.auth_type === 'none' ? t('credPlaceholderNone') : t('credPlaceholder')}
           className="input-base w-full font-mono"
         />
       </FormRow>
@@ -1004,7 +1014,7 @@ function SettingsTab({
             checked={form.verify_tls}
             onChange={(e) => setForm({ ...form, verify_tls: e.target.checked })}
           />
-          <span>验证 TLS 证书</span>
+          <span>{t('verifyTls')}</span>
         </label>
         <label className="flex items-center space-x-2">
           <input
@@ -1012,7 +1022,7 @@ function SettingsTab({
             checked={form.is_active}
             onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
           />
-          <span>连接启用中</span>
+          <span>{t('connEnabled')}</span>
         </label>
       </div>
 
@@ -1020,11 +1030,11 @@ function SettingsTab({
         <button type="button" onClick={save} disabled={saving} className="btn-primary">
           {saving ? (
             <>
-              <i className="fas fa-spinner fa-spin mr-2"></i>保存中…
+              <i className="fas fa-spinner fa-spin mr-2"></i>{t('saving')}
             </>
           ) : (
             <>
-              <i className="fas fa-save mr-2"></i>保存
+              <i className="fas fa-save mr-2"></i>{t('save')}
             </>
           )}
         </button>
@@ -1033,15 +1043,15 @@ function SettingsTab({
           onClick={probe}
           disabled={healthChecking}
           className="btn-default"
-          title="对 base_url 跑一次 GET /，验证 URL + 凭据"
+          title={t('testTitle')}
         >
           {healthChecking ? (
             <>
-              <i className="fas fa-spinner fa-spin mr-2"></i>探活中…
+              <i className="fas fa-spinner fa-spin mr-2"></i>{t('testing')}
             </>
           ) : (
             <>
-              <i className="fas fa-heartbeat mr-2"></i>测试连接
+              <i className="fas fa-heartbeat mr-2"></i>{t('test')}
             </>
           )}
         </button>
@@ -1056,7 +1066,7 @@ function SettingsTab({
           }`}
         >
           <div className="font-medium mb-1">
-            上游响应 {healthResult.status_code || '—'}
+            {t('upstreamResp')} {healthResult.status_code || '—'}
             {healthResult.ok && (
               <span className="ml-2 bg-emerald-100 px-1.5 py-0.5 rounded">OK</span>
             )}
@@ -1087,6 +1097,8 @@ function CreateConnectionDialog({
   onCreated: (id: number) => void
 }) {
   const notify = useNotification()
+  const t = useTranslations('wsEsConn')
+  const tc = useTranslations('connCommon')
   const [form, setForm] = useState({
     connection_name: '',
     base_url: '',
@@ -1099,15 +1111,15 @@ function CreateConnectionDialog({
 
   const submit = async () => {
     if (!form.connection_name.trim()) {
-      notify.error('请填写连接名称')
+      notify.error(t('fillName'))
       return
     }
     if (!form.base_url.trim()) {
-      notify.error('请填写 base_url')
+      notify.error(t('fillBaseUrl'))
       return
     }
     if (form.auth_type !== 'none' && !form.credential) {
-      notify.error('该鉴权类型必须提供凭据')
+      notify.error(t('credRequired'))
       return
     }
     setSaving(true)
@@ -1131,9 +1143,9 @@ function CreateConnectionDialog({
   }
 
   return (
-    <Dialog title="新建 ES 连接" onClose={onClose} widthClass="max-w-lg">
+    <Dialog title={t('createTitle')} onClose={onClose} widthClass="max-w-lg">
       <div className="space-y-3 text-sm">
-        <FormRow label="连接名称 *" hint="同租户内不可重名">
+        <FormRow label={t('connNameReq')} hint={t('connNameHint')}>
           <input
             autoFocus
             value={form.connection_name}
@@ -1142,7 +1154,7 @@ function CreateConnectionDialog({
             placeholder="prod-es / staging-es / …"
           />
         </FormRow>
-        <FormRow label="base_url *" hint="ES 真实地址，业务端永远看不到">
+        <FormRow label={t('baseUrlReq')} hint={t('baseUrlHint')}>
           <input
             value={form.base_url}
             onChange={(e) => setForm({ ...form, base_url: e.target.value })}
@@ -1151,7 +1163,7 @@ function CreateConnectionDialog({
           />
         </FormRow>
         <div className="grid grid-cols-2 gap-3">
-          <FormRow label="鉴权类型">
+          <FormRow label={t('authType')}>
             <select
               value={form.auth_type}
               onChange={(e) => setForm({ ...form, auth_type: e.target.value as typeof form.auth_type })}
@@ -1159,10 +1171,10 @@ function CreateConnectionDialog({
             >
               <option value="api_key">ApiKey</option>
               <option value="basic">Basic（user:pass）</option>
-              <option value="none">无鉴权</option>
+              <option value="none">{t('noAuth')}</option>
             </select>
           </FormRow>
-          <FormRow label="超时（秒）">
+          <FormRow label={t('timeout')}>
             <input
               type="number"
               min={1}
@@ -1176,13 +1188,13 @@ function CreateConnectionDialog({
           </FormRow>
         </div>
         <FormRow
-          label={form.auth_type === 'basic' ? '凭据（user:pass）' : 'API Key'}
+          label={form.auth_type === 'basic' ? t('credBasic') : 'API Key'}
           hint={
             form.auth_type === 'api_key'
-              ? '从 ES Kibana 创建 ApiKey 后拿到的 base64 编码字符串'
+              ? t('apiKeyHint')
               : form.auth_type === 'basic'
-                ? '形如 elastic:changeme'
-                : '无鉴权模式下留空'
+                ? t('credBasicHint')
+                : t('credNoneHint')
           }
         >
           <input
@@ -1200,25 +1212,25 @@ function CreateConnectionDialog({
             onChange={(e) => setForm({ ...form, verify_tls: e.target.checked })}
           />
           <span>
-            验证 TLS 证书
+            {t('verifyTlsCreate')}
             <span className="text-xs text-gray-400 ml-1">
-              （生产建议开；自签证书测试时可关）
+              {t('verifyTlsCreateHint')}
             </span>
           </span>
         </label>
       </div>
       <div className="flex justify-end space-x-2 pt-4 border-t mt-4">
         <button type="button" onClick={onClose} className="btn-default">
-          取消
+          {tc('cancel')}
         </button>
         <button type="button" onClick={submit} disabled={saving} className="btn-primary">
           {saving ? (
             <>
-              <i className="fas fa-spinner fa-spin mr-2"></i>创建中…
+              <i className="fas fa-spinner fa-spin mr-2"></i>{t('creating')}
             </>
           ) : (
             <>
-              <i className="fas fa-plus mr-2"></i>创建
+              <i className="fas fa-plus mr-2"></i>{t('create')}
             </>
           )}
         </button>
@@ -1248,6 +1260,8 @@ function CreateTokenDialog({
   onCreated: (plainToken: string, record: EsAccessToken) => void
 }) {
   const notify = useNotification()
+  const t = useTranslations('wsEsConn')
+  const tc = useTranslations('connCommon')
   const [form, setForm] = useState({
     name: '',
     description: '',
@@ -1260,7 +1274,7 @@ function CreateTokenDialog({
 
   const submit = async () => {
     if (!form.name.trim()) {
-      notify.error('请填写 token 名称')
+      notify.error(t('fillTokenName'))
       return
     }
     const methods = form.methods
@@ -1268,7 +1282,7 @@ function CreateTokenDialog({
       .map((s) => s.trim().toUpperCase())
       .filter(Boolean)
     if (methods.length === 0) {
-      notify.error('至少要允许一种 HTTP 方法')
+      notify.error(t('needMethod'))
       return
     }
     const allowlist = form.index_allowlist
@@ -1276,7 +1290,7 @@ function CreateTokenDialog({
       .map((s) => s.trim())
       .filter(Boolean)
     if (allowlist.length === 0) {
-      notify.error('index_allowlist 至少要有一项（用 * 表示不限）')
+      notify.error(t('needIndex'))
       return
     }
     const denylist = form.path_denylist
@@ -1304,18 +1318,18 @@ function CreateTokenDialog({
   }
 
   return (
-    <Dialog title="新建代理 Token" onClose={onClose} widthClass="max-w-xl">
+    <Dialog title={t('createTokenTitle')} onClose={onClose} widthClass="max-w-xl">
       <div className="space-y-3 text-sm">
-        <FormRow label="名称 *">
+        <FormRow label={t('tokenNameReq')}>
           <input
             autoFocus
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
             className="input-base w-full"
-            placeholder="如：order-service-readonly"
+            placeholder={t('tokenNamePlaceholder')}
           />
         </FormRow>
-        <FormRow label="描述">
+        <FormRow label={t('tokenDescLabel')}>
           <input
             value={form.description}
             onChange={(e) => setForm({ ...form, description: e.target.value })}
@@ -1323,8 +1337,8 @@ function CreateTokenDialog({
           />
         </FormRow>
         <FormRow
-          label="允许的 HTTP 方法 *"
-          hint="逗号或空格分隔；大小写无关。默认 GET,HEAD,POST（读类）。"
+          label={t('methodsLabel')}
+          hint={t('methodsHint')}
         >
           <input
             value={form.methods}
@@ -1334,7 +1348,7 @@ function CreateTokenDialog({
         </FormRow>
         <FormRow
           label="index_allowlist *"
-          hint="支持 * 和 ? 通配；多条用逗号或换行分隔。设成 * 表示不限。"
+          hint={t('indexHint')}
         >
           <textarea
             value={form.index_allowlist}
@@ -1345,7 +1359,7 @@ function CreateTokenDialog({
         </FormRow>
         <FormRow
           label="path_denylist"
-          hint="POSIX 正则，逐行；任一命中即拒。默认拦截 _cluster / _security / _ilm / _snapshot / _shutdown 等。"
+          hint={t('pathDenyHint')}
         >
           <textarea
             value={form.path_denylist}
@@ -1354,7 +1368,7 @@ function CreateTokenDialog({
             rows={6}
           />
         </FormRow>
-        <FormRow label="过期时间" hint="留空 = 永不过期">
+        <FormRow label={t('expireLabel')} hint={t('expireHint')}>
           <input
             type="datetime-local"
             value={form.expires_at}
@@ -1365,16 +1379,16 @@ function CreateTokenDialog({
       </div>
       <div className="flex justify-end space-x-2 pt-4 border-t mt-4">
         <button type="button" onClick={onClose} className="btn-default">
-          取消
+          {tc('cancel')}
         </button>
         <button type="button" onClick={submit} disabled={saving} className="btn-primary">
           {saving ? (
             <>
-              <i className="fas fa-spinner fa-spin mr-2"></i>创建中…
+              <i className="fas fa-spinner fa-spin mr-2"></i>{t('creating')}
             </>
           ) : (
             <>
-              <i className="fas fa-key mr-2"></i>创建 token
+              <i className="fas fa-key mr-2"></i>{t('createTokenBtn')}
             </>
           )}
         </button>
@@ -1395,14 +1409,16 @@ function RevealTokenDialog({
   onClose: () => void
 }) {
   const notify = useNotification()
+  const t = useTranslations('wsEsConn')
+  const tc = useTranslations('connCommon')
   const [acknowledged, setAcknowledged] = useState(false)
 
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(token)
-      notify.success('已复制到剪贴板；请妥善保存')
+      notify.success(t('revealCopied'))
     } catch {
-      notify.error('复制失败，请手动选择文本')
+      notify.error(t('copyFail'))
     }
   }
 
@@ -1410,7 +1426,7 @@ function RevealTokenDialog({
     <Dialog
       title={
         <>
-          <i className="fas fa-key text-amber-500 mr-2"></i>token 已生成（仅此一次显示）
+          <i className="fas fa-key text-amber-500 mr-2"></i>{t('tokenGenerated')}
         </>
       }
       onClose={acknowledged ? onClose : () => {}}
@@ -1419,18 +1435,17 @@ function RevealTokenDialog({
       <div className="space-y-3 text-sm">
         <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded text-xs">
           <i className="fas fa-exclamation-triangle mr-1"></i>
-          请立即复制保存。<strong>关闭此窗口后将无法再次查看</strong>，平台数据库里只
-          保存 SHA-256 哈希。如果丢失只能撤销重建。
+          {t.rich('revealHint2Full', { b: (c: any) => <strong>{c}</strong> })}
         </div>
         <div>
-          <div className="text-xs text-gray-500 mb-1">名称：{name}</div>
+          <div className="text-xs text-gray-500 mb-1">{t('revealName', { name })}</div>
           <pre className="bg-gray-900 text-emerald-300 p-3 rounded font-mono text-xs break-all whitespace-pre-wrap">
             {token}
           </pre>
         </div>
         <div className="flex space-x-2">
           <button type="button" onClick={copy} className="btn-primary text-sm">
-            <i className="fas fa-copy mr-2"></i>复制 token
+            <i className="fas fa-copy mr-2"></i>{t('revealCopy')}
           </button>
         </div>
         <label className="flex items-center space-x-2 text-xs text-gray-600">
@@ -1439,7 +1454,7 @@ function RevealTokenDialog({
             checked={acknowledged}
             onChange={(e) => setAcknowledged(e.target.checked)}
           />
-          <span>我已复制并妥善保存这个 token</span>
+          <span>{t('revealSaved')}</span>
         </label>
       </div>
       <div className="flex justify-end pt-3 border-t mt-4">
@@ -1449,7 +1464,7 @@ function RevealTokenDialog({
           disabled={!acknowledged}
           className="btn-primary"
         >
-          关闭
+          {t('close')}
         </button>
       </div>
     </Dialog>

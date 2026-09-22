@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import type { HelpArticleMeta } from '@/lib/helpCatalog'
 
 export function HelpSection({
@@ -38,11 +39,14 @@ export default function HelpArticle({
   article: HelpArticleMeta | undefined
   children?: ReactNode
 }) {
+  const t = useTranslations('helpArticleShell')
+  const tCat = useTranslations('helpCatalog')
+
   if (!article) {
     return (
       <div>
-        <h1 className="text-lg font-semibold text-gray-900 mb-2">没有这篇文章</h1>
-        <p className="text-sm text-gray-600">请从左侧目录选择一篇说明。</p>
+        <h1 className="text-lg font-semibold text-gray-900 mb-2">{t('notFoundTitle')}</h1>
+        <p className="text-sm text-gray-600">{t('notFoundBody')}</p>
       </div>
     )
   }
@@ -50,8 +54,8 @@ export default function HelpArticle({
   return (
     <article className="space-y-5">
       <header className="space-y-2">
-        <h1 className="text-lg font-semibold text-gray-900">{article.title}</h1>
-        <p className="text-sm text-gray-600">{article.summary}</p>
+        <h1 className="text-lg font-semibold text-gray-900">{tCat(article.title)}</h1>
+        <p className="text-sm text-gray-600">{tCat(article.summary)}</p>
         <div className="flex flex-wrap gap-2 pt-1">
           {article.related.map((rel) => (
             <Link
@@ -59,7 +63,7 @@ export default function HelpArticle({
               href={relatedHref(base, rel.href)}
               className="inline-flex items-center rounded-md border border-gray-200 bg-white px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-50"
             >
-              去使用 · {rel.label}
+              {t('relatedLink', { label: tCat(rel.label) })}
             </Link>
           ))}
         </div>

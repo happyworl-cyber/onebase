@@ -40,7 +40,7 @@ cargo build --release
 
 ```bash
 # 私钥（用于签发 License，绝不泄露！）
-export ONEBASE_LICENSE_PRIVATE_KEY="$(cat keys/partner_private.pem)"
+export PLANEOS_LICENSE_PRIVATE_KEY="$(cat keys/partner_private.pem)"
 
 # 加密密钥（用于客户硬件指纹加密）
 export ENCRYPTION_KEY="<your-existing-base64-key>"
@@ -337,7 +337,7 @@ curl -X POST http://localhost:3010/api/admin/statements/1/paid \
 
 ```bash
 # 客户先获取自己的部署指纹
-export ONEBASE_DEPLOY_FINGERPRINT=$(hostname | sha256sum | cut -c1-16)
+export PLANEOS_DEPLOY_FINGERPRINT=$(hostname | sha256sum | cut -c1-16)
 
 # 代理商签发时绑定
 {
@@ -448,10 +448,10 @@ WHERE status IN ('active', 'grace')
 
 ### 7.3 私钥配置错误
 
-**错误**：`未配置 ONEBASE_LICENSE_PRIVATE_KEY`
+**错误**：`未配置 PLANEOS_LICENSE_PRIVATE_KEY`
 - **解决**：
 ```bash
-export ONEBASE_LICENSE_PRIVATE_KEY="$(cat keys/partner_private.pem)"
+export PLANEOS_LICENSE_PRIVATE_KEY="$(cat keys/partner_private.pem)"
 ```
 
 **错误**：`解析私钥失败`

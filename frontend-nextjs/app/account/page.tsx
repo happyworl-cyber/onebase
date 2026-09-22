@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import { useAppStore } from '@/lib/store'
 import { authAPI } from '@/lib/api'
@@ -10,16 +11,22 @@ function isStrongPassword(p: string): boolean {
   return p.length >= 8 && /[A-Z]/.test(p) && /[a-z]/.test(p) && /[0-9]/.test(p)
 }
 
-function validateForm(oldPassword: string, newPassword: string, confirmPassword: string): string | null {
-  if (!oldPassword) return '请输入当前密码'
-  if (newPassword.length < 8) return '密码至少需要 8 位'
-  if (!isStrongPassword(newPassword)) return '密码必须包含大写字母、小写字母和数字'
-  if (newPassword === oldPassword) return '新密码不能与当前密码相同'
-  if (newPassword !== confirmPassword) return '两次输入的新密码不一致'
+function validateForm(
+  oldPassword: string,
+  newPassword: string,
+  confirmPassword: string,
+  t: (key: string) => string,
+): string | null {
+  if (!oldPassword) return t('errCurrentPwdRequired')
+  if (newPassword.length < 8) return t('errPwdMinLength')
+  if (!isStrongPassword(newPassword)) return t('errPwdComplexity')
+  if (newPassword === oldPassword) return t('errPwdSameAsOld')
+  if (newPassword !== confirmPassword) return t('errPwdMismatch')
   return null
 }
 
 export default function AccountPage() {
+  const t = useTranslations('accountPage')
   const router = useRouter()
   const currentUser = useAppStore((s) => s.currentUser)
 
@@ -60,7 +67,7 @@ export default function AccountPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    const v = validateForm(oldPassword, newPassword, confirmPassword)
+    const v = validateForm(oldPassword, newPassword, confirmPassword, t)
     if (v) {
       setSuccess('')
       setError(v)
@@ -77,11 +84,11 @@ export default function AccountPage() {
       setConfirmPassword('')
       setSuccess(
         revoked > 0
-          ? '密码修改成功，已让其它设备退出登录'
-          : '密码修改成功',
+          ? t('pwdChangedRevoked')
+          : t('pwdChanged'),
       )
     } catch (err: any) {
-      setError(err?.response?.data?.error || '修改密码失败，请重试')
+      setError(err?.response?.data?.error || t('errChangePwdFailed'))
     } finally {
       setLoading(false)
     }
@@ -99,29 +106,29 @@ export default function AccountPage() {
           className="text-sm text-gray-600 hover:text-gray-900 px-2 py-1 rounded hover:bg-gray-50"
         >
           <i className="fas fa-arrow-left mr-2" />
-          返回
+          {t('back')}
         </button>
-        <h1 className="text-sm font-semibold text-gray-900">账号设置</h1>
+        <h1 className="text-sm font-semibold text-gray-900">{t('title')}</h1>
       </header>
 
       <main className="max-w-xl mx-auto px-4 py-8 space-y-6">
         <section className="bg-white border border-gray-200 rounded-lg p-5 space-y-4">
-          <h2 className="text-sm font-semibold text-gray-900">账号信息</h2>
+          <h2 className="text-sm font-semibold text-gray-900">{t('accountInfo')}</h2>
           <div>
-            <div className="text-xs text-gray-500 mb-0.5">用户名</div>
+            <div className="text-xs text-gray-500 mb-0.5">{t('username')}</div>
             <div className="text-sm text-gray-800">{currentUser?.username || '—'}</div>
           </div>
           <div>
-            <div className="text-xs text-gray-500 mb-0.5">邮箱</div>
+            <div className="text-xs text-gray-500 mb-0.5">{t('email')}</div>
             <div className="text-sm text-gray-800">{currentUser?.email || '—'}</div>
           </div>
         </section>
 
         <section className="bg-white border border-gray-200 rounded-lg p-5">
-          <h2 className="text-sm font-semibold text-gray-900 mb-4">修改密码</h2>
+          <h2 className="text-sm font-semibold text-gray-900 mb-4">{t('changePassword')}</h2>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">当前密码</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">{t('currentPassword')}</label>
               <input
                 type="password"
                 value={oldPassword}
@@ -131,18 +138,18 @@ export default function AccountPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">新密码</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">{t('newPassword')}</label>
               <input
                 type="password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 autoComplete="new-password"
                 className={inputClass}
-                placeholder="至少 8 位，含大小写字母和数字"
+                placeholder={t('newPasswordPlaceholder')}
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">确认新密码</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">{t('confirmNewPassword')}</label>
               <input
                 type="password"
                 value={confirmPassword}
@@ -170,7 +177,7 @@ export default function AccountPage() {
               disabled={loading}
               className="px-4 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-500 disabled:opacity-50"
             >
-              {loading ? '提交中...' : '修改密码'}
+              {loading ? t('submitting') : t('changePassword')}
             </button>
           </form>
         </section>

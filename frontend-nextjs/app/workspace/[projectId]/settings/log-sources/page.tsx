@@ -16,6 +16,7 @@ import {
 } from '@/lib/api'
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import { useNotification } from '@/hooks/useNotification'
+import { useTranslations } from 'next-intl'
 import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
 import { closeOnBackdropPress } from '@/lib/utils'
 
@@ -45,6 +46,7 @@ export default function ProjectLogSourcesPage() {
   const params = useParams<{ projectId: string }>()
   const projectId = parseInt(params.projectId, 10)
   const caps = useCurrentProjectCapabilities()
+  const t = useTranslations('wsLogSources')
   const notify = useNotification()
 
   const [sources, setSources] = useState<ProjectLogSource[] | null>(null)
@@ -80,10 +82,10 @@ export default function ProjectLogSourcesPage() {
 
   const handleSave = async () => {
     if (!form) return
-    if (!form.name.trim()) return notify.warning('请填写名称')
-    if (form.credential_id === '') return notify.warning('请选择阿里云 AccessKey 凭证')
+    if (!form.name.trim()) return notify.warning(t('errName'))
+    if (form.credential_id === '') return notify.warning(t('errCred'))
     if (!form.region.trim() || !form.sls_project.trim() || !form.logstore.trim()) {
-      return notify.warning('地域、SLS Project、Logstore 均为必填')
+      return notify.warning(t('errRegionProject'))
     }
     setSaving(true)
     try {
@@ -100,11 +102,11 @@ export default function ProjectLogSourcesPage() {
       if (form.editing) {
         const res = await projectLogSourceAPI.update(projectId, form.editing.id, body)
         setSources((prev) => prev?.map((s) => (s.id === res.data.id ? res.data : s)) ?? null)
-        notify.success(`已更新 ${res.data.name}`)
+        notify.success(t('updated', { name: res.data.name }))
       } else {
         const res = await projectLogSourceAPI.create(projectId, body)
         setSources((prev) => (prev ? [...prev, res.data] : [res.data]))
-        notify.success(`已新建 ${res.data.name}`)
+        notify.success(t('created', { name: res.data.name }))
       }
       setForm(null)
     } catch (err: unknown) {
@@ -115,11 +117,11 @@ export default function ProjectLogSourcesPage() {
   }
 
   const handleDelete = async (s: ProjectLogSource) => {
-    if (!window.confirm(`确认删除云日志源 ${s.name} 吗？`)) return
+    if (!window.confirm(t('confirmDelete', { name: s.name }))) return
     try {
       await projectLogSourceAPI.remove(projectId, s.id)
       setSources((prev) => prev?.filter((x) => x.id !== s.id) ?? null)
-      notify.success(`已删除 ${s.name}`)
+      notify.success(t('deleted', { name: s.name }))
     } catch (err: unknown) {
       notify.error(err)
     }
@@ -129,7 +131,7 @@ export default function ProjectLogSourcesPage() {
     setTestingId(s.id)
     try {
       const res = await projectLogSourceAPI.test(projectId, s.id)
-      notify.success(`连通正常，最近 1 分钟 ${res.data.count} 条`)
+      notify.success(t('testOk', { count: res.data.count }))
     } catch (err: unknown) {
       notify.error(err)
     } finally {
@@ -138,23 +140,23 @@ export default function ProjectLogSourcesPage() {
   }
 
   if (!caps.canManageSecurity) {
-    return <ForbiddenPlaceholder reason="云日志源需要项目 admin 或 owner 角色（或平台超管）" />
+    return <ForbiddenPlaceholder reason={t('forbidden')} />
   }
 
   return (
     <div className="p-6 max-w-5xl space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold text-gray-900">云日志源</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            配置阿里云 SLS Project / Logstore，AccessKey 放在{' '}
+            {t('subtitlePre')}{' '}
             <Link
               href={`/workspace/${projectId}/settings/credentials`}
               className="text-blue-600 hover:underline"
             >
-              凭证管理
+              {t('credManage')}
             </Link>
-            （类型「阿里云 AccessKey」）。查询入口在诊断与监控 → 云日志。
+            {t('subtitlePost')}
           </p>
         </div>
         <button
@@ -162,33 +164,33 @@ export default function ProjectLogSourcesPage() {
           className="btn-primary flex-shrink-0 whitespace-nowrap"
         >
           <i className="fas fa-plus mr-2" />
-          新建日志源
+          {t('newSource')}
         </button>
       </div>
 
       {akCreds.length === 0 && !loading && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
-          还没有阿里云 AccessKey 凭证。请先到{' '}
+          {t('noCredPre')}{' '}
           <Link
             href={`/workspace/${projectId}/settings/credentials`}
             className="underline"
           >
-            设置 → 凭证管理
+            {t('credManageSettings')}
           </Link>{' '}
-          新建类型为「阿里云 AccessKey」的凭证。
+          {t('noCredPost')}
         </div>
       )}
 
       {loading && (
         <div className="py-16 text-center text-gray-400">
           <i className="fas fa-spinner fa-spin mr-2" />
-          加载中...
+          {t('loading')}
         </div>
       )}
 
       {!loading && (sources?.length ?? 0) === 0 && (
         <div className="bg-white border border-gray-200 rounded-xl py-12 text-center text-gray-400">
-          暂无日志源。
+          {t('empty')}
         </div>
       )}
 
@@ -199,8 +201,8 @@ export default function ProjectLogSourcesPage() {
               <div className="text-sm font-medium text-gray-800">{s.name}</div>
               <div className="mt-2 space-y-1 text-xs text-gray-500 font-mono">
                 <div>{s.region} / {s.sls_project} / {s.logstore}</div>
-                <div>凭证：{s.credential_name}</div>
-                {s.query_prefix && <div>前缀：{s.query_prefix}</div>}
+                <div>{t('credLabel', { name: s.credential_name })}</div>
+                {s.query_prefix && <div>{t('prefixLabel', { prefix: s.query_prefix })}</div>}
               </div>
               <div className="mt-3 pt-3 border-t border-gray-100 flex items-center justify-end gap-3 text-xs">
                 <button
@@ -208,7 +210,7 @@ export default function ProjectLogSourcesPage() {
                   disabled={testingId === s.id}
                   className="text-blue-600 hover:text-blue-800 disabled:opacity-50"
                 >
-                  {testingId === s.id ? '测试中...' : '测试连接'}
+                  {testingId === s.id ? t('testing') : t('testConn')}
                 </button>
                 <button
                   onClick={() =>
@@ -225,13 +227,13 @@ export default function ProjectLogSourcesPage() {
                   }
                   className="text-blue-600 hover:text-blue-800"
                 >
-                  编辑
+                  {t('edit')}
                 </button>
                 <button
                   onClick={() => handleDelete(s)}
                   className="text-red-600 hover:text-red-800"
                 >
-                  删除
+                  {t('delete')}
                 </button>
               </div>
             </div>
@@ -248,20 +250,20 @@ export default function ProjectLogSourcesPage() {
             className="bg-white w-full max-w-lg rounded-xl shadow-xl p-6 max-h-[88vh] overflow-y-auto"
           >
             <h3 className="text-lg font-semibold text-gray-900 mb-4">
-              {form.editing ? `编辑 ${form.editing.name}` : '新建日志源'}
+              {form.editing ? t('editTitle', { name: form.editing.name }) : t('createTitle')}
             </h3>
             <div className="space-y-4">
               <label className="block">
-                <span className="block text-sm font-medium text-gray-700 mb-1.5">名称 *</span>
+                <span className="block text-sm font-medium text-gray-700 mb-1.5">{t('nameLabel')}</span>
                 <input
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                   className="w-full input-base"
-                  placeholder="Access / 工作流"
+                  placeholder={t('phName')}
                 />
               </label>
               <label className="block">
-                <span className="block text-sm font-medium text-gray-700 mb-1.5">凭证 *</span>
+                <span className="block text-sm font-medium text-gray-700 mb-1.5">{t('credRequired')}</span>
                 <select
                   value={form.credential_id}
                   onChange={(e) =>
@@ -272,7 +274,7 @@ export default function ProjectLogSourcesPage() {
                   }
                   className="w-full input-base"
                 >
-                  <option value="">选择阿里云 AccessKey</option>
+                  <option value="">{t('selectCred')}</option>
                   {akCreds.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
@@ -281,7 +283,7 @@ export default function ProjectLogSourcesPage() {
                 </select>
               </label>
               <label className="block">
-                <span className="block text-sm font-medium text-gray-700 mb-1.5">地域 *</span>
+                <span className="block text-sm font-medium text-gray-700 mb-1.5">{t('regionLabel')}</span>
                 <input
                   value={form.region}
                   onChange={(e) => setForm({ ...form, region: e.target.value })}
@@ -307,7 +309,7 @@ export default function ProjectLogSourcesPage() {
               </label>
               <label className="block">
                 <span className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Endpoint（可选，默认公网）
+                  {t('endpointLabel')}
                 </span>
                 <input
                   value={form.endpoint}
@@ -318,7 +320,7 @@ export default function ProjectLogSourcesPage() {
               </label>
               <label className="block">
                 <span className="block text-sm font-medium text-gray-700 mb-1.5">
-                  查询前缀（可选）
+                  {t('prefixInputLabel')}
                 </span>
                 <input
                   value={form.query_prefix}
@@ -334,10 +336,10 @@ export default function ProjectLogSourcesPage() {
                 disabled={saving}
                 className="px-4 py-2 text-sm text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
               >
-                取消
+                {t('cancel')}
               </button>
               <button onClick={handleSave} disabled={saving} className="btn-primary disabled:opacity-50">
-                {saving ? '保存中...' : '保存'}
+                {saving ? t('saving') : t('save')}
               </button>
             </div>
           </div>

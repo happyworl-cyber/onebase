@@ -1,9 +1,11 @@
 'use client'
 
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 
 export default function ConnectionWarning() {
   const [dismissed, setDismissed] = useState(false)
+  const t = useTranslations('connectionWarning')
 
   if (dismissed) return null
 
@@ -15,12 +17,18 @@ export default function ConnectionWarning() {
         </div>
         <div className="ml-3 flex-1">
           <p className="text-sm text-yellow-700">
-            <strong className="font-medium">注意：</strong>
-            当前版本的数据库连接管理仅用于配置管理。实际连接的数据库由后端 <code className="bg-yellow-100 px-1 py-0.5 rounded">.env</code> 文件中的 <code className="bg-yellow-100 px-1 py-0.5 rounded">DATABASE_URL</code> 决定。
-            要切换到不同的数据库，请修改后端配置文件并重启服务。
+            <strong className="font-medium">{t('noteLabel')}</strong>
+            {t.rich('body', {
+              code1: (chunks) => (
+                <code className="bg-yellow-100 px-1 py-0.5 rounded">{chunks}</code>
+              ),
+              code2: (chunks) => (
+                <code className="bg-yellow-100 px-1 py-0.5 rounded">{chunks}</code>
+              ),
+            })}
           </p>
           <p className="text-xs text-yellow-600 mt-2">
-            💡 提示：多数据库动态切换功能正在开发中
+            {t('hint')}
           </p>
         </div>
         <button

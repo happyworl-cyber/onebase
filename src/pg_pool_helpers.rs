@@ -30,19 +30,31 @@ pub struct PgAdminCredentials {
 impl PgAdminCredentials {
     pub fn validate(&self) -> Result<()> {
         if self.db_host.trim().is_empty() {
-            return Err(AppError::InvalidQuery("db_host 不能为空".to_string()));
+            return Err(AppError::validation(
+                "pgpoolh_db_host_required",
+                "db_host 不能为空",
+                serde_json::json!({}),
+            ));
         }
         if self.admin_user.trim().is_empty() {
-            return Err(AppError::InvalidQuery("admin_user 不能为空".to_string()));
+            return Err(AppError::validation(
+                "pgpoolh_admin_user_required",
+                "admin_user 不能为空",
+                serde_json::json!({}),
+            ));
         }
         if self.admin_password.is_empty() {
-            return Err(AppError::InvalidQuery(
-                "admin_password 不能为空".to_string(),
+            return Err(AppError::validation(
+                "pgpoolh_admin_password_required",
+                "admin_password 不能为空",
+                serde_json::json!({}),
             ));
         }
         if !(1..=65535).contains(&self.db_port) {
-            return Err(AppError::InvalidQuery(
-                "db_port 必须在 1 ~ 65535".to_string(),
+            return Err(AppError::validation(
+                "pgpoolh_db_port_range",
+                "db_port 必须在 1 ~ 65535",
+                serde_json::json!({}),
             ));
         }
         Ok(())
@@ -309,7 +321,13 @@ pub async fn get_pool(pool: &PgPool, id: i32) -> Result<PgPoolEntry> {
     .bind(id)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("PG 池 {} 不存在", id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "pgpoolh_pool_not_found",
+            format!("PG 池 {} 不存在", id),
+            serde_json::json!({ "id": id }),
+        )
+    })?;
 
     Ok(row_to_entry(&row))
 }
@@ -326,7 +344,13 @@ async fn get_pool_with_secret(pool: &PgPool, id: i32) -> Result<PgPoolEntryWithS
     .bind(id)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("PG 池 {} 不存在或已停用", id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "pgpoolh_pool_not_found_or_inactive",
+            format!("PG 池 {} 不存在或已停用", id),
+            serde_json::json!({ "id": id }),
+        )
+    })?;
 
     let encrypted: String = row.try_get("admin_password_encrypted")?;
     let plain = decrypt_secret(&encrypted)
@@ -410,10 +434,14 @@ pub async fn create_database_with_credentials(
     let temp = admin_connect_creds(creds, "postgres").await?;
 
     if !is_valid_db_name(requested_db_name) {
-        return Err(AppError::InvalidQuery(format!(
-            "数据库名 '{}' 非法（必须 1-63 字符，字母/数字/下划线，首字符不能是数字）",
-            requested_db_name
-        )));
+        return Err(AppError::validation(
+            "pgpoolh_invalid_db_name",
+            format!(
+                "数据库名 '{}' 非法（必须 1-63 字符，字母/数字/下划线，首字符不能是数字）",
+                requested_db_name
+            ),
+            serde_json::json!({ "db_name": requested_db_name }),
+        ));
     }
 
     let mut attempt_name = requested_db_name.to_string();
@@ -530,10 +558,11 @@ pub async fn create_project_role(
 ) -> Result<ProvisionedRole> {
     admin.validate()?;
     if !is_valid_db_name(db_name) {
-        return Err(AppError::InvalidQuery(format!(
-            "拒绝为非法库名 '{}' 创建角色",
-            db_name
-        )));
+        return Err(AppError::validation(
+            "pgpoolh_reject_invalid_db_name_for_role",
+            format!("拒绝为非法库名 '{}' 创建角色", db_name),
+            serde_json::json!({ "db_name": db_name }),
+        ));
     }
 
     let temp = admin_connect_creds(admin, "postgres").await?;
@@ -693,10 +722,11 @@ pub async fn drop_database_with_credentials(
     db_name: &str,
 ) -> Result<()> {
     if !is_valid_db_name(db_name) {
-        return Err(AppError::InvalidQuery(format!(
-            "拒绝删除非法库名 '{}'",
-            db_name
-        )));
+        return Err(AppError::validation(
+            "pgpoolh_reject_invalid_db_name_for_drop",
+            format!("拒绝删除非法库名 '{}'", db_name),
+            serde_json::json!({ "db_name": db_name }),
+        ));
     }
 
     let temp = admin_connect_creds(creds, "postgres").await?;
@@ -911,13 +941,13 @@ mod tests {
     #[test]
     fn parse_pg_url_basic() {
         let parsed =
-            parse_pg_connection_url("postgresql://onebase:secret%40word@10.0.5.33:5432/onebase")
+            parse_pg_connection_url("postgresql://planeos:secret%40word@10.0.5.33:5432/planeos")
                 .unwrap();
         assert_eq!(parsed.creds.db_host, "10.0.5.33");
         assert_eq!(parsed.creds.db_port, 5432);
-        assert_eq!(parsed.creds.admin_user, "onebase");
+        assert_eq!(parsed.creds.admin_user, "planeos");
         assert_eq!(parsed.creds.admin_password, "secret@word");
-        assert_eq!(parsed.database_name, "onebase");
+        assert_eq!(parsed.database_name, "planeos");
     }
 
     #[test]

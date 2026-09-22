@@ -3,7 +3,7 @@
 //! 输出固定形态的 JSON，方便 ELK / Loki / 自研 SaaS 日志系统直接解析：
 //! ```text
 //! {"timestamp":"2026-05-18T01:25:16.361976Z","level":"ERROR",
-//!  "logger":"onebase::auto_api_handlers","message":"...",
+//!  "logger":"planeos::auto_api_handlers","message":"...",
 //!  "taskName":null,"x_request_id":"98753d7e-..."}
 //! ```
 //!
@@ -23,7 +23,7 @@
 //!
 //! ### 自定义日志 target（`logger` 字段）
 //!
-//! 大部分日志的 `logger` 是模块路径（如 `onebase::auto_api_handlers`）。下列横切
+//! 大部分日志的 `logger` 是模块路径（如 `planeos::auto_api_handlers`）。下列横切
 //! 关注点用了**人工 target**，方便日志系统按 `logger` 精确路由 / 建独立索引 / 配告警：
 //!
 //! | target        | 级别        | 内容 |
@@ -38,15 +38,15 @@
 //! | `auto_api`    | debug       | Auto API 各 CRUD handler 入口（db/schema/table/user） |
 //! | `perm_cache`  | debug       | 权限缓存 命中/未命中/写入/失效 |
 //!
-//! 注意：人工 target 不带 `onebase::` 前缀，`RUST_LOG=onebase=debug` 匹配不到它们；
+//! 注意：人工 target 不带 `planeos::` 前缀，`RUST_LOG=planeos=debug` 匹配不到它们；
 //! 默认 filter 已把跑 debug 的几个显式抬到 debug（见 [`init`]）。
 //!
 //! ### 输出目的地
 //!
 //! - **stdout**：始终开启。本地 `cargo run` 直接看终端；容器里 `docker logs` /
 //!   `kubectl logs` 都靠这个。
-//! - **文件**：可选。设置 `LOG_DIR=/var/log/onebase` 后，按天滚动写
-//!   `onebase.YYYY-MM-DD.log`；或设置 `LOG_FILE=/path/to/file.log` 写到固定文件
+//! - **文件**：可选。设置 `LOG_DIR=/var/log/planeos` 后，按天滚动写
+//!   `planeos.YYYY-MM-DD.log`；或设置 `LOG_FILE=/path/to/file.log` 写到固定文件
 //!   （此时不滚动，建议交给 logrotate）。两个变量都未设置 → 不写文件，保持纯 stdout。
 //!
 //! 文件写入走 `tracing-appender::non_blocking`：业务线程只往 channel 推一条，
@@ -70,7 +70,7 @@ tokio::task_local! {
     ///
     /// 由 [`crate::request_id::request_id_middleware`] 在每个请求最外层用
     /// `task_local!::scope` 注入；该 future 内的所有 `tracing::info!` 等都会
-    /// 经 [`OnebaseJsonFormatter`] 自动带上对应 ID。
+    /// 经 [`PlaneOSJsonFormatter`] 自动带上对应 ID。
     ///
     /// 非请求路径（启动日志 / `tokio::spawn` 出去的后台任务）读不到 → 输出 `null`。
     pub static REQUEST_ID: String;
@@ -87,28 +87,28 @@ tokio::task_local! {
 pub fn init() -> Option<WorkerGuard> {
     // 默认（未设 RUST_LOG）的过滤策略：
     //   - 全局 info：含统一 access log + 认证 / 权限 / SSO / 调度 / webhook 等安全审计日志；
-    //   - onebase=debug：本 crate 各模块（按模块路径 target）的 debug；
+    //   - planeos=debug：本 crate 各模块（按模块路径 target）的 debug；
     //   - 自定义短 target：access log/auth 等用了人工 target（方便日志系统按 `logger`
-    //     字段路由），**不**带 `onebase::` 前缀，所以 `onebase=debug` 匹配不到它们。
+    //     字段路由），**不**带 `planeos::` 前缀，所以 `planeos=debug` 匹配不到它们。
     //     这里显式把跑 debug 级的几个自定义 target 抬到 debug，否则工作流逐节点 /
     //     权限缓存 / Auto API 入口这些 debug 日志在默认配置下会被全局 info 吞掉。
     //   - sqlx=info：压住 sqlx 每条 SQL 的 debug 噪音。
     // 生产可直接用 RUST_LOG 覆盖整串（例如只留 info：`RUST_LOG=info`）。
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        "info,onebase=debug,workflow=debug,auto_api=debug,perm_cache=debug,sso=debug,sqlx=info"
+        "info,planeos=debug,workflow=debug,auto_api=debug,perm_cache=debug,sso=debug,sqlx=info"
             .into()
     });
 
     // stdout 永远开。容器里 supervisord / docker / k8s 的标准日志收集都依赖这条。
     let stdout_layer = tracing_subscriber::fmt::layer()
-        .event_format(OnebaseJsonFormatter)
+        .event_format(PlaneOSJsonFormatter)
         .with_writer(std::io::stdout);
 
     // 文件可选：LOG_DIR 优先（按天滚动），其次 LOG_FILE（单文件），都不设 → 跳过。
     let (file_layer, guard) = match build_file_writer() {
         Some((non_blocking, guard)) => {
             let layer = tracing_subscriber::fmt::layer()
-                .event_format(OnebaseJsonFormatter)
+                .event_format(PlaneOSJsonFormatter)
                 .with_ansi(false) // 文件里别留 ANSI 颜色码，cat / grep 才干净
                 .with_writer(non_blocking);
             (Some(layer), Some(guard))
@@ -129,7 +129,7 @@ pub fn init() -> Option<WorkerGuard> {
 /// 根据环境变量决定要不要建文件 writer，建则返回 `(NonBlocking, WorkerGuard)`。
 ///
 /// 解析顺序：
-/// 1. `LOG_DIR`（推荐生产用）：在该目录下按天滚动写 `onebase.YYYY-MM-DD.log`，
+/// 1. `LOG_DIR`（推荐生产用）：在该目录下按天滚动写 `planeos.YYYY-MM-DD.log`，
 ///    天然方便外部 logrotate / 清理脚本按 mtime 删旧文件。
 /// 2. `LOG_FILE`：单文件，不自动滚动（适合 dev / 排障 / 让 logrotate 接管）。
 /// 3. 都没有 → 返回 `None`，调用方走纯 stdout。
@@ -147,7 +147,7 @@ fn build_file_writer() -> Option<(tracing_appender::non_blocking::NonBlocking, W
                 );
                 return None;
             }
-            let appender = tracing_appender::rolling::daily(dir, "onebase.log");
+            let appender = tracing_appender::rolling::daily(dir, "planeos.log");
             let (nb, guard) = tracing_appender::non_blocking(appender);
             return Some((nb, guard));
         }
@@ -196,9 +196,9 @@ fn build_file_writer() -> Option<(tracing_appender::non_blocking::NonBlocking, W
 ///   不再是 `target` / `span.name`
 /// - `timestamp` 6 位微秒，避免不同环境的小数位数不一致让日志比对乱掉
 /// - `message` 提到根字段，其它 structured field 平铺到根（不再嵌 `fields: {...}`）
-pub struct OnebaseJsonFormatter;
+pub struct PlaneOSJsonFormatter;
 
-impl<S, N> FormatEvent<S, N> for OnebaseJsonFormatter
+impl<S, N> FormatEvent<S, N> for PlaneOSJsonFormatter
 where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
     N: for<'writer> FormatFields<'writer> + 'static,
@@ -547,7 +547,7 @@ mod tests {
 
         // 用 PID + 纳秒避免并行测试 / 重跑撞目录。
         let dir = std::env::temp_dir().join(format!(
-            "onebase-log-test-{}-{}",
+            "planeos-log-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -580,7 +580,7 @@ mod tests {
         let prev_file = std::env::var("LOG_FILE").ok();
 
         let dir = std::env::temp_dir().join(format!(
-            "onebase-logfile-test-{}-{}",
+            "planeos-logfile-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -629,7 +629,7 @@ mod tests {
 
         // 故意指向"应该不可创建"的位置：父级是个不可写普通文件。
         let blocker = std::env::temp_dir().join(format!(
-            "onebase-log-blocker-{}-{}",
+            "planeos-log-blocker-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

@@ -22,4 +22,4 @@
 1. Engine: enum + exec + dispatch  
 2. MCP docs  
 3. Frontend palette / types / config panel  
-4. `cargo check --bin onebase` + smoke unit path if any  
+4. `cargo check --bin planeos` + smoke unit path if any  

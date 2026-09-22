@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { organizationAPI } from '@/lib/api'
 
 type MatrixProject = {
@@ -34,6 +35,7 @@ export default function OrgAccessMatrixView({
   reloadToken,
   onAddToProject,
 }: OrgAccessMatrixViewProps) {
+  const t = useTranslations('orgAccessMatrix')
   const [matrix, setMatrix] = useState<MatrixData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [showUnassignedOnly, setShowUnassignedOnly] = useState(false)
@@ -50,14 +52,14 @@ export default function OrgAccessMatrixView({
       })
       .catch((err) => {
         if (cancelled) return
-        setError(err?.response?.data?.error || err?.message || '加载失败')
+        setError(err?.response?.data?.error || err?.message || t('loadFailed'))
         setMatrix(null)
       })
 
     return () => {
       cancelled = true
     }
-  }, [organizationId, reloadToken])
+  }, [organizationId, reloadToken, t])
 
   const cells = useMemo(
     () =>
@@ -84,7 +86,7 @@ export default function OrgAccessMatrixView({
   if (!matrix) {
     return (
       <p className="text-sm text-gray-400">
-        <i className="fas fa-spinner fa-spin mr-2"></i>加载访问矩阵…
+        <i className="fas fa-spinner fa-spin mr-2"></i>{t('loadingMatrix')}
       </p>
     )
   }
@@ -97,9 +99,12 @@ export default function OrgAccessMatrixView({
     <div className="space-y-4">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">访问</h1>
+          <h1 className="text-xl font-semibold text-gray-900">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            {matrix.members.length} 位成员 · {matrix.projects.length} 个项目
+            {t('memberProjectCount', {
+              members: matrix.members.length,
+              projects: matrix.projects.length,
+            })}
           </p>
         </div>
         <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
@@ -109,7 +114,7 @@ export default function OrgAccessMatrixView({
             checked={showUnassignedOnly}
             onChange={(event) => setShowUnassignedOnly(event.target.checked)}
           />
-          仅显示未加入任何项目的成员
+          {t('showUnassignedOnly')}
         </label>
       </header>
 
@@ -118,7 +123,7 @@ export default function OrgAccessMatrixView({
           <thead className="bg-gray-50 text-gray-500 border-b border-gray-200">
             <tr>
               <th className="sticky left-0 z-10 bg-gray-50 px-4 py-3 text-left font-medium min-w-64">
-                成员
+                {t('colMember')}
               </th>
               {matrix.projects.map((project) => (
                 <th
@@ -150,9 +155,9 @@ export default function OrgAccessMatrixView({
                           type="button"
                           className="text-xs text-blue-600 hover:underline"
                           onClick={() => onAddToProject(project, member.user_id)}
-                          title={`将 ${member.username} 加入 ${project.name}`}
+                          title={t('joinTooltip', { username: member.username, project: project.name })}
                         >
-                          — 加入
+                          {t('joinBtn')}
                         </button>
                       )}
                     </td>
@@ -166,7 +171,7 @@ export default function OrgAccessMatrixView({
                   className="px-4 py-8 text-center text-sm text-gray-400"
                   colSpan={Math.max(matrix.projects.length + 1, 1)}
                 >
-                  {showUnassignedOnly ? '没有未加入项目的成员' : '暂无成员'}
+                  {showUnassignedOnly ? t('noUnassignedMembers') : t('noMembers')}
                 </td>
               </tr>
             )}

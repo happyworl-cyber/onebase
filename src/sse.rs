@@ -328,24 +328,40 @@ fn template_placeholders(template: &str) -> Vec<String> {
 /// - 必含 `{identity}`；
 /// - 占位符只允许 `{identity}` 和 `{query.<param>}`；
 /// - `{identity}` 必须出现在所有 `{query.X}` 之前（否则缺省 query 截断会丢掉 identity 而越权）。
-pub fn validate_topic_template(template: &str) -> std::result::Result<(), String> {
+pub fn validate_topic_template(template: &str) -> std::result::Result<(), AppError> {
     let mut seen_identity = false;
     for name in template_placeholders(template) {
         if name == "identity" {
             seen_identity = true;
         } else if let Some(param) = name.strip_prefix("query.") {
             if param.is_empty() {
-                return Err("占位符 {query.} 缺少参数名".to_string());
+                return Err(AppError::validation(
+                    "sse_topic_template_query_param_empty",
+                    "占位符 {query.} 缺少参数名",
+                    serde_json::json!({}),
+                ));
             }
             if !seen_identity {
-                return Err("{identity} 必须出现在所有 {query.X} 之前".to_string());
+                return Err(AppError::validation(
+                    "sse_topic_template_identity_before_query",
+                    "{identity} 必须出现在所有 {query.X} 之前",
+                    serde_json::json!({}),
+                ));
             }
         } else {
-            return Err(format!("不支持的占位符 {{{}}}", name));
+            return Err(AppError::validation(
+                "sse_topic_template_unsupported_placeholder",
+                format!("不支持的占位符 {{{}}}", name),
+                serde_json::json!({ "name": name }),
+            ));
         }
     }
     if !seen_identity {
-        return Err("topic 模板必须包含 {identity}".to_string());
+        return Err(AppError::validation(
+            "sse_topic_template_missing_identity",
+            "topic 模板必须包含 {identity}",
+            serde_json::json!({}),
+        ));
     }
     Ok(())
 }
@@ -642,7 +658,9 @@ pub async fn sse_handler(
     let token = query
         .token
         .filter(|t| !t.is_empty())
-        .ok_or_else(|| AppError::Unauthorized("缺少 token".to_string()))?;
+        .ok_or_else(|| {
+            AppError::unauthorized_coded("sse_missing_token", "缺少 token".to_string(), serde_json::json!({}))
+        })?;
     let claims = verify_token(&token)?;
 
     let topics: Vec<String> = query
@@ -654,14 +672,20 @@ pub async fn sse_handler(
         .collect();
 
     if topics.is_empty() {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "sse_missing_topics",
             "必须通过 ?topics= 指定至少一个订阅 topic".to_string(),
+            serde_json::json!({}),
         ));
     }
 
     for t in &topics {
         if !authorize_topic(&pool, &claims, t).await {
-            return Err(AppError::Forbidden(format!("无权订阅 topic: {}", t)));
+            return Err(AppError::forbidden_coded(
+                "sse_topic_forbidden",
+                format!("无权订阅 topic: {}", t),
+                serde_json::json!({ "topic": t }),
+            ));
         }
     }
 
@@ -902,12 +926,22 @@ pub async fn public_event_handler(
     headers: HeaderMap,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Response> {
-    let cfg = load_public_endpoint(&pool, &slug)
-        .await
-        .ok_or_else(|| AppError::NotFound(format!("工作流订阅 {} 不存在或未启用", slug)))?;
+    let cfg = load_public_endpoint(&pool, &slug).await.ok_or_else(|| {
+        AppError::not_found_coded(
+            "sse_public_endpoint_not_found",
+            format!("工作流订阅 {} 不存在或未启用", slug),
+            serde_json::json!({ "slug": slug }),
+        )
+    })?;
 
     let identity = public_identity(&headers, &query, &cfg.identity_header)
-        .ok_or_else(|| AppError::Unauthorized(format!("缺少 {}", cfg.identity_header)))?
+        .ok_or_else(|| {
+            AppError::unauthorized_coded(
+                "sse_missing_identity_header",
+                format!("缺少 {}", cfg.identity_header),
+                serde_json::json!({ "header": cfg.identity_header }),
+            )
+        })?
         .to_string();
 
     let topic = render_subscription_topic(&cfg.topic_template, &identity, &query);
@@ -1015,13 +1049,18 @@ pub async fn publish_handler(
     Json(req): Json<PublishReq>,
 ) -> Result<Json<serde_json::Value>> {
     if req.topic.trim().is_empty() {
-        return Err(AppError::InvalidQuery("topic 不能为空".to_string()));
+        return Err(AppError::validation(
+            "sse_publish_missing_topic",
+            "topic 不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if !authorize_topic(&pool, &claims, &req.topic).await {
-        return Err(AppError::Forbidden(format!(
-            "无权向 topic 发布: {}",
-            req.topic
-        )));
+        return Err(AppError::forbidden_coded(
+            "sse_publish_forbidden",
+            format!("无权向 topic 发布: {}", req.topic),
+            serde_json::json!({ "topic": req.topic }),
+        ));
     }
     let event = req.event.unwrap_or_else(|| "message".to_string());
     hub.publish(req.topic, event, req.data, req.id);

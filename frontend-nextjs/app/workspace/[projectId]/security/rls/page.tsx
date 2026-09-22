@@ -17,6 +17,7 @@ import {
 } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
 import { useNotification } from '@/hooks/useNotification'
+import { useTranslations } from 'next-intl'
 import Drawer from '@/components/Drawer'
 import PermissionGate from '@/components/PermissionGate'
 import ConditionBuilder from '@/components/rbac/ConditionBuilder'
@@ -65,14 +66,17 @@ const EMPTY_FORM: FormState = {
 }
 
 export default function PermissionsPage() {
+  const t = useTranslations('wsRls')
   return (
-    <PermissionGate requires="canManageRbac" pageName="权限管理">
+    <PermissionGate requires="canManageRbac" pageName={t('gate')}>
       <PermissionsPageInner />
     </PermissionGate>
   )
 }
 
 function PermissionsPageInner() {
+  const tr = useTranslations('wsRls')
+  const trTpl = useTranslations('rbacTemplates')
   const { currentSchema } = useAppStore()
   const notify = useNotification()
   const [permissions, setPermissions] = useState<Permission[]>([])
@@ -197,12 +201,12 @@ function PermissionsPageInner() {
       }
       return next
     })
-    notify.success(`已应用模板：${tpl.label}（可继续调整后保存）`)
+    notify.success(tr('applied', { label: trTpl(tpl.labelKey) }))
   }
 
   const submitPermission = async () => {
     if (!form.resource) {
-      notify.warning('请选择资源')
+      notify.warning(tr('errSelectResource'))
       return
     }
     const payload = {
@@ -216,10 +220,10 @@ function PermissionsPageInner() {
     try {
       if (editingPerm) {
         await rbacAPI.updatePermission(editingPerm.id, payload)
-        notify.success('权限已更新')
+        notify.success(tr('updated'))
       } else {
         await rbacAPI.createPermission(payload)
-        notify.success('权限已创建')
+        notify.success(tr('created'))
       }
       setShowCreateForm(false)
       resetForm()
@@ -230,10 +234,10 @@ function PermissionsPageInner() {
   }
 
   const deletePermission = async (id: number) => {
-    if (!window.confirm('确定要删除这条权限吗？')) return
+    if (!window.confirm(tr('confirmDelete'))) return
     try {
       await rbacAPI.deletePermission(id)
-      notify.success('权限已删除')
+      notify.success(tr('deleted'))
       loadPermissions()
     } catch (err: any) {
       notify.error(err)
@@ -255,13 +259,13 @@ function PermissionsPageInner() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-800">权限管理</h1>
+          <h1 className="text-2xl font-semibold text-gray-800">{tr('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            定义资源访问规则（行级条件 + 列级可见性 ↔ 应用层 RBAC）
+            {tr('subtitle')}
           </p>
         </div>
         <button onClick={openCreate} className="btn-primary">
-          <i className="fas fa-plus mr-2"></i>创建权限
+          <i className="fas fa-plus mr-2"></i>{tr('createPerm')}
         </button>
       </div>
 
@@ -271,7 +275,7 @@ function PermissionsPageInner() {
           type="text"
           value={filterResource}
           onChange={(e) => setFilterResource(e.target.value)}
-          placeholder="搜索资源名 (如 public.posts)"
+          placeholder={tr('phSearch')}
           className="w-full input-base"
         />
       </div>
@@ -279,14 +283,14 @@ function PermissionsPageInner() {
       {/* 权限列表 */}
       {loading ? (
         <div className="card p-8 text-center text-gray-500">
-          <i className="fas fa-spinner fa-spin mr-2"></i>加载中...
+          <i className="fas fa-spinner fa-spin mr-2"></i>{tr('loading')}
         </div>
       ) : Object.keys(grouped).length === 0 ? (
         <div className="card p-8 text-center">
           <i className="fas fa-shield-alt text-5xl text-gray-300 mb-4"></i>
-          <p className="text-gray-500 mb-2">暂无权限定义</p>
+          <p className="text-gray-500 mb-2">{tr('empty')}</p>
           <p className="text-sm text-gray-400">
-            创建权限后，可在「角色管理」里把它分配给角色
+            {tr('emptyHint')}
           </p>
         </div>
       ) : (
@@ -298,7 +302,7 @@ function PermissionsPageInner() {
                   <i className="fas fa-table text-gray-400 mr-2"></i>
                   {resource}
                   <span className="ml-2 text-xs font-normal text-gray-400">
-                    ({perms.length} 条规则)
+                    {tr('ruleCount', { n: perms.length })}
                   </span>
                 </h3>
               </div>
@@ -324,7 +328,7 @@ function PermissionsPageInner() {
           setShowCreateForm(false)
           resetForm()
         }}
-        title={editingPerm ? '编辑权限' : '创建权限'}
+        title={editingPerm ? tr('editTitle') : tr('createTitle')}
         size="xl"
         footer={
           <div className="flex gap-3">
@@ -335,7 +339,7 @@ function PermissionsPageInner() {
               }}
               className="flex-1 h-11 px-5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-all"
             >
-              取消
+              {tr('cancel')}
             </button>
             <button
               onClick={submitPermission}
@@ -343,7 +347,7 @@ function PermissionsPageInner() {
               className="flex-1 h-11 px-5 text-sm font-medium text-white bg-gradient-to-r from-blue-500 to-blue-600 rounded-lg hover:from-blue-600 hover:to-blue-700 disabled:opacity-50 transition-all shadow-sm hover:shadow-md flex items-center justify-center"
             >
               <i className={`fas ${editingPerm ? 'fa-save' : 'fa-plus'} mr-2`}></i>
-              {editingPerm ? '保存修改' : '创建权限'}
+              {editingPerm ? tr('saveEdit') : tr('createPerm')}
             </button>
           </div>
         }
@@ -352,7 +356,7 @@ function PermissionsPageInner() {
           {/* 资源选择 */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              资源 (schema.table)
+              {tr('resourceLabel')}
             </label>
             {tables.length > 0 ? (
               <select
@@ -360,7 +364,7 @@ function PermissionsPageInner() {
                 onChange={(e) => setForm((f) => ({ ...f, resource: e.target.value }))}
                 className="w-full input-base"
               >
-                <option value="">选择表...</option>
+                <option value="">{tr('selectTable')}</option>
                 {tables.map((t) => (
                   <option key={t} value={`${currentSchema}.${t}`}>
                     {currentSchema}.{t}
@@ -380,7 +384,7 @@ function PermissionsPageInner() {
 
           {/* 操作类型 */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">操作类型</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">{tr('actionType')}</label>
             <div className="flex gap-2 flex-wrap">
               {ACTIONS.map((a) => (
                 <button
@@ -401,10 +405,10 @@ function PermissionsPageInner() {
           {/* 应用模板 */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              应用模板（可选）
+              {tr('applyTemplateLabel')}
             </label>
             <p className="text-xs text-gray-500 mb-2">
-              一键填入预设条件，可继续调整后保存。
+              {tr('applyTemplateHint')}
             </p>
             <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
               {PERMISSION_TEMPLATES.map((tpl) => (
@@ -413,11 +417,11 @@ function PermissionsPageInner() {
                   type="button"
                   onClick={() => applyTemplate(tpl.id)}
                   className="text-left p-3 border border-gray-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 transition-colors"
-                  title={tpl.hint}
+                  title={trTpl(tpl.hintKey)}
                 >
-                  <p className="text-xs font-medium text-gray-900">{tpl.label}</p>
+                  <p className="text-xs font-medium text-gray-900">{trTpl(tpl.labelKey)}</p>
                   <p className="text-[11px] text-gray-500 mt-0.5 line-clamp-2">
-                    {tpl.hint}
+                    {trTpl(tpl.hintKey)}
                   </p>
                 </button>
               ))}
@@ -429,10 +433,10 @@ function PermissionsPageInner() {
             <div className="p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
               <p className="font-medium flex items-center gap-2">
                 <i className="fas fa-exclamation-triangle"></i>
-                该权限包含旧版字符串条件
+                {tr('legacyWarnTitle')}
               </p>
               <p className="mt-1">
-                运行时已被后端拒绝。请用下方结构化 builder 重建后保存——保存时会自动覆盖。
+                {tr('legacyWarnBody')}
               </p>
               <ul className="mt-2 space-y-1">
                 {form.legacyStrings.map((s, i) => (
@@ -447,7 +451,7 @@ function PermissionsPageInner() {
           {/* 行级条件 */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              行级过滤条件
+              {tr('rowFilter')}
             </label>
             <ConditionBuilder
               value={form.conditions}
@@ -456,7 +460,7 @@ function PermissionsPageInner() {
             />
             {form.conditions.length > 0 && (
               <p className="text-[10px] text-gray-400 mt-2">
-                生效后：{form.conditions.map(describeCondition).join(' AND ')}
+                {tr('effect', { cond: form.conditions.map((c) => describeCondition(c, trTpl)).join(' AND ') })}
               </p>
             )}
           </div>
@@ -464,7 +468,7 @@ function PermissionsPageInner() {
           {/* 列级可见性 */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              列级可见性
+              {tr('columnVisibility')}
             </label>
             <ColumnControl
               availableColumns={tableColumns}
@@ -485,13 +489,13 @@ function PermissionsPageInner() {
           {/* 描述 */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              描述（可选）
+              {tr('descLabel')}
             </label>
             <input
               type="text"
               value={form.description}
               onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-              placeholder="说明该权限用途，便于团队审阅"
+              placeholder={tr('phDesc')}
               className="w-full input-base"
             />
           </div>
@@ -511,6 +515,8 @@ function PermissionRow({
   onEdit: () => void
   onDelete: () => void
 }) {
+  const tr = useTranslations('wsRls')
+  const trTpl = useTranslations('rbacTemplates')
   const { structured, legacy } = useMemo(() => {
     if (!Array.isArray(perm.conditions)) return { structured: [], legacy: [] }
     const s: RowCondition[] = []
@@ -539,22 +545,22 @@ function PermissionRow({
             )}
             {legacy.length > 0 && (
               <span className="text-[10px] px-2 py-0.5 rounded bg-amber-100 text-amber-800">
-                含旧字符串条件
+                {tr('hasLegacy')}
               </span>
             )}
           </div>
 
           {structured.length > 0 && (
             <div className="mt-1">
-              <span className="text-xs text-gray-400">条件：</span>
+              <span className="text-xs text-gray-400">{tr('conditionsLabel')}</span>
               <code className="text-xs bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded">
-                {structured.map(describeCondition).join(' AND ')}
+                {structured.map((c) => describeCondition(c, trTpl)).join(' AND ')}
               </code>
             </div>
           )}
           {legacy.length > 0 && (
             <div className="mt-1 space-y-1">
-              <span className="text-xs text-gray-400">legacy 条件（已被后端拒绝）：</span>
+              <span className="text-xs text-gray-400">{tr('legacyLabel')}</span>
               {legacy.map((c, i) => (
                 <code
                   key={i}
@@ -568,9 +574,9 @@ function PermissionRow({
 
           {perm.allowed_columns != null && (
             <div className="mt-1 flex flex-wrap gap-1 items-center">
-              <span className="text-xs text-gray-400">仅可见：</span>
+              <span className="text-xs text-gray-400">{tr('onlyVisible')}</span>
               {perm.allowed_columns.length === 0 ? (
-                <span className="text-xs text-red-500 italic">（无可见列）</span>
+                <span className="text-xs text-red-500 italic">{tr('noVisibleCol')}</span>
               ) : (
                 perm.allowed_columns.map((c) => (
                   <span
@@ -585,7 +591,7 @@ function PermissionRow({
           )}
           {perm.denied_columns && perm.denied_columns.length > 0 && (
             <div className="mt-1 flex flex-wrap gap-1 items-center">
-              <span className="text-xs text-gray-400">隐藏：</span>
+              <span className="text-xs text-gray-400">{tr('hidden')}</span>
               {perm.denied_columns.map((c) => (
                 <span
                   key={c}
@@ -601,14 +607,14 @@ function PermissionRow({
           <button
             onClick={onEdit}
             className="text-gray-400 hover:text-blue-600"
-            title="编辑"
+            title={tr('edit')}
           >
             <i className="fas fa-pencil-alt text-sm"></i>
           </button>
           <button
             onClick={onDelete}
             className="text-gray-400 hover:text-red-600"
-            title="删除"
+            title={tr('delete')}
           >
             <i className="fas fa-trash text-sm"></i>
           </button>

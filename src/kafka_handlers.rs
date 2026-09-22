@@ -30,8 +30,10 @@ async fn require_tenant_admin(
     if admins.contains(&tenant_id) {
         Ok(())
     } else {
-        Err(AppError::Forbidden(
+        Err(AppError::forbidden_coded(
+            "kafka_manage_requires_tenant_admin",
             "仅超管或该租户 owner/admin 可管理 Kafka 连接".to_string(),
+            serde_json::json!({}),
         ))
     }
 }
@@ -48,7 +50,13 @@ async fn fetch_connection_authorized(
     .fetch_optional(pool)
     .await
     .map_err(|e| AppError::Internal(format!("查询 Kafka 连接失败: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("Kafka 连接 {id} 不存在")))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "kafka_connection_not_found",
+            format!("Kafka 连接 {id} 不存在"),
+            serde_json::json!({ "id": id }),
+        )
+    })?;
     require_tenant_admin(pool, claims, conn.tenant_id).await?;
     Ok(conn)
 }
@@ -307,9 +315,11 @@ pub async fn list_topics(
 ) -> Result<Json<Value>, AppError> {
     let conn = fetch_connection_authorized(&pool, &claims, id).await?;
     if !conn.is_active {
-        return Err(AppError::NotFound(format!(
-            "Kafka 连接 {id} 不存在或已禁用"
-        )));
+        return Err(AppError::not_found_coded(
+            "kafka_connection_disabled",
+            format!("Kafka 连接 {id} 不存在或已禁用"),
+            serde_json::json!({ "id": id }),
+        ));
     }
     Ok(Json(commands::list_topics(&conn).await?))
 }
@@ -329,9 +339,11 @@ pub async fn create_topic(
 ) -> Result<Json<Value>, AppError> {
     let conn = fetch_connection_authorized(&pool, &claims, id).await?;
     if !conn.is_active {
-        return Err(AppError::NotFound(format!(
-            "Kafka 连接 {id} 不存在或已禁用"
-        )));
+        return Err(AppError::not_found_coded(
+            "kafka_connection_disabled",
+            format!("Kafka 连接 {id} 不存在或已禁用"),
+            serde_json::json!({ "id": id }),
+        ));
     }
     Ok(Json(
         commands::create_topic(&conn, &req.name, req.num_partitions, req.replication_factor)
@@ -346,9 +358,11 @@ pub async fn list_consumer_groups(
 ) -> Result<Json<Value>, AppError> {
     let conn = fetch_connection_authorized(&pool, &claims, id).await?;
     if !conn.is_active {
-        return Err(AppError::NotFound(format!(
-            "Kafka 连接 {id} 不存在或已禁用"
-        )));
+        return Err(AppError::not_found_coded(
+            "kafka_connection_disabled",
+            format!("Kafka 连接 {id} 不存在或已禁用"),
+            serde_json::json!({ "id": id }),
+        ));
     }
     Ok(Json(commands::list_consumer_groups(&conn).await?))
 }
@@ -374,11 +388,15 @@ pub async fn exec(
         }
         "list_topics" => commands::list_topics(&conn).await?,
         _ => {
-            return Err(AppError::InvalidQuery(format!(
-                "不支持的 Kafka 操作 `{}`（支持：{}）",
-                req.op,
-                commands::SUPPORTED_OPS.join(", ")
-            )));
+            return Err(AppError::validation(
+                "kafka_op_unsupported",
+                format!(
+                    "不支持的 Kafka 操作 `{}`（支持：{}）",
+                    req.op,
+                    commands::SUPPORTED_OPS.join(", ")
+                ),
+                serde_json::json!({ "op": req.op, "supported": commands::SUPPORTED_OPS.join(", ") }),
+            ));
         }
     };
     Ok(Json(json!({ "op": req.op, "result": result })))
@@ -409,8 +427,10 @@ fn normalize_protocol(value: &str) -> Result<String, AppError> {
     let protocol = value.trim().to_ascii_uppercase();
     match protocol.as_str() {
         "PLAINTEXT" | "SASL_PLAINTEXT" | "SASL_SSL" | "SSL" => Ok(protocol),
-        _ => Err(AppError::InvalidQuery(
-            "security_protocol 必须是 PLAINTEXT、SASL_PLAINTEXT、SASL_SSL 或 SSL".into(),
+        _ => Err(AppError::validation(
+            "kafka_security_protocol_invalid",
+            "security_protocol 必须是 PLAINTEXT、SASL_PLAINTEXT、SASL_SSL 或 SSL",
+            serde_json::json!({}),
         )),
     }
 }
@@ -424,8 +444,10 @@ fn validate_sasl(
         && (mechanism.map(str::trim).filter(|v| !v.is_empty()).is_none()
             || username.map(str::trim).filter(|v| !v.is_empty()).is_none())
     {
-        return Err(AppError::InvalidQuery(
-            "SASL 协议必须配置 sasl_mechanism 和 sasl_username".into(),
+        return Err(AppError::validation(
+            "kafka_sasl_credentials_required",
+            "SASL 协议必须配置 sasl_mechanism 和 sasl_username",
+            serde_json::json!({}),
         ));
     }
     Ok(())
@@ -433,7 +455,11 @@ fn validate_sasl(
 
 fn validate_name(name: &str) -> Result<(), AppError> {
     if name.trim().is_empty() {
-        Err(AppError::InvalidQuery("connection_name 不能为空".into()))
+        Err(AppError::validation(
+            "kafka_connection_name_required",
+            "connection_name 不能为空",
+            serde_json::json!({}),
+        ))
     } else {
         Ok(())
     }
@@ -441,7 +467,11 @@ fn validate_name(name: &str) -> Result<(), AppError> {
 
 fn validate_brokers(brokers: &str) -> Result<(), AppError> {
     if brokers.trim().is_empty() {
-        Err(AppError::InvalidQuery("brokers 不能为空".into()))
+        Err(AppError::validation(
+            "kafka_brokers_required",
+            "brokers 不能为空",
+            serde_json::json!({}),
+        ))
     } else {
         Ok(())
     }
@@ -450,7 +480,11 @@ fn validate_brokers(brokers: &str) -> Result<(), AppError> {
 fn map_unique_violation(error: sqlx::Error, message: &str) -> AppError {
     if let sqlx::Error::Database(ref database_error) = error {
         if database_error.code().as_deref() == Some("23505") {
-            return AppError::InvalidQuery(message.to_string());
+            return AppError::validation(
+                "kafka_connection_name_duplicate",
+                message.to_string(),
+                serde_json::json!({}),
+            );
         }
     }
     AppError::Internal(format!("DB 错误: {error}"))
@@ -502,7 +536,11 @@ pub async fn create_token(
 ) -> Result<Json<Value>, AppError> {
     let _ = fetch_connection_authorized(&pool, &claims, connection_id).await?;
     if req.name.trim().is_empty() {
-        return Err(AppError::InvalidQuery("token name 不能为空".to_string()));
+        return Err(AppError::validation(
+            "kafka_token_name_required",
+            "token name 不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
     let ops = req.allowed_ops.unwrap_or_else(|| {
         kafka_auth::DEFAULT_OPS
@@ -513,8 +551,10 @@ pub async fn create_token(
     kafka_auth::validate_ops(&ops)?;
     let topics = req.topic_allowlist.unwrap_or_else(|| vec!["*".to_string()]);
     if topics.is_empty() {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "kafka_token_topic_allowlist_empty",
             "topic_allowlist 至少要有一项（用 [\"*\"] 表示不限）".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -559,8 +599,10 @@ pub async fn update_token(
     }
     if let Some(topics) = &req.topic_allowlist {
         if topics.is_empty() {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "kafka_token_update_topic_allowlist_empty",
                 "topic_allowlist 至少要有一项".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -586,7 +628,13 @@ pub async fn update_token(
     .fetch_optional(&pool)
     .await
     .map_err(|e| AppError::Internal(format!("更新 Kafka token 失败: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("token {token_id} 不存在")))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "kafka_token_not_found",
+            format!("token {token_id} 不存在"),
+            serde_json::json!({ "token_id": token_id }),
+        )
+    })?;
     Ok(Json(row))
 }
 

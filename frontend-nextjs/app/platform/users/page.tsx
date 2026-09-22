@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { adminAPI } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
+import { useTranslations } from 'next-intl'
 import { useNotification } from '@/hooks/useNotification'
 import Drawer from '@/components/Drawer'
 
@@ -31,11 +32,11 @@ interface TenantOption {
   slug: string
 }
 
-const TENANT_ROLES: { value: string; label: string }[] = [
-  { value: 'owner', label: 'Owner（所有者）' },
-  { value: 'admin', label: 'Admin（管理员）' },
-  { value: 'member', label: 'Member（成员）' },
-  { value: 'viewer', label: 'Viewer（只读）' },
+const TENANT_ROLES: { value: string; key: string }[] = [
+  { value: 'owner', key: 'roleOwner' },
+  { value: 'admin', key: 'roleAdmin' },
+  { value: 'member', key: 'roleMember' },
+  { value: 'viewer', key: 'roleViewer' },
 ]
 
 const ROLE_BADGE: Record<string, string> = {
@@ -60,6 +61,7 @@ const isStrongPassword = (p: string): boolean =>
 // 页面
 // ──────────────────────────────────────────────
 export default function UsersPage() {
+  const tr = useTranslations('platformUsers')
   const notify = useNotification()
   const currentUser = useAppStore((s) => s.currentUser)
 
@@ -116,7 +118,7 @@ export default function UsersPage() {
       }))
       setTenants(opts)
     } catch (err: any) {
-      console.error('加载租户列表失败:', err)
+      console.error(tr('loadTenantsFailed'), err)
     }
   }
 
@@ -198,12 +200,12 @@ export default function UsersPage() {
     const username = newUser.username.trim()
     const email = newUser.email.trim()
 
-    if (!username) return notify.warning('请输入用户名')
-    if (!email || !email.includes('@')) return notify.warning('请输入合法邮箱')
+    if (!username) return notify.warning(tr('warnUsername'))
+    if (!email || !email.includes('@')) return notify.warning(tr('warnEmail'))
     if (!isStrongPassword(newUser.password))
-      return notify.warning('密码至少 8 位，且需包含大写字母、小写字母和数字')
+      return notify.warning(tr('warnPwWeak'))
     if (newUser.password !== newUser.confirm)
-      return notify.warning('两次输入的密码不一致')
+      return notify.warning(tr('warnPwMismatch'))
 
     setCreating(true)
     try {
@@ -213,7 +215,7 @@ export default function UsersPage() {
         password: newUser.password,
         is_superadmin: newUser.is_superadmin,
       })
-      notify.success('用户已创建')
+      notify.success(tr('created'))
       setShowCreate(false)
       setNewUser({ username: '', email: '', password: '', confirm: '', is_superadmin: false })
       await loadUsers()
@@ -227,13 +229,13 @@ export default function UsersPage() {
   const handleSaveUsername = async () => {
     if (!selected) return
     const trimmed = editingUsername.trim()
-    if (!trimmed) return notify.warning('用户名不能为空')
+    if (!trimmed) return notify.warning(tr('warnUsernameEmpty'))
     if (trimmed === selected.username) return // 没改
 
     setSavingUsername(true)
     try {
       await adminAPI.updateUser(selected.id, { username: trimmed })
-      notify.success('用户名已更新')
+      notify.success(tr('usernameUpdated'))
       await loadUsers()
     } catch (err: any) {
       notify.error(err)
@@ -246,13 +248,13 @@ export default function UsersPage() {
   const handleToggleSuperadmin = async () => {
     if (!selected) return
     const next = !selected.is_superadmin
-    const verb = next ? '提升为超级管理员' : '取消超级管理员身份'
-    if (!window.confirm(`确认要${verb}用户 "${selected.email}" 吗？\n\n注意：操作会立刻吊销该用户的所有现存会话，对方需要重新登录。`)) return
+    const verb = next ? tr('promote') : tr('demote')
+    if (!window.confirm(tr('confirmRole', { verb, email: selected.email }))) return
 
     setSavingSuperadmin(true)
     try {
       await adminAPI.updateUser(selected.id, { is_superadmin: next })
-      notify.success(`已${verb}`)
+      notify.success(tr('roleDone', { verb }))
       await loadUsers()
     } catch (err: any) {
       notify.error(err)
@@ -264,14 +266,14 @@ export default function UsersPage() {
   const handleResetPassword = async () => {
     if (!selected) return
     if (!isStrongPassword(resetPwd.p1))
-      return notify.warning('密码至少 8 位，且需包含大写字母、小写字母和数字')
+      return notify.warning(tr('warnPwWeak'))
     if (resetPwd.p1 !== resetPwd.p2)
-      return notify.warning('两次输入的密码不一致')
+      return notify.warning(tr('warnPwMismatch'))
 
     setResetting(true)
     try {
       await adminAPI.resetUserPassword(selected.id, resetPwd.p1)
-      notify.success('密码已重置，对方需要重新登录')
+      notify.success(tr('pwReset'))
       setShowResetForm(false)
       setResetPwd({ p1: '', p2: '' })
     } catch (err: any) {
@@ -284,17 +286,13 @@ export default function UsersPage() {
   const handleDeleteUser = async () => {
     if (!selected || !canDelete) return
     if (!window.confirm(
-      `确定要彻底删除用户 "${selected.email}" 吗？\n\n` +
-      `这会同时删除：\n` +
-      `  · 该用户在所有租户中的成员关系\n` +
-      `  · 该用户的所有活跃会话和 SSO 绑定\n\n` +
-      `操作不可恢复！`
+      tr('confirmDelete', { email: selected.email })
     )) return
 
     setDeletingUser(true)
     try {
       await adminAPI.deleteUser(selected.id)
-      notify.success('用户已删除')
+      notify.success(tr('deleted'))
       setSelected(null)
       await loadUsers()
     } catch (err: any) {
@@ -305,14 +303,14 @@ export default function UsersPage() {
   }
 
   const handleAssignTenant = async () => {
-    if (!selected || !assignTenantId) return notify.warning('请选择要加入的项目')
+    if (!selected || !assignTenantId) return notify.warning(tr('warnSelectProject'))
     setAssigning(true)
     try {
       await adminAPI.assignUserToTenant(selected.id, {
         tenant_id: Number(assignTenantId),
         role: assignRole,
       })
-      notify.success('已加入项目')
+      notify.success(tr('joinedProject'))
       setAssignTenantId('')
       setAssignRole('member')
       await loadUsers()
@@ -325,10 +323,10 @@ export default function UsersPage() {
 
   const handleRemoveTenant = async (tenantId: number, tenantName: string) => {
     if (!selected) return
-    if (!window.confirm(`确定要把用户 "${selected.email}" 从项目 "${tenantName}" 中移除吗？`)) return
+    if (!window.confirm(tr('confirmRemove', { email: selected.email, tenant: tenantName }))) return
     try {
       await adminAPI.removeUserFromTenant(selected.id, tenantId)
-      notify.success('已从项目中移除')
+      notify.success(tr('removedFromProject'))
       await loadUsers()
     } catch (err: any) {
       notify.error(err)
@@ -345,9 +343,9 @@ export default function UsersPage() {
           <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-amber-100 flex items-center justify-center">
             <i className="fas fa-shield-alt text-2xl text-amber-500"></i>
           </div>
-          <h2 className="text-lg font-semibold text-gray-800 mb-2">需要超级管理员权限</h2>
+          <h2 className="text-lg font-semibold text-gray-800 mb-2">{tr('needSuperTitle')}</h2>
           <p className="text-sm text-gray-500">
-            用户管理仅对平台超级管理员开放，请使用具有 <code className="px-1 py-0.5 bg-gray-100 rounded">is_superadmin</code> 标志的账号登录后再访问。
+            {tr('needSuperDesc')}
           </p>
         </div>
       </div>
@@ -361,20 +359,20 @@ export default function UsersPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-800">用户管理</h1>
+          <h1 className="text-2xl font-semibold text-gray-800">{tr('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            管理平台账号、查看项目成员关系并分配项目（项目隶属于组织/租户）
+            {tr('subtitle')}
           </p>
         </div>
         <button onClick={() => setShowCreate(true)} className="btn-primary">
-          <i className="fas fa-user-plus mr-2"></i>创建用户
+          <i className="fas fa-user-plus mr-2"></i>{tr('createUser')}
         </button>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <StatCard icon="fa-users" color="blue" label="平台用户总数" value={stats.total} />
-        <StatCard icon="fa-user-shield" color="purple" label="超级管理员" value={stats.supers} />
-        <StatCard icon="fa-building" color="green" label="已加入租户" value={stats.withTenant} />
+        <StatCard icon="fa-users" color="blue" label={tr('statTotal')} value={stats.total} />
+        <StatCard icon="fa-user-shield" color="purple" label={tr('statSupers')} value={stats.supers} />
+        <StatCard icon="fa-building" color="green" label={tr('statWithTenant')} value={stats.withTenant} />
       </div>
 
       <div className="card">
@@ -385,12 +383,12 @@ export default function UsersPage() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="按用户名 / 邮箱搜索"
+              placeholder={tr('searchPlaceholder')}
               className="input-base pl-9 h-9"
             />
           </div>
           <span className="text-xs text-gray-500 ml-auto">
-            共 {filteredUsers.length} 条 / 全部 {users.length} 条
+            {tr('countLine', { shown: filteredUsers.length, total: users.length })}
           </span>
         </div>
 
@@ -398,25 +396,25 @@ export default function UsersPage() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b border-gray-200 text-gray-600">
               <tr>
-                <th className="px-4 py-3 text-left font-medium">用户</th>
-                <th className="px-4 py-3 text-left font-medium">邮箱</th>
-                <th className="px-4 py-3 text-left font-medium">平台角色</th>
-                <th className="px-4 py-3 text-left font-medium">所属租户</th>
-                <th className="px-4 py-3 text-left font-medium">创建时间</th>
-                <th className="px-4 py-3 text-right font-medium w-32">操作</th>
+                <th className="px-4 py-3 text-left font-medium">{tr('colUser')}</th>
+                <th className="px-4 py-3 text-left font-medium">{tr('colEmail')}</th>
+                <th className="px-4 py-3 text-left font-medium">{tr('colRole')}</th>
+                <th className="px-4 py-3 text-left font-medium">{tr('colTenants')}</th>
+                <th className="px-4 py-3 text-left font-medium">{tr('colCreated')}</th>
+                <th className="px-4 py-3 text-right font-medium w-32">{tr('colActions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {loading ? (
                 <tr>
                   <td colSpan={6} className="px-4 py-12 text-center text-gray-400">
-                    <i className="fas fa-spinner fa-spin mr-2"></i>加载中...
+                    <i className="fas fa-spinner fa-spin mr-2"></i>{tr('loading')}
                   </td>
                 </tr>
               ) : filteredUsers.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-4 py-12 text-center text-gray-400">
-                    {search ? '没有匹配的用户' : '暂无用户'}
+                    {search ? tr('noMatch') : tr('empty')}
                   </td>
                 </tr>
               ) : (
@@ -433,7 +431,7 @@ export default function UsersPage() {
                             <p className="font-medium text-gray-900 flex items-center gap-2">
                               {u.username}
                               {rowIsSelf && (
-                                <span className="text-xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 font-normal">你</span>
+                                <span className="text-xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 font-normal">{tr('you')}</span>
                               )}
                             </p>
                             <p className="text-xs text-gray-400">ID #{u.id}</p>
@@ -444,15 +442,15 @@ export default function UsersPage() {
                       <td className="px-4 py-3">
                         {u.is_superadmin ? (
                           <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium">
-                            <i className="fas fa-crown text-xs"></i>超级管理员
+                            <i className="fas fa-crown text-xs"></i>{tr('superAdmin')}
                           </span>
                         ) : (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">普通用户</span>
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">{tr('normalUser')}</span>
                         )}
                       </td>
                       <td className="px-4 py-3">
                         {(u.tenants?.length || 0) === 0 ? (
-                          <span className="text-xs text-gray-400">未加入任何租户</span>
+                          <span className="text-xs text-gray-400">{tr('noTenant')}</span>
                         ) : (
                           <div className="flex flex-wrap gap-1.5">
                             {u.tenants!.slice(0, 3).map((t) => (
@@ -480,7 +478,7 @@ export default function UsersPage() {
                           onClick={() => setSelected(u)}
                           className="text-xs text-blue-600 hover:text-blue-700 hover:underline"
                         >
-                          查看 / 管理
+                          {tr('manage')}
                         </button>
                       </td>
                     </tr>
@@ -496,18 +494,18 @@ export default function UsersPage() {
       <Drawer
         isOpen={!!selected}
         onClose={() => setSelected(null)}
-        title={selected ? `用户 · ${selected.username}` : ''}
+        title={selected ? tr('drawerTitle', { name: selected.username }) : ''}
         size="lg"
       >
         {selected && (
           <div className="space-y-6">
             {/* 基本信息（用户名可改） */}
             <section>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">基本信息</h4>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">{tr('basicInfo')}</h4>
               <div className="bg-gray-50 rounded-lg p-4 space-y-3 text-sm">
-                <Field label="用户 ID" value={`#${selected.id}`} />
+                <Field label={tr('userId')} value={`#${selected.id}`} />
                 <div>
-                  <label className="block text-gray-500 text-xs mb-1.5">用户名</label>
+                  <label className="block text-gray-500 text-xs mb-1.5">{tr('usernameLabel')}</label>
                   <div className="flex items-center gap-2">
                     <input
                       type="text"
@@ -520,31 +518,31 @@ export default function UsersPage() {
                       disabled={savingUsername || editingUsername.trim() === selected.username || !editingUsername.trim()}
                       className="btn-primary h-9 px-4 text-xs disabled:opacity-50"
                     >
-                      {savingUsername ? <i className="fas fa-spinner fa-spin"></i> : '保存'}
+                      {savingUsername ? <i className="fas fa-spinner fa-spin"></i> : tr('save')}
                     </button>
                   </div>
                 </div>
-                <Field label="邮箱" value={selected.email} />
-                <Field label="创建时间" value={formatDate(selected.created_at)} />
+                <Field label={tr('emailLabel')} value={selected.email} />
+                <Field label={tr('createdAt')} value={formatDate(selected.created_at)} />
               </div>
             </section>
 
             {/* 平台角色（超管开关） */}
             <section>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">平台角色</h4>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">{tr('platformRole')}</h4>
               <div className="border border-gray-200 rounded-lg px-4 py-3 flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium text-gray-900">
                     {selected.is_superadmin ? (
-                      <span className="text-purple-700"><i className="fas fa-crown mr-1.5"></i>超级管理员</span>
+                      <span className="text-purple-700"><i className="fas fa-crown mr-1.5"></i>{tr('superAdmin')}</span>
                     ) : (
-                      <span>普通用户</span>
+                      <span>{tr('normalUser')}</span>
                     )}
                   </p>
                   <p className="text-xs text-gray-500 mt-1">
                     {selected.is_superadmin
-                      ? '可访问平台所有功能，包括其他租户的数据'
-                      : '仅能访问自己所属租户中获授权的资源'}
+                      ? tr('superDescOn')
+                      : tr('superDescOff')}
                   </p>
                 </div>
                 <button
@@ -553,9 +551,9 @@ export default function UsersPage() {
                   title={
                     !canTogglePromote
                       ? selected.is_superadmin && isSelf
-                        ? '不能取消自己的超级管理员身份'
+                        ? tr('cantDemoteSelf')
                         : selected.is_superadmin && isLastSuper
-                          ? '系统至少需要保留一个超级管理员'
+                          ? tr('needOneSuper')
                           : ''
                       : ''
                   }
@@ -566,11 +564,11 @@ export default function UsersPage() {
                   }`}
                 >
                   {savingSuperadmin ? (
-                    <><i className="fas fa-spinner fa-spin mr-1.5"></i>处理中...</>
+                    <><i className="fas fa-spinner fa-spin mr-1.5"></i>{tr('processing')}</>
                   ) : selected.is_superadmin ? (
-                    <><i className="fas fa-user-minus mr-1.5"></i>取消超管</>
+                    <><i className="fas fa-user-minus mr-1.5"></i>{tr('demoteBtn')}</>
                   ) : (
-                    <><i className="fas fa-crown mr-1.5"></i>提升为超管</>
+                    <><i className="fas fa-crown mr-1.5"></i>{tr('promoteBtn')}</>
                   )}
                 </button>
               </div>
@@ -578,33 +576,33 @@ export default function UsersPage() {
 
             {/* 重置密码 */}
             <section>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">重置密码</h4>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">{tr('resetPw')}</h4>
               {!showResetForm ? (
                 <button
                   onClick={() => setShowResetForm(true)}
                   className="w-full border border-dashed border-gray-300 rounded-lg py-3 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
                 >
-                  <i className="fas fa-key mr-2"></i>设置一个新密码并强制对方重新登录
+                  <i className="fas fa-key mr-2"></i>{tr('resetPwHint')}
                 </button>
               ) : (
                 <div className="border border-gray-200 rounded-lg p-4 space-y-3">
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1.5">新密码</label>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5">{tr('newPw')}</label>
                     <input
                       type="password"
                       value={resetPwd.p1}
                       onChange={(e) => setResetPwd({ ...resetPwd, p1: e.target.value })}
-                      placeholder="≥ 8 位，含大小写和数字"
+                      placeholder={tr('pwPlaceholder')}
                       className="w-full input-base"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1.5">确认新密码</label>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5">{tr('confirmNewPw')}</label>
                     <input
                       type="password"
                       value={resetPwd.p2}
                       onChange={(e) => setResetPwd({ ...resetPwd, p2: e.target.value })}
-                      placeholder="再次输入"
+                      placeholder={tr('reenter')}
                       className="w-full input-base"
                     />
                   </div>
@@ -616,7 +614,7 @@ export default function UsersPage() {
                       }}
                       className="flex-1 h-9 text-xs text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
                     >
-                      取消
+                      {tr('cancel')}
                     </button>
                     <button
                       onClick={handleResetPassword}
@@ -624,9 +622,9 @@ export default function UsersPage() {
                       className="flex-1 h-9 text-xs text-white bg-gradient-to-r from-blue-500 to-blue-600 rounded-lg hover:from-blue-600 hover:to-blue-700 disabled:opacity-50"
                     >
                       {resetting ? (
-                        <><i className="fas fa-spinner fa-spin mr-1.5"></i>重置中...</>
+                        <><i className="fas fa-spinner fa-spin mr-1.5"></i>{tr('resetting')}</>
                       ) : (
-                        <><i className="fas fa-check mr-1.5"></i>确认重置</>
+                        <><i className="fas fa-check mr-1.5"></i>{tr('confirmReset')}</>
                       )}
                     </button>
                   </div>
@@ -637,11 +635,11 @@ export default function UsersPage() {
             {/* 项目成员关系（DB: user_tenants；产品层「项目」隶属于组织） */}
             <section>
               <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">
-                项目成员关系（{selected.tenants?.length || 0}）
+                {tr('memberships', { count: selected.tenants?.length || 0 })}
               </h4>
               {(selected.tenants?.length || 0) === 0 ? (
                 <div className="text-sm text-gray-400 bg-gray-50 rounded-lg p-4 text-center">
-                  该用户还没有加入任何项目
+                  {tr('noMemberships')}
                 </div>
               ) : (
                 <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
@@ -661,7 +659,7 @@ export default function UsersPage() {
                         onClick={() => handleRemoveTenant(t.tenant_id, t.tenant_name)}
                         className="text-xs text-red-500 hover:text-red-700"
                       >
-                        <i className="fas fa-user-minus mr-1"></i>移除
+                        <i className="fas fa-user-minus mr-1"></i>{tr('remove')}
                       </button>
                     </div>
                   ))}
@@ -671,23 +669,23 @@ export default function UsersPage() {
 
             {/* 加入新项目 */}
             <section>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">加入新项目</h4>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">{tr('joinProject')}</h4>
               {availableTenantsForAssign.length === 0 ? (
                 <div className="text-sm text-gray-400 bg-gray-50 rounded-lg p-4 text-center">
                   {tenants.length === 0
-                    ? '系统暂无任何项目，请先在「租户管理」创建租户，再在租户控制台开通项目'
-                    : '该用户已加入全部现有项目'}
+                    ? tr('noProjectsHint')
+                    : tr('allJoined')}
                 </div>
               ) : (
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1.5">租户</label>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5">{tr('tenantLabel')}</label>
                     <select
                       value={assignTenantId}
                       onChange={(e) => setAssignTenantId(e.target.value ? Number(e.target.value) : '')}
                       className="w-full input-base"
                     >
-                      <option value="">— 选择租户 —</option>
+                      <option value="">{tr('selectTenant')}</option>
                       {availableTenantsForAssign.map((t) => (
                         <option key={t.id} value={t.id}>
                           {t.name}（{t.slug}）
@@ -696,14 +694,14 @@ export default function UsersPage() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1.5">角色</label>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5">{tr('roleLabel')}</label>
                     <select
                       value={assignRole}
                       onChange={(e) => setAssignRole(e.target.value)}
                       className="w-full input-base"
                     >
                       {TENANT_ROLES.map((r) => (
-                        <option key={r.value} value={r.value}>{r.label}</option>
+                        <option key={r.value} value={r.value}>{tr(r.key)}</option>
                       ))}
                     </select>
                   </div>
@@ -713,9 +711,9 @@ export default function UsersPage() {
                     className="btn-primary w-full disabled:opacity-50"
                   >
                     {assigning ? (
-                      <><i className="fas fa-spinner fa-spin mr-2"></i>处理中...</>
+                      <><i className="fas fa-spinner fa-spin mr-2"></i>{tr('processing')}</>
                     ) : (
-                      <><i className="fas fa-plus mr-2"></i>加入租户</>
+                      <><i className="fas fa-plus mr-2"></i>{tr('joinTenant')}</>
                     )}
                   </button>
                 </div>
@@ -724,12 +722,11 @@ export default function UsersPage() {
 
             {/* 危险区 */}
             <section>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-red-400 mb-3">危险操作</h4>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-red-400 mb-3">{tr('dangerZone')}</h4>
               <div className="border border-red-200 bg-red-50/50 rounded-lg p-4">
-                <p className="text-sm text-gray-700 font-medium">删除用户</p>
+                <p className="text-sm text-gray-700 font-medium">{tr('deleteUser')}</p>
                 <p className="text-xs text-gray-500 mt-1 leading-relaxed">
-                  会同时清除该用户的所有租户成员关系、活跃会话、SSO 绑定和 RBAC 角色绑定。
-                  操作不可恢复。
+                  {tr('deleteUserDesc')}
                 </p>
                 <button
                   onClick={handleDeleteUser}
@@ -737,18 +734,18 @@ export default function UsersPage() {
                   title={
                     !canDelete
                       ? isSelf
-                        ? '不能删除自己'
+                        ? tr('cantDeleteSelf')
                         : selected.is_superadmin && isLastSuper
-                          ? '系统至少需要保留一个超级管理员'
+                          ? tr('needOneSuper')
                           : ''
                       : ''
                   }
                   className="mt-3 text-xs px-3 py-2 rounded-lg bg-red-500 text-white hover:bg-red-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
                 >
                   {deletingUser ? (
-                    <><i className="fas fa-spinner fa-spin mr-1.5"></i>删除中...</>
+                    <><i className="fas fa-spinner fa-spin mr-1.5"></i>{tr('deleting')}</>
                   ) : (
-                    <><i className="fas fa-trash mr-1.5"></i>删除该用户</>
+                    <><i className="fas fa-trash mr-1.5"></i>{tr('deleteUserBtn')}</>
                   )}
                 </button>
               </div>
@@ -764,7 +761,7 @@ export default function UsersPage() {
           setShowCreate(false)
           setNewUser({ username: '', email: '', password: '', confirm: '', is_superadmin: false })
         }}
-        title="创建用户"
+        title={tr('createTitle')}
         size="md"
         footer={
           <div className="flex gap-3">
@@ -775,7 +772,7 @@ export default function UsersPage() {
               }}
               className="flex-1 h-11 px-5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-all"
             >
-              取消
+              {tr('cancel')}
             </button>
             <button
               onClick={handleCreate}
@@ -783,9 +780,9 @@ export default function UsersPage() {
               className="flex-1 h-11 px-5 text-sm font-medium text-white bg-gradient-to-r from-blue-500 to-blue-600 rounded-lg hover:from-blue-600 hover:to-blue-700 disabled:opacity-50 transition-all shadow-sm hover:shadow-md flex items-center justify-center"
             >
               {creating ? (
-                <><i className="fas fa-spinner fa-spin mr-2"></i>创建中...</>
+                <><i className="fas fa-spinner fa-spin mr-2"></i>{tr('creating')}</>
               ) : (
-                <><i className="fas fa-user-plus mr-2"></i>创建用户</>
+                <><i className="fas fa-user-plus mr-2"></i>{tr('createUser')}</>
               )}
             </button>
           </div>
@@ -793,18 +790,18 @@ export default function UsersPage() {
       >
         <div className="space-y-5">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">用户名</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">{tr('usernameLabel')}</label>
             <input
               type="text"
               value={newUser.username}
               onChange={(e) => setNewUser({ ...newUser, username: e.target.value })}
-              placeholder="如 alice、tom_dev"
+              placeholder={tr('usernamePlaceholder')}
               className="w-full input-base"
               autoFocus
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">邮箱</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">{tr('emailLabel')}</label>
             <input
               type="email"
               value={newUser.email}
@@ -814,22 +811,22 @@ export default function UsersPage() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">初始密码</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">{tr('initialPw')}</label>
             <input
               type="password"
               value={newUser.password}
               onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
-              placeholder="≥ 8 位，含大小写和数字"
+              placeholder={tr('pwPlaceholder')}
               className="w-full input-base"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">确认密码</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">{tr('confirmNewPw')}</label>
             <input
               type="password"
               value={newUser.confirm}
               onChange={(e) => setNewUser({ ...newUser, confirm: e.target.value })}
-              placeholder="再次输入密码"
+              placeholder={tr('reenterPw')}
               className="w-full input-base"
             />
           </div>
@@ -841,13 +838,13 @@ export default function UsersPage() {
               className="mt-0.5 w-4 h-4 rounded border-gray-300 text-purple-600"
             />
             <div>
-              <p className="text-sm font-medium text-gray-900">直接授予超级管理员权限</p>
-              <p className="text-xs text-gray-500 mt-0.5">勾选后该用户开箱可访问平台所有功能。一般只用于创建运维账号。</p>
+              <p className="text-sm font-medium text-gray-900">{tr('grantSuper')}</p>
+              <p className="text-xs text-gray-500 mt-0.5">{tr('grantSuperHint')}</p>
             </div>
           </label>
           <div className="text-xs text-gray-500 bg-blue-50 border border-blue-100 rounded-lg p-3 leading-relaxed">
             <i className="fas fa-info-circle text-blue-500 mr-1"></i>
-            新建用户<strong>不会自动加入任何租户</strong>。创建完成后请在用户列表中点击"查看 / 管理"为其分配租户和角色。
+            {tr('createNote')}
           </div>
         </div>
       </Drawer>

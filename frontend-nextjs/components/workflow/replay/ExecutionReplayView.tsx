@@ -9,6 +9,7 @@
  */
 
 import dynamic from 'next/dynamic'
+import { useTranslations } from 'next-intl'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { formatDateTime } from '@/lib/utils'
 import type { WorkflowEdgeDef, WorkflowNodeDef } from '@/components/workflow/WorkflowCanvas'
@@ -28,21 +29,21 @@ import {
 
 const ReplayGraphCanvas = dynamic(() => import('./ReplayGraphCanvas'), { ssr: false })
 
-const RUN_STATUS_META: Record<string, { label: string; className: string }> = {
-  completed: { label: '成功', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-  failed: { label: '失败', className: 'bg-rose-50 text-rose-700 border-rose-200' },
-  timeout: { label: '超时', className: 'bg-amber-50 text-amber-700 border-amber-200' },
-  running: { label: '进行中', className: 'bg-sky-50 text-sky-700 border-sky-200' },
-  pending: { label: '等待中', className: 'bg-slate-50 text-slate-600 border-slate-200' },
+const RUN_STATUS_META: Record<string, { labelKey: string; className: string }> = {
+  completed: { labelKey: 'statusCompleted', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  failed: { labelKey: 'statusFailed', className: 'bg-rose-50 text-rose-700 border-rose-200' },
+  timeout: { labelKey: 'statusTimeout', className: 'bg-amber-50 text-amber-700 border-amber-200' },
+  running: { labelKey: 'statusRunning', className: 'bg-sky-50 text-sky-700 border-sky-200' },
+  pending: { labelKey: 'statusPending', className: 'bg-slate-50 text-slate-600 border-slate-200' },
 }
 
 function runStatusMeta(status: string) {
-  return RUN_STATUS_META[status] ?? { label: status, className: 'bg-slate-50 text-slate-600 border-slate-200' }
+  return RUN_STATUS_META[status] ?? { labelKey: '', className: 'bg-slate-50 text-slate-600 border-slate-200' }
 }
 
 /** 快照区块展示文案：空值显式写"（空）"，否则格式化 JSON——别让"没数据"和"没显示"混为一谈。 */
-function formatSnapshot(v: unknown): string {
-  return isEmptyValue(v) ? '（空）' : JSON.stringify(v, null, 2)
+function formatSnapshot(v: unknown, t: (k: string) => string): string {
+  return isEmptyValue(v) ? t('empty') : JSON.stringify(v, null, 2)
 }
 
 interface Props {
@@ -68,6 +69,7 @@ export default function ExecutionReplayView({
   mockRunDetails = null,
   initialRunId = null,
 }: Props) {
+  const t = useTranslations('wfReplay')
   const [runs, setRuns] = useState<ReplayRunSummary[]>([])
   const [loadingRuns, setLoadingRuns] = useState(true)
   const [runsError, setRunsError] = useState<string | null>(null)
@@ -100,7 +102,7 @@ export default function ExecutionReplayView({
         setSelectedRunId(pickDefaultRunId(list))
       })
       .catch((err) => {
-        if (!cancelled) setRunsError(err?.message || '运行列表加载失败')
+        if (!cancelled) setRunsError(err?.message || t('runsLoadFailed'))
       })
       .finally(() => {
         if (!cancelled) setLoadingRuns(false)
@@ -131,7 +133,7 @@ export default function ExecutionReplayView({
         if (!cancelled) setRunDetail(detail)
       })
       .catch((err) => {
-        if (!cancelled) setDetailError(err?.message || '运行明细加载失败')
+        if (!cancelled) setDetailError(err?.message || t('detailLoadFailed'))
       })
       .finally(() => {
         if (!cancelled) setLoadingDetail(false)
@@ -174,21 +176,21 @@ export default function ExecutionReplayView({
     const specialDesc = REPLAY_SPECIAL_DESCRIPTION[selectedNodeDef.type]
     if (specialDesc) notes.push({ icon: '🏷', text: specialDesc, className: 'text-slate-600' })
     if (!selectedNodeResult) {
-      notes.push({ icon: '⚪', text: '未执行：本次运行没有覆盖到这个节点', className: 'text-slate-400' })
+      notes.push({ icon: '⚪', text: t('noteNotRun'), className: 'text-slate-400' })
       return notes
     }
     if (selectedNodeResult.status === 'failed') {
-      notes.push({ icon: '❌', text: '失败：节点执行报错，已中断后续流程（详情见下方错误信息）', className: 'text-rose-600' })
+      notes.push({ icon: '❌', text: t('noteFailed'), className: 'text-rose-600' })
     } else if (selectedNodeResult.status === 'failed_allowed') {
-      notes.push({ icon: '⚠', text: '失败但容错：节点报错，因 allow_failure=true 未中断流程', className: 'text-amber-600' })
+      notes.push({ icon: '⚠', text: t('noteFailedTolerated'), className: 'text-amber-600' })
     } else if (selectedNodeResult.status === 'skipped') {
-      notes.push({ icon: '⏭', text: '跳过：条件分支未选中或上游未执行到，本次运行没走到这个节点', className: 'text-slate-500' })
+      notes.push({ icon: '⏭', text: t('noteSkipped'), className: 'text-slate-500' })
     }
     if (selectedNodeResult.branch) {
-      notes.push({ icon: '🔀', text: `条件分支：走了「${selectedNodeResult.branch}」`, className: 'text-indigo-600' })
+      notes.push({ icon: '🔀', text: t('noteBranch', { branch: selectedNodeResult.branch }), className: 'text-indigo-600' })
     }
     if (selectedEmptyReason) {
-      notes.push({ icon: '⚠', text: `空响应：${selectedEmptyReason}`, className: 'text-amber-700' })
+      notes.push({ icon: '⚠', text: t('noteEmpty', { reason: selectedEmptyReason }), className: 'text-amber-700' })
     }
     return notes
   }, [selectedNodeDef, selectedNodeResult, selectedEmptyReason])
@@ -222,7 +224,7 @@ export default function ExecutionReplayView({
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 shrink-0">
           <h3 className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
             <i className="fas fa-clock-rotate-left text-[11px] text-slate-400" />
-            执行回放
+            {t('replay')}
           </h3>
           <button
             data-alt="replay-close-button"
@@ -234,11 +236,11 @@ export default function ExecutionReplayView({
         </div>
         <div className="flex-1 overflow-y-auto">
           {loadingRuns ? (
-            <div className="p-4 text-center text-xs text-slate-400">加载中…</div>
+            <div className="p-4 text-center text-xs text-slate-400">{t('loading')}</div>
           ) : runsError ? (
             <div className="p-4 text-center text-xs text-rose-500">{runsError}</div>
           ) : runs.length === 0 ? (
-            <div className="p-4 text-center text-xs text-slate-400">暂无执行记录</div>
+            <div className="p-4 text-center text-xs text-slate-400">{t('noRuns')}</div>
           ) : (
             <ul>
               {runs.map((run) => {
@@ -256,7 +258,7 @@ export default function ExecutionReplayView({
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-mono text-slate-500">#{run.id}</span>
                         <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${meta.className}`}>
-                          {meta.label}
+                          {meta.labelKey ? t(meta.labelKey) : run.status}
                         </span>
                       </div>
                       <div className="mt-1 text-[11px] text-slate-400">
@@ -278,7 +280,7 @@ export default function ExecutionReplayView({
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/70">
             <div className="flex items-center gap-2 rounded-lg border border-slate-100 bg-white px-4 py-2.5 text-sm text-slate-500 shadow-soft">
               <i className="fas fa-circle-notch fa-spin text-indigo-400" />
-              执行明细加载中…
+              {t('detailLoading')}
             </div>
           </div>
         )}
@@ -292,7 +294,7 @@ export default function ExecutionReplayView({
         )}
         {!loadingRuns && runs.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="text-sm text-slate-400">该工作流还没有执行记录，无法回放</div>
+            <div className="text-sm text-slate-400">{t('noRunsCantReplay')}</div>
           </div>
         )}
         {selectedRunId != null && runDetail && (
@@ -316,25 +318,25 @@ export default function ExecutionReplayView({
             onClick={handleFocusEmptyResponse}
             className="mb-3 flex w-full items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-700 hover:bg-amber-100 transition"
           >
-            <span>⚠ 空响应节点：{emptyResponseNodeIds.length} 个</span>
-            <span className="text-[10px] text-amber-500">点击逐个聚焦</span>
+            <span>{t('emptyRespNodes', { n: emptyResponseNodeIds.length })}</span>
+            <span className="text-[10px] text-amber-500">{t('clickFocusEach')}</span>
           </button>
         )}
         {selectedNodeDef ? (
           <div data-alt="replay-node-detail">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">节点详情</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{t('nodeDetail')}</div>
             <div className="text-sm font-medium text-slate-800 mb-1 flex items-center gap-1.5">
               {selectedNodeDef.label || selectedNodeDef.id}
               {selectedNodeResult && isEmptyResponseNode(selectedNodeResult.node_type ?? null, selectedNodeResult.status, selectedNodeResult.output) && (
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-medium border bg-amber-50 text-amber-700 border-amber-200">
-                  ⚠ 空响应
+                  {t('emptyResp')}
                 </span>
               )}
             </div>
-            <div className="text-xs text-slate-500 mb-1">类型：{selectedNodeDef.type}</div>
+            <div className="text-xs text-slate-500 mb-1">{t('typeLabel', { type: selectedNodeDef.type })}</div>
             {markerNotes.length > 0 && (
               <div className="mt-1 mb-2 space-y-1 rounded-lg border border-indigo-100 bg-indigo-50/50 p-2">
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-indigo-400">标记说明</div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-indigo-400">{t('markNote')}</div>
                 {markerNotes.map((n, i) => (
                   <div key={i} className={`text-xs ${n.className}`}>
                     {n.icon} {n.text}
@@ -354,7 +356,7 @@ export default function ExecutionReplayView({
             )}
             {selectedNodeDef.config != null && Object.keys(selectedNodeDef.config).length > 0 && (
               <details className="mt-2">
-                <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-600">完整配置</summary>
+                <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-600">{t('fullConfig')}</summary>
                 <pre className="mt-1 p-2 bg-slate-50 rounded text-[11px] font-mono overflow-auto max-h-48">
                   {JSON.stringify(selectedNodeDef.config, null, 2)}
                 </pre>
@@ -362,16 +364,16 @@ export default function ExecutionReplayView({
             )}
             {selectedNodeResult ? (
               <>
-                <div className="text-xs text-slate-500 mb-1">状态：{selectedNodeResult.status}</div>
+                <div className="text-xs text-slate-500 mb-1">{t('nodeStatus', { status: selectedNodeResult.status })}</div>
                 {selectedNodeResult.status === 'skipped' ? (
-                  <div className="text-xs text-slate-500 mb-1">耗时：—（跳过）</div>
+                  <div className="text-xs text-slate-500 mb-1">{t('elapsedSkipped')}</div>
                 ) : (
                   selectedNodeResult.elapsed_ms != null && (
-                    <div className="text-xs text-slate-500 mb-1">耗时：{selectedNodeResult.elapsed_ms}ms</div>
+                    <div className="text-xs text-slate-500 mb-1">{t('elapsedMs', { ms: selectedNodeResult.elapsed_ms })}</div>
                   )
                 )}
                 {selectedNodeResult.branch && (
-                  <div className="text-xs text-slate-500 mb-1">走的分支：{selectedNodeResult.branch}</div>
+                  <div className="text-xs text-slate-500 mb-1">{t('branchTaken', { branch: selectedNodeResult.branch })}</div>
                 )}
                 {selectedNodeResult.error && (
                   <div className="mt-2 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg p-2 font-mono whitespace-pre-wrap">
@@ -379,46 +381,46 @@ export default function ExecutionReplayView({
                   </div>
                 )}
                 <details className="mt-2">
-                  <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-600">入参快照</summary>
+                  <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-600">{t('inputSnapshot')}</summary>
                   <pre className="mt-1 p-2 bg-slate-50 rounded text-[11px] font-mono overflow-auto max-h-48">
-                    {formatSnapshot(selectedNodeResult.input)}
+                    {formatSnapshot(selectedNodeResult.input, t)}
                   </pre>
                 </details>
                 <details className="mt-2" open>
-                  <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-600">出参快照</summary>
+                  <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-600">{t('outputSnapshot')}</summary>
                   <pre className="mt-1 p-2 bg-slate-50 rounded text-[11px] font-mono overflow-auto max-h-48">
-                    {formatSnapshot(selectedNodeResult.output)}
+                    {formatSnapshot(selectedNodeResult.output, t)}
                   </pre>
                 </details>
               </>
             ) : (
-              <div className="mt-2 text-xs text-slate-400">这次运行没走到这个节点。</div>
+              <div className="mt-2 text-xs text-slate-400">{t('notReached')}</div>
             )}
           </div>
         ) : (
           <div data-alt="replay-run-summary">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">运行总览</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{t('runOverview')}</div>
             {runDetail ? (
               <>
                 <div className="text-xs text-slate-500 mb-1">
-                  状态：{runStatusMeta(runDetail.status).label}
+                  {t('runStatus', { label: (() => { const m = runStatusMeta(runDetail.status); return m.labelKey ? t(m.labelKey) : runDetail.status })() })}
                 </div>
                 {runDetail.elapsed_ms != null && (
-                  <div className="text-xs text-slate-500 mb-1">总耗时：{runDetail.elapsed_ms}ms</div>
+                  <div className="text-xs text-slate-500 mb-1">{t('totalElapsed', { ms: runDetail.elapsed_ms })}</div>
                 )}
-                <div className="text-xs text-slate-500 mb-1">开始：{formatDateTime(runDetail.started_at)}</div>
+                <div className="text-xs text-slate-500 mb-1">{t('startedAt', { time: formatDateTime(runDetail.started_at) })}</div>
                 {emptyResponseNodeIds.length === 0 && (
-                  <div className="text-xs text-slate-500 mb-1">空响应节点：0 个</div>
+                  <div className="text-xs text-slate-500 mb-1">{t('emptyRespCount', { n: 0 })}</div>
                 )}
                 {runDetail.error_message && (
                   <div className="mt-2 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg p-2 font-mono whitespace-pre-wrap">
                     {runDetail.error_message}
                   </div>
                 )}
-                <div className="mt-3 text-[11px] text-slate-400">点击图中节点查看该节点执行详情。</div>
+                <div className="mt-3 text-[11px] text-slate-400">{t('clickNodeHint')}</div>
               </>
             ) : (
-              <div className="text-xs text-slate-400">选择左侧一次运行开始回放。</div>
+              <div className="text-xs text-slate-400">{t('selectRunHint')}</div>
             )}
           </div>
         )}

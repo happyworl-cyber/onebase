@@ -29,5 +29,5 @@ tcpdump 显示热路径事务为：`BEGIN` → `set_config`（Parse+Execute）�
 
 ## 风险
 
-- 已以 `WITH` 开头的 SQL：helper 合并为 `WITH __onebase_sess AS (...), …`。
+- 已以 `WITH` 开头的 SQL：helper 合并为 `WITH __planeos_sess AS (...), …`。
 - raw SQL 改表与本改动无关。

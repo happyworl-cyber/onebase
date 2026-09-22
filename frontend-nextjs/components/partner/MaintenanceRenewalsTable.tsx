@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useTranslations } from 'next-intl';
 import {
   Alert,
   AlertDescription,
@@ -65,6 +66,7 @@ interface PaginatedResponse {
 }
 
 export function MaintenanceRenewalsTable() {
+  const t = useTranslations('partnerMaintRenewals');
   const [renewals, setRenewals] = useState<MaintenanceRenewal[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -104,7 +106,7 @@ export function MaintenanceRenewalsTable() {
       setRenewals(response.data.renewals);
       setTotalPages(response.data.pagination.total_pages);
     } catch (err: any) {
-      setError(err.message || '加载失败');
+      setError(err.message || t('loadFailed'));
     } finally {
       setIsLoading(false);
     }
@@ -131,7 +133,7 @@ export function MaintenanceRenewalsTable() {
       setMarkPaidDialog({ open: false, renewal: null });
       setPaymentReference('');
     } catch (err: any) {
-      setError(err.message || '标记支付失败');
+      setError(err.message || t('markPaidFailed'));
     } finally {
       setIsSubmitting(false);
     }
@@ -139,26 +141,26 @@ export function MaintenanceRenewalsTable() {
 
   // 状态徽章
   const getStatusBadge = (status: string) => {
-    const variants: Record<string, { variant: any; icon: any; label: string }> = {
+    const variants: Record<string, { variant: any; icon: any; labelKey: string }> = {
       pending: {
         variant: 'secondary',
         icon: Clock,
-        label: '待支付',
+        labelKey: 'statusPending',
       },
       paid: {
         variant: 'default',
         icon: CheckCircle,
-        label: '已支付',
+        labelKey: 'statusPaid',
       },
       overdue: {
         variant: 'destructive',
         icon: AlertTriangle,
-        label: '逾期',
+        labelKey: 'statusOverdue',
       },
       cancelled: {
         variant: 'outline',
         icon: XCircle,
-        label: '已取消',
+        labelKey: 'statusCancelled',
       },
     };
 
@@ -168,7 +170,7 @@ export function MaintenanceRenewalsTable() {
     return (
       <Badge variant={config.variant} className="flex items-center gap-1">
         <Icon className="h-3 w-3" />
-        {config.label}
+        {t(config.labelKey)}
       </Badge>
     );
   };
@@ -187,24 +189,24 @@ export function MaintenanceRenewalsTable() {
       <div className="flex gap-4 items-center">
         <div className="flex-1">
           <Label htmlFor="status-filter" className="sr-only">
-            筛选状态
+            {t('filterStatus')}
           </Label>
           <Select value={statusFilter} onValueChange={setStatusFilter}>
             <SelectTrigger id="status-filter" className="w-48">
-              <SelectValue placeholder="筛选状态" />
+              <SelectValue placeholder={t('filterStatus')} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部状态</SelectItem>
-              <SelectItem value="pending">待支付</SelectItem>
-              <SelectItem value="paid">已支付</SelectItem>
-              <SelectItem value="overdue">逾期</SelectItem>
-              <SelectItem value="cancelled">已取消</SelectItem>
+              <SelectItem value="all">{t('statusAll')}</SelectItem>
+              <SelectItem value="pending">{t('statusPending')}</SelectItem>
+              <SelectItem value="paid">{t('statusPaid')}</SelectItem>
+              <SelectItem value="overdue">{t('statusOverdue')}</SelectItem>
+              <SelectItem value="cancelled">{t('statusCancelled')}</SelectItem>
             </SelectContent>
           </Select>
         </div>
 
         <Button onClick={loadRenewals} variant="outline">
-          刷新
+          {t('refresh')}
         </Button>
       </div>
 
@@ -222,7 +224,7 @@ export function MaintenanceRenewalsTable() {
         </div>
       ) : renewals.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
-          暂无维护费续费记录
+          {t('noRenewalRecords')}
         </div>
       ) : (
         <>
@@ -231,14 +233,14 @@ export function MaintenanceRenewalsTable() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>客户信息</TableHead>
-                  <TableHead>版本</TableHead>
-                  <TableHead>续费年份</TableHead>
-                  <TableHead>服务周期</TableHead>
-                  <TableHead className="text-right">维护费</TableHead>
-                  <TableHead className="text-right">佣金</TableHead>
-                  <TableHead>支付状态</TableHead>
-                  <TableHead>操作</TableHead>
+                  <TableHead>{t('customerInfo')}</TableHead>
+                  <TableHead>{t('edition')}</TableHead>
+                  <TableHead>{t('renewalYear')}</TableHead>
+                  <TableHead>{t('servicePeriod')}</TableHead>
+                  <TableHead className="text-right">{t('maintenanceFee')}</TableHead>
+                  <TableHead className="text-right">{t('commission')}</TableHead>
+                  <TableHead>{t('paymentStatus')}</TableHead>
+                  <TableHead>{t('actions')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -261,7 +263,7 @@ export function MaintenanceRenewalsTable() {
                       <TableCell>
                         <Badge variant="outline">{renewal.edition}</Badge>
                       </TableCell>
-                      <TableCell>第 {renewal.renewal_year} 年</TableCell>
+                      <TableCell>{t('yearOrdinal', { n: renewal.renewal_year })}</TableCell>
                       <TableCell>
                         <div className="text-sm">
                           <div>
@@ -270,14 +272,14 @@ export function MaintenanceRenewalsTable() {
                             )}
                           </div>
                           <div className="text-muted-foreground">
-                            至{' '}
+                            {t('until')}{' '}
                             {new Intl.DateTimeFormat('zh-CN').format(
                               new Date(renewal.period_end)
                             )}
                           </div>
                           {isExpiringSoon && (
                             <div className="text-orange-600 font-medium">
-                              {daysRemaining} 天后到期
+                              {t('expiresInDays', { n: daysRemaining })}
                             </div>
                           )}
                         </div>
@@ -306,7 +308,7 @@ export function MaintenanceRenewalsTable() {
                               setPaymentReference('');
                             }}
                           >
-                            标记已支付
+                            {t('markPaid')}
                           </Button>
                         )}
                         {renewal.payment_status === 'paid' && renewal.payment_reference && (
@@ -331,11 +333,11 @@ export function MaintenanceRenewalsTable() {
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={page === 1}
               >
-                上一页
+                {t('previousPage')}
               </Button>
               <div className="flex items-center gap-2">
                 <span className="text-sm text-muted-foreground">
-                  第 {page} / {totalPages} 页
+                  {t('pageOf', { page, totalPages })}
                 </span>
               </div>
               <Button
@@ -344,7 +346,7 @@ export function MaintenanceRenewalsTable() {
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={page === totalPages}
               >
-                下一页
+                {t('nextPage')}
               </Button>
             </div>
           )}
@@ -360,16 +362,16 @@ export function MaintenanceRenewalsTable() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>标记维护费已支付</DialogTitle>
+            <DialogTitle>{t('markMaintenancePaidTitle')}</DialogTitle>
             <DialogDescription>
-              确认收到客户「{markPaidDialog.renewal?.customer_name}」的维护费支付？
+              {t('confirmReceivedPayment', { customer: markPaidDialog.renewal?.customer_name ?? '' })}
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-4">
             <div className="bg-muted rounded-lg p-4 space-y-2">
               <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">维护费金额</span>
+                <span className="text-muted-foreground">{t('maintenanceFeeAmount')}</span>
                 <span className="font-semibold">
                   ¥
                   {markPaidDialog.renewal
@@ -378,7 +380,7 @@ export function MaintenanceRenewalsTable() {
                 </span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">您的佣金</span>
+                <span className="text-muted-foreground">{t('yourCommission')}</span>
                 <span className="font-semibold text-primary">
                   ¥
                   {markPaidDialog.renewal
@@ -389,10 +391,10 @@ export function MaintenanceRenewalsTable() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="payment-reference">支付凭证（可选）</Label>
+              <Label htmlFor="payment-reference">{t('paymentReferenceOptional')}</Label>
               <Input
                 id="payment-reference"
-                placeholder="例：银行转账凭证 20260901-001"
+                placeholder={t('paymentReferencePlaceholder')}
                 value={paymentReference}
                 onChange={(e) => setPaymentReference(e.target.value)}
               />
@@ -405,11 +407,11 @@ export function MaintenanceRenewalsTable() {
               onClick={() => setMarkPaidDialog({ open: false, renewal: null })}
               disabled={isSubmitting}
             >
-              取消
+              {t('cancel')}
             </Button>
             <Button onClick={handleMarkPaid} disabled={isSubmitting}>
               {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              确认已支付
+              {t('confirmPaid')}
             </Button>
           </DialogFooter>
         </DialogContent>

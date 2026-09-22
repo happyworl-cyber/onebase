@@ -1,15 +1,17 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import { usePathname, useRouter } from 'next/navigation'
 import { useAppStore } from '@/lib/store'
 import { clearAuthToken } from '@/lib/auth'
+import InlineLocaleSwitcher from '@/components/InlineLocaleSwitcher'
 import { useUiCapabilities, type UiCapabilities } from '@/lib/permissions'
 import SchemaSelector from './SchemaSelector'
 
 interface MenuItem {
   id: string
-  name: string
+  nameKey: string
   icon: string
   path?: string
   badge?: string
@@ -23,7 +25,7 @@ interface MenuItem {
 }
 
 interface SubMenuItem {
-  name: string
+  nameKey: string
   path: string
   badge?: string
   comingSoon?: boolean
@@ -42,71 +44,71 @@ interface SubMenuItem {
 const menuStructure: MenuItem[] = [
   {
     id: 'home',
-    name: '首页',
+    nameKey: 'navHome',
     icon: 'fa-home',
     path: '/dashboard',
   },
   {
     id: 'data',
-    name: '数据管理',
+    nameKey: 'grpData',
     icon: 'fa-database',
     children: [
-      { name: 'Schema 可视化', path: '/dashboard/visualizer' },
-      { name: '数据表编辑器', path: '/dashboard/tables', badge: 'New' },
-      { name: '表结构设计', path: '/dashboard/table-designer', badge: 'New', requires: 'canRunDdl' },
-      { name: 'SQL 编辑器', path: '/dashboard/query', requires: 'canRunAnySql' },
-      { name: '数据导入', path: '/dashboard/import', badge: 'New', requires: 'canRunDdl' },
-      { name: '事务管理', path: '/dashboard/transaction', requires: 'canRunAnySql' },
-      { name: '备份恢复', path: '/dashboard/backup', requires: 'canExport' },
-      { name: '扩展管理', path: '/dashboard/extensions', badge: 'New', requires: 'canRunDdl' },
+      { nameKey: 'navVisualizer', path: '/dashboard/visualizer' },
+      { nameKey: 'navTables', path: '/dashboard/tables', badge: 'New' },
+      { nameKey: 'navTableDesigner', path: '/dashboard/table-designer', badge: 'New', requires: 'canRunDdl' },
+      { nameKey: 'navQuery', path: '/dashboard/query', requires: 'canRunAnySql' },
+      { nameKey: 'navImport', path: '/dashboard/import', badge: 'New', requires: 'canRunDdl' },
+      { nameKey: 'navTransaction', path: '/dashboard/transaction', requires: 'canRunAnySql' },
+      { nameKey: 'navBackup', path: '/dashboard/backup', requires: 'canExport' },
+      { nameKey: 'navExtensions', path: '/dashboard/extensions', badge: 'New', requires: 'canRunDdl' },
     ],
   },
   {
     id: 'api',
-    name: 'API & 集成',
+    nameKey: 'grpApi',
     icon: 'fa-plug',
     children: [
-      { name: 'API 文档', path: '/dashboard/api', badge: 'New' },
-      { name: 'Webhook 管理', path: '/dashboard/webhooks', requires: 'canManageWebhooks' },
-      { name: 'ES 反向代理', path: '/dashboard/es-connections', requires: 'canManageApiKeys' },
-      { name: 'API 测试', path: '/dashboard/test' },
+      { nameKey: 'navApiDoc', path: '/dashboard/api', badge: 'New' },
+      { nameKey: 'navWebhooks', path: '/dashboard/webhooks', requires: 'canManageWebhooks' },
+      { nameKey: 'navEs', path: '/dashboard/es-connections', requires: 'canManageApiKeys' },
+      { nameKey: 'navApiTest', path: '/dashboard/test' },
     ],
   },
   {
     id: 'automation',
-    name: '自动化',
+    nameKey: 'grpAutomation',
     icon: 'fa-bolt',
     children: [
-      { name: '函数管理', path: '/dashboard/functions' },
-      { name: 'RPC 调用', path: '/dashboard/rpc' },
-      { name: '触发器管理', path: '/dashboard/triggers' },
-      { name: '工作流', path: '/dashboard/workflows', requires: 'canManageWebhooks' },
-      { name: '定时任务', path: '/dashboard/scheduled-tasks', requires: 'canManageWebhooks' },
+      { nameKey: 'navFunctions', path: '/dashboard/functions' },
+      { nameKey: 'navRpc', path: '/dashboard/rpc' },
+      { nameKey: 'navTriggers', path: '/dashboard/triggers' },
+      { nameKey: 'navWorkflows', path: '/dashboard/workflows', requires: 'canManageWebhooks' },
+      { nameKey: 'navScheduled', path: '/dashboard/scheduled-tasks', requires: 'canManageWebhooks' },
     ],
   },
   {
     id: 'security',
-    name: '安全与权限',
+    nameKey: 'grpSecurity',
     icon: 'fa-shield-alt',
     requires: 'canManageRbac',
     children: [
-      { name: '权限管理', path: '/dashboard/rls', badge: 'RBAC' },
-      { name: '角色管理', path: '/dashboard/roles', badge: 'RBAC' },
-      { name: 'RPC 授权', path: '/dashboard/rpc-acl', badge: 'RBAC' },
+      { nameKey: 'navRls', path: '/dashboard/rls', badge: 'RBAC' },
+      { nameKey: 'navRoles', path: '/dashboard/roles', badge: 'RBAC' },
+      { nameKey: 'navRpcAcl', path: '/dashboard/rpc-acl', badge: 'RBAC' },
     ],
   },
   {
     id: 'monitor',
-    name: '运维监控',
+    nameKey: 'grpMonitor',
     icon: 'fa-chart-line',
     children: [
-      { name: '数据库监控', path: '/dashboard/monitor', badge: 'New', requires: 'canViewMonitor' },
-      { name: '数据库连接', path: '/dashboard/connections' },
-      { name: '索引管理', path: '/dashboard/indexes', requires: 'canRunDdl' },
-      { name: '查询性能', path: '/dashboard/query-analyzer', requires: 'canRunAnySql' },
-      { name: '慢查询日志', path: '/dashboard/slow-queries', requires: 'canRunAnySql' },
-      { name: 'Schema 迁移', path: '/dashboard/migrations', comingSoon: true },
-      { name: '性能顾问', path: '/dashboard/advisor', comingSoon: true },
+      { nameKey: 'navMonitor', path: '/dashboard/monitor', badge: 'New', requires: 'canViewMonitor' },
+      { nameKey: 'navConnections', path: '/dashboard/connections' },
+      { nameKey: 'navIndexes', path: '/dashboard/indexes', requires: 'canRunDdl' },
+      { nameKey: 'navQueryAnalyzer', path: '/dashboard/query-analyzer', requires: 'canRunAnySql' },
+      { nameKey: 'navSlowQueries', path: '/dashboard/slow-queries', requires: 'canRunAnySql' },
+      { nameKey: 'navMigrations', path: '/dashboard/migrations', comingSoon: true },
+      { nameKey: 'navAdvisor', path: '/dashboard/advisor', comingSoon: true },
     ],
   },
 ]
@@ -133,6 +135,7 @@ function filterMenuByCapabilities(menu: MenuItem[], caps: UiCapabilities): MenuI
 }
 
 export default function SidebarV3() {
+  const t = useTranslations('dashboardSidebar')
   const pathname = usePathname()
   const router = useRouter()
   const [activeGroup, setActiveGroup] = useState<string>('')
@@ -253,7 +256,7 @@ export default function SidebarV3() {
                   className="w-full text-xs text-blue-600 hover:text-blue-700 flex items-center justify-center space-x-1 mt-1 py-1.5 hover:bg-blue-100/50 rounded transition-colors"
                 >
                   <i className="fas fa-arrow-left"></i>
-                  <span>返回项目列表</span>
+                  <span>{t('backToList')}</span>
                 </button>
               )}
             </div>
@@ -261,14 +264,14 @@ export default function SidebarV3() {
             <div className="bg-yellow-50 rounded-lg p-3 border border-yellow-200">
               <p className="text-xs text-yellow-700 flex items-center">
                 <i className="fas fa-exclamation-triangle mr-2"></i>
-                未选择项目
+                {t('noProject')}
               </p>
               {isSuperAdmin && (
                 <button
                   onClick={handleBackToPlatform}
                   className="w-full text-xs text-yellow-700 hover:text-yellow-800 flex items-center justify-center space-x-1 mt-2 py-1.5 hover:bg-yellow-100 rounded transition-colors"
                 >
-                  <span>前往选择项目</span>
+                  <span>{t('goSelectProject')}</span>
                   <i className="fas fa-arrow-right"></i>
                 </button>
               )}
@@ -305,7 +308,7 @@ export default function SidebarV3() {
                     ? 'text-blue-600'
                     : 'text-gray-400'
                 }`}></i>
-                <span className="flex-1 text-left">{item.name}</span>
+                <span className="flex-1 text-left">{t(item.nameKey)}</span>
                 {item.children && activeGroup === item.id && (
                   <i className="fas fa-chevron-right text-[10px] text-gray-400"></i>
                 )}
@@ -326,9 +329,9 @@ export default function SidebarV3() {
               </span>
             </div>
             <div className="flex-1 min-w-0 text-left">
-              <p className="text-xs font-medium text-gray-900 truncate">{user?.username || '用户'}</p>
+              <p className="text-xs font-medium text-gray-900 truncate">{user?.username || t('user')}</p>
               <p className="text-[11px] text-gray-500 truncate">
-                {isSuperAdmin ? '超级管理员' : '用户'}
+                {isSuperAdmin ? t('superAdmin') : t('user')}
               </p>
             </div>
             <i className={`fas fa-chevron-down text-gray-400 text-[10px] flex-shrink-0 transition-transform ${showUserMenu ? 'rotate-180' : ''}`}></i>
@@ -347,13 +350,13 @@ export default function SidebarV3() {
                   className="w-full flex items-center space-x-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
                 >
                   <i className="fas fa-user text-xs w-4 text-gray-400"></i>
-                  <span>账号设置</span>
+                  <span>{t('accountSettings')}</span>
                 </button>
                 <button
                   className="w-full flex items-center space-x-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
                 >
                   <i className="fas fa-cog text-xs w-4 text-gray-400"></i>
-                  <span>设置</span>
+                  <span>{t('settings')}</span>
                 </button>
                 {isSuperAdmin && (
                   <>
@@ -363,17 +366,19 @@ export default function SidebarV3() {
                       className="w-full flex items-center space-x-2.5 px-3 py-2 text-sm text-blue-600 hover:bg-blue-50 transition-colors"
                     >
                       <i className="fas fa-building text-xs w-4"></i>
-                      <span>平台管理</span>
+                      <span>{t('platformAdmin')}</span>
                     </button>
                   </>
                 )}
+                <div className="border-t border-gray-100 my-1"></div>
+                <InlineLocaleSwitcher onChosen={() => setShowUserMenu(false)} />
                 <div className="border-t border-gray-100 my-1"></div>
                 <button
                   onClick={handleLogout}
                   className="w-full flex items-center space-x-2.5 px-3 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
                 >
                   <i className="fas fa-sign-out-alt text-xs w-4"></i>
-                  <span>退出登录</span>
+                  <span>{t('logout')}</span>
                 </button>
               </div>
             </div>
@@ -387,7 +392,7 @@ export default function SidebarV3() {
           {/* 子菜单标题 */}
           <div className="h-[60px] flex items-center px-4 border-b border-gray-200">
             <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              {currentMenu.name}
+              {t(currentMenu.nameKey)}
             </h2>
           </div>
 
@@ -407,7 +412,7 @@ export default function SidebarV3() {
                       : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
                     }`}
                 >
-                  <span>{subItem.name}</span>
+                  <span>{t(subItem.nameKey)}</span>
                   {subItem.comingSoon && (
                     <span className="text-[10px] px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded font-medium">
                       Soon
@@ -430,7 +435,7 @@ export default function SidebarV3() {
               className="flex items-center space-x-2 px-3 py-2 text-xs text-gray-600 hover:text-gray-900 transition-colors"
             >
               <i className="fas fa-question-circle"></i>
-              <span>帮助文档</span>
+              <span>{t('helpDocs')}</span>
             </a>
           </div>
         </div>

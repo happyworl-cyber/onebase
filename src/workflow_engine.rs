@@ -1511,8 +1511,10 @@ pub fn topological_sort(def: &WorkflowDefinition) -> Result<Vec<String>> {
     }
 
     if sorted.len() != def.nodes.len() {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "wfeng_dag_cycle",
             "工作流 DAG 包含循环依赖，无法执行".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -1621,13 +1623,19 @@ fn expand_loop_region(
         return Ok(cached.clone());
     }
     if !visiting.insert(loop_id.to_string()) {
-        return Err(AppError::InvalidQuery(format!(
-            "loop 节点嵌套关系形成循环: '{loop_id}'"
-        )));
+        return Err(AppError::validation(
+            "wfeng_loop_nested_cycle",
+            format!("loop 节点嵌套关系形成循环: '{loop_id}'"),
+            serde_json::json!({ "loop_id": loop_id }),
+        ));
     }
 
     let direct = direct_regions.get(loop_id).ok_or_else(|| {
-        AppError::InvalidQuery(format!("内部错误：loop '{loop_id}' 缺少直接循环区域"))
+        AppError::validation(
+            "wfeng_loop_region_missing",
+            format!("内部错误：loop '{loop_id}' 缺少直接循环区域"),
+            serde_json::json!({ "loop_id": loop_id }),
+        )
     })?;
     let mut expanded = direct.body_nodes.clone();
     for node_id in &direct.body_nodes {
@@ -1637,9 +1645,11 @@ fn expand_loop_region(
             .unwrap_or(false)
         {
             if !direct_regions.contains_key(node_id) {
-                return Err(AppError::InvalidQuery(format!(
-                    "loop 节点 '{loop_id}' 的循环体包含未接线的嵌套 loop '{node_id}'"
-                )));
+                return Err(AppError::validation(
+                    "wfeng_loop_nested_unwired",
+                    format!("loop 节点 '{loop_id}' 的循环体包含未接线的嵌套 loop '{node_id}'"),
+                    serde_json::json!({ "loop_id": loop_id, "node_id": node_id }),
+                ));
             }
             expanded.extend(expand_loop_region(
                 node_id,
@@ -1682,20 +1692,28 @@ fn plan_loops(def: &WorkflowDefinition) -> Result<LoopPlan> {
             continue;
         }
         if !edge.is_loop_back() {
-            return Err(AppError::InvalidQuery(format!(
-                "回边 {} -> {} 必须同时设置 edge_type='loop_back' 与 target_handle='back'",
-                edge.from, edge.to
-            )));
+            return Err(AppError::validation(
+                "wfeng_loop_back_edge_invalid",
+                format!(
+                    "回边 {} -> {} 必须同时设置 edge_type='loop_back' 与 target_handle='back'",
+                    edge.from, edge.to
+                ),
+                serde_json::json!({ "from": edge.from, "to": edge.to }),
+            ));
         }
         if !node_by_id
             .get(edge.to.as_str())
             .map(|n| n.node_type == NodeType::Loop)
             .unwrap_or(false)
         {
-            return Err(AppError::InvalidQuery(format!(
-                "loop_back 回边的目标 '{}' 不是 loop 节点",
-                edge.to
-            )));
+            return Err(AppError::validation(
+                "wfeng_loop_back_target_not_loop",
+                format!(
+                    "loop_back 回边的目标 '{}' 不是 loop 节点",
+                    edge.to
+                ),
+                serde_json::json!({ "to": edge.to }),
+            ));
         }
     }
     if loop_ids.is_empty() {
@@ -1722,26 +1740,38 @@ fn plan_loops(def: &WorkflowDefinition) -> Result<LoopPlan> {
         }
 
         if body_targets.is_empty() {
-            return Err(AppError::InvalidQuery(format!(
-                "loop 节点 '{loop_id}' 缺少循环体（body）出边"
-            )));
+            return Err(AppError::validation(
+                "wfeng_loop_missing_body_edge",
+                format!("loop 节点 '{loop_id}' 缺少循环体（body）出边"),
+                serde_json::json!({ "loop_id": loop_id }),
+            ));
         }
         if body_targets.len() > 1 {
-            return Err(AppError::InvalidQuery(format!(
-                "loop 节点 '{loop_id}' 只能有一条 body 出边（当前 {} 条）",
-                body_targets.len()
-            )));
+            return Err(AppError::validation(
+                "wfeng_loop_multiple_body_edges",
+                format!(
+                    "loop 节点 '{loop_id}' 只能有一条 body 出边（当前 {} 条）",
+                    body_targets.len()
+                ),
+                serde_json::json!({ "loop_id": loop_id, "count": body_targets.len() }),
+            ));
         }
         if back_edges.is_empty() {
-            return Err(AppError::InvalidQuery(format!(
-                "loop 节点 '{loop_id}' 缺少回边（loop_back），循环体末节点须连回本节点"
-            )));
+            return Err(AppError::validation(
+                "wfeng_loop_missing_back_edge",
+                format!("loop 节点 '{loop_id}' 缺少回边（loop_back），循环体末节点须连回本节点"),
+                serde_json::json!({ "loop_id": loop_id }),
+            ));
         }
         if back_edges.len() > 1 {
-            return Err(AppError::InvalidQuery(format!(
-                "loop 节点 '{loop_id}' 只能有一条回边（loop_back），当前 {} 条",
-                back_edges.len()
-            )));
+            return Err(AppError::validation(
+                "wfeng_loop_multiple_back_edges",
+                format!(
+                    "loop 节点 '{loop_id}' 只能有一条回边（loop_back），当前 {} 条",
+                    back_edges.len()
+                ),
+                serde_json::json!({ "loop_id": loop_id, "count": back_edges.len() }),
+            ));
         }
 
         let done_count = def
@@ -1750,9 +1780,11 @@ fn plan_loops(def: &WorkflowDefinition) -> Result<LoopPlan> {
             .filter(|e| e.from == loop_id && e.branch.as_deref() == Some(LOOP_DONE_BRANCH))
             .count();
         if done_count > 1 {
-            return Err(AppError::InvalidQuery(format!(
-                "loop 节点 '{loop_id}' 只能有一条 done 出边（当前 {done_count} 条）"
-            )));
+            return Err(AppError::validation(
+                "wfeng_loop_multiple_done_edges",
+                format!("loop 节点 '{loop_id}' 只能有一条 done 出边（当前 {done_count} 条）"),
+                serde_json::json!({ "loop_id": loop_id, "count": done_count }),
+            ));
         }
         if let Some(edge) = def.edges.iter().find(|e| {
             e.from == loop_id
@@ -1762,10 +1794,14 @@ fn plan_loops(def: &WorkflowDefinition) -> Result<LoopPlan> {
                     Some(LOOP_BODY_BRANCH) | Some(LOOP_DONE_BRANCH)
                 )
         }) {
-            return Err(AppError::InvalidQuery(format!(
-                "loop 节点 '{loop_id}' 存在非法出口到 '{}'（只允许 body/done）",
-                edge.to
-            )));
+            return Err(AppError::validation(
+                "wfeng_loop_illegal_exit",
+                format!(
+                    "loop 节点 '{loop_id}' 存在非法出口到 '{}'（只允许 body/done）",
+                    edge.to
+                ),
+                serde_json::json!({ "loop_id": loop_id, "to": edge.to }),
+            ));
         }
 
         // 求直接循环区域。嵌套 loop 在父区域中视为原子节点：只沿其 done 出口继续，
@@ -1815,14 +1851,20 @@ fn plan_loops(def: &WorkflowDefinition) -> Result<LoopPlan> {
 
         let body_nodes: HashSet<String> = forward.intersection(&reverse).cloned().collect();
         if !body_nodes.contains(&body_targets[0]) || !body_nodes.contains(back_source) {
-            return Err(AppError::InvalidQuery(format!(
-                "loop 节点 '{loop_id}' 的 body 入口无法沿闭合路径到达回边源 '{back_source}'"
-            )));
+            return Err(AppError::validation(
+                "wfeng_loop_body_unreachable",
+                format!("loop 节点 '{loop_id}' 的 body 入口无法沿闭合路径到达回边源 '{back_source}'"),
+                serde_json::json!({ "loop_id": loop_id, "back_source": back_source }),
+            ));
         }
 
         // 模式校验。
         let loop_node = node_by_id.get(loop_id).ok_or_else(|| {
-            AppError::InvalidQuery(format!("内部错误：loop 节点 '{loop_id}' 未找到"))
+            AppError::validation(
+                "wfeng_loop_node_not_found",
+                format!("内部错误：loop 节点 '{loop_id}' 未找到"),
+                serde_json::json!({ "loop_id": loop_id }),
+            )
         })?;
         validate_loop_config(loop_id, &loop_node.config)?;
 
@@ -1836,9 +1878,13 @@ fn plan_loops(def: &WorkflowDefinition) -> Result<LoopPlan> {
                 if let Some(body_node) = node_by_id.get(body_id.as_str()) {
                     let cfg_text = serde_json::to_string(&body_node.config).unwrap_or_default();
                     if cfg_text.contains("loop.results") {
-                        return Err(AppError::InvalidQuery(format!(
-                            "loop 节点 '{loop_id}'（并发 for_each）的循环体节点 '{body_id}' 不可引用 {{{{loop.results}}}}（并发模式下跨轮结果不可见）"
-                        )));
+                        return Err(AppError::validation(
+                            "wfeng_loop_concurrent_results_ref",
+                            format!(
+                                "loop 节点 '{loop_id}'（并发 for_each）的循环体节点 '{body_id}' 不可引用 {{{{loop.results}}}}（并发模式下跨轮结果不可见）"
+                            ),
+                            serde_json::json!({ "loop_id": loop_id, "body_id": body_id }),
+                        ));
                     }
                 }
             }
@@ -1879,9 +1925,11 @@ fn plan_loops(def: &WorkflowDefinition) -> Result<LoopPlan> {
             let b_nested_in_a = a_nodes.contains(b) && b_nodes.is_subset(a_nodes);
             let a_nested_in_b = b_nodes.contains(a) && a_nodes.is_subset(b_nodes);
             if !b_nested_in_a && !a_nested_in_b {
-                return Err(AppError::InvalidQuery(format!(
-                    "loop 节点 '{a}' 与 '{b}' 的循环体存在非嵌套共享节点"
-                )));
+                return Err(AppError::validation(
+                    "wfeng_loop_regions_overlap",
+                    format!("loop 节点 '{a}' 与 '{b}' 的循环体存在非嵌套共享节点"),
+                    serde_json::json!({ "a": a, "b": b }),
+                ));
             }
         }
     }
@@ -1898,30 +1946,42 @@ fn plan_loops(def: &WorkflowDefinition) -> Result<LoopPlan> {
                 let is_own_back = from_inside && edge.to == loop_id;
                 let is_nested_back = from_inside && to_inside;
                 if !is_own_back && !is_nested_back && (from_inside || to_inside) {
-                    return Err(AppError::InvalidQuery(format!(
-                        "loop 节点 '{loop_id}' 存在跨区域回边 '{} -> {}'",
-                        edge.from, edge.to
-                    )));
+                    return Err(AppError::validation(
+                        "wfeng_loop_cross_region_back_edge",
+                        format!(
+                            "loop 节点 '{loop_id}' 存在跨区域回边 '{} -> {}'",
+                            edge.from, edge.to
+                        ),
+                        serde_json::json!({ "loop_id": loop_id, "from": edge.from, "to": edge.to }),
+                    ));
                 }
                 continue;
             }
             let from_inside = body_nodes.contains(&edge.from);
             let to_inside = body_nodes.contains(&edge.to);
             if from_inside && !to_inside {
-                return Err(AppError::InvalidQuery(format!(
-                    "loop 节点 '{loop_id}' 的循环体节点 '{}' 存在越界出边到 '{}'",
-                    edge.from, edge.to
-                )));
+                return Err(AppError::validation(
+                    "wfeng_loop_body_edge_escape",
+                    format!(
+                        "loop 节点 '{loop_id}' 的循环体节点 '{}' 存在越界出边到 '{}'",
+                        edge.from, edge.to
+                    ),
+                    serde_json::json!({ "loop_id": loop_id, "from": edge.from, "to": edge.to }),
+                ));
             }
             if !from_inside && to_inside {
                 let valid_entry = edge.from == loop_id
                     && edge.to == direct.body_entries[0]
                     && edge.branch.as_deref() == Some(LOOP_BODY_BRANCH);
                 if !valid_entry {
-                    return Err(AppError::InvalidQuery(format!(
-                        "loop 节点 '{loop_id}' 的循环体节点 '{}' 存在外部入边 '{} -> {}'",
-                        edge.to, edge.from, edge.to
-                    )));
+                    return Err(AppError::validation(
+                        "wfeng_loop_body_external_entry",
+                        format!(
+                            "loop 节点 '{loop_id}' 的循环体节点 '{}' 存在外部入边 '{} -> {}'",
+                            edge.to, edge.from, edge.to
+                        ),
+                        serde_json::json!({ "loop_id": loop_id, "node": edge.to, "from": edge.from, "to": edge.to }),
+                    ));
                 }
             }
         }
@@ -1968,62 +2028,82 @@ fn validate_loop_config(loop_id: &str, config: &JsonValue) -> Result<()> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if expr.trim().is_empty() {
-                return Err(AppError::InvalidQuery(format!(
-                    "loop 节点 '{loop_id}'（{mode} 模式）缺少条件表达式 expression"
-                )));
+                return Err(AppError::validation(
+                    "wfeng_loop_missing_expression",
+                    format!("loop 节点 '{loop_id}'（{mode} 模式）缺少条件表达式 expression"),
+                    serde_json::json!({ "loop_id": loop_id, "mode": mode }),
+                ));
             }
             let max_it = config.get("max_iterations").and_then(json_as_u64);
             if max_it.map(|n| n == 0).unwrap_or(true) {
-                return Err(AppError::InvalidQuery(format!(
-                    "loop 节点 '{loop_id}'（{mode} 模式）必须设置 max_iterations（>=1）以防死循环"
-                )));
+                return Err(AppError::validation(
+                    "wfeng_loop_missing_max_iterations",
+                    format!("loop 节点 '{loop_id}'（{mode} 模式）必须设置 max_iterations（>=1）以防死循环"),
+                    serde_json::json!({ "loop_id": loop_id, "mode": mode }),
+                ));
             }
             if max_it.unwrap_or(0) > HARD_LOOP_MAX_ITERATIONS {
-                return Err(AppError::InvalidQuery(format!(
-                    "loop 节点 '{loop_id}' 的 max_iterations 不能超过服务端硬上限 {HARD_LOOP_MAX_ITERATIONS}"
-                )));
+                return Err(AppError::validation(
+                    "wfeng_loop_max_iterations_exceeded",
+                    format!("loop 节点 '{loop_id}' 的 max_iterations 不能超过服务端硬上限 {HARD_LOOP_MAX_ITERATIONS}"),
+                    serde_json::json!({ "loop_id": loop_id, "max": HARD_LOOP_MAX_ITERATIONS }),
+                ));
             }
         }
         "count" => {
             if config.get("count").is_none() {
-                return Err(AppError::InvalidQuery(format!(
-                    "loop 节点 '{loop_id}'（count 模式）缺少执行次数 count"
-                )));
+                return Err(AppError::validation(
+                    "wfeng_loop_missing_count",
+                    format!("loop 节点 '{loop_id}'（count 模式）缺少执行次数 count"),
+                    serde_json::json!({ "loop_id": loop_id }),
+                ));
             }
             if let Some(count) = config.get("count").and_then(json_as_u64) {
                 if count == 0 || count > HARD_LOOP_MAX_ITERATIONS {
-                    return Err(AppError::InvalidQuery(format!(
-                        "loop 节点 '{loop_id}' 的 count 必须在 1..={HARD_LOOP_MAX_ITERATIONS} 范围内"
-                    )));
+                    return Err(AppError::validation(
+                        "wfeng_loop_count_out_of_range",
+                        format!("loop 节点 '{loop_id}' 的 count 必须在 1..={HARD_LOOP_MAX_ITERATIONS} 范围内"),
+                        serde_json::json!({ "loop_id": loop_id, "max": HARD_LOOP_MAX_ITERATIONS }),
+                    ));
                 }
             }
         }
         "for_each" => {
             let items = config.get("items").and_then(|v| v.as_str()).unwrap_or("");
             if items.trim().is_empty() {
-                return Err(AppError::InvalidQuery(format!(
-                    "loop 节点 '{loop_id}'（for_each 模式）缺少遍历数组来源 items"
-                )));
+                return Err(AppError::validation(
+                    "wfeng_loop_missing_items",
+                    format!("loop 节点 '{loop_id}'（for_each 模式）缺少遍历数组来源 items"),
+                    serde_json::json!({ "loop_id": loop_id }),
+                ));
             }
             let concurrency = config.get("concurrency").and_then(json_as_u64).unwrap_or(1);
             if concurrency < 1 || concurrency > HARD_LOOP_MAX_CONCURRENCY {
-                return Err(AppError::InvalidQuery(format!(
-                    "loop 节点 '{loop_id}'（for_each 模式）的 concurrency 必须在 1..={HARD_LOOP_MAX_CONCURRENCY} 范围内（当前 {concurrency}）"
-                )));
+                return Err(AppError::validation(
+                    "wfeng_loop_concurrency_out_of_range",
+                    format!(
+                        "loop 节点 '{loop_id}'（for_each 模式）的 concurrency 必须在 1..={HARD_LOOP_MAX_CONCURRENCY} 范围内（当前 {concurrency}）"
+                    ),
+                    serde_json::json!({ "loop_id": loop_id, "max": HARD_LOOP_MAX_CONCURRENCY, "concurrency": concurrency }),
+                ));
             }
         }
         other => {
-            return Err(AppError::InvalidQuery(format!(
-                "loop 节点 '{loop_id}' 的 loop_mode '{other}' 非法（应为 while/until/count/for_each）"
-            )));
+            return Err(AppError::validation(
+                "wfeng_loop_mode_invalid",
+                format!("loop 节点 '{loop_id}' 的 loop_mode '{other}' 非法（应为 while/until/count/for_each）"),
+                serde_json::json!({ "loop_id": loop_id, "mode": other }),
+            ));
         }
     }
 
     // 并发仅 for_each 支持；while/until/count 存在跨轮状态依赖，强制串行。
     if mode != "for_each" && config.get("concurrency").and_then(json_as_u64).unwrap_or(1) != 1 {
-        return Err(AppError::InvalidQuery(format!(
-            "loop 节点 '{loop_id}'（{mode} 模式）不支持并发，concurrency 只能为 1"
-        )));
+        return Err(AppError::validation(
+            "wfeng_loop_concurrency_not_supported",
+            format!("loop 节点 '{loop_id}'（{mode} 模式）不支持并发，concurrency 只能为 1"),
+            serde_json::json!({ "loop_id": loop_id, "mode": mode }),
+        ));
     }
 
     Ok(())
@@ -2196,7 +2276,13 @@ async fn load_datasource_meta(
     .bind(tenant_id)
     .fetch_optional(mgmt_pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("数据源 {} 不存在或已禁用", ds_id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "wfeng_datasource_not_found",
+            format!("数据源 {} 不存在或已禁用", ds_id),
+            serde_json::json!({ "id": ds_id }),
+        )
+    })?;
 
     let ds_type: String = row.get("ds_type");
     let host: String = row.get("host");
@@ -2207,25 +2293,38 @@ async fn load_datasource_meta(
     let cred_kind: Option<String> = row.get("cred_kind");
     if let Some(kind) = cred_kind.as_deref() {
         if !crate::workflow_credentials::datasource_accepts_kind(kind) {
-            return Err(AppError::InvalidQuery(format!(
-                "数据源 {} 绑定的凭证类型是 {kind}，请改绑 basic",
-                ds_id
-            )));
+            return Err(AppError::validation(
+                "wfeng_datasource_credential_kind_mismatch",
+                format!(
+                    "数据源 {} 绑定的凭证类型是 {kind}，请改绑 basic",
+                    ds_id
+                ),
+                serde_json::json!({ "id": ds_id, "kind": kind }),
+            ));
         }
     }
 
     if host.trim().is_empty() {
-        return Err(AppError::InvalidQuery(format!(
-            "数据源 {} 缺少主机地址",
-            ds_id
-        )));
+        return Err(AppError::validation(
+            "wfeng_datasource_missing_host",
+            format!("数据源 {} 缺少主机地址", ds_id),
+            serde_json::json!({ "id": ds_id }),
+        ));
     }
-    let database = database
-        .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| AppError::InvalidQuery(format!("数据源 {} 缺少库名（database）", ds_id)))?;
-    let username = username
-        .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| AppError::InvalidQuery(format!("数据源 {} 未绑定带用户名的凭证", ds_id)))?;
+    let database = database.filter(|s| !s.trim().is_empty()).ok_or_else(|| {
+        AppError::validation(
+            "wfeng_datasource_missing_database",
+            format!("数据源 {} 缺少库名（database）", ds_id),
+            serde_json::json!({ "id": ds_id }),
+        )
+    })?;
+    let username = username.filter(|s| !s.trim().is_empty()).ok_or_else(|| {
+        AppError::validation(
+            "wfeng_datasource_missing_username",
+            format!("数据源 {} 未绑定带用户名的凭证", ds_id),
+            serde_json::json!({ "id": ds_id }),
+        )
+    })?;
     let password = secret_enc
         .map(|e| crate::crypto::decrypt_secret_lossy(&e))
         .unwrap_or_default();
@@ -2303,10 +2402,14 @@ pub async fn resolve_datasource_conn(
             MYSQL_DATASOURCE_POOLS.insert(key, pool.clone());
             Ok(DatasourceConn::MySql(pool))
         }
-        other => Err(AppError::InvalidQuery(format!(
-            "数据源类型 {} 暂不支持在数据库节点中执行 SQL（当前支持 postgresql / mysql）",
-            other
-        ))),
+        other => Err(AppError::validation(
+            "wfeng_datasource_type_unsupported",
+            format!(
+                "数据源类型 {} 暂不支持在数据库节点中执行 SQL（当前支持 postgresql / mysql）",
+                other
+            ),
+            serde_json::json!({ "ds_type": other }),
+        )),
     }
 }
 
@@ -2656,9 +2759,13 @@ impl DagEngine {
                 let exec_result = if node.node_type == NodeType::Loop {
                     match loop_plan.regions.get(node_id.as_str()) {
                         Some(region) => self.run_loop(node, region, ctx, &call_stack).await,
-                        None => Err(AppError::InvalidQuery(format!(
-                        "loop 节点 '{node_id}' 未接线（缺少 body 出口或 loop_back 回边），无法执行"
-                    ))),
+                        None => Err(AppError::validation(
+                            "wfeng_loop_not_wired",
+                            format!(
+                                "loop 节点 '{node_id}' 未接线（缺少 body 出口或 loop_back 回边），无法执行"
+                            ),
+                            serde_json::json!({ "node_id": node_id }),
+                        )),
                     }
                 } else {
                     self.execute_node(node, &config, ctx, &call_stack).await
@@ -2902,9 +3009,11 @@ impl DagEngine {
             // loop 节点由 execute_dag 特殊分发（run_loop），需要访问整图以界定循环体，
             // 不经此逐节点 dispatch。走到这里说明循环体识别有误（如循环体内又嵌了未被
             // 拥有的 loop），属于内部不变量被破坏，直接报错而非静默。
-            NodeType::Loop => Err(AppError::InvalidQuery(
+            NodeType::Loop => Err(AppError::validation(
+                "wfeng_loop_dispatched_via_execute_node",
                 "loop 节点不应经 execute_node 分发（应由 execute_dag 的 run_loop 处理）"
                     .to_string(),
+                serde_json::json!({}),
             )),
         }
     }
@@ -2951,19 +3060,27 @@ impl DagEngine {
                 // 空数组来源节点（如 code 节点产出的空 items）应视为「0 次迭代」而非报错。
                 JsonValue::Object(m) if m.is_empty() => Vec::new(),
                 _ => {
-                    return Err(AppError::InvalidQuery(format!(
-                        "loop '{loop_id}' for_each 的 items '{items_expr}' 解析结果不是数组"
-                    )))
+                    return Err(AppError::validation(
+                        "wfeng_loop_for_each_items_not_array",
+                        format!(
+                            "loop '{loop_id}' for_each 的 items '{items_expr}' 解析结果不是数组"
+                        ),
+                        serde_json::json!({ "loop_id": loop_id, "items_expr": items_expr }),
+                    ))
                 }
             }
         } else {
             Vec::new()
         };
         if items.len() as u64 > HARD_LOOP_MAX_ITERATIONS {
-            return Err(AppError::InvalidQuery(format!(
-                "loop '{loop_id}' for_each 数组长度 {} 超过服务端硬上限 {HARD_LOOP_MAX_ITERATIONS}",
-                items.len()
-            )));
+            return Err(AppError::validation(
+                "wfeng_loop_for_each_items_too_many",
+                format!(
+                    "loop '{loop_id}' for_each 数组长度 {} 超过服务端硬上限 {HARD_LOOP_MAX_ITERATIONS}",
+                    items.len()
+                ),
+                serde_json::json!({ "loop_id": loop_id, "count": items.len(), "max": HARD_LOOP_MAX_ITERATIONS }),
+            ));
         }
 
         // count：解析目标次数（支持模板）。
@@ -2971,17 +3088,21 @@ impl DagEngine {
             let raw = config.get("count").cloned().unwrap_or(JsonValue::Null);
             let resolved = resolve_template(&raw, &carry_ctx);
             json_as_u64(&resolved).ok_or_else(|| {
-                AppError::InvalidQuery(format!(
-                    "loop '{loop_id}' count 模式的 count 解析结果不是正整数"
-                ))
+                AppError::validation(
+                    "wfeng_loop_count_not_positive_integer",
+                    format!("loop '{loop_id}' count 模式的 count 解析结果不是正整数"),
+                    serde_json::json!({ "loop_id": loop_id }),
+                )
             })?
         } else {
             0
         };
         if mode == "count" && (count_target == 0 || count_target > HARD_LOOP_MAX_ITERATIONS) {
-            return Err(AppError::InvalidQuery(format!(
-                "loop '{loop_id}' count 必须在 1..={HARD_LOOP_MAX_ITERATIONS} 范围内"
-            )));
+            return Err(AppError::validation(
+                "wfeng_loop_count_target_out_of_range",
+                format!("loop '{loop_id}' count 必须在 1..={HARD_LOOP_MAX_ITERATIONS} 范围内"),
+                serde_json::json!({ "loop_id": loop_id, "max": HARD_LOOP_MAX_ITERATIONS }),
+            ));
         }
 
         // 所有模式均受不可绕过的服务端硬上限约束；count/for_each 若额外配置
@@ -3081,11 +3202,19 @@ impl DagEngine {
                             body_results.iter().find(|r| r.status == NodeStatus::Failed)
                         {
                             if !allow_failure {
-                                return Err(AppError::InvalidQuery(format!(
-                                    "loop '{loop_id}' 循环体节点 '{}' 失败: {}",
-                                    failed.node_id,
-                                    failed.error.clone().unwrap_or_default()
-                                )));
+                                return Err(AppError::validation(
+                                    "wfeng_loop_body_node_failed",
+                                    format!(
+                                        "loop '{loop_id}' 循环体节点 '{}' 失败: {}",
+                                        failed.node_id,
+                                        failed.error.clone().unwrap_or_default()
+                                    ),
+                                    serde_json::json!({
+                                        "loop_id": loop_id,
+                                        "node_id": failed.node_id,
+                                        "error": failed.error.clone().unwrap_or_default(),
+                                    }),
+                                ));
                             }
                             had_failures = true;
                             last_error = failed.error.clone();
@@ -3105,7 +3234,11 @@ impl DagEngine {
                                 region.back_source
                             );
                             if !allow_failure {
-                                return Err(AppError::InvalidQuery(msg));
+                                return Err(AppError::validation(
+                                    "wfeng_loop_back_source_not_executed",
+                                    msg,
+                                    serde_json::json!({ "loop_id": loop_id, "back_source": region.back_source }),
+                                ));
                             }
                             had_failures = true;
                             last_error = Some(msg.clone());
@@ -3223,11 +3356,19 @@ impl DagEngine {
                     had_failures = true;
                     last_error = failed.error.clone();
                     if !allow_failure {
-                        return Err(AppError::InvalidQuery(format!(
-                            "loop '{loop_id}' 循环体节点 '{}' 失败: {}",
-                            failed.node_id,
-                            failed.error.clone().unwrap_or_default()
-                        )));
+                        return Err(AppError::validation(
+                            "wfeng_loop_body_node_failed",
+                            format!(
+                                "loop '{loop_id}' 循环体节点 '{}' 失败: {}",
+                                failed.node_id,
+                                failed.error.clone().unwrap_or_default()
+                            ),
+                            serde_json::json!({
+                                "loop_id": loop_id,
+                                "node_id": failed.node_id,
+                                "error": failed.error.clone().unwrap_or_default(),
+                            }),
+                        ));
                     }
                     if iteration_reports.len() < MAX_LOOP_ITERATION_REPORTS {
                         iteration_reports.push(json!({
@@ -3265,10 +3406,14 @@ impl DagEngine {
                     .get(&region.back_source)
                     .cloned()
                     .ok_or_else(|| {
-                        AppError::InvalidQuery(format!(
-                            "loop '{loop_id}' 本轮未执行回边源节点 '{}'",
-                            region.back_source
-                        ))
+                        AppError::validation(
+                            "wfeng_loop_back_source_not_executed",
+                            format!(
+                                "loop '{loop_id}' 本轮未执行回边源节点 '{}'",
+                                region.back_source
+                            ),
+                            serde_json::json!({ "loop_id": loop_id, "back_source": region.back_source }),
+                        )
                     })?;
                 results_acc.push(last_out);
                 if iteration_reports.len() < MAX_LOOP_ITERATION_REPORTS {
@@ -3359,15 +3504,21 @@ impl DagEngine {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .ok_or_else(|| {
-                AppError::InvalidQuery(
+                AppError::validation(
+                    "wfeng_call_workflow_missing_slug",
                     "call_workflow 节点缺少 workflow（子工作流 slug）".to_string(),
+                    serde_json::json!({}),
                 )
             })?;
 
         if call_stack.len() >= MAX_CALL_DEPTH {
-            return Err(AppError::InvalidQuery(format!(
-                "子工作流调用层级超过上限 {MAX_CALL_DEPTH}（调用链：{call_stack:?}）"
-            )));
+            return Err(AppError::validation(
+                "wfeng_call_workflow_depth_exceeded",
+                format!(
+                    "子工作流调用层级超过上限 {MAX_CALL_DEPTH}（调用链：{call_stack:?}）"
+                ),
+                serde_json::json!({ "max_depth": MAX_CALL_DEPTH, "call_stack": format!("{call_stack:?}") }),
+            ));
         }
 
         // 同租户内按 slug 解析，优先与父节点同库；只取已发布且启用中的工作流。
@@ -3385,9 +3536,13 @@ impl DagEngine {
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| {
-            AppError::NotFound(format!(
-                "子工作流 '{target_slug}' 不存在或未启用（同租户内）"
-            ))
+            AppError::not_found_coded(
+                "wfeng_call_workflow_target_not_found",
+                format!(
+                    "子工作流 '{target_slug}' 不存在或未启用（同租户内）"
+                ),
+                serde_json::json!({ "slug": target_slug }),
+            )
         })?;
 
         let target_id: i32 = row.get("id");
@@ -3395,9 +3550,13 @@ impl DagEngine {
 
         // 环检测：目标是当前工作流自身、或已在调用链上 ⇒ 拒绝。
         if target_id == ctx.workflow_id || call_stack.contains(&target_id) {
-            return Err(AppError::InvalidQuery(format!(
-                "检测到工作流递归调用：'{target_slug}'(id={target_id}) 已在调用链 {call_stack:?} 中"
-            )));
+            return Err(AppError::validation(
+                "wfeng_call_workflow_recursive",
+                format!(
+                    "检测到工作流递归调用：'{target_slug}'(id={target_id}) 已在调用链 {call_stack:?} 中"
+                ),
+                serde_json::json!({ "slug": target_slug, "id": target_id, "call_stack": format!("{call_stack:?}") }),
+            ));
         }
 
         let target_tenant: Option<i32> = row.get("tenant_id");
@@ -3407,10 +3566,18 @@ impl DagEngine {
         let workflow_dependencies: JsonValue = row.get("dependencies");
 
         let nodes_vec: Vec<WorkflowNode> = serde_json::from_value(nodes).map_err(|e| {
-            AppError::InvalidQuery(format!("子工作流 '{target_slug}' 节点解析失败: {e}"))
+            AppError::validation(
+                "wfeng_call_workflow_nodes_parse_failed",
+                format!("子工作流 '{target_slug}' 节点解析失败: {e}"),
+                serde_json::json!({ "slug": target_slug, "error": e.to_string() }),
+            )
         })?;
         let edges_vec: Vec<WorkflowEdge> = serde_json::from_value(edges).map_err(|e| {
-            AppError::InvalidQuery(format!("子工作流 '{target_slug}' 连线解析失败: {e}"))
+            AppError::validation(
+                "wfeng_call_workflow_edges_parse_failed",
+                format!("子工作流 '{target_slug}' 连线解析失败: {e}"),
+                serde_json::json!({ "slug": target_slug, "error": e.to_string() }),
+            )
         })?;
         let sub_def = WorkflowDefinition {
             nodes: nodes_vec,
@@ -3532,12 +3699,20 @@ impl DagEngine {
 
         // 子流程任一节点硬失败 ⇒ 让父节点也失败（父节点可用 allow_failure 容错）。
         if let Some(failed) = sub_results.iter().find(|r| r.status == NodeStatus::Failed) {
-            return Err(AppError::InvalidQuery(format!(
-                "子工作流 '{}' 节点 '{}' 失败: {}",
-                target_slug,
-                failed.node_id,
-                failed.error.clone().unwrap_or_default()
-            )));
+            return Err(AppError::validation(
+                "wfeng_call_workflow_node_failed",
+                format!(
+                    "子工作流 '{}' 节点 '{}' 失败: {}",
+                    target_slug,
+                    failed.node_id,
+                    failed.error.clone().unwrap_or_default()
+                ),
+                serde_json::json!({
+                    "slug": target_slug,
+                    "node_id": failed.node_id,
+                    "error": failed.error.clone().unwrap_or_default(),
+                }),
+            ));
         }
 
         Ok(ok_out(output))
@@ -3555,10 +3730,18 @@ impl DagEngine {
         let topic_tpl = config
             .get("topic")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AppError::InvalidQuery("sse_publish 节点缺少 topic 字段".to_string()))?;
+            .ok_or_else(|| {
+                AppError::validation(
+                    "wfeng_sse_publish_missing_topic",
+                    "sse_publish 节点缺少 topic 字段".to_string(),
+                    serde_json::json!({}),
+                )
+            })?;
         if topic_tpl.trim().is_empty() {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "wfeng_sse_publish_empty_topic",
                 "sse_publish 节点 topic 不能为空".to_string(),
+                serde_json::json!({}),
             ));
         }
 
@@ -3584,11 +3767,15 @@ impl DagEngine {
             let settings = crate::sse_batch_config::sse_batch_settings();
             let max_recipients = effective_max_recipients(config, settings);
             if max_recipients > 0 && recipients.len() > max_recipients {
-                return Err(AppError::InvalidQuery(format!(
-                    "recipient 数量 ({}) 超过上限 ({})",
-                    recipients.len(),
-                    max_recipients
-                )));
+                return Err(AppError::validation(
+                    "wfeng_sse_publish_recipients_exceeded",
+                    format!(
+                        "recipient 数量 ({}) 超过上限 ({})",
+                        recipients.len(),
+                        max_recipients
+                    ),
+                    serde_json::json!({ "count": recipients.len(), "max": max_recipients }),
+                ));
             }
 
             let batch_size = effective_sse_batch_size(config, settings);
@@ -3668,7 +3855,13 @@ impl DagEngine {
         let raw_code = config
             .get("code")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AppError::InvalidQuery("code 节点缺少 code 字段".to_string()))?;
+            .ok_or_else(|| {
+                AppError::validation(
+                    "wfeng_code_node_missing_code",
+                    "code 节点缺少 code 字段".to_string(),
+                    serde_json::json!({}),
+                )
+            })?;
         // 导入时若 JSON 多转义一层，脚本只剩字面 `\n`，lua.load 会把两条语句粘成一行。
         let code = restore_escaped_script_newlines(raw_code);
 
@@ -3829,22 +4022,31 @@ end
         let sql: &str = if dynamic {
             let v = resolve_template(config.get("sql").unwrap_or(&JsonValue::Null), ctx);
             resolved_sql = v.as_str().map(|s| s.to_string()).ok_or_else(|| {
-                AppError::InvalidQuery("db_query 动态 SQL 解析结果不是字符串".to_string())
+                AppError::validation(
+                    "wfeng_db_query_dynamic_sql_not_string",
+                    "db_query 动态 SQL 解析结果不是字符串".to_string(),
+                    serde_json::json!({}),
+                )
             })?;
             resolved_sql.as_str()
         } else {
-            config
-                .get("sql")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| AppError::InvalidQuery("db_query 节点缺少 sql 字段".to_string()))?
+            config.get("sql").and_then(|v| v.as_str()).ok_or_else(|| {
+                AppError::validation(
+                    "wfeng_db_query_missing_sql",
+                    "db_query 节点缺少 sql 字段".to_string(),
+                    serde_json::json!({}),
+                )
+            })?
         };
 
         // 安全检查：只允许 SELECT / WITH（动态模式对解析后的文本同样校验）。
         // 必须先剥注释，否则 `-- 说明\nSELECT ...` 会被当成非法首词 `--`。
         let first_word = sql_leading_keyword(sql);
         if !matches!(first_word.as_str(), "SELECT" | "WITH") {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "wfeng_db_query_disallowed_statement",
                 "db_query 节点只允许 SELECT/WITH 语句".to_string(),
+                serde_json::json!({}),
             ));
         }
 
@@ -3942,21 +4144,30 @@ end
         let sql: &str = if dynamic {
             let v = resolve_template(config.get("sql").unwrap_or(&JsonValue::Null), ctx);
             resolved_sql = v.as_str().map(|s| s.to_string()).ok_or_else(|| {
-                AppError::InvalidQuery("db_execute 动态 SQL 解析结果不是字符串".to_string())
+                AppError::validation(
+                    "wfeng_db_execute_dynamic_sql_not_string",
+                    "db_execute 动态 SQL 解析结果不是字符串".to_string(),
+                    serde_json::json!({}),
+                )
             })?;
             resolved_sql.as_str()
         } else {
-            config
-                .get("sql")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| AppError::InvalidQuery("db_execute 节点缺少 sql 字段".to_string()))?
+            config.get("sql").and_then(|v| v.as_str()).ok_or_else(|| {
+                AppError::validation(
+                    "wfeng_db_execute_missing_sql",
+                    "db_execute 节点缺少 sql 字段".to_string(),
+                    serde_json::json!({}),
+                )
+            })?
         };
 
         // DDL 拦截（动态模式对解析后的文本同样校验）
         let first_word = sql_leading_keyword(sql);
         if matches!(first_word.as_str(), "DROP" | "TRUNCATE") {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "wfeng_db_execute_ddl_forbidden",
                 "db_execute 节点禁止 DROP/TRUNCATE 操作".to_string(),
+                serde_json::json!({}),
             ));
         }
 
@@ -4024,7 +4235,11 @@ end
             .get("statements")
             .and_then(|v| v.as_array())
             .ok_or_else(|| {
-                AppError::InvalidQuery("db_transaction 节点缺少 statements 数组".to_string())
+                AppError::validation(
+                    "wfeng_db_transaction_missing_statements",
+                    "db_transaction 节点缺少 statements 数组".to_string(),
+                    serde_json::json!({}),
+                )
             })?;
 
         let pool = self
@@ -4046,13 +4261,19 @@ end
 
             for stmt in statements {
                 let sql = stmt.get("sql").and_then(|v| v.as_str()).ok_or_else(|| {
-                    AppError::InvalidQuery("db_transaction statements 缺少 sql 字段".to_string())
+                    AppError::validation(
+                        "wfeng_db_transaction_stmt_missing_sql",
+                        "db_transaction statements 缺少 sql 字段".to_string(),
+                        serde_json::json!({}),
+                    )
                 })?;
 
                 let first_word = sql_leading_keyword(sql);
                 if matches!(first_word.as_str(), "DROP" | "TRUNCATE") {
-                    return Err(AppError::InvalidQuery(
+                    return Err(AppError::validation(
+                        "wfeng_db_transaction_ddl_forbidden",
                         "db_transaction 禁止 DROP/TRUNCATE".to_string(),
+                        serde_json::json!({}),
                     ));
                 }
 
@@ -4099,17 +4320,24 @@ end
         let items_path = config
             .get("items")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AppError::InvalidQuery("foreach 节点缺少 items 字段".to_string()))?;
+            .ok_or_else(|| {
+                AppError::validation(
+                    "wfeng_foreach_missing_items",
+                    "foreach 节点缺少 items 字段".to_string(),
+                    serde_json::json!({}),
+                )
+            })?;
 
         // 通过模板解析取出数组
         let template_val = json!(format!("{{{{{}}}}}", items_path));
         let items = match resolve_template(&template_val, ctx) {
             JsonValue::Array(arr) => arr,
             _ => {
-                return Err(AppError::InvalidQuery(format!(
-                    "foreach items '{}' 解析结果不是数组",
-                    items_path
-                )))
+                return Err(AppError::validation(
+                    "wfeng_foreach_items_not_array",
+                    format!("foreach items '{}' 解析结果不是数组", items_path),
+                    serde_json::json!({ "items_path": items_path }),
+                ))
             }
         };
 
@@ -4117,7 +4345,11 @@ end
             .get("statements")
             .and_then(|v| v.as_array())
             .ok_or_else(|| {
-                AppError::InvalidQuery("foreach 节点缺少 statements 数组".to_string())
+                AppError::validation(
+                    "wfeng_foreach_missing_statements",
+                    "foreach 节点缺少 statements 数组".to_string(),
+                    serde_json::json!({}),
+                )
             })?;
 
         let item_var = config
@@ -4148,13 +4380,19 @@ end
                 let mut tx = conn.begin().await?;
                 for stmt in statements {
                     let sql = stmt.get("sql").and_then(|v| v.as_str()).ok_or_else(|| {
-                        AppError::InvalidQuery("foreach statement 缺少 sql 字段".to_string())
+                        AppError::validation(
+                            "wfeng_foreach_stmt_missing_sql",
+                            "foreach statement 缺少 sql 字段".to_string(),
+                            serde_json::json!({}),
+                        )
                     })?;
 
                     let first_word = sql_leading_keyword(sql);
                     if matches!(first_word.as_str(), "DROP" | "TRUNCATE") {
-                        return Err(AppError::InvalidQuery(
+                        return Err(AppError::validation(
+                            "wfeng_foreach_ddl_forbidden",
                             "foreach 禁止 DROP/TRUNCATE".to_string(),
+                            serde_json::json!({}),
                         ));
                     }
 
@@ -4206,10 +4444,14 @@ end
         }
 
         let database_id = ctx.database_id.ok_or_else(|| {
-            AppError::InvalidQuery(format!(
-                "{} 节点缺少 workflow.database_id，拒绝回退到管理库执行 SQL",
-                node_type
-            ))
+            AppError::validation(
+                "wfeng_db_node_missing_database_id",
+                format!(
+                    "{} 节点缺少 workflow.database_id，拒绝回退到管理库执行 SQL",
+                    node_type
+                ),
+                serde_json::json!({ "node_type": node_type }),
+            )
         })?;
 
         let pool = self
@@ -4233,10 +4475,14 @@ end
     ) -> Result<PgPool> {
         match self.workflow_db_conn(config, ctx, node_type).await? {
             DatasourceConn::Pg(pool) => Ok(pool),
-            DatasourceConn::MySql(_) => Err(AppError::InvalidQuery(format!(
-                "{} 节点暂不支持 MySQL 数据源，请改用 PostgreSQL 数据源或默认库",
-                node_type
-            ))),
+            DatasourceConn::MySql(_) => Err(AppError::validation(
+                "wfeng_db_node_mysql_unsupported",
+                format!(
+                    "{} 节点暂不支持 MySQL 数据源，请改用 PostgreSQL 数据源或默认库",
+                    node_type
+                ),
+                serde_json::json!({ "node_type": node_type }),
+            )),
         }
     }
 
@@ -4259,7 +4505,13 @@ end
         .bind(database_id)
         .fetch_optional(&self.pool)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("数据库连接 {} 不存在或已禁用", database_id)))?;
+        .ok_or_else(|| {
+            AppError::not_found_coded(
+                "wfeng_workflow_database_not_found",
+                format!("数据库连接 {} 不存在或已禁用", database_id),
+                serde_json::json!({ "id": database_id }),
+            )
+        })?;
 
         let encrypted_password: String = row.get("db_password_encrypted");
         let config = DatabaseConfig {
@@ -4302,14 +4554,24 @@ end
             .get("connection_id")
             .and_then(|v| v.as_i64())
             .ok_or_else(|| {
-                AppError::InvalidQuery("redis 节点缺少 connection_id（整数）".to_string())
+                AppError::validation(
+                    "wfeng_redis_missing_connection_id",
+                    "redis 节点缺少 connection_id（整数）".to_string(),
+                    serde_json::json!({}),
+                )
             })?;
         let op = config
             .get("op")
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| AppError::InvalidQuery("redis 节点缺少 op".to_string()))?
+            .ok_or_else(|| {
+                AppError::validation(
+                    "wfeng_redis_missing_op",
+                    "redis 节点缺少 op".to_string(),
+                    serde_json::json!({}),
+                )
+            })?
             .to_lowercase();
 
         // 写操作在 dry_run / 生产只读下走 mock，不真正落库。
@@ -4329,7 +4591,11 @@ end
         }
 
         let tenant_id = ctx.tenant_id.ok_or_else(|| {
-            AppError::InvalidQuery("redis 节点需要 workflow.tenant_id 才能解析连接".to_string())
+            AppError::validation(
+                "wfeng_redis_missing_tenant_id",
+                "redis 节点需要 workflow.tenant_id 才能解析连接".to_string(),
+                serde_json::json!({}),
+            )
         })?;
 
         // args = config 去掉 connection_id / op 后的其余字段。占位符（{{...}}）已由
@@ -4366,14 +4632,24 @@ end
             .get("connection_id")
             .and_then(|v| v.as_i64())
             .ok_or_else(|| {
-                AppError::InvalidQuery("kafka 节点缺少 connection_id（整数）".to_string())
+                AppError::validation(
+                    "wfeng_kafka_missing_connection_id",
+                    "kafka 节点缺少 connection_id（整数）".to_string(),
+                    serde_json::json!({}),
+                )
             })?;
         let op = config
             .get("op")
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| AppError::InvalidQuery("kafka 节点缺少 op".to_string()))?
+            .ok_or_else(|| {
+                AppError::validation(
+                    "wfeng_kafka_missing_op",
+                    "kafka 节点缺少 op".to_string(),
+                    serde_json::json!({}),
+                )
+            })?
             .to_lowercase();
 
         if (ctx.dry_run || ctx.prod_readonly) && commands::is_write_op(&op) {
@@ -4392,7 +4668,11 @@ end
         }
 
         let tenant_id = ctx.tenant_id.ok_or_else(|| {
-            AppError::InvalidQuery("kafka 节点需要 workflow.tenant_id 才能解析连接".to_string())
+            AppError::validation(
+                "wfeng_kafka_missing_tenant_id",
+                "kafka 节点需要 workflow.tenant_id 才能解析连接".to_string(),
+                serde_json::json!({}),
+            )
         })?;
 
         let mut args = config.clone();
@@ -4424,14 +4704,24 @@ end
             .get("connection_id")
             .and_then(|v| v.as_i64())
             .ok_or_else(|| {
-                AppError::InvalidQuery("object_storage 节点缺少 connection_id（整数）".to_string())
+                AppError::validation(
+                    "wfeng_object_storage_missing_connection_id",
+                    "object_storage 节点缺少 connection_id（整数）".to_string(),
+                    serde_json::json!({}),
+                )
             })?;
         let op = config
             .get("op")
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| AppError::InvalidQuery("object_storage 节点缺少 op".to_string()))?
+            .ok_or_else(|| {
+                AppError::validation(
+                    "wfeng_object_storage_missing_op",
+                    "object_storage 节点缺少 op".to_string(),
+                    serde_json::json!({}),
+                )
+            })?
             .to_lowercase();
 
         let mut args = config.clone();
@@ -4456,8 +4746,10 @@ end
         }
 
         let tenant_id = ctx.tenant_id.ok_or_else(|| {
-            AppError::InvalidQuery(
+            AppError::validation(
+                "wfeng_object_storage_missing_tenant_id",
                 "object_storage 节点需要 workflow.tenant_id 才能解析连接".to_string(),
+                serde_json::json!({}),
             )
         })?;
 
@@ -4476,24 +4768,44 @@ end
         let connection_id = config
             .get("connection_id")
             .and_then(|v| v.as_i64())
-            .ok_or_else(|| AppError::InvalidQuery("llm 节点缺少 connection_id".into()))?;
+            .ok_or_else(|| {
+                AppError::validation(
+                    "wfeng_llm_missing_connection_id",
+                    "llm 节点缺少 connection_id".to_string(),
+                    serde_json::json!({}),
+                )
+            })?;
         let model = config
             .get("model")
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| AppError::InvalidQuery("llm 节点缺少 model".into()))?
+            .ok_or_else(|| {
+                AppError::validation(
+                    "wfeng_llm_missing_model",
+                    "llm 节点缺少 model".to_string(),
+                    serde_json::json!({}),
+                )
+            })?
             .to_string();
         let tenant_id = ctx.tenant_id.ok_or_else(|| {
-            AppError::InvalidQuery("llm 节点需要 workflow.tenant_id 才能解析连接".into())
+            AppError::validation(
+                "wfeng_llm_missing_tenant_id",
+                "llm 节点需要 workflow.tenant_id 才能解析连接".to_string(),
+                serde_json::json!({}),
+            )
         })?;
         let conn =
             crate::llm_ds::fetch_active_for_tenant(&self.pool, connection_id, tenant_id).await?;
         if !crate::workflow_llm::model_allowed(&conn.models, &model) {
-            return Err(AppError::InvalidQuery(format!(
-                "模型 {model} 不在连接 {} 的列表中",
-                conn.connection_name
-            )));
+            return Err(AppError::validation(
+                "wfeng_llm_model_not_allowed",
+                format!(
+                    "模型 {model} 不在连接 {} 的列表中",
+                    conn.connection_name
+                ),
+                serde_json::json!({ "model": model, "connection_name": conn.connection_name }),
+            ));
         }
         let json_mode = config
             .get("json_mode")
@@ -4507,16 +4819,35 @@ end
         let user = config.get("user_prompt").and_then(|v| v.as_str());
         let messages_v = config.get("messages").cloned().unwrap_or(JsonValue::Null);
         let assembled = crate::workflow_llm::assemble_messages(system, &messages_v, user)
-            .map_err(AppError::InvalidQuery)?;
+            .map_err(|e| {
+                let detail = e.clone();
+                AppError::validation(
+                    "wfeng_llm_assemble_messages_failed",
+                    e,
+                    serde_json::json!({ "detail": detail }),
+                )
+            })?;
         if skip {
             return Ok(ok_out(crate::workflow_llm::skip_llm_mock(
                 &model, json_mode,
             )));
         }
-        let temperature =
-            crate::workflow_llm::parse_temperature(config).map_err(AppError::InvalidQuery)?;
-        let max_tokens =
-            crate::workflow_llm::parse_max_tokens(config).map_err(AppError::InvalidQuery)?;
+        let temperature = crate::workflow_llm::parse_temperature(config).map_err(|e| {
+            let detail = e.clone();
+            AppError::validation(
+                "wfeng_llm_parse_temperature_failed",
+                e,
+                serde_json::json!({ "detail": detail }),
+            )
+        })?;
+        let max_tokens = crate::workflow_llm::parse_max_tokens(config).map_err(|e| {
+            let detail = e.clone();
+            AppError::validation(
+                "wfeng_llm_parse_max_tokens_failed",
+                e,
+                serde_json::json!({ "detail": detail }),
+            )
+        })?;
         let stream = crate::workflow_stream::stream_enabled(config);
         let timeout_secs = config
             .get("timeout_secs")
@@ -4532,9 +4863,23 @@ end
             let cred = ctx
                 .credentials
                 .get_by_id(cid)
-                .ok_or_else(|| AppError::InvalidQuery(format!("连接凭证 {cid} 不存在")))?;
-            crate::workflow_credentials::apply_http_auth_headers(&mut headers_obj, cred)
-                .map_err(AppError::InvalidQuery)?;
+                .ok_or_else(|| {
+                    AppError::validation(
+                        "wfeng_llm_connection_credential_not_found",
+                        format!("连接凭证 {cid} 不存在"),
+                        serde_json::json!({ "id": cid }),
+                    )
+                })?;
+            crate::workflow_credentials::apply_http_auth_headers(&mut headers_obj, cred).map_err(
+                |e| {
+                    let detail = e.clone();
+                    AppError::validation(
+                        "wfeng_llm_apply_auth_headers_failed",
+                        e,
+                        serde_json::json!({ "detail": detail }),
+                    )
+                },
+            )?;
         }
         let headers: Vec<(String, String)> = headers_obj
             .iter()
@@ -4584,7 +4929,13 @@ end
         let url = config
             .get("url")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AppError::InvalidQuery("http_call 节点缺少 url 字段".to_string()))?;
+            .ok_or_else(|| {
+                AppError::validation(
+                    "wfeng_http_call_missing_url",
+                    "http_call 节点缺少 url 字段".to_string(),
+                    serde_json::json!({}),
+                )
+            })?;
 
         let method = config
             .get("method")
@@ -4594,8 +4945,10 @@ end
 
         // 内网黑名单
         if crate::http_async_poll::is_private_url(url) {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "wfeng_http_call_private_url_forbidden",
                 "http_call 不允许访问内网地址".to_string(),
+                serde_json::json!({}),
             ));
         }
 
@@ -4622,7 +4975,12 @@ end
             None => serde_json::Map::new(),
         };
         if let Err(msg) = inject_http_credential(config, ctx, &mut headers_obj) {
-            return Err(AppError::InvalidQuery(msg));
+            let detail = msg.clone();
+            return Err(AppError::validation(
+                "wfeng_http_call_inject_credential_failed",
+                msg,
+                serde_json::json!({ "detail": detail }),
+            ));
         }
         let headers = if headers_obj.is_empty() {
             None
@@ -4654,8 +5012,10 @@ end
 
         if crate::workflow_stream::stream_enabled(config) {
             if parse_async_poll_config(config).enabled {
-                return Err(AppError::InvalidQuery(
+                return Err(AppError::validation(
+                    "wfeng_http_call_stream_async_poll_conflict",
                     "http_call 不能同时开启 stream 与 async_poll".to_string(),
+                    serde_json::json!({}),
                 ));
             }
             let sink = if ctx.trigger_type == "endpoint" {
@@ -4967,8 +5327,10 @@ end
             return Ok(ok_branch(json!({ "matched_branch": branch }), branch));
         }
 
-        Err(AppError::InvalidQuery(
+        Err(AppError::validation(
+            "wfeng_condition_missing_conditions_or_expression",
             "condition 节点需要 conditions 数组或 expression 字段".to_string(),
+            serde_json::json!({}),
         ))
     }
 
@@ -5132,10 +5494,14 @@ pub const API_KEY_READONLY_BLOCK_CODE: &str = "api_key_readonly_write_blocked";
 /// 「0 行受影响」继续跑，把一次本该被拒绝的调用变成看起来成功、实则数据不一致的
 /// 结果。宁可整条工作流以 403 中断，也不制造这种静默错误。
 pub fn api_key_readonly_block_error(node_id: &str, node_type: &str) -> AppError {
-    AppError::Forbidden(format!(
-        "{}: 只读 API Key 不允许执行数据库写操作，节点 '{}'（{}）已被拒绝",
-        API_KEY_READONLY_BLOCK_CODE, node_id, node_type
-    ))
+    AppError::forbidden_coded(
+        "wfeng_api_key_readonly_write_blocked",
+        format!(
+            "{}: 只读 API Key 不允许执行数据库写操作，节点 '{}'（{}）已被拒绝",
+            API_KEY_READONLY_BLOCK_CODE, node_id, node_type
+        ),
+        serde_json::json!({ "node_id": node_id, "node_type": node_type }),
+    )
 }
 
 /// 错误是否由只读护栏抛出（`execute_dag` / HTTP 层共用的判定）。
@@ -5241,13 +5607,18 @@ fn parse_one_recipient(val: &JsonValue) -> Option<String> {
 
 fn validate_recipient_segment(recipient: &str) -> Result<()> {
     if recipient.is_empty() {
-        return Err(AppError::InvalidQuery("recipient 不能为空".to_string()));
+        return Err(AppError::validation(
+            "wfeng_recipient_empty",
+            "recipient 不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if recipient.contains(':') || recipient.contains('*') {
-        return Err(AppError::InvalidQuery(format!(
-            "recipient 不能包含 ':' 或 '*'：{}",
-            recipient
-        )));
+        return Err(AppError::validation(
+            "wfeng_recipient_invalid_chars",
+            format!("recipient 不能包含 ':' 或 '*'：{}", recipient),
+            serde_json::json!({ "recipient": recipient }),
+        ));
     }
     Ok(())
 }
@@ -5262,7 +5633,11 @@ fn parse_recipient_list(val: &JsonValue) -> Result<Vec<String>> {
                 Vec::new()
             } else if s.starts_with('[') {
                 let parsed: Vec<JsonValue> = serde_json::from_str(s).map_err(|e| {
-                    AppError::InvalidQuery(format!("recipient 列表 JSON 无效: {}", e))
+                    AppError::validation(
+                        "wfeng_recipient_list_invalid_json",
+                        format!("recipient 列表 JSON 无效: {}", e),
+                        serde_json::json!({ "error": e.to_string() }),
+                    )
                 })?;
                 parsed.iter().filter_map(parse_one_recipient).collect()
             } else {
@@ -5277,7 +5652,11 @@ fn parse_recipient_list(val: &JsonValue) -> Result<Vec<String>> {
     };
 
     if recipients.is_empty() {
-        return Err(AppError::InvalidQuery("recipient 列表不能为空".to_string()));
+        return Err(AppError::validation(
+            "wfeng_recipient_list_empty",
+            "recipient 列表不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     for r in &recipients {
@@ -5350,15 +5729,19 @@ fn expand_user_topics(
 
     let template = topic_tpl.trim();
     if !template.starts_with("user:") {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "wfeng_sse_batch_topic_format_invalid",
             "user_ids 批量推送要求 topic 为 user:{uid}:... 或 user:...:... 格式".to_string(),
+            serde_json::json!({}),
         ));
     }
     let rest = &template[5..];
     let second_colon = rest.find(':').ok_or_else(|| {
-        AppError::InvalidQuery(
+        AppError::validation(
+            "wfeng_sse_batch_topic_missing_suffix",
             "user topic 批量格式应为 user:{ids}:suffix，例如 user:{{trigger.ids}}:notify"
                 .to_string(),
+            serde_json::json!({}),
         )
     })?;
     let suffix = &rest[second_colon + 1..];
@@ -5625,38 +6008,58 @@ impl std::fmt::Debug for EmailSendConfig {
 impl EmailSendConfig {
     fn from_json(config: &JsonValue) -> Result<Self> {
         let from = config_string(config, "from")
-            .or_else(|| env_string(&["ONEBASE_SMTP_FROM", "SMTP_FROM"]))
-            .ok_or_else(|| AppError::InvalidQuery("email_send 节点缺少发件人 from".to_string()))?;
+            .or_else(|| env_string(&["PLANEOS_SMTP_FROM", "SMTP_FROM"]))
+            .ok_or_else(|| {
+                AppError::validation(
+                    "wfeng_email_send_missing_from",
+                    "email_send 节点缺少发件人 from".to_string(),
+                    serde_json::json!({}),
+                )
+            })?;
         let to = recipients_from_config(config, "to");
         if to.is_empty() {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "wfeng_email_send_missing_to",
                 "email_send 节点至少需要一个收件人 to".to_string(),
+                serde_json::json!({}),
             ));
         }
 
         let subject = config_string(config, "subject").ok_or_else(|| {
-            AppError::InvalidQuery("email_send 节点缺少邮件主题 subject".to_string())
+            AppError::validation(
+                "wfeng_email_send_missing_subject",
+                "email_send 节点缺少邮件主题 subject".to_string(),
+                serde_json::json!({}),
+            )
         })?;
         let text_body = config_string(config, "text_body");
         let html_body = config_string(config, "html_body");
         if text_body.is_none() && html_body.is_none() {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "wfeng_email_send_missing_body",
                 "email_send 节点至少需要 text_body 或 html_body".to_string(),
+                serde_json::json!({}),
             ));
         }
 
         let smtp_host = config_string(config, "smtp_host")
-            .or_else(|| env_string(&["ONEBASE_SMTP_HOST", "SMTP_HOST"]))
-            .ok_or_else(|| AppError::InvalidQuery("email_send 节点缺少 SMTP host".to_string()))?;
+            .or_else(|| env_string(&["PLANEOS_SMTP_HOST", "SMTP_HOST"]))
+            .ok_or_else(|| {
+                AppError::validation(
+                    "wfeng_email_send_missing_smtp_host",
+                    "email_send 节点缺少 SMTP host".to_string(),
+                    serde_json::json!({}),
+                )
+            })?;
         let smtp_port = config_u16(config, "smtp_port")
-            .or_else(|| env_u16(&["ONEBASE_SMTP_PORT", "SMTP_PORT"]))
+            .or_else(|| env_u16(&["PLANEOS_SMTP_PORT", "SMTP_PORT"]))
             .unwrap_or(587);
         let smtp_username = config_string(config, "smtp_username")
-            .or_else(|| env_string(&["ONEBASE_SMTP_USERNAME", "SMTP_USERNAME"]));
+            .or_else(|| env_string(&["PLANEOS_SMTP_USERNAME", "SMTP_USERNAME"]));
         let smtp_password = config_string(config, "smtp_password")
-            .or_else(|| env_string(&["ONEBASE_SMTP_PASSWORD", "SMTP_PASSWORD"]));
+            .or_else(|| env_string(&["PLANEOS_SMTP_PASSWORD", "SMTP_PASSWORD"]));
         let smtp_starttls = config_bool(config, "smtp_starttls")
-            .or_else(|| env_bool(&["ONEBASE_SMTP_STARTTLS", "SMTP_STARTTLS"]))
+            .or_else(|| env_bool(&["PLANEOS_SMTP_STARTTLS", "SMTP_STARTTLS"]))
             .unwrap_or(true);
 
         Ok(Self {
@@ -5766,7 +6169,11 @@ async fn send_email(config: EmailSendConfig) -> Result<()> {
 
 fn parse_mailbox(value: &str, field: &str) -> Result<lettre::message::Mailbox> {
     value.parse().map_err(|e| {
-        AppError::InvalidQuery(format!("email_send 节点 {} 邮箱格式无效: {}", field, e))
+        AppError::validation(
+            "wfeng_email_send_invalid_mailbox",
+            format!("email_send 节点 {} 邮箱格式无效: {}", field, e),
+            serde_json::json!({ "field": field, "error": format!("{e}") }),
+        )
     })
 }
 
@@ -5844,9 +6251,13 @@ fn parse_json_field(field: &str, value: &JsonValue) -> Result<Option<JsonValue>>
             if text.is_empty() {
                 Ok(None)
             } else {
-                serde_json::from_str::<JsonValue>(text)
-                    .map(Some)
-                    .map_err(|e| AppError::InvalidQuery(format!("{field} 不是合法 JSON: {e}")))
+                serde_json::from_str::<JsonValue>(text).map(Some).map_err(|e| {
+                    AppError::validation(
+                        "wfeng_field_not_valid_json",
+                        format!("{field} 不是合法 JSON: {e}"),
+                        serde_json::json!({ "field": field, "error": e.to_string() }),
+                    )
+                })
             }
         }
         _ => Ok(Some(value.clone())),
@@ -5899,10 +6310,14 @@ fn parse_json_object_field(field: &str, value: &JsonValue) -> Result<JsonValue> 
     if parsed.is_object() {
         Ok(parsed)
     } else {
-        Err(AppError::InvalidQuery(format!(
-            "{field} 必须是 JSON 对象（object/dictionary），当前是 {}",
-            json_kind_name(&parsed)
-        )))
+        Err(AppError::validation(
+            "wfeng_field_not_json_object",
+            format!(
+                "{field} 必须是 JSON 对象（object/dictionary），当前是 {}",
+                json_kind_name(&parsed)
+            ),
+            serde_json::json!({ "field": field, "kind": json_kind_name(&parsed) }),
+        ))
     }
 }
 
@@ -5973,31 +6388,43 @@ fn mysql_row_to_json(row: &sqlx::mysql::MySqlRow) -> JsonValue {
 /// 验证 WorkflowDefinition 结构是否合法
 pub fn validate_definition(def: &WorkflowDefinition) -> Result<()> {
     if def.nodes.is_empty() {
-        return Err(AppError::InvalidQuery("工作流至少需要一个节点".to_string()));
+        return Err(AppError::validation(
+            "wfeng_workflow_no_nodes",
+            "工作流至少需要一个节点".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let node_ids: HashSet<&str> = def.nodes.iter().map(|n| n.id.as_str()).collect();
     if node_ids.len() != def.nodes.len() {
-        return Err(AppError::InvalidQuery("工作流节点 ID 存在重复".to_string()));
+        return Err(AppError::validation(
+            "wfeng_workflow_duplicate_node_ids",
+            "工作流节点 ID 存在重复".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if node_ids.contains("loop") {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "wfeng_workflow_reserved_node_id",
             "节点 ID 'loop' 为循环作用域变量保留名，请使用其他 ID".to_string(),
+            serde_json::json!({}),
         ));
     }
 
     for edge in &def.edges {
         if !node_ids.contains(edge.from.as_str()) {
-            return Err(AppError::InvalidQuery(format!(
-                "边引用了不存在的源节点: {}",
-                edge.from
-            )));
+            return Err(AppError::validation(
+                "wfeng_workflow_edge_unknown_source",
+                format!("边引用了不存在的源节点: {}", edge.from),
+                serde_json::json!({ "node_id": edge.from }),
+            ));
         }
         if !node_ids.contains(edge.to.as_str()) {
-            return Err(AppError::InvalidQuery(format!(
-                "边引用了不存在的目标节点: {}",
-                edge.to
-            )));
+            return Err(AppError::validation(
+                "wfeng_workflow_edge_unknown_target",
+                format!("边引用了不存在的目标节点: {}", edge.to),
+                serde_json::json!({ "node_id": edge.to }),
+            ));
         }
     }
 
@@ -6023,10 +6450,18 @@ pub fn validate_definition(def: &WorkflowDefinition) -> Result<()> {
                 .map(str::trim)
                 .is_some_and(|s| !s.is_empty());
             if !has_conn {
-                return Err(AppError::InvalidQuery("llm 节点缺少 connection_id".into()));
+                return Err(AppError::validation(
+                    "wfeng_llm_missing_connection_id",
+                    "llm 节点缺少 connection_id".to_string(),
+                    serde_json::json!({}),
+                ));
             }
             if !has_model {
-                return Err(AppError::InvalidQuery("llm 节点缺少 model".into()));
+                return Err(AppError::validation(
+                    "wfeng_llm_missing_model",
+                    "llm 节点缺少 model".to_string(),
+                    serde_json::json!({}),
+                ));
             }
             let system = node
                 .config
@@ -6044,10 +6479,19 @@ pub fn validate_definition(def: &WorkflowDefinition) -> Result<()> {
                 .cloned()
                 .unwrap_or(JsonValue::Null);
             if crate::workflow_llm::is_statically_empty_prompts(&system, &user, &messages) {
-                return Err(AppError::InvalidQuery("llm 节点组完 messages 为空".into()));
+                return Err(AppError::validation(
+                    "wfeng_llm_messages_empty",
+                    "llm 节点组完 messages 为空".to_string(),
+                    serde_json::json!({}),
+                ));
             }
             if let Err(e) = crate::workflow_llm::parse_temperature(&node.config) {
-                return Err(AppError::InvalidQuery(e));
+                let detail = e.clone();
+                return Err(AppError::validation(
+                    "wfeng_llm_parse_temperature_failed",
+                    e,
+                    serde_json::json!({ "detail": detail }),
+                ));
             }
         }
         let streaming = matches!(node.node_type, NodeType::HttpCall | NodeType::Llm)
@@ -6059,14 +6503,18 @@ pub fn validate_definition(def: &WorkflowDefinition) -> Result<()> {
             && streaming
             && crate::http_async_poll::parse_async_poll_config(&node.config).enabled
         {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "wfeng_http_call_stream_async_poll_conflict",
                 "http_call 不能同时开启 stream 与 async_poll".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
     if stream_sources > 1 {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "wfeng_workflow_multiple_stream_sources",
             "工作流最多只能有一个 stream: true 的 http_call 或 llm 节点".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -6126,7 +6574,10 @@ mod tests {
     fn api_key_readonly_block_error_is_forbidden_and_marked() {
         let err = api_key_readonly_block_error("save_order", "db_execute");
         // 必须是 Forbidden：HTTP 层据此回 403，而不是 5xx。
-        assert!(matches!(err, AppError::Forbidden(_)));
+        assert!(matches!(
+            err,
+            AppError::Coded { status, .. } if status == axum::http::StatusCode::FORBIDDEN
+        ));
 
         let msg = err.to_string();
         assert!(is_api_key_readonly_block_message(&msg));
@@ -6175,7 +6626,10 @@ mod tests {
                 is_api_key_readonly_block_message(&err.to_string()),
                 "{label} 未被护栏拦截，实际错误：{err}"
             );
-            assert!(matches!(err, AppError::Forbidden(_)));
+            assert!(matches!(
+                err,
+                AppError::Coded { status, .. } if status == axum::http::StatusCode::FORBIDDEN
+            ));
         }
     }
 
@@ -6189,7 +6643,7 @@ mod tests {
         let fast_fail_engine = || {
             let pool = sqlx::postgres::PgPoolOptions::new()
                 .acquire_timeout(std::time::Duration::from_millis(200))
-                .connect_lazy("postgresql://onebase:onebase@127.0.0.1:1/onebase")
+                .connect_lazy("postgresql://planeos:planeos@127.0.0.1:1/planeos")
                 .expect("lazy pool should not connect during setup");
             DagEngine::new(pool)
         };
@@ -6344,7 +6798,10 @@ mod tests {
             is_api_key_readonly_block_message(&err.to_string()),
             "数据修改型 CTE 未被护栏拦截，实际错误：{err}"
         );
-        assert!(matches!(err, AppError::Forbidden(_)));
+        assert!(matches!(
+            err,
+            AppError::Coded { status, .. } if status == axum::http::StatusCode::FORBIDDEN
+        ));
     }
 
     #[tokio::test]
@@ -6353,7 +6810,7 @@ mod tests {
         // （因连接池不可达而报连接错误，以此证明护栏没有过度触发）。
         let pool = sqlx::postgres::PgPoolOptions::new()
             .acquire_timeout(std::time::Duration::from_millis(200))
-            .connect_lazy("postgresql://onebase:onebase@127.0.0.1:1/onebase")
+            .connect_lazy("postgresql://planeos:planeos@127.0.0.1:1/planeos")
             .expect("lazy pool should not connect during setup");
         let engine = DagEngine::new(pool);
 
@@ -6964,7 +7421,7 @@ mod tests {
     #[tokio::test]
     async fn db_query_requires_workflow_database_id_before_querying() {
         let pool = sqlx::postgres::PgPoolOptions::new()
-            .connect_lazy("postgresql://onebase:onebase@127.0.0.1:1/onebase")
+            .connect_lazy("postgresql://planeos:planeos@127.0.0.1:1/planeos")
             .expect("lazy pool should not connect during setup");
         let engine = DagEngine::new(pool);
         let ctx = ExecutionContext {
@@ -6990,10 +7447,10 @@ mod tests {
             .expect_err("db_query should reject workflows without database_id");
 
         match err {
-            AppError::InvalidQuery(message) => {
+            AppError::Coded { message, .. } => {
                 assert!(message.contains("database_id"));
             }
-            other => panic!("expected InvalidQuery, got {other:?}"),
+            other => panic!("expected Coded, got {other:?}"),
         }
     }
 
@@ -7056,16 +7513,16 @@ mod tests {
         let err = EmailSendConfig::from_json(&raw).expect_err("missing to should fail");
 
         match err {
-            AppError::InvalidQuery(message) => {
+            AppError::Coded { message, .. } => {
                 assert!(message.contains("收件人"));
             }
-            other => panic!("expected InvalidQuery, got {other:?}"),
+            other => panic!("expected Coded, got {other:?}"),
         }
     }
 
     fn lazy_engine() -> DagEngine {
         let pool = sqlx::postgres::PgPoolOptions::new()
-            .connect_lazy("postgresql://onebase:onebase@127.0.0.1:1/onebase")
+            .connect_lazy("postgresql://planeos:planeos@127.0.0.1:1/planeos")
             .expect("lazy pool should not connect during setup");
         DagEngine::new(pool)
     }
@@ -8944,7 +9401,7 @@ mod tests {
 
         let engine = DagEngine::new(
             sqlx::postgres::PgPoolOptions::new()
-                .connect_lazy("postgres://localhost/onebase")
+                .connect_lazy("postgres://localhost/planeos")
                 .unwrap(),
         );
         let output = engine

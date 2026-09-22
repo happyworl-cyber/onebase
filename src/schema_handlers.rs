@@ -17,7 +17,11 @@ use sqlx::{PgPool, Row};
 fn require_database_id(opt: Option<Extension<CurrentDatabaseId>>) -> Result<i32> {
     opt.map(|Extension(CurrentDatabaseId(id))| id)
         .ok_or_else(|| {
-            AppError::InvalidQuery("缺少 X-Database-Id 请求头，无法在租户库上执行 DDL".to_string())
+            AppError::validation(
+                "schema_missing_database_id_header",
+                "缺少 X-Database-Id 请求头，无法在租户库上执行 DDL".to_string(),
+                serde_json::json!({}),
+            )
         })
 }
 
@@ -30,7 +34,11 @@ fn require_database_id(opt: Option<Extension<CurrentDatabaseId>>) -> Result<i32>
 /// 甚至读到函数源码 / 触发器体。统一在这里 fail-closed。
 fn require_tenant_pool(dynamic_pool: &Option<Extension<PgPool>>) -> Result<&PgPool> {
     dynamic_pool.as_deref().ok_or_else(|| {
-        AppError::InvalidQuery("缺少有效的 X-Database-Id 请求头，无法定位目标数据库".to_string())
+        AppError::validation(
+            "schema_missing_valid_database_id_header",
+            "缺少有效的 X-Database-Id 请求头，无法定位目标数据库".to_string(),
+            serde_json::json!({}),
+        )
     })
 }
 
@@ -197,13 +205,19 @@ pub async fn create_schema(
     // DDL 必须落到租户库；缺失租户池绝不回退到 management 库（见 require_tenant_pool）。
     let pool = require_tenant_pool(&dynamic_pool)?;
 
-    let schema_name = req["name"]
-        .as_str()
-        .ok_or_else(|| crate::error::AppError::InvalidQuery("缺少 schema 名称".to_string()))?;
+    let schema_name = req["name"].as_str().ok_or_else(|| {
+        crate::error::AppError::validation(
+            "schema_missing_name",
+            "缺少 schema 名称".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
 
     if !is_valid_schema_name(schema_name) {
-        return Err(crate::error::AppError::InvalidQuery(
+        return Err(crate::error::AppError::validation(
+            "schema_invalid_name",
             "Schema 名称只能包含字母、数字和下划线，且不能以数字开头".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -216,10 +230,11 @@ pub async fn create_schema(
     .await?;
 
     if exists {
-        return Err(crate::error::AppError::InvalidQuery(format!(
-            "Schema '{}' 已存在",
-            schema_name
-        )));
+        return Err(crate::error::AppError::validation(
+            "schema_already_exists",
+            format!("Schema '{}' 已存在", schema_name),
+            serde_json::json!({ "schema_name": schema_name }),
+        ));
     }
 
     // 创建 schema
@@ -242,6 +257,8 @@ pub async fn create_schema(
         None,
         None,
         None,
+        Some("oplog_schema_create"),
+        serde_json::json!({ "schema": schema_name }),
     );
 
     Ok(Json(serde_json::json!({
@@ -283,10 +300,11 @@ pub async fn drop_schema(
     let pool = require_tenant_pool(&dynamic_pool)?;
 
     if !is_valid_schema_name(&schema) {
-        return Err(crate::error::AppError::InvalidQuery(format!(
-            "非法的 schema 名称: '{}'",
-            schema
-        )));
+        return Err(crate::error::AppError::validation(
+            "schema_invalid_name_for_drop",
+            format!("非法的 schema 名称: '{}'", schema),
+            serde_json::json!({ "schema": schema }),
+        ));
     }
 
     let protected_schemas = [
@@ -297,10 +315,11 @@ pub async fn drop_schema(
         "management",
     ];
     if protected_schemas.contains(&schema.as_str()) {
-        return Err(crate::error::AppError::InvalidQuery(format!(
-            "不能删除系统 schema '{}'",
-            schema
-        )));
+        return Err(crate::error::AppError::validation(
+            "schema_cannot_drop_system_schema",
+            format!("不能删除系统 schema '{}'", schema),
+            serde_json::json!({ "schema": schema }),
+        ));
     }
 
     // 检查是否强制删除（CASCADE）
@@ -315,10 +334,11 @@ pub async fn drop_schema(
     .await?;
 
     if !exists {
-        return Err(crate::error::AppError::NotFound(format!(
-            "Schema '{}' 不存在",
-            schema
-        )));
+        return Err(crate::error::AppError::not_found_coded(
+            "schema_not_found",
+            format!("Schema '{}' 不存在", schema),
+            serde_json::json!({ "schema": schema }),
+        ));
     }
 
     // 删除 schema
@@ -330,10 +350,11 @@ pub async fn drop_schema(
 
     sqlx::query(&sql).execute(pool).await.map_err(|e| {
         if e.to_string().contains("cannot drop") || e.to_string().contains("not empty") {
-            crate::error::AppError::InvalidQuery(format!(
-                "Schema '{}' 不为空，请先删除其中的对象或使用 CASCADE 选项",
-                schema
-            ))
+            crate::error::AppError::validation(
+                "schema_not_empty",
+                format!("Schema '{}' 不为空，请先删除其中的对象或使用 CASCADE 选项", schema),
+                serde_json::json!({ "schema": schema }),
+            )
         } else {
             crate::error::AppError::Internal(format!("删除 schema 失败: {}", e))
         }
@@ -362,6 +383,12 @@ pub async fn drop_schema(
             "fields": { "级联删除": cascade }
         })),
         None,
+        Some(if cascade {
+            "oplog_schema_delete_cascade"
+        } else {
+            "oplog_schema_delete"
+        }),
+        serde_json::json!({ "schema": schema }),
     );
 
     Ok(Json(serde_json::json!({

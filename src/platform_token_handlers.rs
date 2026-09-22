@@ -17,8 +17,10 @@ fn require_platform_token_admin(claims: &Claims) -> Result<()> {
     if claims.is_superadmin {
         Ok(())
     } else {
-        Err(AppError::Forbidden(
+        Err(AppError::forbidden_coded(
+            "ptokenh_superadmin_only",
             "仅平台超管可管理平台服务令牌".to_string(),
+            serde_json::json!({}),
         ))
     }
 }
@@ -43,15 +45,19 @@ pub async fn create_platform_token(
     require_platform_token_admin(&claims)?;
     // 禁止用平台令牌再创建平台令牌（防提权链）。
     if token_ctx.is_some() {
-        return Err(AppError::Forbidden(
+        return Err(AppError::forbidden_coded(
+            "ptokenh_cannot_create_via_platform_token",
             "禁止使用平台令牌创建新的平台令牌，请用登录用户（JWT）操作".to_string(),
+            serde_json::json!({}),
         ));
     }
 
     let name = req.name.trim();
     if name.is_empty() || name.len() > 100 {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "ptokenh_name_length_invalid",
             "令牌名称需为 1-100 个字符".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -169,7 +175,11 @@ pub async fn delete_platform_token(
             .rows_affected();
 
     if affected == 0 {
-        return Err(AppError::NotFound("令牌不存在或无权操作".to_string()));
+        return Err(AppError::not_found_coded(
+            "ptokenh_not_found_or_forbidden",
+            "令牌不存在或无权操作".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     Ok(Json(json!({ "success": true, "id": id })))

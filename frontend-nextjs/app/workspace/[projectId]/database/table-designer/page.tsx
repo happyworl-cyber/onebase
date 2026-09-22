@@ -1,6 +1,7 @@
 'use client'
 
 import { Suspense, useState, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { schemaAPI, ddlAPI, type AlterOp, type DdlColumnDef, type DdlIndexDef } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
@@ -10,28 +11,28 @@ import Drawer from '@/components/Drawer'
 
 // PostgreSQL 数据类型
 const DATA_TYPES = [
-  { value: 'integer', label: 'INTEGER', description: '整数' },
-  { value: 'bigint', label: 'BIGINT', description: '大整数' },
-  { value: 'smallint', label: 'SMALLINT', description: '小整数' },
-  { value: 'serial', label: 'SERIAL', description: '自增整数' },
-  { value: 'bigserial', label: 'BIGSERIAL', description: '自增大整数' },
-  { value: 'numeric', label: 'NUMERIC', description: '精确数值' },
-  { value: 'real', label: 'REAL', description: '浮点数' },
-  { value: 'double precision', label: 'DOUBLE PRECISION', description: '双精度' },
-  { value: 'varchar', label: 'VARCHAR', description: '可变长字符串' },
-  { value: 'text', label: 'TEXT', description: '长文本' },
-  { value: 'char', label: 'CHAR', description: '定长字符串' },
-  { value: 'boolean', label: 'BOOLEAN', description: '布尔值' },
-  { value: 'date', label: 'DATE', description: '日期' },
-  { value: 'time', label: 'TIME', description: '时间' },
-  { value: 'timestamp', label: 'TIMESTAMP', description: '时间戳' },
-  { value: 'timestamptz', label: 'TIMESTAMPTZ', description: '带时区时间戳' },
+  { value: 'integer', label: 'INTEGER', description: 'Integer' },
+  { value: 'bigint', label: 'BIGINT', description: 'Big integer' },
+  { value: 'smallint', label: 'SMALLINT', description: 'Small integer' },
+  { value: 'serial', label: 'SERIAL', description: 'Auto-increment integer' },
+  { value: 'bigserial', label: 'BIGSERIAL', description: 'Auto-increment big integer' },
+  { value: 'numeric', label: 'NUMERIC', description: 'Exact numeric' },
+  { value: 'real', label: 'REAL', description: 'Float' },
+  { value: 'double precision', label: 'DOUBLE PRECISION', description: 'Double precision' },
+  { value: 'varchar', label: 'VARCHAR', description: 'Variable-length string' },
+  { value: 'text', label: 'TEXT', description: 'Long text' },
+  { value: 'char', label: 'CHAR', description: 'Fixed-length string' },
+  { value: 'boolean', label: 'BOOLEAN', description: 'Boolean' },
+  { value: 'date', label: 'DATE', description: 'Date' },
+  { value: 'time', label: 'TIME', description: 'Time' },
+  { value: 'timestamp', label: 'TIMESTAMP', description: 'Timestamp' },
+  { value: 'timestamptz', label: 'TIMESTAMPTZ', description: 'Timestamp with time zone' },
   { value: 'uuid', label: 'UUID', description: 'UUID' },
-  { value: 'json', label: 'JSON', description: 'JSON 数据' },
-  { value: 'jsonb', label: 'JSONB', description: '二进制 JSON' },
-  { value: 'bytea', label: 'BYTEA', description: '二进制数据' },
-  { value: 'inet', label: 'INET', description: 'IP 地址' },
-  { value: 'array', label: 'ARRAY', description: '数组' },
+  { value: 'json', label: 'JSON', description: 'JSON data' },
+  { value: 'jsonb', label: 'JSONB', description: 'Binary JSON' },
+  { value: 'bytea', label: 'BYTEA', description: 'Binary data' },
+  { value: 'inet', label: 'INET', description: 'IP address' },
+  { value: 'array', label: 'ARRAY', description: 'Array' },
 ]
 
 interface ColumnDefinition {
@@ -66,11 +67,12 @@ interface TableInfo {
 type Mode = 'create' | 'edit'
 
 export default function TableDesignerPage() {
+  const t = useTranslations('wsTableDesigner')
   return (
     <Suspense
       fallback={
         <div className="p-6 text-sm text-gray-500">
-          <i className="fas fa-spinner fa-spin mr-2"></i>加载中…
+          <i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}
         </div>
       }
     >
@@ -80,6 +82,7 @@ export default function TableDesignerPage() {
 }
 
 function TableDesignerInner() {
+  const t = useTranslations('wsTableDesigner')
   const { currentSchema } = useAppStore()
   const notify = useNotification()
   const { canWriteDatabase } = useCurrentProjectCapabilities()
@@ -378,7 +381,7 @@ function TableDesignerInner() {
   const generateAlterTableSQL = () => {
     const ops = computeAlterOps()
     if (ops.length === 0) {
-      return '-- 当前编辑没有可识别的结构变更'
+      return t('noRecognizableChange')
     }
     let targetTable = originalTableName || tableName
     const lines = ops.map(op => {
@@ -434,7 +437,7 @@ function TableDesignerInner() {
   // 注意：不走 /query。结构化 body 由 ddlAPI 拼，服务端 100% 走白名单 + ident 校验。
   const executeSQL = async () => {
     if (!canWriteDatabase) {
-      notify.error('需要 owner / admin / member 角色才能执行 DDL；当前账号为 viewer。')
+      notify.error(t('ddlForbidden'))
       return
     }
     if (!tableName) return
@@ -442,8 +445,7 @@ function TableDesignerInner() {
     if (mode === 'create') {
       if (columns.length === 0) return
       const ok = window.confirm(
-        `确定在 schema "${currentSchema}" 下创建表 "${tableName}" 吗？\n` +
-        `共 ${columns.length} 列${indexes.length > 0 ? ` / ${indexes.length} 个索引` : ''}。`
+        t('confirmCreate', { schema: currentSchema, name: tableName, cols: columns.length, idx: indexes.length > 0 ? t('idxSuffix', { n: indexes.length }) : '' })
       )
       if (!ok) return
       setExecuting(true)
@@ -454,7 +456,7 @@ function TableDesignerInner() {
           columns: columns.map(toApiColumn),
           indexes: indexes.filter(i => i.name && i.columns.length > 0).map(toApiIndex),
         })
-        notify.success(`表 "${tableName}" 创建成功`)
+        notify.success(t('createOk', { name: tableName }))
         setShowPreview(false)
         await loadTables()
         // 触发 ER 图、表列表的 schema-changed 监听，让其他页面同步
@@ -473,18 +475,18 @@ function TableDesignerInner() {
     // edit 模式
     const ops = computeAlterOps()
     if (ops.length === 0) {
-      notify.error('没有可应用的变更')
+      notify.error(t('noChange'))
       return
     }
     const summary = ops.map(o => o.kind).join(', ')
     const ok = window.confirm(
-      `确定对表 "${tableName}" 应用 ${ops.length} 个变更？\n操作：${summary}`
+      t('confirmAlter', { name: tableName, n: ops.length, summary })
     )
     if (!ok) return
     setExecuting(true)
     try {
       await ddlAPI.alterTable(currentSchema, originalTableName || tableName, ops)
-      notify.success('表结构修改成功！')
+      notify.success(t('alterOk'))
       setShowPreview(false)
       await loadTables()
       // 重新拉一次结构作为新基线，并重置 originals
@@ -545,9 +547,9 @@ function TableDesignerInner() {
       {/* 页面头部 */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-800">表结构设计器</h1>
+          <h1 className="text-2xl font-semibold text-gray-800">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            当前 Schema: <span className="font-mono font-medium text-gray-900">{currentSchema}</span>
+            {t('currentSchema')} <span className="font-mono font-medium text-gray-900">{currentSchema}</span>
           </p>
         </div>
         
@@ -557,7 +559,7 @@ function TableDesignerInner() {
             className="btn-primary"
           >
             <i className="fas fa-plus mr-2"></i>
-            新建表
+            {t('newTable')}
           </button>
         </div>
       </div>
@@ -568,17 +570,17 @@ function TableDesignerInner() {
         <div className="col-span-3">
           <div className="card">
             <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
-              <h3 className="text-sm font-semibold text-gray-700">现有表</h3>
+              <h3 className="text-sm font-semibold text-gray-700">{t('existingTables')}</h3>
             </div>
             <div className="max-h-[600px] overflow-y-auto">
               {loading && tables.length === 0 ? (
                 <div className="p-4 text-center text-gray-500">
                   <i className="fas fa-spinner fa-spin mr-2"></i>
-                  加载中...
+                  {t('loadingShort')}
                 </div>
               ) : tables.length === 0 ? (
                 <div className="p-4 text-center text-gray-500">
-                  暂无表
+                  {t('emptyTables')}
                 </div>
               ) : (
                 <div className="divide-y divide-gray-100">
@@ -608,17 +610,17 @@ function TableDesignerInner() {
             <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
               <div className="flex items-center space-x-3">
                 <h3 className="text-sm font-semibold text-gray-700">
-                  {mode === 'create' ? '创建新表' : `编辑表: ${tableName}`}
+                  {mode === 'create' ? t('createNewTable') : t('editTable', { name: tableName })}
                 </h3>
                 <span className={`text-xs px-2 py-0.5 rounded font-medium ${
                   mode === 'create' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
                 }`}>
-                  {mode === 'create' ? '新建' : '编辑'}
+                  {mode === 'create' ? t('modeCreate') : t('modeEdit')}
                 </span>
                 {mode === 'edit' && (
                   <span className="text-xs text-gray-500">
                     <i className="fas fa-info-circle mr-1"></i>
-                    支持改表名 / 列名 / 类型 / 可空 / 默认值 / 新增唯一
+                    {t('editHint')}
                   </span>
                 )}
               </div>
@@ -630,7 +632,7 @@ function TableDesignerInner() {
                   className="btn-default text-sm"
                 >
                   <i className="fas fa-eye mr-2"></i>
-                  预览 SQL
+                  {t('previewSql')}
                 </button>
               </div>
             </div>
@@ -638,12 +640,12 @@ function TableDesignerInner() {
             <div className="p-4 space-y-6">
               {/* 表名 */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">表名</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">{t('tableNameLabel')}</label>
                 <input
                   type="text"
                   value={tableName}
                   onChange={(e) => setTableName(e.target.value)}
-                  placeholder="输入表名..."
+                  placeholder={t('tableNamePlaceholder')}
                   className="w-64 input-base"
                 />
               </div>
@@ -651,13 +653,13 @@ function TableDesignerInner() {
               {/* 列定义 */}
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <label className="text-sm font-medium text-gray-700">列定义</label>
+                  <label className="text-sm font-medium text-gray-700">{t('colDefs')}</label>
                   <button
                     onClick={addColumn}
                     className="text-sm text-blue-600 hover:text-blue-800"
                   >
                     <i className="fas fa-plus mr-1"></i>
-                    添加列
+                    {t('addColumn')}
                   </button>
                 </div>
                 
@@ -665,14 +667,14 @@ function TableDesignerInner() {
                   <table className="w-full text-sm">
                     <thead className="bg-gray-50">
                       <tr>
-                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">列名</th>
-                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">类型</th>
-                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">长度</th>
-                        <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600">可空</th>
-                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">默认值</th>
-                        <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600">主键</th>
-                        <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600">唯一</th>
-                        <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600">操作</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">{t('colName')}</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">{t('colType')}</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">{t('colLength')}</th>
+                        <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600">{t('colNullable')}</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">{t('colDefault')}</th>
+                        <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600">{t('colPrimary')}</th>
+                        <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600">{t('colUnique')}</th>
+                        <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600">{t('colActions')}</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -742,7 +744,7 @@ function TableDesignerInner() {
                                 nullable: e.target.checked ? false : col.nullable
                               })}
                               disabled={isOriginal}
-                              title={isOriginal ? '原始列主键不可改' : undefined}
+                              title={isOriginal ? t('pkLocked') : undefined}
                               className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
                             />
                           </td>
@@ -752,7 +754,7 @@ function TableDesignerInner() {
                               checked={col.isUnique}
                               onChange={(e) => updateColumn(col.id, { isUnique: e.target.checked })}
                               disabled={col.isPrimaryKey || originalUniqueLocked}
-                              title={originalUniqueLocked ? '已有唯一约束暂不支持从这里删除' : undefined}
+                              title={originalUniqueLocked ? t('uniqueLocked') : undefined}
                               className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
                             />
                           </td>
@@ -760,7 +762,7 @@ function TableDesignerInner() {
                             <button
                               onClick={() => removeColumn(col.id)}
                               className="text-red-500 hover:text-red-700"
-                              title="删除"
+                              title={t('delete')}
                             >
                               <i className="fas fa-trash"></i>
                             </button>
@@ -771,7 +773,7 @@ function TableDesignerInner() {
                       {columns.length === 0 && (
                         <tr>
                           <td colSpan={8} className="px-4 py-8 text-center text-gray-500">
-                            点击"添加列"开始设计表结构
+                            {t('addColHint')}
                           </td>
                         </tr>
                       )}
@@ -783,14 +785,14 @@ function TableDesignerInner() {
               {/* 索引定义 */}
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <label className="text-sm font-medium text-gray-700">索引</label>
+                  <label className="text-sm font-medium text-gray-700">{t('indexesLabel')}</label>
                   <button
                     onClick={addIndex}
                     disabled={columns.length === 0}
                     className="text-sm text-blue-600 hover:text-blue-800 disabled:opacity-50"
                   >
                     <i className="fas fa-plus mr-1"></i>
-                    添加索引
+                    {t('addIndex')}
                   </button>
                 </div>
                 
@@ -799,10 +801,10 @@ function TableDesignerInner() {
                     <table className="w-full text-sm">
                       <thead className="bg-gray-50">
                         <tr>
-                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">索引名</th>
-                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">列</th>
-                          <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600">唯一</th>
-                          <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600">操作</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">{t('idxName')}</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">{t('idxCols')}</th>
+                          <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600">{t('idxUnique')}</th>
+                          <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600">{t('idxActions')}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
@@ -845,7 +847,7 @@ function TableDesignerInner() {
                               <button
                                 onClick={() => removeIndex(idx.id)}
                                 className="text-red-500 hover:text-red-700"
-                                title="删除"
+                                title={t('delete')}
                               >
                                 <i className="fas fa-trash"></i>
                               </button>
@@ -866,7 +868,7 @@ function TableDesignerInner() {
       <Drawer
         isOpen={showPreview}
         onClose={() => setShowPreview(false)}
-        title="SQL 预览"
+        title={t('sqlPreview')}
         size="xl"
         footer={
           <div className="flex gap-3">
@@ -874,26 +876,26 @@ function TableDesignerInner() {
               onClick={() => setShowPreview(false)}
               className="h-11 px-5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-all duration-200"
             >
-              关闭
+              {t('close')}
             </button>
             <button
               onClick={() => {
                 navigator.clipboard.writeText(generatedSQL)
-                notify.success('SQL 已复制到剪贴板')
+                notify.success(t('sqlCopied'))
               }}
               className="h-11 px-5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-all duration-200 flex items-center"
             >
               <i className="fas fa-copy mr-2"></i>
-              复制
+              {t('copy')}
             </button>
             <button
               onClick={executeSQL}
               disabled={executing || !canWriteDatabase}
-              title={!canWriteDatabase ? '需要 owner / admin / member 角色才能执行 DDL（viewer 只读）' : undefined}
+              title={!canWriteDatabase ? t('ddlViewerHint') : undefined}
               className="flex-1 h-11 px-5 text-sm font-medium text-white bg-gradient-to-r from-green-500 to-green-600 rounded-lg hover:from-green-600 hover:to-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-sm hover:shadow-md flex items-center justify-center"
             >
               <i className={`fas ${executing ? 'fa-spinner fa-spin' : 'fa-play'} mr-2`}></i>
-              {executing ? '执行中...' : !canWriteDatabase ? '无权执行' : '执行 SQL'}
+              {executing ? t('executing') : !canWriteDatabase ? t('noPermExec') : t('execSql')}
             </button>
           </div>
         }

@@ -1,5 +1,7 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
+
 import { useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { TRIGGER_ICON_CLASS, TRIGGER_META } from './constants'
@@ -90,6 +92,7 @@ export default function WorkflowListToolbar({
   onSetView,
   onResetFilters,
 }: WorkflowListToolbarProps) {
+  const t = useTranslations('wfManager')
   const [openDrop, setOpenDrop] = useState<'trig' | 'author' | 'updater' | 'sort' | null>(null)
   const [authorSearch, setAuthorSearch] = useState('')
   const [updaterSearch, setUpdaterSearch] = useState('')
@@ -137,7 +140,7 @@ export default function WorkflowListToolbar({
     ? updaters.filter((a) => a.toLowerCase().includes(updaterSearch.toLowerCase()))
     : updaters
 
-  const sortLabel = { updated_at: '最近修改', created_at: '创建时间', name: '名称 A→Z' }[state.sort]
+  const sortLabel = { updated_at: t('sortUpdated'), created_at: t('sortCreated'), name: t('sortName') }[state.sort]
 
   const hasActiveFilters =
     !!state.search ||
@@ -156,14 +159,14 @@ export default function WorkflowListToolbar({
           value={state.search}
           onChange={(e) => onSearch(e.target.value)}
           placeholder={
-            state.globalSearch ? '全局搜索 ID / 名称 / slug' : '搜索本文件夹 ID / 名称 / slug'
+            state.globalSearch ? t('phSearchGlobal') : t('phSearchFolder')
           }
           className="pl-7 pr-8 py-2 border border-slate-200 rounded-lg text-sm w-72 lg:w-80 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-200"
         />
         {state.search && (
           <button
             type="button"
-            aria-label="清除搜索"
+            aria-label={t('clearSearch')}
             onClick={() => onSearch('')}
             className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 flex items-center justify-center rounded-full text-slate-300 hover:text-slate-500 hover:bg-slate-100"
           >
@@ -175,7 +178,7 @@ export default function WorkflowListToolbar({
       <button
         type="button"
         onClick={onToggleGlobalSearch}
-        title="在整个项目库的所有文件夹中搜索"
+        title={t('globalSearchTitle')}
         className={cn(
           'px-2.5 py-2 text-sm border rounded-lg flex items-center gap-1.5',
           state.globalSearch
@@ -184,7 +187,7 @@ export default function WorkflowListToolbar({
         )}
       >
         <i className={cn('fas fa-globe text-[9px]', state.globalSearch ? 'text-indigo-500' : 'text-slate-400')} />
-        全局搜索
+        {t('globalSearch')}
       </button>
 
       {/* Trigger dropdown（多选，勾选时不关闭） */}
@@ -203,9 +206,9 @@ export default function WorkflowListToolbar({
           )}
         >
           <i className="fas fa-bolt text-slate-400 text-[10px]" />
-          {state.trigs.size ? `触发 (${state.trigs.size})` : '触发方式'}
+          {state.trigs.size ? t('trigsN', { n: state.trigs.size }) : t('trigs')}
           {state.trigs.size ? (
-            <ChipClear label="清除触发方式筛选" onClear={onClearTrigs} />
+            <ChipClear label={t('clearTrigs')} onClear={onClearTrigs} />
           ) : (
             <i className="fas fa-chevron-down text-slate-300 text-[9px]" />
           )}
@@ -247,9 +250,9 @@ export default function WorkflowListToolbar({
           )}
         >
           <i className="fas fa-user text-slate-400 text-[10px]" />
-          {state.author || '作者'}
+          {state.author || t('author')}
           {state.author ? (
-            <ChipClear label="清除作者筛选" onClear={() => onSetAuthor(null)} />
+            <ChipClear label={t('clearAuthor')} onClear={() => onSetAuthor(null)} />
           ) : (
             <i className="fas fa-chevron-down text-slate-300 text-[9px]" />
           )}
@@ -267,7 +270,7 @@ export default function WorkflowListToolbar({
                   type="text"
                   value={authorSearch}
                   onChange={(e) => setAuthorSearch(e.target.value)}
-                  placeholder="搜索作者…"
+                  placeholder={t('phSearchAuthor')}
                   className="w-full pl-6 pr-2 py-1.5 border border-slate-200 rounded-md text-sm placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-300"
                 />
               </div>
@@ -283,12 +286,12 @@ export default function WorkflowListToolbar({
                   }}
                   className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center justify-between"
                 >
-                  全部作者
+                  {t('allAuthors')}
                   {!state.author && <i className="fas fa-check text-indigo-600 text-[10px]" />}
                 </button>
               )}
               {filteredAuthors.length === 0 ? (
-                <div className="px-3 py-2 text-sm text-slate-400">无匹配作者</div>
+                <div className="px-3 py-2 text-sm text-slate-400">{t('noMatchAuthor')}</div>
               ) : (
                 filteredAuthors.map((a) => (
                   <button
@@ -331,9 +334,9 @@ export default function WorkflowListToolbar({
           )}
         >
           <i className="fas fa-user-pen text-slate-400 text-[10px]" />
-          {state.updater || '最近修改人'}
+          {state.updater || t('updater')}
           {state.updater ? (
-            <ChipClear label="清除最近修改人筛选" onClear={() => onSetUpdater(null)} />
+            <ChipClear label={t('clearUpdater')} onClear={() => onSetUpdater(null)} />
           ) : (
             <i className="fas fa-chevron-down text-slate-300 text-[9px]" />
           )}
@@ -351,7 +354,7 @@ export default function WorkflowListToolbar({
                   type="text"
                   value={updaterSearch}
                   onChange={(e) => setUpdaterSearch(e.target.value)}
-                  placeholder="搜索最近修改人…"
+                  placeholder={t('phSearchUpdater')}
                   className="w-full pl-6 pr-2 py-1.5 border border-slate-200 rounded-md text-sm placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-300"
                 />
               </div>
@@ -367,12 +370,12 @@ export default function WorkflowListToolbar({
                   }}
                   className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center justify-between"
                 >
-                  全部
+                  {t('all')}
                   {!state.updater && <i className="fas fa-check text-indigo-600 text-[10px]" />}
                 </button>
               )}
               {filteredUpdaters.length === 0 ? (
-                <div className="px-3 py-2 text-sm text-slate-400">无匹配</div>
+                <div className="px-3 py-2 text-sm text-slate-400">{t('noMatch')}</div>
               ) : (
                 filteredUpdaters.map((a) => (
                   <button
@@ -403,25 +406,25 @@ export default function WorkflowListToolbar({
         <button
           type="button"
           onClick={onResetFilters}
-          title="清空全部筛选条件"
+          title={t('clearAllTitle')}
           className="flex items-center gap-1.5 px-2.5 py-2 text-sm text-slate-500 rounded-lg border border-transparent hover:border-slate-200 hover:bg-slate-50 hover:text-slate-700"
         >
           <i className="fas fa-filter-circle-xmark text-[11px]" />
-          清空筛选
+          {t('clearAll')}
         </button>
       )}
 
       <div className="flex items-center gap-1 ml-auto">
         <FilterChip active={state.status === 'all'} onClick={() => onSetStatus('all')}>
-          全部
+          {t('statusAll')}
         </FilterChip>
         <FilterChip active={state.status === 'on'} onClick={() => onSetStatus('on')} className="flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
-          启用
+          {t('statusEnabled')}
         </FilterChip>
         <FilterChip active={state.status === 'off'} onClick={() => onSetStatus('off')} className="flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-slate-300 inline-block" />
-          禁用
+          {t('statusDisabled')}
         </FilterChip>
       </div>
 
@@ -445,9 +448,9 @@ export default function WorkflowListToolbar({
           >
             {(
               [
-                ['created_at', '创建时间'],
-                ['updated_at', '最近修改'],
-                ['name', '名称 A→Z'],
+                ['created_at', t('sortCreated')],
+                ['updated_at', t('sortUpdated')],
+                ['name', t('sortName')],
               ] as const
             ).map(([key, label]) => (
               <button
@@ -477,7 +480,7 @@ export default function WorkflowListToolbar({
           )}
         >
           <i className="fas fa-list text-[9px]" />
-          紧凑
+          {t('viewCompact')}
         </button>
         <button
           type="button"
@@ -488,7 +491,7 @@ export default function WorkflowListToolbar({
           )}
         >
           <i className="fas fa-grip text-[9px]" />
-          卡片
+          {t('viewCard')}
         </button>
       </div>
     </div>

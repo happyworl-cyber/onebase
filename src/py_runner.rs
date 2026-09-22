@@ -222,7 +222,7 @@ async fn run_python(
             "HOME",
             temp_dir.to_str().ok_or("temporary path is not UTF-8")?,
             "--setenv",
-            "ONEBASE_HOST_SOCK",
+            "PLANEOS_HOST_SOCK",
             socket_path.to_str().ok_or("socket path is not UTF-8")?,
             "--setenv",
             "PYTHONPATH",
@@ -243,7 +243,7 @@ async fn run_python(
             .env_clear()
             .env("PATH", SAFE_PATH)
             .env("HOME", temp_dir)
-            .env("ONEBASE_HOST_SOCK", socket_path)
+            .env("PLANEOS_HOST_SOCK", socket_path)
             .env("PYTHONPATH", &python_path)
             .env("PYTHONDONTWRITEBYTECODE", "1");
         command
@@ -308,21 +308,21 @@ fn runtime_dir() -> Result<PathBuf, String> {
         if !configured.is_empty() {
             let dir = PathBuf::from(configured);
             return dir
-                .join("onebase_host.py")
+                .join("planeos_host.py")
                 .is_file()
                 .then_some(dir)
                 .ok_or_else(|| {
-                    format!("WORKFLOW_PY_RUNTIME 目录缺少 onebase_host.py: {configured}")
+                    format!("WORKFLOW_PY_RUNTIME 目录缺少 planeos_host.py: {configured}")
                 });
         }
     }
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("py-runtime")
-        .join("onebase_runtime");
-    if dir.join("onebase_host.py").is_file() {
+        .join("planeos_runtime");
+    if dir.join("planeos_host.py").is_file() {
         Ok(dir)
     } else {
-        Err("PlaneOS Python runtime onebase_host.py is missing".to_string())
+        Err("PlaneOS Python runtime planeos_host.py is missing".to_string())
     }
 }
 
@@ -364,7 +364,7 @@ import os as _os
 import sys as _sys
 from types import SimpleNamespace as _SimpleNamespace
 
-import onebase_host as _host
+import planeos_host as _host
 
 _dir = _os.path.dirname(_os.path.abspath(__file__))
 _logs = []
@@ -525,7 +525,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("py-runtime")
-            .join("onebase_runtime");
+            .join("planeos_runtime");
         std::env::set_var("WORKFLOW_PY_RUNTIME", &dir);
         assert_eq!(runtime_dir().unwrap(), dir);
         std::env::set_var("WORKFLOW_PY_RUNTIME", "/nonexistent/py-runtime-xyz");

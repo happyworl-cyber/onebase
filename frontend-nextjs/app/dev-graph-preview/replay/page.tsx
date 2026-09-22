@@ -1,12 +1,14 @@
 'use client'
 
 /**
- * 本地 dev 预览页 —— 执行回放图，零后端依赖，数据来自内置 fixture（见 ./fixtures.ts）。
- * 同 app/dev-graph-preview/page.tsx（依赖图）的先例：不是生产路由，生产页
- * （WorkflowsManager 里的"执行回放"按钮）不依赖这个文件。
+ * Local dev preview page — execution replay graph, zero backend dependency, data from the
+ * built-in fixtures (see ./fixtures.ts). Same precedent as app/dev-graph-preview/page.tsx
+ * (dependency graph): not a production route; the production page (the "Execution replay"
+ * button in WorkflowsManager) does not depend on this file.
  *
- * 支持 `?run=<id>` 透传给 ExecutionReplayView 的 initialRunId prop，方便本地/playwright
- * 免后端验证"从执行记录进来预选某次 run"这个能力。
+ * Supports `?run=<id>` passed through to ExecutionReplayView's initialRunId prop, making it
+ * easy to verify "enter from an execution record and preselect a run" locally / in Playwright
+ * without a backend.
  */
 
 import { Suspense } from 'react'
@@ -14,7 +16,7 @@ import { useSearchParams } from 'next/navigation'
 import ExecutionReplayView from '@/components/workflow/replay/ExecutionReplayView'
 import { MOCK_RUNS, MOCK_RUN_DETAILS, MOCK_WORKFLOW_EDGES, MOCK_WORKFLOW_NODES } from './fixtures'
 
-/** useSearchParams 在 App Router 里必须包一层 Suspense 才能静态导出，见外层 default export。 */
+/** useSearchParams must be wrapped in a Suspense boundary in the App Router for static export; see the outer default export. */
 export default function DevReplayPreviewPage() {
   return (
     <Suspense fallback={null}>

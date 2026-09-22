@@ -35,10 +35,11 @@ fn is_valid_slug(s: &str) -> bool {
 fn validate_org_role(role: &str) -> Result<()> {
     match role {
         "owner" | "admin" | "member" => Ok(()),
-        _ => Err(AppError::InvalidQuery(format!(
-            "无效组织角色 '{}'，必须是 owner / admin / member 之一",
-            role
-        ))),
+        _ => Err(AppError::validation(
+            "org_invalid_org_role",
+            format!("无效组织角色 '{}'，必须是 owner / admin / member 之一", role),
+            serde_json::json!({ "role": role }),
+        )),
     }
 }
 
@@ -433,19 +434,27 @@ pub async fn create_organization(
     Json(req): Json<CreateOrganizationRequest>,
 ) -> Result<Json<serde_json::Value>> {
     if !claims.is_superadmin {
-        return Err(AppError::Forbidden(
+        return Err(AppError::forbidden_coded(
+            "org_create_forbidden_not_superadmin",
             "仅平台超管可以创建租户，请联系平台管理员".to_string(),
+            serde_json::json!({}),
         ));
     }
 
     let name = req.name.trim();
     let slug = req.slug.trim();
     if name.is_empty() || name.chars().count() > 100 {
-        return Err(AppError::InvalidQuery("name 必须 1-100 字符".to_string()));
+        return Err(AppError::validation(
+            "org_name_length",
+            "name 必须 1-100 字符".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if !is_valid_slug(slug) {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "org_slug_format",
             "slug 必须 1-50 字符，首字符小写字母，仅含 [a-z0-9_-]".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -455,7 +464,11 @@ pub async fn create_organization(
             .fetch_one(&pool)
             .await?;
         if !exists {
-            return Err(AppError::NotFound(format!("用户 {} 不存在", owner_id)));
+            return Err(AppError::not_found_coded(
+                "org_user_not_found",
+                format!("用户 {} 不存在", owner_id),
+                serde_json::json!({ "user_id": owner_id }),
+            ));
         }
     }
 
@@ -474,7 +487,11 @@ pub async fn create_organization(
     .await
     .map_err(|e| match &e {
         sqlx::Error::Database(db) if db.constraint() == Some("organizations_slug_key") => {
-            AppError::InvalidQuery(format!("slug '{}' 已被占用", slug))
+            AppError::validation(
+                "org_slug_taken",
+                format!("slug '{}' 已被占用", slug),
+                serde_json::json!({ "slug": slug }),
+            )
         }
         _ => AppError::Database(e),
     })?;
@@ -518,14 +535,21 @@ pub async fn get_organization(
     .bind(organization_id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("组织 {} 不存在", organization_id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "org_not_found",
+            format!("组织 {} 不存在", organization_id),
+            serde_json::json!({ "organization_id": organization_id }),
+        )
+    })?;
 
     let status: String = row.get("status");
     if status != "active" && !claims.is_superadmin {
-        return Err(AppError::Forbidden(format!(
-            "租户 {} 已停用，请联系平台管理员",
-            organization_id
-        )));
+        return Err(AppError::forbidden_coded(
+            "org_tenant_suspended",
+            format!("租户 {} 已停用，请联系平台管理员", organization_id),
+            serde_json::json!({ "organization_id": organization_id }),
+        ));
     }
 
     let user_role = if claims.is_superadmin {
@@ -566,25 +590,35 @@ pub async fn patch_organization(
     permissions::require_organization_owner(&pool, &claims, organization_id).await?;
 
     if req.name.is_none() && req.contact_email.is_none() && req.status.is_none() {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "org_patch_missing_fields",
             "至少提供 name、contact_email 或 status 之一".to_string(),
+            serde_json::json!({}),
         ));
     }
     if let Some(ref name) = req.name {
         let name = name.trim();
         if name.is_empty() || name.chars().count() > 100 {
-            return Err(AppError::InvalidQuery("name 必须 1-100 字符".to_string()));
+            return Err(AppError::validation(
+                "org_name_length",
+                "name 必须 1-100 字符".to_string(),
+                serde_json::json!({}),
+            ));
         }
     }
     if let Some(ref status) = req.status {
         if !claims.is_superadmin {
-            return Err(AppError::Forbidden(
+            return Err(AppError::forbidden_coded(
+                "org_status_change_forbidden",
                 "仅平台超管可以修改租户状态".to_string(),
+                serde_json::json!({}),
             ));
         }
         if !["active", "suspended", "deleted"].contains(&status.as_str()) {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "org_status_invalid",
                 "status 必须是 active / suspended / deleted".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -608,7 +642,13 @@ pub async fn patch_organization(
         .bind(req.contact_email.as_deref())
         .fetch_optional(&mut *tx)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("组织 {} 不存在", organization_id)))?;
+        .ok_or_else(|| {
+            AppError::not_found_coded(
+                "org_not_found",
+                format!("组织 {} 不存在", organization_id),
+                serde_json::json!({ "organization_id": organization_id }),
+            )
+        })?;
 
         let current_slug: String = row.get("slug");
         let new_slug = released_slug(&current_slug, organization_id);
@@ -661,7 +701,13 @@ pub async fn patch_organization(
     .bind(req.status.as_deref())
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("组织 {} 不存在", organization_id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "org_not_found",
+            format!("组织 {} 不存在", organization_id),
+            serde_json::json!({ "organization_id": organization_id }),
+        )
+    })?;
 
     let role = if claims.is_superadmin {
         "superadmin".to_string()
@@ -813,7 +859,11 @@ pub async fn add_organization_member(
         .fetch_one(&pool)
         .await?;
     if !user_exists {
-        return Err(AppError::NotFound(format!("用户 {} 不存在", req.user_id)));
+        return Err(AppError::not_found_coded(
+            "org_user_not_found",
+            format!("用户 {} 不存在", req.user_id),
+            serde_json::json!({ "user_id": req.user_id }),
+        ));
     }
 
     sqlx::query(
@@ -854,7 +904,11 @@ pub async fn update_organization_member(
     validate_org_role(&req.role)?;
 
     if user_id == claims.sub && !claims.is_superadmin {
-        return Err(AppError::Forbidden("不能修改自己的组织角色".to_string()));
+        return Err(AppError::forbidden_coded(
+            "org_cannot_change_own_role",
+            "不能修改自己的组织角色".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     // 升为 owner、或改动现有 owner 的角色，仅限组织 owner / 超管
@@ -885,8 +939,10 @@ pub async fn update_organization_member(
         .fetch_one(&pool)
         .await?;
         if current.as_deref() == Some("owner") && owners == 0 {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "org_last_owner_demote",
                 "不能降级组织的最后一个 owner".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -906,7 +962,11 @@ pub async fn update_organization_member(
     .rows_affected();
 
     if n == 0 {
-        return Err(AppError::NotFound("组织成员不存在".to_string()));
+        return Err(AppError::not_found_coded(
+            "org_member_not_found",
+            "组织成员不存在".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     Ok(Json(json!({
@@ -926,7 +986,11 @@ pub async fn remove_organization_member(
     permissions::require_organization_admin(&pool, &claims, organization_id).await?;
 
     if user_id == claims.sub && !claims.is_superadmin {
-        return Err(AppError::Forbidden("不能移除自己".to_string()));
+        return Err(AppError::forbidden_coded(
+            "org_cannot_remove_self",
+            "不能移除自己".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let role: Option<String> = sqlx::query_scalar(
@@ -941,7 +1005,11 @@ pub async fn remove_organization_member(
     .await?;
 
     let Some(role) = role else {
-        return Err(AppError::NotFound("组织成员不存在".to_string()));
+        return Err(AppError::not_found_coded(
+            "org_member_not_found",
+            "组织成员不存在".to_string(),
+            serde_json::json!({}),
+        ));
     };
 
     if role == "owner" {
@@ -957,8 +1025,10 @@ pub async fn remove_organization_member(
         .fetch_one(&pool)
         .await?;
         if other_owners == 0 {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "org_last_owner_remove",
                 "不能移除组织的最后一个 owner".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -1110,10 +1180,14 @@ pub struct AddProjectMemberFromOrgRequest {
 fn validate_project_role(role: &str) -> Result<()> {
     match role {
         "owner" | "admin" | "member" | "viewer" => Ok(()),
-        _ => Err(AppError::InvalidQuery(format!(
-            "无效项目角色 '{}'，必须是 owner / admin / member / viewer 之一",
-            role
-        ))),
+        _ => Err(AppError::validation(
+            "org_invalid_project_role",
+            format!(
+                "无效项目角色 '{}'，必须是 owner / admin / member / viewer 之一",
+                role
+            ),
+            serde_json::json!({ "role": role }),
+        )),
     }
 }
 
@@ -1161,13 +1235,17 @@ pub async fn add_organization_project_member(
     let create_mode = req.username.is_some() || req.email.is_some() || req.password.is_some();
     match (req.user_id, create_mode) {
         (Some(_), true) => {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "org_user_id_and_create_conflict",
                 "不能同时传 user_id 与新建账号字段".to_string(),
+                serde_json::json!({}),
             ));
         }
         (None, false) => {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "org_missing_user_or_account_fields",
                 "请提供 user_id，或 username/email/password 新建账号".to_string(),
+                serde_json::json!({}),
             ));
         }
         _ => {}
@@ -1186,10 +1264,11 @@ pub async fn add_organization_project_member(
     .fetch_one(&pool)
     .await?;
     if !belongs {
-        return Err(AppError::NotFound(format!(
-            "项目 {} 不属于组织 {} 或不存在",
-            project_id, organization_id
-        )));
+        return Err(AppError::not_found_coded(
+            "org_project_not_in_org",
+            format!("项目 {} 不属于组织 {} 或不存在", project_id, organization_id),
+            serde_json::json!({ "project_id": project_id, "organization_id": organization_id }),
+        ));
     }
 
     let password_hash = if create_mode {
@@ -1197,13 +1276,25 @@ pub async fn add_organization_project_member(
         let email = req.email.as_deref().unwrap_or("").trim().to_lowercase();
         let password = req.password.as_deref().unwrap_or("");
         if username.chars().count() < 3 {
-            return Err(AppError::InvalidQuery("用户名至少 3 个字符".to_string()));
+            return Err(AppError::validation(
+                "org_username_min_length",
+                "用户名至少 3 个字符".to_string(),
+                serde_json::json!({}),
+            ));
         }
         if !email.contains('@') || email.len() < 5 {
-            return Err(AppError::InvalidQuery("邮箱格式不正确".to_string()));
+            return Err(AppError::validation(
+                "org_email_invalid_format",
+                "邮箱格式不正确".to_string(),
+                serde_json::json!({}),
+            ));
         }
         if password.chars().count() < 6 {
-            return Err(AppError::InvalidQuery("密码至少 6 个字符".to_string()));
+            return Err(AppError::validation(
+                "org_password_min_length",
+                "密码至少 6 个字符".to_string(),
+                serde_json::json!({}),
+            ));
         }
 
         let email_taken: bool =
@@ -1212,7 +1303,11 @@ pub async fn add_organization_project_member(
                 .fetch_one(&pool)
                 .await?;
         if email_taken {
-            return Err(AppError::InvalidQuery("该邮箱已被注册".to_string()));
+            return Err(AppError::validation(
+                "org_email_taken",
+                "该邮箱已被注册".to_string(),
+                serde_json::json!({}),
+            ));
         }
         let username_taken: bool =
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)")
@@ -1220,7 +1315,11 @@ pub async fn add_organization_project_member(
                 .fetch_one(&pool)
                 .await?;
         if username_taken {
-            return Err(AppError::InvalidQuery("该用户名已被使用".to_string()));
+            return Err(AppError::validation(
+                "org_username_taken",
+                "该用户名已被使用".to_string(),
+                serde_json::json!({}),
+            ));
         }
 
         Some((
@@ -1236,7 +1335,11 @@ pub async fn add_organization_project_member(
         None
     } else {
         let Some(user_id) = req.user_id else {
-            return Err(AppError::InvalidQuery("请提供 user_id".to_string()));
+            return Err(AppError::validation(
+                "org_user_id_required",
+                "请提供 user_id".to_string(),
+                serde_json::json!({}),
+            ));
         };
 
         let user_exists: bool =
@@ -1245,7 +1348,11 @@ pub async fn add_organization_project_member(
                 .fetch_one(&pool)
                 .await?;
         if !user_exists {
-            return Err(AppError::NotFound(format!("用户 {} 不存在", user_id)));
+            return Err(AppError::not_found_coded(
+                "org_user_not_found",
+                format!("用户 {} 不存在", user_id),
+                serde_json::json!({ "user_id": user_id }),
+            ));
         }
 
         Some(user_id)
@@ -1348,7 +1455,11 @@ pub async fn transfer_organization_owner(
     permissions::require_organization_owner(&pool, &claims, organization_id).await?;
 
     if req.user_id == claims.sub {
-        return Err(AppError::InvalidQuery("不能转让给自己".to_string()));
+        return Err(AppError::validation(
+            "org_cannot_transfer_to_self",
+            "不能转让给自己".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let target_active: bool = sqlx::query_scalar(
@@ -1364,8 +1475,10 @@ pub async fn transfer_organization_owner(
     .fetch_one(&pool)
     .await?;
     if !target_active {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "org_transfer_target_not_active_member",
             "目标用户必须先是本租户的活跃成员".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -1431,8 +1544,10 @@ pub async fn patch_organization_project(
     permissions::require_organization_owner(&pool, &claims, organization_id).await?;
 
     if !["active", "suspended"].contains(&req.status.as_str()) {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "org_project_status_invalid",
             "status 只能是 active（恢复）或 suspended（归档）".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -1451,10 +1566,11 @@ pub async fn patch_organization_project(
     .rows_affected();
 
     if n == 0 {
-        return Err(AppError::NotFound(format!(
-            "项目 {} 不属于组织 {} 或不存在",
-            project_id, organization_id
-        )));
+        return Err(AppError::not_found_coded(
+            "org_project_not_in_org",
+            format!("项目 {} 不属于组织 {} 或不存在", project_id, organization_id),
+            serde_json::json!({ "project_id": project_id, "organization_id": organization_id }),
+        ));
     }
 
     tracing::info!(

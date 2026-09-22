@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal Onebase Provisioner Webhook mock for local integration tests.
+"""Minimal PlaneOS Provisioner Webhook mock for local integration tests.
 
 Usage:
   python3 mock_server.py
@@ -9,7 +9,7 @@ Usage:
   MOCK_ASYNC=1 python3 mock_server.py
   # 或在开通时 slug 以 async- 开头
 
-Configure Onebase:
+Configure PlaneOS:
   PROVISION_WEBHOOK_URL=http://127.0.0.1:9090/provision
   PROVISION_WEBHOOK_DEPROVISION_URL=http://127.0.0.1:9090/deprovision
   PROVISION_WEBHOOK_TOKEN=dev-token   # optional

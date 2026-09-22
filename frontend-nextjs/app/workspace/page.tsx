@@ -6,15 +6,17 @@
  */
 
 import { Suspense, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { useRouter, useSearchParams } from 'next/navigation'
 
 export default function WorkspaceRedirectPage() {
+  const t = useTranslations('workspaceRedirect')
   return (
     <Suspense
       fallback={
         <div className="min-h-screen flex items-center justify-center bg-gray-50">
           <div className="text-sm text-gray-500">
-            <i className="fas fa-spinner fa-spin mr-2"></i>跳转中…
+            <i className="fas fa-spinner fa-spin mr-2"></i>{t('redirecting')}
           </div>
         </div>
       }
@@ -25,6 +27,7 @@ export default function WorkspaceRedirectPage() {
 }
 
 function WorkspaceRedirectInner() {
+  const t = useTranslations('workspaceRedirect')
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -50,7 +53,7 @@ function WorkspaceRedirectInner() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
       <div className="text-sm text-gray-500">
-        <i className="fas fa-spinner fa-spin mr-2"></i>跳转中…
+        <i className="fas fa-spinner fa-spin mr-2"></i>{t('redirecting')}
       </div>
     </div>
   )

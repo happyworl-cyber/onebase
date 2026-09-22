@@ -38,7 +38,11 @@ fn pick_pool<'a>(main: &'a PgPool, dynamic: &'a Option<Extension<PgPool>>) -> &'
 fn require_database_id(opt: Option<Extension<CurrentDatabaseId>>) -> Result<i32> {
     opt.map(|Extension(CurrentDatabaseId(id))| id)
         .ok_or_else(|| {
-            AppError::InvalidQuery("缺少 X-Database-Id 请求头，无法定位目标数据库".to_string())
+            AppError::validation(
+                "qperf_missing_database_id_header",
+                "缺少 X-Database-Id 请求头，无法定位目标数据库".to_string(),
+                serde_json::json!({}),
+            )
         })
 }
 
@@ -67,8 +71,10 @@ async fn require_db_read(main_pool: &PgPool, user_id: i32, database_id: i32) -> 
     .map_err(|e| AppError::Internal(format!("权限查询失败: {}", e)))?;
 
     if count == 0 {
-        return Err(AppError::Forbidden(
+        return Err(AppError::forbidden_coded(
+            "qperf_no_permission_for_db_stats",
             "没有权限查看该数据库的查询统计".to_string(),
+            serde_json::json!({}),
         ));
     }
     Ok(())
@@ -209,10 +215,12 @@ pub async fn list_statements(
 
     let pool = pick_pool(&main_pool, &dynamic_pool);
     let view = crate::pg_stat::resolve_view(pool).await?.ok_or_else(|| {
-        AppError::InvalidQuery(
+        AppError::validation(
+            "qperf_pg_stat_statements_not_enabled",
             "pg_stat_statements 扩展未启用，无法读取查询统计。请先在该数据库 \
                  CREATE EXTENSION pg_stat_statements；详见扩展状态接口。"
                 .to_string(),
+            serde_json::json!({}),
         )
     })?;
 

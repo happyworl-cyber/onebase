@@ -10,7 +10,7 @@
 
 ### 1.1 目标
 
-在 Kafka 数据源页的 **Topics** 标签中支持创建 topic，使项目成员无需离开 PlaneOS 即可为工作流准备 topic（例如 `onebase.ai-close-ticket`）。
+在 Kafka 数据源页的 **Topics** 标签中支持创建 topic，使项目成员无需离开 PlaneOS 即可为工作流准备 topic（例如 `planeos.ai-close-ticket`）。
 
 1. JWT Admin API：`POST /api/admin/kafka-connections/:id/topics`
 2. 请求体：`name` + `num_partitions` + `replication_factor`
@@ -70,7 +70,7 @@ frontend-nextjs/.../kafka-connections/page.tsx  # TopicsTab 表单
 
 ```json
 {
-  "name": "onebase.ai-close-ticket",
+  "name": "planeos.ai-close-ticket",
   "num_partitions": 3,
   "replication_factor": 1
 }
@@ -87,7 +87,7 @@ frontend-nextjs/.../kafka-connections/page.tsx  # TopicsTab 表单
 ```json
 {
   "ok": true,
-  "topic": "onebase.ai-close-ticket",
+  "topic": "planeos.ai-close-ticket",
   "num_partitions": 3,
   "replication_factor": 1
 }

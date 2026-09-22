@@ -67,7 +67,11 @@ struct UserRow {
 
 pub(crate) fn require_active_user(is_active: bool) -> Result<(), AppError> {
     if !is_active {
-        return Err(AppError::Forbidden("账号已停用，请联系管理员".to_string()));
+        return Err(AppError::forbidden_coded(
+            "authh_account_disabled",
+            "账号已停用，请联系管理员".to_string(),
+            serde_json::json!({}),
+        ));
     }
     Ok(())
 }
@@ -91,8 +95,13 @@ pub async fn register(
     Json(req): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<AuthResponse>), AppError> {
     // 验证请求
-    req.validate()
-        .map_err(|e| AppError::InvalidQuery(format!("验证失败: {}", e)))?;
+    req.validate().map_err(|e| {
+        AppError::validation(
+            "authh_validation_failed",
+            format!("验证失败: {}", e),
+            serde_json::json!({ "error": e.to_string() }),
+        )
+    })?;
 
     // 检查邮箱是否已存在
     let existing_user: Option<(i32,)> = sqlx::query_as("SELECT id FROM users WHERE email = $1")
@@ -101,7 +110,11 @@ pub async fn register(
         .await?;
 
     if existing_user.is_some() {
-        return Err(AppError::InvalidQuery("邮箱已被注册".to_string()));
+        return Err(AppError::validation(
+            "authh_email_registered",
+            "邮箱已被注册".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     // 检查用户名是否已存在
@@ -112,7 +125,11 @@ pub async fn register(
             .await?;
 
     if existing_username.is_some() {
-        return Err(AppError::InvalidQuery("用户名已被使用".to_string()));
+        return Err(AppError::validation(
+            "authh_username_taken",
+            "用户名已被使用".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     // 哈希密码
@@ -194,8 +211,13 @@ pub async fn login(
     redis: Option<Extension<RedisManager>>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, AppError> {
-    req.validate()
-        .map_err(|e| AppError::InvalidQuery(format!("验证失败: {}", e)))?;
+    req.validate().map_err(|e| {
+        AppError::validation(
+            "authh_validation_failed",
+            format!("验证失败: {}", e),
+            serde_json::json!({ "error": e.to_string() }),
+        )
+    })?;
 
     let ip = extract_client_ip(&headers, &addr);
 
@@ -210,10 +232,12 @@ pub async fn login(
                     count = count,
                     "登录频率超限，触发限流"
                 );
-                return Err(AppError::TooManyRequests(format!(
-                    "登录尝试过于频繁，请 {} 秒后重试",
-                    LOGIN_RATE_LIMIT_WINDOW
-                )));
+                return Err(AppError::coded(
+                    axum::http::StatusCode::TOO_MANY_REQUESTS,
+                    "authh_login_rate_limited",
+                    format!("登录尝试过于频繁，请 {} 秒后重试", LOGIN_RATE_LIMIT_WINDOW),
+                    serde_json::json!({ "seconds": LOGIN_RATE_LIMIT_WINDOW }),
+                ));
             }
         }
     }
@@ -242,7 +266,11 @@ pub async fn login(
                 ip = %ip,
                 "登录失败：邮箱不存在"
             );
-            return Err(AppError::Unauthorized("邮箱或密码错误".to_string()));
+            return Err(AppError::unauthorized_coded(
+                "authh_invalid_credentials",
+                "邮箱或密码错误".to_string(),
+                serde_json::json!({}),
+            ));
         }
     };
 
@@ -256,7 +284,11 @@ pub async fn login(
             ip = %ip,
             "登录失败：密码错误"
         );
-        return Err(AppError::Unauthorized("邮箱或密码错误".to_string()));
+        return Err(AppError::unauthorized_coded(
+            "authh_invalid_credentials",
+            "邮箱或密码错误".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     require_active_user(user.is_active)?;
@@ -312,7 +344,13 @@ pub async fn get_me(
     .bind(user_id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::Unauthorized("用户不存在".to_string()))?;
+    .ok_or_else(|| {
+        AppError::unauthorized_coded(
+            "authh_user_not_found",
+            "用户不存在".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
 
     Ok(Json(UserInfo {
         id: user.id,
@@ -410,8 +448,13 @@ pub async fn change_password(
     State(pool): State<PgPool>,
     Json(req): Json<ChangePasswordRequest>,
 ) -> Result<Json<Value>, AppError> {
-    req.validate()
-        .map_err(|e| AppError::InvalidQuery(format!("验证失败: {}", e)))?;
+    req.validate().map_err(|e| {
+        AppError::validation(
+            "authh_validation_failed",
+            format!("验证失败: {}", e),
+            serde_json::json!({ "error": e.to_string() }),
+        )
+    })?;
 
     let user_id = claims.sub; // claims.sub 现在是 i32 类型
 
@@ -421,7 +464,13 @@ pub async fn change_password(
         .fetch_optional(&pool)
         .await?;
     let password_hash = row
-        .ok_or_else(|| AppError::Unauthorized("用户不存在".to_string()))?
+        .ok_or_else(|| {
+            AppError::unauthorized_coded(
+                "authh_user_not_found",
+                "用户不存在".to_string(),
+                serde_json::json!({}),
+            )
+        })?
         .0;
 
     // 验证旧密码
@@ -432,12 +481,20 @@ pub async fn change_password(
             user_id,
             "修改密码失败：旧密码错误"
         );
-        return Err(AppError::InvalidQuery("旧密码错误".to_string()));
+        return Err(AppError::validation(
+            "authh_old_password_incorrect",
+            "旧密码错误".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     // 新密码不能与旧密码相同——否则内置默认密码“只能用一次”的约束形同虚设。
     if req.new_password == req.old_password {
-        return Err(AppError::InvalidQuery("新密码不能与旧密码相同".to_string()));
+        return Err(AppError::validation(
+            "authh_new_password_same_as_old",
+            "新密码不能与旧密码相同".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     validate_password(&req.new_password)?;
@@ -494,10 +551,10 @@ mod tests {
 
         let error = require_active_user(false).unwrap_err();
         match error {
-            AppError::Forbidden(message) => {
+            AppError::Coded { message, .. } => {
                 assert_eq!(message, "账号已停用，请联系管理员");
             }
-            other => panic!("expected Forbidden, got {other:?}"),
+            other => panic!("expected Coded, got {other:?}"),
         }
     }
 }

@@ -32,7 +32,11 @@ const ACTION_WRITE: &str = "ALL";
 fn require_database_id(opt: Option<Extension<CurrentDatabaseId>>) -> Result<i32> {
     opt.map(|Extension(CurrentDatabaseId(id))| id)
         .ok_or_else(|| {
-            AppError::InvalidQuery("缺少 X-Database-Id 请求头，无法定位目标数据库".to_string())
+            AppError::validation(
+                "index_missing_database_header",
+                "缺少 X-Database-Id 请求头，无法定位目标数据库".to_string(),
+                serde_json::json!({}),
+            )
         })
 }
 
@@ -94,11 +98,19 @@ pub async fn list_indexes(
     let pool = dynamic_pool.as_deref().unwrap_or(&main_pool);
 
     if !is_valid_identifier(&schema) {
-        return Err(AppError::InvalidQuery("无效的 schema 名".to_string()));
+        return Err(AppError::validation(
+            "index_invalid_schema",
+            "无效的 schema 名".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if let Some(t) = &q.table {
         if !is_valid_identifier(t) {
-            return Err(AppError::InvalidQuery("无效的表名".to_string()));
+            return Err(AppError::validation(
+                "index_invalid_table",
+                "无效的表名".to_string(),
+                serde_json::json!({}),
+            ));
         }
     }
 
@@ -232,19 +244,31 @@ pub async fn create_index(
     let pool = dynamic_pool.as_deref().unwrap_or(&main_pool);
 
     if !is_valid_identifier(&req.schema) {
-        return Err(AppError::InvalidQuery("无效的 schema 名".to_string()));
+        return Err(AppError::validation(
+            "index_invalid_schema",
+            "无效的 schema 名".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if !is_valid_identifier(&req.table) {
-        return Err(AppError::InvalidQuery("无效的表名".to_string()));
+        return Err(AppError::validation(
+            "index_invalid_table",
+            "无效的表名".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if !is_valid_identifier(&req.name) {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "index_invalid_name",
             "索引名只允许字母数字和下划线，且不能以数字开头（最长 63 字符）".to_string(),
+            serde_json::json!({}),
         ));
     }
     if req.columns.is_empty() {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "index_columns_required",
             "索引至少需要一列或一个表达式".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -266,11 +290,15 @@ pub async fn create_index(
         .unwrap_or("btree")
         .to_ascii_lowercase();
     if !ALLOWED_METHODS.contains(&method.as_str()) {
-        return Err(AppError::InvalidQuery(format!(
-            "不支持的索引类型 '{}'，可选: {}",
-            method,
-            ALLOWED_METHODS.join(", ")
-        )));
+        return Err(AppError::validation(
+            "index_method_not_allowed",
+            format!(
+                "不支持的索引类型 '{}'，可选: {}",
+                method,
+                ALLOWED_METHODS.join(", ")
+            ),
+            serde_json::json!({ "method": method, "allowed": ALLOWED_METHODS.join(", ") }),
+        ));
     }
 
     // 列 / 表达式 — 拼装 (col1 ASC NULLS LAST, (lower(name)), ...)
@@ -279,36 +307,39 @@ pub async fn create_index(
         let core = match (c.name.as_deref(), c.expression.as_deref()) {
             (Some(n), None) | (Some(n), Some("")) => {
                 if !is_valid_identifier(n) {
-                    return Err(AppError::InvalidQuery(format!(
-                        "第 {} 列的列名 '{}' 不合法",
-                        i + 1,
-                        n
-                    )));
+                    return Err(AppError::validation(
+                        "index_column_name_invalid",
+                        format!("第 {} 列的列名 '{}' 不合法", i + 1, n),
+                        serde_json::json!({ "position": i + 1, "name": n }),
+                    ));
                 }
                 quote_ident(n)
             }
             (None, Some(e)) | (Some(""), Some(e)) => {
                 let trimmed = e.trim();
                 if trimmed.is_empty() {
-                    return Err(AppError::InvalidQuery(format!(
-                        "第 {} 列的表达式不能为空",
-                        i + 1
-                    )));
+                    return Err(AppError::validation(
+                        "index_expression_empty",
+                        format!("第 {} 列的表达式不能为空", i + 1),
+                        serde_json::json!({ "position": i + 1 }),
+                    ));
                 }
                 if trimmed.len() > 1000 {
-                    return Err(AppError::InvalidQuery(format!(
-                        "第 {} 列的表达式过长（>1000 字符）",
-                        i + 1
-                    )));
+                    return Err(AppError::validation(
+                        "index_expression_too_long",
+                        format!("第 {} 列的表达式过长（>1000 字符）", i + 1),
+                        serde_json::json!({ "position": i + 1 }),
+                    ));
                 }
                 // 表达式必须用括号包裹，否则 PostgreSQL 解析失败
                 format!("({})", trimmed)
             }
             _ => {
-                return Err(AppError::InvalidQuery(format!(
-                    "第 {} 列必须填写「列名」或「表达式」其中之一",
-                    i + 1
-                )));
+                return Err(AppError::validation(
+                    "index_column_spec_required",
+                    format!("第 {} 列必须填写「列名」或「表达式」其中之一", i + 1),
+                    serde_json::json!({ "position": i + 1 }),
+                ));
             }
         };
 
@@ -316,8 +347,10 @@ pub async fn create_index(
         if let Some(ord) = c.ordering.as_deref().map(|s| s.trim().to_ascii_uppercase()) {
             if !ord.is_empty() {
                 if ord != "ASC" && ord != "DESC" {
-                    return Err(AppError::InvalidQuery(
+                    return Err(AppError::validation(
+                        "index_ordering_invalid",
                         "排序方向只能是 ASC 或 DESC".to_string(),
+                        serde_json::json!({}),
                     ));
                 }
                 part.push(' ');
@@ -327,8 +360,10 @@ pub async fn create_index(
         if let Some(nulls) = c.nulls.as_deref().map(|s| s.trim().to_ascii_uppercase()) {
             if !nulls.is_empty() {
                 if nulls != "FIRST" && nulls != "LAST" {
-                    return Err(AppError::InvalidQuery(
+                    return Err(AppError::validation(
+                        "index_nulls_invalid",
                         "NULLS 顺序只能是 FIRST 或 LAST".to_string(),
+                        serde_json::json!({}),
                     ));
                 }
                 part.push_str(" NULLS ");
@@ -342,10 +377,11 @@ pub async fn create_index(
     let include_clause = if let Some(inc) = req.include.as_ref().filter(|v| !v.is_empty()) {
         for n in inc {
             if !is_valid_identifier(n) {
-                return Err(AppError::InvalidQuery(format!(
-                    "INCLUDE 列名 '{}' 不合法",
-                    n
-                )));
+                return Err(AppError::validation(
+                    "index_include_column_invalid",
+                    format!("INCLUDE 列名 '{}' 不合法", n),
+                    serde_json::json!({ "name": n }),
+                ));
             }
         }
         let joined: Vec<String> = inc.iter().map(|n| quote_ident(n)).collect();
@@ -359,8 +395,10 @@ pub async fn create_index(
         if w.is_empty() {
             String::new()
         } else if w.len() > 2000 {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "index_where_clause_too_long",
                 "WHERE 子句过长（>2000 字符）".to_string(),
+                serde_json::json!({}),
             ));
         } else {
             format!(" WHERE ({})", w)
@@ -426,6 +464,8 @@ pub async fn create_index(
             }
         })),
         None,
+        Some("oplog_index_create"),
+        json!({ "schema": req.schema, "table": req.table, "name": req.name }),
     );
 
     Ok(Json(json!({
@@ -457,10 +497,18 @@ pub async fn drop_index(
     let pool = dynamic_pool.as_deref().unwrap_or(&main_pool);
 
     if !is_valid_identifier(&schema) {
-        return Err(AppError::InvalidQuery("无效的 schema 名".to_string()));
+        return Err(AppError::validation(
+            "index_invalid_schema",
+            "无效的 schema 名".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if !is_valid_identifier(&index_name) {
-        return Err(AppError::InvalidQuery("无效的索引名".to_string()));
+        return Err(AppError::validation(
+            "index_invalid_index_name",
+            "无效的索引名".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     // RBAC：先在租户库里反查该索引归属的表名，再要求该表的 ALL 权限。
@@ -483,10 +531,11 @@ pub async fn drop_index(
     let table_name = match owning_table {
         Some((t,)) => t,
         None => {
-            return Err(AppError::NotFound(format!(
-                "索引 {}.{} 不存在",
-                schema, index_name
-            )));
+            return Err(AppError::not_found_coded(
+                "index_not_found",
+                format!("索引 {}.{} 不存在", schema, index_name),
+                serde_json::json!({ "schema": schema, "index_name": index_name }),
+            ));
         }
     };
 
@@ -507,8 +556,10 @@ pub async fn drop_index(
 
     // PostgreSQL 限制：CONCURRENTLY 与 CASCADE 互斥；CONCURRENTLY 必须在事务块外。
     if concurrent && cascade {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "index_concurrent_cascade_conflict",
             "CONCURRENTLY 与 CASCADE 不能同时使用".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -538,6 +589,8 @@ pub async fn drop_index(
         None,
         None,
         None,
+        Some("oplog_index_delete"),
+        json!({ "schema": schema, "name": index_name, "table": table_name }),
     );
 
     Ok(Json(json!({

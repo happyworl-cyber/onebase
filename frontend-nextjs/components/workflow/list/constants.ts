@@ -2,14 +2,14 @@ import { UNCATEGORIZED_FOLDER_NAME } from './types'
 
 export const TRIGGER_META: Record<
   string,
-  { icon: string; label: string; color: 'indigo' | 'amber' | 'sky' | 'slate' | 'violet' | 'emerald' }
+  { icon: string; label: string; labelKey: string; color: 'indigo' | 'amber' | 'sky' | 'slate' | 'violet' | 'emerald' }
 > = {
-  endpoint: { icon: 'fa-globe', label: 'HTTP 端点', color: 'indigo' },
-  hook: { icon: 'fa-bolt', label: '数据变更', color: 'amber' },
-  notify: { icon: 'fa-bell', label: 'PG NOTIFY', color: 'violet' },
-  cron: { icon: 'fa-clock', label: '定时任务', color: 'sky' },
-  kafka: { icon: 'fa-envelope', label: 'Kafka 消息', color: 'emerald' },
-  manual: { icon: 'fa-hand-pointer', label: '手动触发', color: 'slate' },
+  endpoint: { icon: 'fa-globe', label: 'HTTP endpoint', labelKey: 'triggerEndpoint', color: 'indigo' },
+  hook: { icon: 'fa-bolt', label: 'Data change', labelKey: 'triggerHook', color: 'amber' },
+  notify: { icon: 'fa-bell', label: 'PG NOTIFY', labelKey: 'triggerNotify', color: 'violet' },
+  cron: { icon: 'fa-clock', label: 'Scheduled', labelKey: 'triggerCron', color: 'sky' },
+  kafka: { icon: 'fa-envelope', label: 'Kafka message', labelKey: 'triggerKafka', color: 'emerald' },
+  manual: { icon: 'fa-hand-pointer', label: 'Manual', labelKey: 'triggerManual', color: 'slate' },
 }
 
 export const TRIGGER_BADGE_CLASS: Record<string, string> = {
@@ -42,10 +42,10 @@ export const FOLDER_NAME_PRESETS: Record<string, { icon: string; color: string }
   [UNCATEGORIZED_FOLDER_NAME]: { icon: 'fa-inbox', color: 'text-slate-400' },
 }
 
-export const LIST_PREFS_KEY = 'onebase:workflow-list-prefs'
+export const LIST_PREFS_KEY = 'planeos:workflow-list-prefs'
 
 export function customFoldersStorageKey(databaseId?: number | null) {
-  return `onebase:workflow-folders:${databaseId ?? 'all'}`
+  return `planeos:workflow-folders:${databaseId ?? 'all'}`
 }
 
 /** 紧凑列表：表头与数据行共用同一 grid（固定操作列宽度，避免 flex 挤压导致列错位） */

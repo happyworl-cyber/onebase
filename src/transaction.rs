@@ -101,14 +101,22 @@ pub async fn execute_transaction(
     };
     if req.operations.is_empty() {
         push_audit("raw_sql_txn", Some("empty_operations"));
-        return Err(AppError::InvalidQuery("事务操作列表不能为空".to_string()));
+        return Err(AppError::validation(
+            "txn_operations_empty",
+            "事务操作列表不能为空",
+            serde_json::json!({}),
+        ));
     }
     if req.operations.len() > policy.max_operations {
         push_audit("raw_sql_txn", Some("op_count_exceeds_max"));
-        return Err(AppError::InvalidQuery(format!(
-            "单个事务最多支持 {} 个操作（环境变量 RAW_SQL_MAX_OPERATIONS 可调）",
-            policy.max_operations
-        )));
+        return Err(AppError::validation(
+            "txn_max_operations_exceeded",
+            format!(
+                "单个事务最多支持 {} 个操作（环境变量 RAW_SQL_MAX_OPERATIONS 可调）",
+                policy.max_operations
+            ),
+            serde_json::json!({ "max_operations": policy.max_operations }),
+        ));
     }
 
     tracing::warn!(
@@ -210,6 +218,8 @@ pub async fn execute_transaction(
                 None,
                 Some(serde_json::json!({ "v": 1, "kind": "sql", "statements": statements })),
                 None,
+                Some("oplog_db_transaction_execute"),
+                serde_json::json!({ "op_count": op_count }),
             );
         }
     }
@@ -232,7 +242,13 @@ async fn execute_insert(
     let data = op
         .data
         .as_ref()
-        .ok_or_else(|| AppError::InvalidQuery("POST 操作需要提供 data 字段".to_string()))?;
+        .ok_or_else(|| {
+            AppError::validation(
+                "txn_post_missing_data",
+                "POST 操作需要提供 data 字段",
+                serde_json::json!({}),
+            )
+        })?;
 
     // 验证标识符
     QueryParams::sanitize_identifier(&op.schema)?;
@@ -241,10 +257,16 @@ async fn execute_insert(
     // 构建 INSERT SQL
     let obj = data
         .as_object()
-        .ok_or_else(|| AppError::InvalidQuery("data 必须是 JSON 对象".to_string()))?;
+        .ok_or_else(|| {
+            AppError::validation("txn_data_not_object", "data 必须是 JSON 对象", serde_json::json!({}))
+        })?;
 
     if obj.is_empty() {
-        return Err(AppError::InvalidQuery("data 不能为空".to_string()));
+        return Err(AppError::validation(
+            "txn_data_empty",
+            "data 不能为空",
+            serde_json::json!({}),
+        ));
     }
 
     let mut columns = Vec::new();
@@ -285,12 +307,24 @@ async fn execute_update(
     let data = op
         .data
         .as_ref()
-        .ok_or_else(|| AppError::InvalidQuery("PATCH 操作需要提供 data 字段".to_string()))?;
+        .ok_or_else(|| {
+            AppError::validation(
+                "txn_patch_missing_data",
+                "PATCH 操作需要提供 data 字段",
+                serde_json::json!({}),
+            )
+        })?;
 
     let conditions = op
         .conditions
         .as_ref()
-        .ok_or_else(|| AppError::InvalidQuery("PATCH 操作需要提供 where 条件".to_string()))?;
+        .ok_or_else(|| {
+            AppError::validation(
+                "txn_patch_missing_where",
+                "PATCH 操作需要提供 where 条件",
+                serde_json::json!({}),
+            )
+        })?;
 
     // 验证标识符
     QueryParams::sanitize_identifier(&op.schema)?;
@@ -299,10 +333,16 @@ async fn execute_update(
     // 构建 UPDATE SQL
     let obj = data
         .as_object()
-        .ok_or_else(|| AppError::InvalidQuery("data 必须是 JSON 对象".to_string()))?;
+        .ok_or_else(|| {
+            AppError::validation("txn_data_not_object", "data 必须是 JSON 对象", serde_json::json!({}))
+        })?;
 
     if obj.is_empty() {
-        return Err(AppError::InvalidQuery("data 不能为空".to_string()));
+        return Err(AppError::validation(
+            "txn_data_empty",
+            "data 不能为空",
+            serde_json::json!({}),
+        ));
     }
 
     let mut set_clauses = Vec::new();
@@ -362,7 +402,13 @@ async fn execute_delete(
     let conditions = op
         .conditions
         .as_ref()
-        .ok_or_else(|| AppError::InvalidQuery("DELETE 操作需要提供 where 条件".to_string()))?;
+        .ok_or_else(|| {
+            AppError::validation(
+                "txn_delete_missing_where",
+                "DELETE 操作需要提供 where 条件",
+                serde_json::json!({}),
+            )
+        })?;
 
     // 验证标识符
     QueryParams::sanitize_identifier(&op.schema)?;
@@ -381,8 +427,10 @@ async fn execute_delete(
     }
 
     if where_clauses.is_empty() {
-        return Err(AppError::InvalidQuery(
-            "DELETE 操作必须提供 WHERE 条件，以防止误删除全表".to_string(),
+        return Err(AppError::validation(
+            "txn_delete_requires_where_safety",
+            "DELETE 操作必须提供 WHERE 条件，以防止误删除全表",
+            serde_json::json!({}),
         ));
     }
 

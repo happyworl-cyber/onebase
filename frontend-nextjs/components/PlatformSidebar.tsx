@@ -3,33 +3,37 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { clearAuthToken } from '@/lib/auth'
+import InlineLocaleSwitcher from '@/components/InlineLocaleSwitcher'
 
 interface NavItem {
-  name: string
+  key: string
   path: string
   icon: string
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { name: '租户管理', path: '/platform/organizations', icon: 'fa-building' },
-  { name: '全部项目', path: '/platform', icon: 'fa-folder-tree' },
-  { name: '用户管理', path: '/platform/users', icon: 'fa-users' },
-  { name: '审计日志', path: '/platform/audit', icon: 'fa-clipboard-list' },
-  { name: '执行日志', path: '/platform/logs', icon: 'fa-stream' },
-  { name: 'SSO 登录管理', path: '/platform/sso', icon: 'fa-key' },
+  { key: 'tenants', path: '/platform/organizations', icon: 'fa-building' },
+  { key: 'allProjects', path: '/platform', icon: 'fa-folder-tree' },
+  { key: 'users', path: '/platform/users', icon: 'fa-users' },
+  { key: 'audit', path: '/platform/audit', icon: 'fa-clipboard-list' },
+  { key: 'execLogs', path: '/platform/logs', icon: 'fa-stream' },
+  { key: 'sso', path: '/platform/sso', icon: 'fa-key' },
   // RPC 授权已下放回 dashboard 工作区（/dashboard/rpc-acl）。本质是 tenant 内部
   // 的"角色 × 函数"绑定，后端 require_tenant_admin_for_db 同时放行租户管理员，
   // 平台超管在切到具体项目后照样能操作，不需要单独的全局视图。
-  { name: '定时任务', path: '/platform/scheduled-tasks', icon: 'fa-clock' },
+  { key: 'scheduled', path: '/platform/scheduled-tasks', icon: 'fa-clock' },
   // 跨租户应用层慢查询日志 + 全局熔断器状态（W3 Task 3 从 workspace monitor 拆出）
-  { name: '平台监控', path: '/platform/monitor', icon: 'fa-chart-line' },
+  { key: 'monitor', path: '/platform/monitor', icon: 'fa-chart-line' },
   // M2 自助开通向导：超管维护 PG 服务器池，普通用户走 wizard 时从中选一台
-  { name: 'PG 池', path: '/platform/pg-pools', icon: 'fa-server' },
-  { name: '网关域名', path: '/platform/settings', icon: 'fa-globe' },
+  { key: 'pgPools', path: '/platform/pg-pools', icon: 'fa-server' },
+  { key: 'gateway', path: '/platform/settings', icon: 'fa-globe' },
 ]
 
 export default function PlatformSidebar() {
+  const tn = useTranslations('platformNav')
+  const tc = useTranslations('common')
   const router = useRouter()
   const pathname = usePathname()
   const [user, setUser] = useState<any>(null)
@@ -74,7 +78,7 @@ export default function PlatformSidebar() {
           </div>
           <div>
             <h1 className="text-sm font-semibold text-gray-900">PlaneOS</h1>
-            <p className="text-[11px] text-gray-500">平台管理</p>
+            <p className="text-[11px] text-gray-500">{tn('subtitle')}</p>
           </div>
         </div>
       </div>
@@ -87,8 +91,8 @@ export default function PlatformSidebar() {
               <i className="fas fa-crown text-white text-xs"></i>
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-gray-900 truncate">超级管理员</p>
-              <p className="text-[11px] text-gray-500 truncate">跨租户全局视图</p>
+              <p className="text-sm font-semibold text-gray-900 truncate">{tn('roleTitle')}</p>
+              <p className="text-[11px] text-gray-500 truncate">{tn('roleDesc')}</p>
             </div>
           </div>
         </div>
@@ -112,7 +116,7 @@ export default function PlatformSidebar() {
                   isActive(item.path) ? 'text-blue-600' : 'text-gray-400'
                 }`}
               ></i>
-              <span className="flex-1 text-left">{item.name}</span>
+              <span className="flex-1 text-left">{tn(item.key)}</span>
             </button>
           ))}
         </div>
@@ -123,7 +127,7 @@ export default function PlatformSidebar() {
             className="w-full flex items-center space-x-3 px-3 py-2 rounded-md text-[13px] text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors"
           >
             <i className="fas fa-arrow-right text-sm w-4 flex-shrink-0 text-gray-400"></i>
-            <span className="flex-1 text-left">进入工作区</span>
+            <span className="flex-1 text-left">{tn('enterWorkspace')}</span>
           </button>
         </div>
       </nav>
@@ -140,8 +144,8 @@ export default function PlatformSidebar() {
             </span>
           </div>
           <div className="flex-1 min-w-0 text-left">
-            <p className="text-xs font-medium text-gray-900 truncate">{user?.username || '用户'}</p>
-            <p className="text-[11px] text-gray-500 truncate">超级管理员</p>
+            <p className="text-xs font-medium text-gray-900 truncate">{user?.username || tc('userFallback')}</p>
+            <p className="text-[11px] text-gray-500 truncate">{tn('roleTitle')}</p>
           </div>
           <i
             className={`fas fa-chevron-down text-gray-400 text-[10px] flex-shrink-0 transition-transform ${
@@ -159,14 +163,17 @@ export default function PlatformSidebar() {
                 className="flex items-center space-x-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
               >
                 <i className="fas fa-user-cog text-xs w-4 text-gray-400"></i>
-                <span>账号设置</span>
+                <span>{tc('accountSettings')}</span>
               </Link>
+              <div className="border-t border-gray-100 my-1"></div>
+              <InlineLocaleSwitcher onChosen={() => setShowUserMenu(false)} />
+              <div className="border-t border-gray-100 my-1"></div>
               <button
                 onClick={handleLogout}
                 className="w-full flex items-center space-x-2.5 px-3 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
               >
                 <i className="fas fa-sign-out-alt text-xs w-4"></i>
-                <span>退出登录</span>
+                <span>{tc('logout')}</span>
               </button>
             </div>
           </div>

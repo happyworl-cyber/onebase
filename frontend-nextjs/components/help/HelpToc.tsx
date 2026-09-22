@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { HELP_ARTICLES, HELP_GROUPS } from '@/lib/helpCatalog'
 
 export default function HelpToc({
@@ -8,6 +9,8 @@ export default function HelpToc({
   base: string
   slug: string | null
 }) {
+  const t = useTranslations('helpToc')
+  const tCat = useTranslations('helpCatalog')
   return (
     <nav className="w-[200px] flex-shrink-0">
       <div className="sticky top-0 space-y-4">
@@ -17,12 +20,12 @@ export default function HelpToc({
             slug === null ? 'text-blue-600' : 'text-gray-700 hover:text-gray-900'
           }`}
         >
-          使用帮助
+          {t('helpHome')}
         </Link>
         {HELP_GROUPS.map((group) => (
           <div key={group.id}>
             <div className="px-0.5 mb-1 text-[11px] font-medium uppercase tracking-wide text-gray-400">
-              {group.label}
+              {tCat(group.label)}
             </div>
             <ul className="space-y-0.5">
               {HELP_ARTICLES.filter((a) => a.group === group.id).map((article) => {
@@ -37,7 +40,7 @@ export default function HelpToc({
                           : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                       }`}
                     >
-                      {article.title}
+                      {tCat(article.title)}
                     </Link>
                   </li>
                 )

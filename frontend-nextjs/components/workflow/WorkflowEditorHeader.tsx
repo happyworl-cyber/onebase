@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { createPortal, flushSync } from 'react-dom'
 import { useParams } from 'next/navigation'
 import { cn } from '@/lib/utils'
@@ -33,13 +34,13 @@ const META_COLLAPSED_KEY = 'workflow-editor-meta-collapsed'
 function depsStatusLabel(status: WorkflowDepsStatus['status']): string {
   switch (status) {
     case 'installing':
-      return '安装中'
+      return 'depsInstalling'
     case 'ready':
-      return '就绪'
+      return 'depsReady'
     case 'failed':
-      return '失败'
+      return 'depsFailed'
     default:
-      return '空闲'
+      return 'depsIdle'
   }
 }
 
@@ -181,9 +182,9 @@ interface Props {
   pyDepsStatus: WorkflowDepsStatus | null
 }
 
-function dbLabel(opt: DatabaseOption) {
+function dbLabel(opt: DatabaseOption, tr: (k: string) => string) {
   const name = opt.connection_name || opt.db_name
-  return `${name} (${opt.db_host})${opt.is_primary ? ' · 主' : ''}`
+  return `${name} (${opt.db_host})${opt.is_primary ? tr('dbPrimarySuffix') : ''}`
 }
 
 const DEFAULT_KAFKA_TRIGGER_CONFIG = {
@@ -201,6 +202,7 @@ function KafkaTriggerConfig({
   value: string
   onChange: (value: string) => void
 }) {
+  const t = useTranslations('wfHeader')
   const params = useParams<{ projectId: string }>()
   const tenantId = parseInt(params?.projectId ?? '', 10)
   const [connections, setConnections] = useState<KafkaConnection[]>([])
@@ -251,13 +253,13 @@ function KafkaTriggerConfig({
     <div className="border-t border-[#f0f1f3]">
       <div className="flex items-end gap-3 px-4 py-2.5 overflow-x-auto">
         <label className="flex flex-col gap-1 min-w-[220px]">
-          <span className="text-[10px] font-bold uppercase tracking-[0.06em] text-[#b0bac5]">Kafka 连接</span>
+          <span className="text-[10px] font-bold uppercase tracking-[0.06em] text-[#b0bac5]">{t('kafkaConn')}</span>
           <select
             value={Number(parsed.connection_id) || 0}
             onChange={(e) => update('connection_id', Number(e.target.value))}
             className={fieldClass}
           >
-            <option value={0}>{loading ? '加载中…' : '请选择连接'}</option>
+            <option value={0}>{loading ? t('loading') : t('selectConn')}</option>
             {connections.map((connection) => (
               <option key={connection.id} value={connection.id}>
                 {connection.connection_name}（{connection.brokers}）
@@ -271,31 +273,31 @@ function KafkaTriggerConfig({
             value={String(parsed.topic ?? '')}
             onChange={(e) => update('topic', e.target.value)}
             className={`${fieldClass} font-mono`}
-            placeholder="与 produce 侧完全一致"
+            placeholder={t('phTopicSame')}
           />
         </label>
         <label className="flex flex-col gap-1 min-w-[220px]">
-          <span className="text-[10px] font-bold uppercase tracking-[0.06em] text-[#b0bac5]">Group ID（可选）</span>
+          <span className="text-[10px] font-bold uppercase tracking-[0.06em] text-[#b0bac5]">{t('groupIdOptional')}</span>
           <input
             value={String(parsed.group_id ?? '')}
             onChange={(e) => update('group_id', e.target.value)}
             className={`${fieldClass} font-mono`}
-            placeholder="留空则用 planeos-wf-{工作流id}"
+            placeholder={t('phGroupId')}
           />
         </label>
         <label className="flex flex-col gap-1 min-w-[150px]">
-          <span className="text-[10px] font-bold uppercase tracking-[0.06em] text-[#b0bac5]">初始 Offset</span>
+          <span className="text-[10px] font-bold uppercase tracking-[0.06em] text-[#b0bac5]">{t('initOffset')}</span>
           <select
             value={offset}
             onChange={(e) => update('auto_offset_reset', e.target.value)}
             className={fieldClass}
           >
-            <option value="latest">latest（跳过历史）</option>
-            <option value="earliest">earliest（可读积压）</option>
+            <option value="latest">{t('offsetLatest')}</option>
+            <option value="earliest">{t('offsetEarliest')}</option>
           </select>
         </label>
         <label className="flex flex-col gap-1 min-w-[130px]">
-          <span className="text-[10px] font-bold uppercase tracking-[0.06em] text-[#b0bac5]">消息格式</span>
+          <span className="text-[10px] font-bold uppercase tracking-[0.06em] text-[#b0bac5]">{t('msgFormat')}</span>
           <select
             value={String(parsed.value_format ?? 'json')}
             onChange={(e) => update('value_format', e.target.value)}
@@ -308,19 +310,18 @@ function KafkaTriggerConfig({
       </div>
       <div className="px-4 pb-2 text-[11px] text-slate-500 space-y-0.5">
         <p>
-          Group 建议固定完整名称（如 <code className="font-mono text-slate-700">planeos-ai-close-ticket</code>
-          ）；改名等于新消费组。可在「Kafka → 消费组」核对是否在线。
+          {t.rich('kafkaGroupHint', { code: (c) => <code className="font-mono text-slate-700">{c}</code> })}
           {groupId ? (
-            <span className="ml-1 font-mono text-slate-600">当前：{groupId}</span>
+            <span className="ml-1 font-mono text-slate-600">{t('kafkaCurrent', { group: groupId })}</span>
           ) : null}
         </p>
         {offset === 'latest' ? (
           <p className="text-amber-700">
-            latest：消费组首次无 committed offset 时从末尾读，已在 topic 里的消息不会被消费。联调积压请改 earliest，或 consumer 就绪后再 produce。
+            {t('kafkaLatestHint')}
           </p>
         ) : (
           <p>
-            earliest：无 committed offset 时从最早可读位置开始（注意历史消息可能被重复处理）。
+            {t('kafkaEarliestHint')}
           </p>
         )}
       </div>
@@ -423,6 +424,7 @@ function InlineSelectMenu({
 }
 
 function TriggerTypeBadge({ triggerType, className }: { triggerType: string; className?: string }) {
+  const tTrig = useTranslations('wfTrigger')
   const meta = TRIGGER_META[triggerType] ?? TRIGGER_META.manual
   return (
     <span
@@ -433,7 +435,7 @@ function TriggerTypeBadge({ triggerType, className }: { triggerType: string; cla
       )}
     >
       <i className={cn('fas text-[10px]', meta.icon, TRIGGER_ICON_CLASS[meta.color])} />
-      {meta.label}
+      {tTrig(meta.labelKey)}
     </span>
   )
 }
@@ -484,9 +486,9 @@ const TEXT_FIELD_KEYS = new Set(['name', 'slug', 'description', 'timeout_ms', 't
 const INPUT_SCHEMA_PLACEHOLDER = `{
   "type": "object",
   "properties": {
-    "email": { "type": "string", "description": "邮箱（与 phone 二选一）" },
-    "phone": { "type": "string", "description": "手机号（与 email 二选一）" },
-    "password": { "type": "string", "description": "密码" }
+    "email": { "type": "string", "description": "Email (either this or phone)" },
+    "phone": { "type": "string", "description": "Phone (either this or email)" },
+    "password": { "type": "string", "description": "Password" }
   },
   "required": ["password"],
   "oneOf": [{ "required": ["email"] }, { "required": ["phone"] }]
@@ -577,6 +579,8 @@ export default function WorkflowEditorHeader({
   depsStatus,
   pyDepsStatus,
 }: Props) {
+  const tr = useTranslations('wfHeader')
+  const trTrig = useTranslations('wfTrigger')
   const [editingField, setEditingField] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState('')
   const [dirtyFields, setDirtyFields] = useState<Set<string>>(new Set())
@@ -598,7 +602,7 @@ export default function WorkflowEditorHeader({
   const pyRequirements = extractPyRequirements(workflowDependencies)
   const pipDepsConfigured = pyRequirements.length > 0
 
-  const title = formMeta.name || editingName || '新建工作流'
+  const title = formMeta.name || editingName || tr('newWorkflow')
   const selectedDb = databaseOptions.find((d) => String(d.database_id) === formMeta.database_id)
 
   useEffect(() => {
@@ -615,7 +619,7 @@ export default function WorkflowEditorHeader({
 
   const markDirty = useCallback((key: string) => {
     setDirtyFields((prev) => new Set(prev).add(key))
-    setToast('已修改，记得保存')
+    setToast(tr('savedReminder'))
   }, [])
 
   useEffect(() => {
@@ -662,11 +666,11 @@ export default function WorkflowEditorHeader({
       try {
         parsed = JSON.parse(text)
       } catch {
-        setNpmDepsError('不是合法 JSON')
+        setNpmDepsError(tr('npmInvalidJson'))
         return
       }
       if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object') {
-        setNpmDepsError('必须是 JSON 对象，如 { "axios": "^1.7.0" }')
+        setNpmDepsError(tr('npmMustObject'))
         return
       }
       setNpmDepsError(null)
@@ -783,7 +787,7 @@ export default function WorkflowEditorHeader({
   const copyEndpoint = async () => {
     if (!endpointPath) return
     const ok = await copyTextToClipboard(endpointPath)
-    showToast(ok ? '端点已复制 ✓' : '复制失败，请手动选择复制')
+    showToast(ok ? tr('endpointCopied') : tr('copyFailed'))
   }
 
   const isEditing = (key: string) => editingField === key
@@ -811,7 +815,7 @@ export default function WorkflowEditorHeader({
     const expr = cronSchedule.trim()
     if (!expr) return null
     const parts = expr.split(/\s+/)
-    if (parts.length !== 5) return '需 5 个字段（分 时 日 月 周）'
+    if (parts.length !== 5) return tr('cron5fields')
     const specs: Array<[number, number, boolean]> = [
       [0, 59, false],
       [0, 23, false],
@@ -819,7 +823,7 @@ export default function WorkflowEditorHeader({
       [1, 12, false],
       [0, 6, true],
     ]
-    const names = ['分', '时', '日', '月', '周']
+    const names = [tr('cronMin'), tr('cronHour'), tr('cronDay'), tr('cronMonth'), tr('cronWeek')]
 
     const parseNum = (x: string, min: number, max: number, isWd: boolean): number | null => {
       if (!/^\d+$/.test(x)) return null
@@ -851,7 +855,7 @@ export default function WorkflowEditorHeader({
         tokens.some((t: string) => t === '') ||
         !tokens.every((t: string) => validToken(t, min, max, isWd))
       ) {
-        return `${names[i]}字段非法`
+        return tr('cronFieldInvalid', { name: names[i] })
       }
     }
     return null
@@ -878,17 +882,17 @@ export default function WorkflowEditorHeader({
           <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
-          返回
+          {tr('back')}
         </button>
         <div className="w-px h-[18px] bg-slate-200 shrink-0" />
         <span className="text-sm font-semibold text-slate-800 truncate shrink-0">{title}</span>
         {publishedVersion == null ? (
           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold shrink-0 bg-slate-100 border border-slate-200 text-slate-500">
-            未发布
+            {tr('unpublished')}
           </span>
         ) : hasUnpublished ? (
           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold shrink-0 bg-amber-50 border border-amber-200 text-amber-700">
-            有未发布修改
+            {tr('hasUnpublished')}
           </span>
         ) : null}
         {isEnabled != null && (
@@ -896,7 +900,7 @@ export default function WorkflowEditorHeader({
             <button
               type="button"
               onClick={onToggleEnabled}
-              title={isEnabled ? '点击禁用：禁用后所有触发方式（端点 / 数据变更 / 定时 / 手动）都将无法执行' : '点击启用：启用后可被触发执行'}
+              title={isEnabled ? tr('toggleDisableTitle') : tr('toggleEnableTitle')}
               className={`group inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold shrink-0 transition-colors ${
                 isEnabled
                   ? 'bg-emerald-50 border border-emerald-200 text-emerald-600 hover:bg-emerald-100'
@@ -904,9 +908,9 @@ export default function WorkflowEditorHeader({
               }`}
             >
               <span className={`w-1.5 h-1.5 rounded-full ${isEnabled ? 'bg-emerald-500' : 'bg-slate-400'}`} />
-              {isEnabled ? '已启用' : '已禁用'}
+              {isEnabled ? tr('enabled') : tr('disabled')}
               <span className="text-[10px] font-medium opacity-50 group-hover:opacity-80">
-                {isEnabled ? '· 点击禁用' : '· 点击启用'}
+                {isEnabled ? tr('clickDisable') : tr('clickEnable')}
               </span>
             </button>
           ) : (
@@ -918,36 +922,36 @@ export default function WorkflowEditorHeader({
               }`}
             >
               <span className={`w-1.5 h-1.5 rounded-full ${isEnabled ? 'bg-emerald-500' : 'bg-slate-400'}`} />
-              {isEnabled ? '已启用' : '已禁用'}
+              {isEnabled ? tr('enabled') : tr('disabled')}
             </span>
           )
         )}
         {publishedVersion == null && (
-          <span className="text-[11px] text-amber-600 shrink-0">发布后才会接收请求</span>
+          <span className="text-[11px] text-amber-600 shrink-0">{tr('publishToReceive')}</span>
         )}
         <div className="flex-1" />
         <button
           type="button"
           onClick={toggleMetaCollapsed}
-          title={metaCollapsed ? '展开名称、服务、依赖等设置' : '折叠信息栏，画布占满下方'}
+          title={metaCollapsed ? tr('expandMetaTitle') : tr('collapseMetaTitle')}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[7px] text-xs font-medium text-slate-500 hover:bg-slate-50 shrink-0"
         >
           <i className={`fas ${metaCollapsed ? 'fa-chevron-down' : 'fa-chevron-up'} text-[10px] text-slate-400`} />
-          {metaCollapsed ? '展开' : '折叠'}
+          {metaCollapsed ? tr('expand') : tr('collapse')}
         </button>
         <button
           type="button"
           onClick={onShowHelp}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[7px] text-xs font-medium text-slate-500 hover:bg-slate-50 shrink-0"
         >
-          接口文档
+          {tr('apiDoc')}
         </button>
         <button
           type="button"
           onClick={onShowDebug}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[7px] text-xs font-medium border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 shrink-0"
         >
-          调试
+          {tr('debug')}
         </button>
         {onShowRuns && (
           <button
@@ -956,7 +960,7 @@ export default function WorkflowEditorHeader({
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[7px] text-xs font-medium border border-slate-200 text-slate-600 bg-white hover:bg-slate-50 shrink-0"
           >
             <i className="fas fa-clock-rotate-left text-[10px] text-slate-400" />
-            执行日志
+            {tr('execLogs')}
           </button>
         )}
         {onShowVersions && (
@@ -965,7 +969,7 @@ export default function WorkflowEditorHeader({
             onClick={onShowVersions}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[7px] text-xs font-medium border border-slate-200 text-slate-600 bg-white hover:bg-slate-50 shrink-0"
           >
-            版本历史
+            {tr('versionHistory')}
           </button>
         )}
         {onShare && (
@@ -975,7 +979,7 @@ export default function WorkflowEditorHeader({
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[7px] text-xs font-medium border border-slate-200 text-slate-600 bg-white hover:bg-slate-50 shrink-0"
           >
             <i className="fas fa-link text-[10px] text-slate-400" />
-            复制编辑链接
+            {tr('copyEditLink')}
           </button>
         )}
         {onExport && (
@@ -985,13 +989,13 @@ export default function WorkflowEditorHeader({
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[7px] text-xs font-medium border border-slate-200 text-slate-600 bg-white hover:bg-slate-50 shrink-0"
           >
             <i className="fas fa-download text-[10px] text-slate-400" />
-            导出
+            {tr('export')}
           </button>
         )}
         <input
           value={saveNote}
           onChange={(e) => setSaveNote(e.target.value)}
-          placeholder="保存备注（可选）"
+          placeholder={tr('phSaveNote')}
           className="w-28 shrink-0 px-2 py-1.5 border border-slate-200 rounded-[7px] text-xs text-slate-600 outline-none focus:border-indigo-300"
         />
         {hasUnpublished && onDiscardDraft && (
@@ -1000,7 +1004,7 @@ export default function WorkflowEditorHeader({
             onClick={onDiscardDraft}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[7px] text-xs font-medium border border-slate-200 text-slate-600 bg-white hover:bg-slate-50 shrink-0"
           >
-            丢弃草稿
+            {tr('discardDraft')}
           </button>
         )}
         <button
@@ -1008,7 +1012,7 @@ export default function WorkflowEditorHeader({
           onClick={handleSave}
           className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-[7px] text-xs font-semibold border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 shrink-0"
         >
-          保存
+          {tr('save')}
         </button>
         {onPublish && (
           <button
@@ -1017,7 +1021,7 @@ export default function WorkflowEditorHeader({
             disabled={publishDisabled}
             className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-[7px] text-xs font-semibold bg-indigo-600 text-white hover:bg-indigo-700 shadow-[0_1px_4px_rgba(79,70,229,0.3)] shrink-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-indigo-600"
           >
-            {publishDisabled ? '已发布' : '发布'}
+            {publishDisabled ? tr('published') : tr('publish')}
           </button>
         )}
       </div>
@@ -1029,7 +1033,7 @@ export default function WorkflowEditorHeader({
         <div className="flex items-stretch h-[50px] border-b border-[#f0f1f3] overflow-x-auto">
           <InlineField
             fieldKey="name"
-            label="名称"
+            label={tr('fieldName')}
             fieldClassName="flex-[1.4] min-w-[130px]"
             editValue={formMeta.name}
             editing={isEditing('name')}
@@ -1051,7 +1055,7 @@ export default function WorkflowEditorHeader({
               />
             ) : (
               <span className="text-[14px] font-medium text-slate-700 truncate leading-tight">
-                {formMeta.name || <span className="text-slate-400 italic font-normal">未命名</span>}
+                {formMeta.name || <span className="text-slate-400 italic font-normal">{tr('unnamed')}</span>}
               </span>
             )}
           </InlineField>
@@ -1087,7 +1091,7 @@ export default function WorkflowEditorHeader({
 
           <InlineField
             fieldKey="department"
-            label="服务"
+            label={tr('fieldService')}
             fieldClassName="w-[118px]"
             editValue={formMeta.department}
             editing={isEditing('department')}
@@ -1109,7 +1113,7 @@ export default function WorkflowEditorHeader({
 
           <InlineField
             fieldKey="category"
-            label="分类"
+            label={tr('fieldCategory')}
             fieldClassName="w-[108px]"
             editValue={formMeta.category}
             editing={isEditing('category')}
@@ -1131,7 +1135,7 @@ export default function WorkflowEditorHeader({
 
           <InlineField
             fieldKey="trigger_type"
-            label="触发方式"
+            label={tr('fieldTrigger')}
             fieldClassName="w-[138px]"
             editValue={formMeta.trigger_type}
             editing={isEditing('trigger_type')}
@@ -1145,7 +1149,7 @@ export default function WorkflowEditorHeader({
                 const meta = TRIGGER_META[t.value] ?? TRIGGER_META.manual
                 return {
                   value: t.value,
-                  label: meta.label,
+                  label: trTrig(meta.labelKey),
                   icon: meta.icon,
                   iconClass: TRIGGER_ICON_CLASS[meta.color],
                 }
@@ -1170,14 +1174,14 @@ export default function WorkflowEditorHeader({
                   cronError ? 'text-red-500' : 'text-[#b0bac5]'
                 }`}
               >
-                {cronError ? `Cron 非法：${cronError}` : '定时（Cron · 北京时间）'}
+                {cronError ? tr('cronInvalid', { err: cronError }) : tr('cronScheduled')}
               </span>
               <input
                 className={`w-full text-[13px] font-medium font-mono border-none outline-none bg-transparent p-0 placeholder:text-slate-400 placeholder:font-sans placeholder:font-normal placeholder:italic ${
                   cronError ? 'text-red-600' : 'text-slate-800'
                 }`}
                 value={cronSchedule}
-                placeholder="分 时 日 月 周（北京时间），如 */5 * * * *"
+                placeholder={tr('phCron')}
                 title={cronError ?? undefined}
                 onChange={(e) => setCronSchedule(e.target.value)}
                 onMouseDown={(e) => e.stopPropagation()}
@@ -1191,7 +1195,7 @@ export default function WorkflowEditorHeader({
           {endpointPath && (
             <InlineField
               fieldKey="endpoint"
-              label="端点"
+              label={tr('fieldEndpoint')}
               fieldClassName="flex-[2] min-w-[200px] border-r-0"
               editValue=""
               editing={false}
@@ -1205,7 +1209,7 @@ export default function WorkflowEditorHeader({
                   onMouseDown={(e) => e.stopPropagation()}
                   onClick={copyEndpoint}
                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[5px] text-[12px] font-mono bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors max-w-full truncate"
-                  title="点击复制"
+                  title={tr('clickCopy')}
                 >
                   <span className="text-[10px] font-extrabold tracking-wide opacity-70 shrink-0">POST</span>
                   <span className="truncate">{endpointPath.replace(/^POST\s+/, '')}</span>
@@ -1215,7 +1219,7 @@ export default function WorkflowEditorHeader({
                 </button>
                 {hasUnpublished && liveSlug && formMeta.slug && formMeta.slug !== liveSlug && (
                   <span className="text-[11px] text-amber-700 truncate shrink-0">
-                    发布后地址变为 {formMeta.slug}
+                    {tr('publishSlugHint', { slug: formMeta.slug })}
                   </span>
                 )}
               </div>
@@ -1227,7 +1231,7 @@ export default function WorkflowEditorHeader({
         <div className="flex items-stretch h-[50px] overflow-x-auto">
           <InlineField
             fieldKey="description"
-            label="备注"
+            label={tr('fieldNote')}
             fieldClassName="flex-[2] min-w-[180px]"
             editValue={formMeta.description}
             editing={isEditing('description')}
@@ -1239,7 +1243,7 @@ export default function WorkflowEditorHeader({
                 ref={(el) => { inputRefs.current.description = el }}
                 className="w-full text-[14px] font-medium text-slate-800 border-none outline-none bg-transparent p-0"
                 value={editDraft}
-                placeholder="用途说明（可选）"
+                placeholder={tr('phPurpose')}
                 onChange={(e) => setEditDraft(e.target.value)}
                 onBlur={(e) => commitDraft('description', e.currentTarget.value)}
                 onKeyDown={(e) => {
@@ -1250,7 +1254,7 @@ export default function WorkflowEditorHeader({
               />
             ) : (
               <span className="text-[14px] font-medium text-slate-700 truncate leading-tight">
-                {formMeta.description || <span className="text-slate-400 italic font-normal">用途说明（可选）</span>}
+                {formMeta.description || <span className="text-slate-400 italic font-normal">{tr('phPurpose')}</span>}
               </span>
             )}
           </InlineField>
@@ -1258,7 +1262,7 @@ export default function WorkflowEditorHeader({
           {databaseOptions.length > 0 && (
             <InlineField
               fieldKey="database_id"
-              label="数据库"
+              label={tr('fieldDatabase')}
               fieldClassName="flex-[1.6] min-w-[200px]"
               editValue={formMeta.database_id}
               editing={isEditing('database_id')}
@@ -1271,10 +1275,10 @@ export default function WorkflowEditorHeader({
                 minWidth={280}
                 maxHeight={240}
                 options={[
-                  { value: '', label: '请选择数据库' },
+                  { value: '', label: tr('selectDatabase') },
                   ...databaseOptions.map((c) => ({
                     value: String(c.database_id),
-                    label: dbLabel(c),
+                    label: dbLabel(c, tr),
                     mono: true,
                   })),
                 ]}
@@ -1282,7 +1286,7 @@ export default function WorkflowEditorHeader({
                 onDismiss={stopEdit}
               >
                 <span className="block text-[13px] font-medium font-mono text-slate-700 truncate leading-tight">
-                  {selectedDb ? dbLabel(selectedDb) : <span className="text-slate-400 italic font-sans font-normal">未选择</span>}
+                  {selectedDb ? dbLabel(selectedDb, tr) : <span className="text-slate-400 italic font-sans font-normal">{tr('notSelected')}</span>}
                 </span>
               </FieldSelectAnchor>
             </InlineField>
@@ -1290,7 +1294,7 @@ export default function WorkflowEditorHeader({
 
           <InlineField
             fieldKey="timeout_ms"
-            label="超时时间"
+            label={tr('fieldTimeout')}
             fieldClassName="w-[108px]"
             editValue={String(formMeta.timeout_ms)}
             editing={isEditing('timeout_ms')}
@@ -1388,7 +1392,7 @@ export default function WorkflowEditorHeader({
         <div className={cn('border-t border-[#f0f1f3]', isEditing('input_schema') ? 'min-h-[140px]' : 'min-h-[50px]')}>
           <InlineField
             fieldKey="input_schema"
-            label="入参定义"
+            label={tr('fieldInputDef')}
             fieldClassName="flex-1 min-w-0"
             editValue={formMeta.input_schema ?? ''}
             editing={isEditing('input_schema')}
@@ -1413,7 +1417,7 @@ export default function WorkflowEditorHeader({
               <span className="text-[13px] font-medium font-mono text-slate-700 truncate leading-tight">
                 {formMeta.input_schema?.trim()
                   ? formMeta.input_schema.replace(/\s+/g, ' ')
-                  : <span className="text-slate-400 italic font-sans font-normal">未声明（文档将扫描 {'{{trigger.x}}'}）</span>}
+                  : <span className="text-slate-400 italic font-sans font-normal">{tr('notDeclared', { trigvar: '{{trigger.x}}' })}</span>}
               </span>
             )}
           </InlineField>
@@ -1434,7 +1438,7 @@ export default function WorkflowEditorHeader({
                 )}
               />
               <span className="text-[12px] font-bold uppercase tracking-[0.06em] text-[#b0bac5]">
-                依赖 (npm)
+                {tr('depsNpm')}
               </span>
               {depsStatus && (
                 <span
@@ -1444,17 +1448,17 @@ export default function WorkflowEditorHeader({
                   )}
                   title={depsStatus.error || undefined}
                 >
-                  {depsStatusLabel(depsStatus.status)}
+                  {tr(depsStatusLabel(depsStatus.status))}
                 </span>
               )}
               {npmDepsConfigured && (
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-violet-50 text-violet-700">
-                  {Object.keys(jsDepsObject).length} 个包
+                  {tr('pkgCount', { n: Object.keys(jsDepsObject).length })}
                 </span>
               )}
               {!npmDepsConfigured && !depsStatus && (
                 <span className="text-[12px] text-slate-400 font-normal normal-case tracking-normal">
-                  点击展开设置
+                  {tr('clickExpandSettings')}
                 </span>
               )}
             </div>
@@ -1462,7 +1466,7 @@ export default function WorkflowEditorHeader({
           {npmDepsOpen && (
             <div className="px-4 pb-3 space-y-2">
               <div className="text-[12px] text-slate-500">
-                为 JavaScript 代码节点声明 npm 依赖；保存后后端自动安装。仅编辑 dependencies 对象即可。
+                {tr('npmDesc')}
               </div>
               <label className="block">
                 <span className="block text-[11px] font-semibold text-slate-500 mb-1">
@@ -1483,10 +1487,10 @@ export default function WorkflowEditorHeader({
               </label>
               {npmDepsError && <p className="text-[11px] text-red-600">{npmDepsError}</p>}
               {depsStatus?.status === 'failed' && depsStatus.error && (
-                <p className="text-[11px] text-red-600">安装失败：{depsStatus.error}</p>
+                <p className="text-[11px] text-red-600">{tr('installFailed', { err: depsStatus.error })}</p>
               )}
               {depsStatus?.status === 'installing' && (
-                <p className="text-[11px] text-blue-600">依赖正在安装，请稍后刷新查看状态。</p>
+                <p className="text-[11px] text-blue-600">{tr('installing')}</p>
               )}
             </div>
           )}
@@ -1507,7 +1511,7 @@ export default function WorkflowEditorHeader({
                 )}
               />
               <span className="text-[12px] font-bold uppercase tracking-[0.06em] text-[#b0bac5]">
-                依赖 (pip)
+                {tr('depsPip')}
               </span>
               {pyDepsStatus && (
                 <span
@@ -1517,17 +1521,17 @@ export default function WorkflowEditorHeader({
                   )}
                   title={pyDepsStatus.error || undefined}
                 >
-                  {depsStatusLabel(pyDepsStatus.status)}
+                  {tr(depsStatusLabel(pyDepsStatus.status))}
                 </span>
               )}
               {pipDepsConfigured && (
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-violet-50 text-violet-700">
-                  {pyRequirements.length} 个包
+                  {tr('pkgCount', { n: pyRequirements.length })}
                 </span>
               )}
               {!pipDepsConfigured && !pyDepsStatus && (
                 <span className="text-[12px] text-slate-400 font-normal normal-case tracking-normal">
-                  点击展开设置
+                  {tr('clickExpandSettings')}
                 </span>
               )}
             </div>
@@ -1535,7 +1539,7 @@ export default function WorkflowEditorHeader({
           {pipDepsOpen && (
             <div className="px-4 pb-3 space-y-2">
               <div className="text-[12px] text-slate-500">
-                为 Python 代码节点声明 pip 依赖；保存后后端自动安装。每行一个 requirement。
+                {tr('pipDesc')}
               </div>
               <label className="block">
                 <span className="block text-[11px] font-semibold text-slate-500 mb-1">
@@ -1552,10 +1556,10 @@ export default function WorkflowEditorHeader({
                 />
               </label>
               {pyDepsStatus?.status === 'failed' && pyDepsStatus.error && (
-                <p className="text-[11px] text-red-600">安装失败：{pyDepsStatus.error}</p>
+                <p className="text-[11px] text-red-600">{tr('installFailed', { err: pyDepsStatus.error })}</p>
               )}
               {pyDepsStatus?.status === 'installing' && (
-                <p className="text-[11px] text-blue-600">依赖正在安装，请稍后刷新查看状态。</p>
+                <p className="text-[11px] text-blue-600">{tr('installing')}</p>
               )}
             </div>
           )}
@@ -1576,28 +1580,28 @@ export default function WorkflowEditorHeader({
                 )}
               />
               <span className="text-[12px] font-bold uppercase tracking-[0.06em] text-[#b0bac5]">
-                失败告警 Webhook
+                {tr('alertWebhook')}
               </span>
               {alertConfigured ? (
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-emerald-50 text-emerald-700">
-                  已配置
+                  {tr('configured')}
                 </span>
               ) : (
                 <span className="text-[12px] text-slate-400 font-normal normal-case tracking-normal">
-                  点击展开设置
+                  {tr('clickExpandSettings')}
                 </span>
               )}
             </div>
             {formMeta.last_alert_sent_at && (
               <div className="text-[12px] text-slate-500 whitespace-nowrap shrink-0">
-                上次发送：{new Date(formMeta.last_alert_sent_at).toLocaleString()}
+                {tr('lastSent', { time: new Date(formMeta.last_alert_sent_at).toLocaleString() })}
               </div>
             )}
           </button>
           {alertOpen && (
             <div className="px-4 pb-3 space-y-2">
               <div className="text-[12px] text-slate-500">
-                仅最终失败后发送；同一工作流按限流小时数最多发送一次。URL 留空即关闭告警。
+                {tr('alertDesc')}
               </div>
               <div className="grid grid-cols-[minmax(220px,1fr)_120px] gap-3">
                 <label className="min-w-0">
@@ -1614,7 +1618,7 @@ export default function WorkflowEditorHeader({
                   />
                 </label>
                 <label>
-                  <span className="block text-[11px] font-semibold text-slate-500 mb-1">限流小时</span>
+                  <span className="block text-[11px] font-semibold text-slate-500 mb-1">{tr('rateLimitHours')}</span>
                   <input
                     type="number"
                     min={0}
@@ -1633,7 +1637,7 @@ export default function WorkflowEditorHeader({
               </div>
               <label className="block">
                 <span className="block text-[11px] font-semibold text-slate-500 mb-1">
-                  消息模板（JSON object）
+                  {tr('msgTemplate')}
                 </span>
                   <textarea
                   value={formMeta.alert_webhook_template ?? ''}
@@ -1645,7 +1649,7 @@ export default function WorkflowEditorHeader({
                   rows={4}
                 />
                 <span className="block mt-1 text-[11px] text-slate-400">
-                  变量：{'{{source}} {{name}} {{status}} {{error}} {{time}} {{run_id}} {{object_id}} {{trigger_type}} {{trace_id}}'}
+                  {tr('variables', { vars: '{{source}} {{name}} {{status}} {{error}} {{time}} {{run_id}} {{object_id}} {{trigger_type}} {{trace_id}}' })}
                 </span>
               </label>
             </div>

@@ -16,6 +16,7 @@
  */
 
 import dynamic from 'next/dynamic'
+import { useTranslations } from 'next-intl'
 import { useParams, useSearchParams } from 'next/navigation'
 import { useAppStore } from '@/lib/store'
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
@@ -28,6 +29,7 @@ const WorkflowGraphCanvas = dynamic(
 
 export default function WorkspaceWorkflowGraphPage() {
   const params = useParams<{ projectId: string }>()
+  const t = useTranslations('wsAutomation')
   const projectId = parseInt(params.projectId, 10)
   const currentConnection = useAppStore((s) => s.currentConnection)
   const databaseId = currentConnection?.database_id ?? null
@@ -39,17 +41,17 @@ export default function WorkspaceWorkflowGraphPage() {
   const focusId = searchParams.get('focus')
 
   if (!caps.canManageEvents) {
-    return <ForbiddenPlaceholder reason="工作流依赖图需要 admin+ 角色（owner / admin / 超管）" />
+    return <ForbiddenPlaceholder reason={t('forbiddenGraph')} />
   }
 
   if (isNaN(projectId)) {
-    return <div className="p-8 text-center text-gray-500">URL 中的 projectId 无效</div>
+    return <div className="p-8 text-center text-gray-500">{t('invalidProject')}</div>
   }
 
   if (!databaseId) {
     return (
       <div className="p-8 text-center text-gray-500">
-        本项目尚未绑定主数据库连接，无法查看工作流依赖图。
+        {t('noConnGraph')}
       </div>
     )
   }

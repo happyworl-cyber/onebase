@@ -13,12 +13,14 @@
 
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { projectGatewayAPI, type ProjectGatewaySettings } from '@/lib/api'
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import { useNotification } from '@/hooks/useNotification'
 import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
 
 export default function ProjectGatewayPage() {
+  const t = useTranslations('wsGatewaySettings')
   const params = useParams<{ projectId: string }>()
   const projectId = parseInt(params?.projectId ?? '', 10)
   const caps = useCurrentProjectCapabilities()
@@ -58,13 +60,13 @@ export default function ProjectGatewayPage() {
 
   const handleSave = async () => {
     if (invalid) {
-      notify.error('对外基址必须以 http:// 或 https:// 开头')
+      notify.error(t('errBaseScheme'))
       return
     }
     setSaving(true)
     try {
       await projectGatewayAPI.update(projectId, { public_base_url: trimmed === '' ? null : trimmed })
-      notify.success('已保存，本项目接口文档将立即使用新的对外地址')
+      notify.success(t('saved'))
       await load()
     } catch (err: any) {
       notify.error(err)
@@ -76,27 +78,26 @@ export default function ProjectGatewayPage() {
   return (
     <div className="max-w-3xl">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-slate-800">网关域名</h1>
+        <h1 className="text-2xl font-bold text-slate-800">{t('title')}</h1>
         <p className="text-sm text-slate-500 mt-1">
-          本项目的对外调用基址，优先级高于平台全局设置；留空则回落到平台设置。
+          {t('subtitle')}
         </p>
       </div>
 
       {loading ? (
-        <div className="bg-white rounded-xl shadow-sm p-8 text-center text-sm text-slate-400">加载中…</div>
+        <div className="bg-white rounded-xl shadow-sm p-8 text-center text-sm text-slate-400">{t('loading')}</div>
       ) : (
         <div className="bg-white rounded-xl shadow-sm p-6 space-y-5">
           <div>
-            <h2 className="font-semibold text-slate-800">对外调用基址（网关域名）</h2>
+            <h2 className="font-semibold text-slate-800">{t('cardTitle')}</h2>
             <p className="text-sm text-slate-500 mt-1 leading-relaxed">
-              本项目接口文档（工作流 / REST / RPC）展示的调用地址会用这个域名拼接。
-              <span className="text-slate-700 font-medium">保存后立即生效，无需重启或重新发布</span>。
-              留空则回落到平台全局设置。
+              {t('cardDesc1')}
+              <span className="text-slate-700 font-medium">{t('cardDescStrong')}</span>{t('cardDesc2')}
             </p>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">对外基址 URL</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">{t('urlLabel')}</label>
             <input
               type="text"
               value={draft}
@@ -109,23 +110,23 @@ export default function ProjectGatewayPage() {
               }`}
             />
             {invalid ? (
-              <p className="text-xs text-red-500 mt-1">必须以 http:// 或 https:// 开头。</p>
+              <p className="text-xs text-red-500 mt-1">{t('mustStartWithScheme')}</p>
             ) : (
-              <p className="text-xs text-slate-400 mt-1">不含末尾斜杠；例如 https://gw.example.com</p>
+              <p className="text-xs text-slate-400 mt-1">{t('noTrailingSlashHint')}</p>
             )}
           </div>
 
           <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-sm space-y-1">
             <div className="flex items-center gap-2">
-              <span className="text-slate-500 w-28 shrink-0">当前生效地址</span>
-              <code className="text-slate-800 break-all">{settings?.effective_base_url || '（浏览器 origin）'}</code>
+              <span className="text-slate-500 w-28 shrink-0">{t('effective')}</span>
+              <code className="text-slate-800 break-all">{settings?.effective_base_url || t('browserOrigin')}</code>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-slate-500 w-28 shrink-0">平台默认</span>
-              <code className="text-slate-600 break-all">{settings?.platform_base_url || '（未配置）'}</code>
+              <span className="text-slate-500 w-28 shrink-0">{t('platformDefault')}</span>
+              <code className="text-slate-600 break-all">{settings?.platform_base_url || t('notConfigured')}</code>
             </div>
             <p className="text-xs text-slate-400 pt-1">
-              优先级：本项目配置 &gt; 平台全局设置 &gt; 环境变量 PUBLIC_BASE_URL &gt; 网关转发头 &gt; 浏览器 origin
+              {t('priority')}
             </p>
           </div>
 
@@ -135,9 +136,9 @@ export default function ProjectGatewayPage() {
               disabled={saving || invalid || !dirty}
               className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {saving ? '保存中…' : '保存'}
+              {saving ? t('saving') : t('save')}
             </button>
-            {dirty && !saving && <span className="text-xs text-amber-600">有未保存的改动</span>}
+            {dirty && !saving && <span className="text-xs text-amber-600">{t('dirty')}</span>}
           </div>
         </div>
       )}

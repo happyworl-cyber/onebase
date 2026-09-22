@@ -1,19 +1,19 @@
 -- =====================================================================
 -- Acme → Elasticsearch 同步：纯 SQL 方案
---   PG http 扩展 ──> onebase /api/es-app/* ──> Elasticsearch
+--   PG http 扩展 ──> planeos /api/es-app/* ──> Elasticsearch
 -- =====================================================================
 --
--- 在 onebase 的【SQL 编辑器】里按 `acme_test` (库=supabase, schema=gamesq)
+-- 在 planeos 的【SQL 编辑器】里按 `acme_test` (库=supabase, schema=gamesq)
 -- 整段 paste & run。需要超管权限。
 --
 -- 设计要点：
---   · ES 的真实地址/账密**不**进这张库；只配 onebase HTTP 入口 + 一个 obes_es_* token。
---   · 写入走 onebase 的应用 API (`/api/es-app/:index/bulk`)，onebase 帮忙转 ES `_bulk`、
+--   · ES 的真实地址/账密**不**进这张库；只配 planeos HTTP 入口 + 一个 obes_es_* token。
+--   · 写入走 planeos 的应用 API (`/api/es-app/:index/bulk`)，planeos 帮忙转 ES `_bulk`、
 --     做审计、强制 token ACL（method 白名单、index 白名单）。
 --   · 这份脚本会在 gamesq 下创建：
---       _es_sync_config            设置表（onebase 入口 / token / 索引名 / batch）
+--       _es_sync_config            设置表（planeos 入口 / token / 索引名 / batch）
 --       _es_setting / _strip_html / _parse_tac / _parse_description    工具函数
---       _es_call / _es_bulk        onebase HTTP 客户端
+--       _es_call / _es_bulk        planeos HTTP 客户端
 --       _es_*_fields / _es_common_settings   mapping 片段
 --       _es_ensure_index           按 mapping 建索引（幂等；走 /api/es-app/:idx/_init）
 --       es_init_indices            外层入口
@@ -29,7 +29,7 @@
 --   RDS：控制台 → 扩展管理 → 勾选 http
 --   自建：用 superuser 跑 `CREATE EXTENSION http;`
 --
--- 这里不直接 `CREATE EXTENSION`，因为在 onebase SQL 编辑器里通常没有 superuser，
+-- 这里不直接 `CREATE EXTENSION`，因为在 planeos SQL 编辑器里通常没有 superuser，
 -- 静默失败会让后面所有 `http_response` 类型引用都报"type does not exist"，
 -- 不如先用一个明确的检查兜住。注意：很多托管 PG 会把扩展装在 `extensions`
 -- 等非 public schema；下面的函数会动态读取实际 schema，不要求必须是 public。
@@ -45,7 +45,7 @@ BEGIN
         RAISE EXCEPTION
           'pgsql-http 扩展未安装。请先：1) 阿里云 RDS 控制台 -> 扩展管理 -> 安装 http；'
           '或 2) 用 superuser 执行 `CREATE EXTENSION http;`。'
-          '装好后回到 onebase SQL 编辑器重跑本脚本。';
+          '装好后回到 planeos SQL 编辑器重跑本脚本。';
     END IF;
 END $$;
 
@@ -56,13 +56,13 @@ CREATE TABLE IF NOT EXISTS gamesq._es_sync_config (
 );
 
 -- 占位行：apply 后改成真实值。
---   onebase_base_url：onebase HTTP 监听地址（必须从 PG 这台机器能访问到；
---     如果 PG 在公网 RDS、onebase 在内网，请填 onebase 公网/反代地址）。
---   onebase_es_token：在 onebase【ES 反向代理】页面给目标连接申请的 `obes_es_*` token，
+--   planeos_base_url：planeos HTTP 监听地址（必须从 PG 这台机器能访问到；
+--     如果 PG 在公网 RDS、planeos 在内网，请填 planeos 公网/反代地址）。
+--   planeos_es_token：在 planeos【ES 反向代理】页面给目标连接申请的 `obes_es_*` token，
 --     methods_allow 至少含 GET/POST/PUT/DELETE，indices_allow 至少覆盖三个目标索引。
 INSERT INTO gamesq._es_sync_config(key, value) VALUES
-    ('onebase_base_url',  'http://127.0.0.1:3006'),
-    ('onebase_es_token',  'obes_es_REPLACE_ME'),
+    ('planeos_base_url',  'http://127.0.0.1:3006'),
+    ('planeos_es_token',  'obes_es_REPLACE_ME'),
     ('article_index',       'way_article_search_main'),
     ('community_index',     'way_community_search'),
     ('user_index',          'way_user_search'),
@@ -171,15 +171,15 @@ END;
 $$;
 
 
--- ── 5. onebase HTTP 客户端：方法 / path / json body → (status, response_jsonb)
+-- ── 5. planeos HTTP 客户端：方法 / path / json body → (status, response_jsonb)
 -- path 以 / 开头，例如 '/api/es-app/way_article_search_main/bulk'
 -- body 为 NULL 时不带 body（GET/DELETE 用）；非 NULL 时按 application/json 发送
 CREATE OR REPLACE FUNCTION gamesq._es_call(method text, path text, body jsonb DEFAULT NULL,
                                             OUT status int, OUT response jsonb)
 LANGUAGE plpgsql AS $$
 DECLARE
-    base_url   text := gamesq._es_setting('onebase_base_url');
-    token      text := gamesq._es_setting('onebase_es_token');
+    base_url   text := gamesq._es_setting('planeos_base_url');
+    token      text := gamesq._es_setting('planeos_es_token');
     ext_schema text := gamesq._es_http_schema();
     conn_to    text := COALESCE(NULLIF(gamesq._es_setting('http_connect_timeout_ms'), ''), '10000');
     total_to   text := COALESCE(NULLIF(gamesq._es_setting('http_timeout_ms'), ''),         '30000');
@@ -187,17 +187,17 @@ DECLARE
     body_text  text;
 BEGIN
     IF base_url IS NULL OR base_url = '' THEN
-        RAISE EXCEPTION 'gamesq._es_sync_config.onebase_base_url 未配置';
+        RAISE EXCEPTION 'gamesq._es_sync_config.planeos_base_url 未配置';
     END IF;
     IF token IS NULL OR token = '' OR token LIKE '%REPLACE_ME%' THEN
-        RAISE EXCEPTION 'gamesq._es_sync_config.onebase_es_token 未配置或仍是占位值';
+        RAISE EXCEPTION 'gamesq._es_sync_config.planeos_es_token 未配置或仍是占位值';
     END IF;
     IF ext_schema IS NULL OR ext_schema = '' THEN
         RAISE EXCEPTION 'pgsql-http 扩展未安装，找不到扩展 schema';
     END IF;
 
     -- pgsql-http 默认 CONNECTTIMEOUT_MS=1000 / TIMEOUT_MS=5000，并且这些 curlopt
-    -- 是 session 级；onebase SQL 编辑器每次执行可能复用不同连接，所以这里
+    -- 是 session 级；planeos SQL 编辑器每次执行可能复用不同连接，所以这里
     -- 在每次 _es_call 都重新设一遍，保证不依赖前置 SQL。
     EXECUTE format('SELECT %I.http_set_curlopt($1, $2)', ext_schema)
         USING 'CURLOPT_CONNECTTIMEOUT_MS', conn_to;
@@ -325,7 +325,7 @@ LANGUAGE sql IMMUTABLE AS $$ SELECT $body$
 $body$::jsonb $$;
 
 
--- ── 7. 索引初始化（走 onebase 的 /api/es-app/:idx/_init，幂等）
+-- ── 7. 索引初始化（走 planeos 的 /api/es-app/:idx/_init，幂等）
 CREATE OR REPLACE FUNCTION gamesq._es_ensure_index(idx text, fields jsonb, p_recreate boolean)
 RETURNS text
 LANGUAGE plpgsql AS $$
@@ -334,7 +334,7 @@ DECLARE
     resp jsonb;
 BEGIN
     IF p_recreate THEN
-        -- DELETE 不存在时 onebase 透传 ES 404；当 idempotent 处理
+        -- DELETE 不存在时 planeos 透传 ES 404；当 idempotent 处理
         SELECT c.status, c.response INTO st, resp
         FROM gamesq._es_call('DELETE', '/api/es-app/' || idx) c;
         IF st >= 400 AND st <> 404 THEN
@@ -381,7 +381,7 @@ END;
 $$;
 
 
--- ── 8. _bulk 封装：传一个 operations jsonb 数组，POST 给 onebase 应用 API
+-- ── 8. _bulk 封装：传一个 operations jsonb 数组，POST 给 planeos 应用 API
 -- ops 形如 [{"action":"index","id":"1","doc":{...}}, {"action":"delete","id":"9"}]
 -- 返回 (ok, failed)
 CREATE OR REPLACE FUNCTION gamesq._es_bulk(idx text, ops jsonb,
@@ -397,7 +397,7 @@ BEGIN
     n := jsonb_array_length(ops);
     IF n = 0 THEN RETURN; END IF;
     IF n > 1000 THEN
-        -- onebase 应用 API 单批上限 1000；理论上不会撞，因为 batch ≤ 500，但兜底
+        -- planeos 应用 API 单批上限 1000；理论上不会撞，因为 batch ≤ 500，但兜底
         RAISE EXCEPTION '_es_bulk: operations 超过 1000 条上限（实际 %）', n;
     END IF;
 
@@ -411,7 +411,7 @@ BEGIN
         RAISE EXCEPTION 'bulk % failed: status=% body=%', idx, st, resp;
     END IF;
 
-    -- onebase 返回 { took_ms, errors, results: [{ok: bool, ...}] }
+    -- planeos 返回 { took_ms, errors, results: [{ok: bool, ...}] }
     SELECT
         COUNT(*) FILTER (WHERE COALESCE((item->>'ok')::boolean, false)),
         COUNT(*) FILTER (WHERE NOT COALESCE((item->>'ok')::boolean, false))
@@ -805,7 +805,7 @@ $$;
 
 -- ── 13. 轻量健康检查：POST /api/es-app/:idx/count，专给 SQL 编辑器（30s 上限）用来验通路
 --   返回每个索引当前文档数 + 每次往返耗时，不扫源表、不写任何东西。
---   提示：用的是 onebase 应用 API 的 count 端点（POST，body 为空 {}）；token 必须放行 POST。
+--   提示：用的是 planeos 应用 API 的 count 端点（POST，body 为空 {}）；token 必须放行 POST。
 CREATE OR REPLACE FUNCTION gamesq.es_health()
 RETURNS jsonb
 LANGUAGE plpgsql AS $$

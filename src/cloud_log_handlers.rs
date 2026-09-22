@@ -84,7 +84,11 @@ fn validate_write(
 )> {
     let name = req.name.trim().to_string();
     if name.is_empty() || name.chars().count() > MAX_NAME_LEN {
-        return Err(AppError::InvalidQuery("名称不能为空且最长 100 字".into()));
+        return Err(AppError::validation(
+            "cloudlog_name_required",
+            "名称不能为空且最长 100 字",
+            serde_json::json!({}),
+        ));
     }
     let provider = req
         .provider
@@ -93,14 +97,20 @@ fn validate_write(
         .trim()
         .to_string();
     if provider != "aliyun_sls" {
-        return Err(AppError::InvalidQuery("第一期仅支持 aliyun_sls".into()));
+        return Err(AppError::validation(
+            "cloudlog_provider_unsupported",
+            "第一期仅支持 aliyun_sls",
+            serde_json::json!({}),
+        ));
     }
     let region = req.region.trim().to_string();
     let sls_project = req.sls_project.trim().to_string();
     let logstore = req.logstore.trim().to_string();
     if region.is_empty() || sls_project.is_empty() || logstore.is_empty() {
-        return Err(AppError::InvalidQuery(
-            "地域、SLS Project、Logstore 均为必填".into(),
+        return Err(AppError::validation(
+            "cloudlog_region_fields_required",
+            "地域、SLS Project、Logstore 均为必填",
+            serde_json::json!({}),
         ));
     }
     Ok((
@@ -124,15 +134,27 @@ async fn require_aliyun_ak(pool: &PgPool, project_id: i32, credential_id: i32) -
     .await?;
     match kind.as_deref() {
         Some("aliyun_ak") => Ok(()),
-        Some(_) => Err(AppError::InvalidQuery("请选择阿里云 AccessKey 凭证".into())),
-        None => Err(AppError::InvalidQuery("凭证不存在或不属于本项目".into())),
+        Some(_) => Err(AppError::validation(
+            "cloudlog_select_aliyun_credential",
+            "请选择阿里云 AccessKey 凭证",
+            serde_json::json!({}),
+        )),
+        None => Err(AppError::validation(
+            "cloudlog_credential_not_owned",
+            "凭证不存在或不属于本项目",
+            serde_json::json!({}),
+        )),
     }
 }
 
 fn map_unique(e: sqlx::Error) -> AppError {
     if let sqlx::Error::Database(db) = &e {
         if db.constraint() == Some("project_log_sources_name_unique") {
-            return AppError::InvalidQuery("同一项目内日志源名称必须唯一".into());
+            return AppError::validation(
+                "cloudlog_name_unique",
+                "同一项目内日志源名称必须唯一",
+                serde_json::json!({}),
+            );
         }
     }
     AppError::Database(e)
@@ -148,6 +170,11 @@ fn record_source_op(
     summary: String,
     change: serde_json::Value,
 ) {
+    let summary_code = match action {
+        operation_log::action::CREATE => "oplog_log_source_create",
+        operation_log::action::DELETE => "oplog_log_source_delete",
+        _ => "oplog_log_source_update",
+    };
     let input = OperationLogInput::new(
         tenant_id,
         Actor::from_claims(claims),
@@ -161,7 +188,8 @@ fn record_source_op(
         name.to_string(),
         Some(source_id.to_string()),
     )
-    .change(change);
+    .change(change)
+    .summary_code(summary_code, json!({ "name": name }));
     operation_log::record(pool, input);
 }
 
@@ -279,7 +307,11 @@ pub async fn update_log_source(
     .map_err(map_unique)?
     .rows_affected();
     if affected == 0 {
-        return Err(AppError::NotFound(format!("云日志源 {sid} 不存在")));
+        return Err(AppError::not_found_coded(
+        "cloudlog_source_not_found",
+        format!("云日志源 {sid} 不存在"),
+        serde_json::json!({ "sid": sid }),
+    ));
     }
 
     let row = sqlx::query(&format!(
@@ -316,7 +348,11 @@ pub async fn delete_log_source(
     .fetch_optional(&pool)
     .await?;
     let Some(name) = name else {
-        return Err(AppError::NotFound(format!("云日志源 {sid} 不存在")));
+        return Err(AppError::not_found_coded(
+        "cloudlog_source_not_found",
+        format!("云日志源 {sid} 不存在"),
+        serde_json::json!({ "sid": sid }),
+    ));
     };
     sqlx::query("DELETE FROM management.project_log_sources WHERE id = $1 AND tenant_id = $2")
         .bind(sid)
@@ -361,21 +397,40 @@ async fn load_source_exec(pool: &PgPool, project_id: i32, sid: i32) -> Result<So
     .bind(project_id)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("云日志源 {sid} 不存在")))?;
+    .ok_or_else(|| AppError::not_found_coded(
+        "cloudlog_source_not_found",
+        format!("云日志源 {sid} 不存在"),
+        serde_json::json!({ "sid": sid }),
+    ))?;
 
     let kind: String = row.get("kind");
     if kind != "aliyun_ak" {
-        return Err(AppError::InvalidQuery("请选择阿里云 AccessKey 凭证".into()));
+        return Err(AppError::validation(
+            "cloudlog_select_aliyun_credential",
+            "请选择阿里云 AccessKey 凭证",
+            serde_json::json!({}),
+        ));
     }
     let access_key_id: Option<String> = row.get("username");
     let access_key_id = access_key_id
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| AppError::InvalidQuery("凭证缺少 AccessKeyId".into()))?
+        .ok_or_else(|| {
+            AppError::validation(
+                "cloudlog_credential_missing_access_key",
+                "凭证缺少 AccessKeyId",
+                serde_json::json!({}),
+            )
+        })?
         .to_string();
-    let secret = crypto::decrypt_secret(row.get("secret_encrypted"))
-        .map_err(|_| AppError::InvalidQuery("凭证解密失败".into()))?;
+    let secret = crypto::decrypt_secret(row.get("secret_encrypted")).map_err(|_| {
+        AppError::validation(
+            "cloudlog_credential_decrypt_failed",
+            "凭证解密失败",
+            serde_json::json!({}),
+        )
+    })?;
     Ok(SourceExec {
         region: row.get("region"),
         sls_project: row.get("sls_project"),
@@ -393,9 +448,14 @@ fn build_query(src: &SourceExec, body: &LogQueryBody, now: i64) -> Result<(Cloud
         body.query.as_deref(),
         body.x_request_id.as_deref(),
     )
-    .map_err(AppError::InvalidQuery)?;
-    let (from, to) =
-        resolve_query_window(body.from, body.to, now).map_err(AppError::InvalidQuery)?;
+    .map_err(|e| {
+        AppError::validation(
+            "cloudlog_invalid_request_id_format",
+            e,
+            serde_json::json!({}),
+        )
+    })?;
+    let (from, to) = resolve_query_window(body.from, body.to, now)?;
     let offset = body.offset.unwrap_or(0).max(0) as u32;
     Ok((
         CloudLogQuery {
@@ -412,8 +472,11 @@ fn build_query(src: &SourceExec, body: &LogQueryBody, now: i64) -> Result<(Cloud
 
 fn map_sls_err(e: String) -> AppError {
     if e.contains("凭证无效") || e.contains("读权限") {
-        AppError::InvalidQuery(e)
+        AppError::validation("cloudlog_sls_credential_invalid", e, serde_json::json!({}))
     } else if e.contains("SLS 返回 4") {
+        // 该分支的消息来自 crate::cloud_log_aliyun 透传的 SLS 响应体（超出本次转换范围），
+        // 内容任意/无固定结构，无法映射为单一 code+params；且下方单测按
+        // `AppError::InvalidQuery` 变体做精确匹配，保留原样。
         AppError::InvalidQuery(e)
     } else {
         AppError::Internal(e)

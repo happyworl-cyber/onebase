@@ -11,7 +11,7 @@
 ## 一、双层防线工作机制
 
 ```
-浏览器/App                         Onebase 后端                    PostgreSQL 业务库
+浏览器/App                         PlaneOS 后端                    PostgreSQL 业务库
 ─────────────                      ───────────────                    ─────────────
 GET /api/v1/.../messages
   + Bearer JWT
@@ -30,7 +30,7 @@ GET /api/v1/.../messages
                                    5) COMMIT （SET LOCAL 自动清）
 ```
 
-- **业务级（RBAC）** 在 Onebase 进程里完成：拿到结构化 `permissions.conditions`，
+- **业务级（RBAC）** 在 PlaneOS 进程里完成：拿到结构化 `permissions.conditions`，
   拼到 SQL WHERE 子句、再做列白名单 / API Key scope 等。
 - **数据级（RLS）** 在 PostgreSQL 里完成：业务 SQL 跑过来时，每张启用了 RLS 的表都会
   自动叠加 POLICY 里的 USING / WITH CHECK 子句。
@@ -40,7 +40,7 @@ GET /api/v1/.../messages
 
 ---
 
-## 二、Onebase 怎么把 user_id 传进 PG
+## 二、PlaneOS 怎么把 user_id 传进 PG
 
 `src/auto_api_handlers.rs` 的 5 个 CRUD handler 已经统一改造为：
 
@@ -258,27 +258,27 @@ RESTRICTIVE 与所有同动作的 POLICY 是 AND。
 ### 方案 A：给应用角色赋 `BYPASSRLS`（最干脆）
 
 ```sql
-ALTER ROLE onebase_app BYPASSRLS;
+ALTER ROLE planeos_app BYPASSRLS;
 ```
 
-这样应用使用 `onebase_app` 连接时所有 POLICY 失效。**不推荐**——粒度太粗。
+这样应用使用 `planeos_app` 连接时所有 POLICY 失效。**不推荐**——粒度太粗。
 
 ### 方案 B：在 POLICY 里给后台角色开口（推荐）
 
 ```sql
 -- 给一个专用 role
-CREATE ROLE onebase_backoffice NOINHERIT;
+CREATE ROLE planeos_backoffice NOINHERIT;
 
 -- 让该角色读 / 写所有 messages
 CREATE POLICY msg_backoffice ON public.messages
     AS PERMISSIVE
     FOR ALL
-    TO onebase_backoffice
+    TO planeos_backoffice
     USING (true)
     WITH CHECK (true);
 ```
 
-后台维护脚本用 `SET LOCAL ROLE onebase_backoffice` 临时切角色再跑。
+后台维护脚本用 `SET LOCAL ROLE planeos_backoffice` 临时切角色再跑。
 
 ### 方案 C：用 setting 做"上帝模式"（最灵活，慎用）
 
@@ -307,7 +307,7 @@ USING (
 | INSERT 类 POLICY 都加了 `WITH CHECK` | `\d+ public.messages` 看每条 POLICY |
 | `app.current_user_id()` 在业务库里存在 | `SELECT app.current_user_id();` |
 | 每个用户 ID 列上都有索引 | RLS 加在 WHERE 里，相当于自动加了 `xxx_id = N`，没索引就是全表扫 |
-| Onebase 注入的 `app.current_user_id` 能被读到 | 在事务里 `SELECT current_setting('app.current_user_id')` 应当返回非空 |
+| PlaneOS 注入的 `app.current_user_id` 能被读到 | 在事务里 `SELECT current_setting('app.current_user_id')` 应当返回非空 |
 
 ---
 
@@ -326,7 +326,7 @@ RLS 拒绝访问时返回的是"看不到 / 无此行"，不会报错，**比 RB
 2. **看当前 GUC 值**
 
    ```sql
-   -- 在 onebase 后端日志里加：
+   -- 在 planeos 后端日志里加：
    tracing::debug!(user_id = %user_id, "set RLS context");
    -- 在 PG 端：
    SELECT current_setting('app.current_user_id', true);

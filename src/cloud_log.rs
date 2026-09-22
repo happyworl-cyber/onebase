@@ -1,5 +1,6 @@
 //! 云日志：查询拼装、时间窗、控制台深链。与具体云厂商 HTTP 无关。
 
+use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
 
@@ -94,14 +95,22 @@ pub fn resolve_query_window(
     from: Option<i64>,
     to: Option<i64>,
     now: i64,
-) -> Result<(i64, i64), String> {
+) -> Result<(i64, i64), AppError> {
     let to = to.unwrap_or(now);
     let from = from.unwrap_or(to - DEFAULT_WINDOW_SECS);
     if from >= to {
-        return Err("from 必须小于 to".into());
+        return Err(AppError::validation(
+            "cloudlog_window_from_after_to",
+            "from 必须小于 to",
+            serde_json::json!({}),
+        ));
     }
     if to - from > MAX_WINDOW_SECS {
-        return Err("时间窗不能超过 7 天".into());
+        return Err(AppError::validation(
+            "cloudlog_window_too_large",
+            "时间窗不能超过 7 天",
+            serde_json::json!({ "max_days": MAX_WINDOW_SECS / 86400 }),
+        ));
     }
     Ok((from, to))
 }
@@ -235,10 +244,10 @@ mod tests {
         );
         let week = 7 * 86400;
         assert!(resolve_query_window(Some(1), Some(1 + week), now).is_ok());
-        assert_eq!(
-            resolve_query_window(Some(1), Some(1 + week + 1), now).unwrap_err(),
-            "时间窗不能超过 7 天"
-        );
+        match resolve_query_window(Some(1), Some(1 + week + 1), now).unwrap_err() {
+            AppError::Coded { message, .. } => assert_eq!(message, "时间窗不能超过 7 天"),
+            other => panic!("unexpected error: {other:?}"),
+        }
         assert!(resolve_query_window(Some(10), Some(10), now).is_err());
         // 旧 24h 上限必须已经放开
         assert!(resolve_query_window(Some(1), Some(1 + 86400 + 1), now).is_ok());

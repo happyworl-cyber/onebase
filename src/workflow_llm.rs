@@ -73,7 +73,10 @@ fn local_url_allowed(url: &Url) -> bool {
         .as_str()
     {
         "localhost" => true,
+        // host_str() 对 IPv6 字面量保留方括号（如 `[::1]`），需剥离后才能解析成 IpAddr
         host => host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
             .parse::<IpAddr>()
             .map(|ip| ip.is_loopback())
             .unwrap_or(false),
@@ -82,38 +85,65 @@ fn local_url_allowed(url: &Url) -> bool {
 
 /// 请求时重新解析并固定目标地址，避免项目配置的 LLM URL 通过 DNS 重绑定访问内网。
 pub async fn client_for_url(raw: &str) -> Result<reqwest::Client> {
-    let url = Url::parse(raw)
-        .map_err(|_| AppError::InvalidQuery("LLM base_url 不是有效 URL".to_string()))?;
+    let url = Url::parse(raw).map_err(|_| {
+        AppError::validation(
+            "wfllm_base_url_invalid",
+            "LLM base_url 不是有效 URL".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
     if url.username() != ""
         || url.password().is_some()
         || url.query().is_some()
         || url.fragment().is_some()
     {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "wfllm_base_url_forbidden_parts",
             "LLM base_url 不允许包含凭据、query 或 fragment".to_string(),
+            serde_json::json!({}),
         ));
     }
     let local_allowed = local_url_allowed(&url);
     if url.scheme() != "https" && !(url.scheme() == "http" && local_allowed) {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "wfllm_base_url_requires_https",
             "LLM base_url 必须使用 HTTPS；开发/测试环境仅允许 HTTP localhost".to_string(),
+            serde_json::json!({}),
         ));
     }
-    let host = url
-        .host_str()
-        .ok_or_else(|| AppError::InvalidQuery("LLM base_url 缺少主机名".to_string()))?;
-    let port = url
-        .port_or_known_default()
-        .ok_or_else(|| AppError::InvalidQuery("LLM base_url 端口无效".to_string()))?;
-    let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
+    let host = url.host_str().ok_or_else(|| {
+        AppError::validation(
+            "wfllm_base_url_missing_host",
+            "LLM base_url 缺少主机名".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
+    let port = url.port_or_known_default().ok_or_else(|| {
+        AppError::validation(
+            "wfllm_base_url_invalid_port",
+            "LLM base_url 端口无效".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
+    // IPv6 字面量的 host_str() 带方括号，lookup_host 不接受，解析前先剥离
+    let lookup_name = host.trim_start_matches('[').trim_end_matches(']');
+    let addresses: Vec<SocketAddr> = tokio::net::lookup_host((lookup_name, port))
         .await
-        .map_err(|_| AppError::InvalidQuery("LLM base_url 主机无法解析".to_string()))?
+        .map_err(|_| {
+            AppError::validation(
+                "wfllm_base_url_host_unresolvable",
+                "LLM base_url 主机无法解析".to_string(),
+                serde_json::json!({}),
+            )
+        })?
         .collect();
     if addresses.is_empty()
         || (!local_allowed && addresses.iter().any(|addr| is_non_public_ip(addr.ip())))
     {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "wfllm_base_url_forbidden_address",
             "LLM base_url 不允许指向本机、内网、链路本地或保留地址".to_string(),
+            serde_json::json!({}),
         ));
     }
     reqwest::Client::builder()
@@ -378,7 +408,13 @@ async fn execute_chat_request_inner(
             json!("stop"),
             true,
         )
-        .map_err(AppError::InvalidQuery);
+        .map_err(|reason| {
+            AppError::validation(
+                "wfllm_stream_output_invalid",
+                reason.clone(),
+                serde_json::json!({ "reason": reason }),
+            )
+        });
     }
 
     let resp = apply_headers(client.post(&req.url), &req.headers)
@@ -396,8 +432,13 @@ async fn execute_chat_request_inner(
         .map_err(|e| AppError::Internal(format!("读取响应失败: {e}")))?;
     let body: Value = serde_json::from_str(&text)
         .map_err(|e| AppError::Internal(format!("LLM 响应不是 JSON: {e}")))?;
-    parse_non_stream_response(&body, &req.requested_model, req.json_mode)
-        .map_err(AppError::InvalidQuery)
+    parse_non_stream_response(&body, &req.requested_model, req.json_mode).map_err(|reason| {
+        AppError::validation(
+            "wfllm_response_parse_invalid",
+            reason.clone(),
+            serde_json::json!({ "reason": reason }),
+        )
+    })
 }
 
 pub async fn execute_chat_request(
@@ -554,6 +595,9 @@ mod tests {
     async fn execute_chat_request_posts_json() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
+
+        // client_for_url 只在 development/test 实例放行 http://localhost
+        std::env::set_var("RUST_ENV", "test");
 
         let listener = TcpListener::bind("[::1]:0").await.unwrap();
         let url = format!(

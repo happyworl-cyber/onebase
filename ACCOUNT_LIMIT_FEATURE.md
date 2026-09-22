@@ -298,7 +298,7 @@ cargo run --bin license_tool issue \
   --max-tenants 5 \
   --max-accounts-per-tenant 10 \
   --days 365 \
-  --out /etc/onebase/license.lic
+  --out /etc/planeos/license.lic
 ```
 
 ### 业务代码检查

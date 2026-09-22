@@ -52,7 +52,13 @@ async fn require_admin_for_database(
             .bind(database_id)
             .fetch_optional(pool)
             .await?
-            .ok_or_else(|| AppError::InvalidQuery(format!("数据库 {} 不存在", database_id)))?;
+            .ok_or_else(|| {
+                AppError::validation(
+                    "ssebridge_database_not_found",
+                    format!("数据库 {} 不存在", database_id),
+                    serde_json::json!({ "id": database_id }),
+                )
+            })?;
     permissions::require_tenant_admin(pool, claims, tenant_id).await?;
     Ok(tenant_id)
 }
@@ -68,7 +74,13 @@ async fn require_admin_for_existing_bridge(
             .bind(bridge_id)
             .fetch_optional(pool)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("监听桥 {} 不存在", bridge_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_coded(
+                    "ssebridge_bridge_not_found",
+                    format!("监听桥 {} 不存在", bridge_id),
+                    serde_json::json!({ "id": bridge_id }),
+                )
+            })?;
     require_admin_for_database(pool, claims, database_id).await?;
     Ok(database_id)
 }
@@ -149,18 +161,32 @@ pub async fn create_bridge(
     let topic_template = body.topic_template.trim();
     let event_name = body.event_name.trim();
     if channel.is_empty() {
-        return Err(AppError::InvalidQuery("channel 不能为空".to_string()));
+        return Err(AppError::validation(
+            "ssebridge_channel_empty",
+            "channel 不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if channel.len() > 63 {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "ssebridge_channel_too_long",
             "channel 长度不能超过 63".to_string(),
+            serde_json::json!({}),
         ));
     }
     if topic_template.is_empty() {
-        return Err(AppError::InvalidQuery("topic 模板不能为空".to_string()));
+        return Err(AppError::validation(
+            "ssebridge_topic_template_empty",
+            "topic 模板不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if event_name.is_empty() {
-        return Err(AppError::InvalidQuery("event 名不能为空".to_string()));
+        return Err(AppError::validation(
+            "ssebridge_event_name_empty",
+            "event 名不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let row = sqlx::query(
@@ -207,7 +233,11 @@ pub async fn update_bridge(
     .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("监听桥 {} 不存在", id)));
+        return Err(AppError::not_found_coded(
+            "ssebridge_bridge_not_found",
+            format!("监听桥 {} 不存在", id),
+            serde_json::json!({ "id": id }),
+        ));
     }
     Ok(Json(json!({ "message": "更新成功" })))
 }
@@ -225,7 +255,11 @@ pub async fn delete_bridge(
         .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("监听桥 {} 不存在", id)));
+        return Err(AppError::not_found_coded(
+            "ssebridge_bridge_not_found",
+            format!("监听桥 {} 不存在", id),
+            serde_json::json!({ "id": id }),
+        ));
     }
     Ok(Json(json!({ "message": "删除成功" })))
 }

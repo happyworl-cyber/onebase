@@ -58,7 +58,7 @@ ON management.partner_commissions(related_license_id);
 
 CREATE TABLE IF NOT EXISTS management.maintenance_renewals (
     id SERIAL PRIMARY KEY,
-    license_id UUID NOT NULL REFERENCES management.customer_licenses(id) ON DELETE CASCADE,
+    license_id UUID NOT NULL REFERENCES management.customer_licenses(license_id) ON DELETE CASCADE,  -- 指向 UUID 业务列，非 SERIAL 主键
     partner_id INTEGER NOT NULL REFERENCES management.partners(id) ON DELETE RESTRICT,
 
     -- 续费信息
@@ -86,10 +86,10 @@ CREATE TABLE IF NOT EXISTS management.maintenance_renewals (
     CONSTRAINT maintenance_renewals_commission_rate_check CHECK (commission_rate >= 0 AND commission_rate <= 100)
 );
 
-CREATE INDEX idx_maintenance_renewals_license_id ON management.maintenance_renewals(license_id);
-CREATE INDEX idx_maintenance_renewals_partner_id ON management.maintenance_renewals(partner_id);
-CREATE INDEX idx_maintenance_renewals_payment_status ON management.maintenance_renewals(payment_status);
-CREATE INDEX idx_maintenance_renewals_period ON management.maintenance_renewals(period_start, period_end);
+CREATE INDEX IF NOT EXISTS idx_maintenance_renewals_license_id ON management.maintenance_renewals(license_id);
+CREATE INDEX IF NOT EXISTS idx_maintenance_renewals_partner_id ON management.maintenance_renewals(partner_id);
+CREATE INDEX IF NOT EXISTS idx_maintenance_renewals_payment_status ON management.maintenance_renewals(payment_status);
+CREATE INDEX IF NOT EXISTS idx_maintenance_renewals_period ON management.maintenance_renewals(period_start, period_end);
 
 COMMENT ON TABLE management.maintenance_renewals
 IS '维护费续费记录表 - 跟踪每年的维护费续费情况';
@@ -127,8 +127,17 @@ DROP VIEW IF EXISTS management.v_partner_stats;
 CREATE VIEW management.v_partner_stats AS
 SELECT
     p.id AS partner_id,
-    p.name AS partner_name,
+    -- name / slug / license_quota / used_quota / commission_rate / created_at
+    -- 都是 src/partner_models.rs::PartnerStats 必需的列。早期版本漏掉了它们，
+    -- 还把 name 错误地起别名成 partner_name，导致 admin_list_partners
+    -- （SELECT * FROM v_partner_stats ORDER BY created_at）报
+    -- `column "created_at" does not exist`。
+    p.name,
+    p.slug,
     p.status,
+    p.license_quota,
+    p.used_quota,
+    p.commission_rate,
 
     -- License 统计
     COUNT(DISTINCT cl.id) AS total_licenses,
@@ -152,13 +161,15 @@ SELECT
 
     -- 最近活动
     MAX(cl.created_at) AS last_license_issued,
-    MAX(pc.created_at) AS last_commission_date
+    MAX(pc.created_at) AS last_commission_date,
+
+    p.created_at
 FROM
     management.partners p
     LEFT JOIN management.customer_licenses cl ON p.id = cl.partner_id
     LEFT JOIN management.partner_commissions pc ON p.id = pc.partner_id
 GROUP BY
-    p.id, p.name, p.status;
+    p.id;
 
 COMMENT ON VIEW management.v_partner_stats
 IS '代理商统计视图 - 包含 License、维护费、佣金等综合统计';
@@ -175,6 +186,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trigger_maintenance_renewals_updated_at ON management.maintenance_renewals;
 CREATE TRIGGER trigger_maintenance_renewals_updated_at
 BEFORE UPDATE ON management.maintenance_renewals
 FOR EACH ROW

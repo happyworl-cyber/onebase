@@ -9,7 +9,7 @@
 //! - 保证 `cargo test --test scheduler_handlers_authz` 始终能命中、不缺路径
 //! - 等 e2e fixture 落地后在这里追加 `oneshot::ServiceExt` 的真实 HTTP 测试
 
-use onebase::auth::Claims;
+use planeos::auth::Claims;
 
 #[test]
 fn claims_struct_is_constructible() {

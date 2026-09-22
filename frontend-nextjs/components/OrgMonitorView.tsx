@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import api, { organizationAPI, type ApiRequestConfig } from '@/lib/api'
 
 type OrgStats = {
@@ -26,6 +27,7 @@ type ExecRow = {
 type ExecStat = { source: string; status: string; count: number }
 
 export default function OrgMonitorView({ organizationId }: { organizationId: number }) {
+  const t = useTranslations('orgMonitor')
   const [stats, setStats] = useState<OrgStats | null>(null)
   const [execStats, setExecStats] = useState<ExecStat[]>([])
   const [failed, setFailed] = useState<ExecRow[]>([])
@@ -70,7 +72,7 @@ export default function OrgMonitorView({ organizationId }: { organizationId: num
   if (loading) {
     return (
       <p className="text-sm text-gray-400">
-        <i className="fas fa-spinner fa-spin mr-2"></i>加载监控…
+        <i className="fas fa-spinner fa-spin mr-2"></i>{t('loadingMonitor')}
       </p>
     )
   }
@@ -84,22 +86,20 @@ export default function OrgMonitorView({ organizationId }: { organizationId: num
     <div className="space-y-6">
       <header className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">监控</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            本租户近 24 小时流量与失败执行（不含平台级基础设施指标）。
-          </p>
+          <h1 className="text-xl font-semibold text-gray-900">{t('title')}</h1>
+          <p className="text-sm text-gray-500 mt-1">{t('subtitle')}</p>
         </div>
         <button type="button" className="text-sm text-blue-600 hover:underline" onClick={load}>
-          刷新
+          {t('refresh')}
         </button>
       </header>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {[
-          ['API 调用 (24h)', stats?.audit_calls_24h ?? 0],
-          ['错误率', `${errRate}%`],
-          ['执行失败 (24h)', stats?.exec_failed_24h ?? 0],
-          ['慢查询 (24h)', stats?.slow_queries_24h ?? 0],
+          [t('statApiCalls24h'), stats?.audit_calls_24h ?? 0],
+          [t('statErrorRate'), `${errRate}%`],
+          [t('statExecFailed24h'), stats?.exec_failed_24h ?? 0],
+          [t('statSlowQueries24h'), stats?.slow_queries_24h ?? 0],
         ].map(([label, value]) => (
           <div key={String(label)} className="bg-white border border-gray-200 rounded-lg px-4 py-4">
             <p className="text-xs text-gray-500">{label}</p>
@@ -111,14 +111,14 @@ export default function OrgMonitorView({ organizationId }: { organizationId: num
       {execStats.length > 0 && (
         <section className="bg-white border border-gray-200 rounded-lg overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-100 text-sm font-medium text-gray-800">
-            执行分布（近 24h）
+            {t('execDistribution24h')}
           </div>
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-xs text-gray-500">
               <tr>
-                <th className="px-4 py-2 text-left">来源</th>
-                <th className="px-4 py-2 text-left">状态</th>
-                <th className="px-4 py-2 text-right">次数</th>
+                <th className="px-4 py-2 text-left">{t('colSource')}</th>
+                <th className="px-4 py-2 text-left">{t('colStatus')}</th>
+                <th className="px-4 py-2 text-right">{t('colCount')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -136,15 +136,15 @@ export default function OrgMonitorView({ organizationId }: { organizationId: num
 
       <section className="bg-white border border-gray-200 rounded-lg overflow-hidden">
         <div className="px-4 py-3 border-b border-gray-100 text-sm font-medium text-gray-800">
-          最近失败执行
+          {t('recentFailedExec')}
         </div>
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-xs text-gray-500">
             <tr>
-              <th className="px-4 py-2 text-left">时间</th>
-              <th className="px-4 py-2 text-left">来源</th>
-              <th className="px-4 py-2 text-left">名称</th>
-              <th className="px-4 py-2 text-left">错误</th>
+              <th className="px-4 py-2 text-left">{t('colTime')}</th>
+              <th className="px-4 py-2 text-left">{t('colSource')}</th>
+              <th className="px-4 py-2 text-left">{t('colName')}</th>
+              <th className="px-4 py-2 text-left">{t('colError')}</th>
               <th className="px-4 py-2 text-left">Trace</th>
             </tr>
           </thead>
@@ -152,7 +152,7 @@ export default function OrgMonitorView({ organizationId }: { organizationId: num
             {failed.length === 0 ? (
               <tr>
                 <td colSpan={5} className="px-4 py-8 text-center text-gray-400">
-                  暂无失败执行
+                  {t('noFailedExec')}
                 </td>
               </tr>
             ) : (

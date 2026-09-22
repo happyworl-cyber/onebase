@@ -361,7 +361,7 @@ impl HttpExecutor {
         if let Some(enc) = task.http_secret_enc.as_ref() {
             let secret = crate::crypto::decrypt_secret_lossy(enc);
             let signature = hmac_sha256(&secret, &serde_json::to_vec(&body)?);
-            req = req.header("X-Onebase-Signature", signature);
+            req = req.header("X-PlaneOS-Signature", signature);
         }
 
         let resp = req.json(&body).send().await?;

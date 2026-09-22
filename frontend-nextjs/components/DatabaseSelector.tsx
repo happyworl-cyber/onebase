@@ -1,10 +1,12 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import { useAppStore } from '@/lib/store'
 
 export default function DatabaseSelector() {
+  const t = useTranslations('databaseSelector')
   const router = useRouter()
   const { currentDatabase, databases, setCurrentDatabase, currentConnection } = useAppStore()
   const [showMenu, setShowMenu] = useState(false)
@@ -19,7 +21,7 @@ export default function DatabaseSelector() {
       <div className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-200">
         <div className="flex items-center space-x-2">
           <i className="fas fa-database text-gray-400 text-xs"></i>
-          <span className="text-xs text-gray-700">加载中...</span>
+          <span className="text-xs text-gray-700">{t('loading')}</span>
         </div>
       </div>
     )
@@ -36,7 +38,7 @@ export default function DatabaseSelector() {
             <i className="fas fa-database text-gray-400 text-xs flex-shrink-0"></i>
             <div className="flex-1 min-w-0 text-left">
               <p className="text-xs font-medium text-gray-700 truncate">
-                {currentDatabase?.name || '选择数据库'}
+                {currentDatabase?.name || t('selectDb')}
               </p>
               {currentDatabase && (
                 <p className="text-[10px] text-gray-500 truncate">
@@ -45,7 +47,7 @@ export default function DatabaseSelector() {
               )}
             </div>
             {currentDatabase?.id !== 'default' && (
-              <i className="fas fa-exclamation-triangle text-yellow-500 text-xs flex-shrink-0" title="配置未生效，仍使用默认连接"></i>
+              <i className="fas fa-exclamation-triangle text-yellow-500 text-xs flex-shrink-0" title={t('configWarn')}></i>
             )}
           </div>
           <i className={`fas fa-chevron-down text-gray-400 text-[10px] flex-shrink-0 transition-transform ${showMenu ? 'rotate-180' : ''}`}></i>
@@ -125,7 +127,7 @@ export default function DatabaseSelector() {
               >
                 <div className="flex items-center space-x-2">
                   <i className="fas fa-cog text-xs text-gray-400"></i>
-                  <span className="text-xs text-gray-700">管理数据库连接</span>
+                  <span className="text-xs text-gray-700">{t('manageConn')}</span>
                 </div>
               </button>
             </div>

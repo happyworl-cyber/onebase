@@ -21,11 +21,20 @@ fn normalize(expr: &str) -> String {
 
 /// 计算 `expr` 在 `tz` 时区下、`after` 之后的第一个触发时刻。
 pub fn next_after(expr: &str, tz: &str, after: DateTime<Utc>) -> Result<DateTime<Utc>, AppError> {
-    let tz: chrono_tz::Tz = tz
-        .parse()
-        .map_err(|_| AppError::InvalidQuery(format!("无效时区: {}", tz)))?;
-    let schedule = cron::Schedule::from_str(&normalize(expr))
-        .map_err(|e| AppError::InvalidQuery(format!("无效 cron 表达式: {}", e)))?;
+    let tz: chrono_tz::Tz = tz.parse().map_err(|_| {
+        AppError::validation(
+            "cron_invalid_timezone",
+            format!("无效时区: {}", tz),
+            serde_json::json!({ "timezone": tz }),
+        )
+    })?;
+    let schedule = cron::Schedule::from_str(&normalize(expr)).map_err(|e| {
+        AppError::validation(
+            "cron_invalid_cron_expression",
+            format!("无效 cron 表达式: {}", e),
+            serde_json::json!({ "error": e.to_string() }),
+        )
+    })?;
     let local = after.with_timezone(&tz);
     let next = schedule
         .after(&local)
@@ -42,11 +51,20 @@ pub fn preview(
     after: DateTime<Utc>,
     count: usize,
 ) -> Result<Vec<DateTime<Utc>>, AppError> {
-    let tz_parsed: chrono_tz::Tz = tz
-        .parse()
-        .map_err(|_| AppError::InvalidQuery(format!("无效时区: {}", tz)))?;
-    let schedule = cron::Schedule::from_str(&normalize(expr))
-        .map_err(|e| AppError::InvalidQuery(format!("无效 cron 表达式: {}", e)))?;
+    let tz_parsed: chrono_tz::Tz = tz.parse().map_err(|_| {
+        AppError::validation(
+            "cron_invalid_timezone",
+            format!("无效时区: {}", tz),
+            serde_json::json!({ "timezone": tz }),
+        )
+    })?;
+    let schedule = cron::Schedule::from_str(&normalize(expr)).map_err(|e| {
+        AppError::validation(
+            "cron_invalid_cron_expression",
+            format!("无效 cron 表达式: {}", e),
+            serde_json::json!({ "error": e.to_string() }),
+        )
+    })?;
     let local = after.with_timezone(&tz_parsed);
     Ok(schedule
         .after(&local)

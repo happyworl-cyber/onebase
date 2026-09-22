@@ -198,7 +198,7 @@ Delete the three `test_scan_trigger_fields_*` tests from `mcp_tools.rs` (they no
 Run:
 
 ```bash
-cargo test --bin onebase resolve_null_schema_scans_nodes -- --nocapture
+cargo test --bin planeos resolve_null_schema_scans_nodes -- --nocapture
 ```
 
 Expected: FAIL (function missing or `todo!()`).
@@ -244,7 +244,7 @@ json!({
 - [ ] **Step 4: Run the new tests**
 
 ```bash
-cargo test --bin onebase workflow_input_schema -- --nocapture
+cargo test --bin planeos workflow_input_schema -- --nocapture
 ```
 
 Expected: all tests in this module PASS, including the moved scan tests.
@@ -364,9 +364,9 @@ Leave `def_changed` for node-level op-log diff as `req.nodes.is_some() || req.ed
 - [ ] **Step 4: Compile and run related tests**
 
 ```bash
-cargo test --bin onebase workflow_input_schema -- --nocapture
-cargo test --bin onebase dummy_workflow -- --nocapture
-cargo check --bin onebase
+cargo test --bin planeos workflow_input_schema -- --nocapture
+cargo test --bin planeos dummy_workflow -- --nocapture
+cargo check --bin planeos
 ```
 
 Expected: compile succeeds; existing handler unit tests still pass. Apply the migration on the dev DB the same way this repo normally does (existing `migrate` bin / compose). Do not invent a new migrate path.
@@ -464,8 +464,8 @@ Update the update tool description: 同时传 nodes+edges **或 input_schema** �
 - [ ] **Step 4: Compile**
 
 ```bash
-cargo test --bin onebase workflow_input_schema -- --nocapture
-cargo check --bin onebase
+cargo test --bin planeos workflow_input_schema -- --nocapture
+cargo check --bin planeos
 ```
 
 Expected: PASS / compile ok.

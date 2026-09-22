@@ -4,7 +4,7 @@
 
 **Goal:** Extend workflow `code` nodes with optional JavaScript (Node.js) execution, per-workflow npm deps, sandboxed subprocess + host IPC aligning Lua builtins.
 
-**Architecture:** Keep `type: "code"`; add `config.language` (`lua`|`javascript`, default `lua`). Persist workflow-level `dependencies` JSONB. On JS exec: ensure npm install under `WORKFLOW_DEPS_DIR`, spawn sandboxed `node --require onebase-runtime`, talk to Rust host bridge for `env`/`http`/`crypto`/`log`/`json`/`time`/`sse`/`google`, write back `ctx.body`.
+**Architecture:** Keep `type: "code"`; add `config.language` (`lua`|`javascript`, default `lua`). Persist workflow-level `dependencies` JSONB. On JS exec: ensure npm install under `WORKFLOW_DEPS_DIR`, spawn sandboxed `node --require planeos-runtime`, talk to Rust host bridge for `env`/`http`/`crypto`/`log`/`json`/`time`/`sse`/`google`, write back `ctx.body`.
 
 **Tech Stack:** Rust/Axum, tokio process, bwrap/nsjail (reuse scheduler ShellExecutor patterns), Node.js CJS runtime package, Next.js workflow editor.
 
@@ -26,7 +26,7 @@
 | `src/js_deps.rs` | hash, install mutex, status file, ensure_ready |
 | `src/js_runner.rs` | wrap user code, spawn node, timeout, parse result |
 | `src/js_host_bridge.rs` | UDS IPC server; host ops |
-| `js-runtime/onebase-runtime/` | `--require` preload exposing globals |
+| `js-runtime/planeos-runtime/` | `--require` preload exposing globals |
 | `src/workflow_engine.rs` | dispatch lua vs javascript in `exec_code_node` |
 | `src/workflow_handlers.rs` | CRUD `dependencies`; return `deps_status`; async install on save |
 | `src/lib.rs` / `src/main.rs` | `mod` registration |
@@ -87,10 +87,10 @@ ALTER TABLE management.workflows
 
 ---
 
-### Task 3: `onebase-runtime` + host bridge (IPC)
+### Task 3: `planeos-runtime` + host bridge (IPC)
 
 **Files:**
-- Create: `js-runtime/onebase-runtime/index.js` (+ minimal `package.json` if needed)
+- Create: `js-runtime/planeos-runtime/index.js` (+ minimal `package.json` if needed)
 - Create: `src/js_host_bridge.rs`
 - Modify: `src/lib.rs` / `src/main.rs`
 
@@ -106,7 +106,7 @@ ALTER TABLE management.workflows
 - [ ] **Step 2:** Add `http.*` via Rust reqwest with private-IP block (reuse helper from `http_call` / existing SSRF util — grep `is_private` / `block_private` / `ensure_public`).
 - [ ] **Step 3:** Port `crypto.*` and `sse.publish` / `google.sa_assertion` by calling shared Rust logic (extract thin wrappers from `lua_builtins` if needed rather than duplicating crypto).
 - [ ] **Step 4:** Unit test: start bridge, node one-liner calling `env.get`, assert value.
-- [ ] **Step 5:** Commit `feat: add JS host bridge and onebase-runtime`
+- [ ] **Step 5:** Commit `feat: add JS host bridge and planeos-runtime`
 
 ---
 
@@ -126,7 +126,7 @@ ALTER TABLE management.workflows
   3. `ensure_javascript_deps` when workflow has JS deps (caller may pass deps); if deps declared and not ready after ensure → error
   4. Temp dir: `ctx.json`, `user.js`, `entry.js`, `result.json`
   5. entry wraps user code, loads ctx, auto-calls `execute` if present, writes `{body}` to result.json
-  6. Start host bridge on UDS in temp dir; set `ONEBASE_HOST_SOCK`
+  6. Start host bridge on UDS in temp dir; set `PLANEOS_HOST_SOCK`
   7. Spawn sandboxed node with timeout; read result.json
 
 - [ ] **Step 1:** Implement entry wrapper + Direct-mode execute (no bwrap) with feature flag gate.

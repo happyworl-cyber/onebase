@@ -61,7 +61,7 @@ fn signal_sample_bucket_preserves_total_gt_items() {
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `cargo test -p onebase empty_signal_sample_bucket_shape signal_sample_bucket_preserves_total_gt_items -- --nocapture`
+Run: `cargo test -p planeos empty_signal_sample_bucket_shape signal_sample_bucket_preserves_total_gt_items -- --nocapture`
 
 Expected: FAIL（`signal_sample_bucket` 未定义）
 
@@ -228,7 +228,7 @@ let signal_samples = match collect_signal_samples(&pool).await {
 
 - [ ] **Step 5: 跑单元测试通过**
 
-Run: `cargo test -p onebase empty_signal_sample_bucket_shape signal_sample_bucket_preserves_total_gt_items eval_rule_operators -- --nocapture`
+Run: `cargo test -p planeos empty_signal_sample_bucket_shape signal_sample_bucket_preserves_total_gt_items eval_rule_operators -- --nocapture`
 
 Expected: PASS
 

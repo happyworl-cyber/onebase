@@ -45,15 +45,19 @@ pub async fn create_pat(
 ) -> Result<Json<Value>> {
     let name = req.name.trim();
     if name.is_empty() || name.len() > 100 {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "pat_name_length_invalid",
             "name 不能为空且不超过 100 字符".to_string(),
+            serde_json::json!({}),
         ));
     }
     // 校验有效期：0/负数会生成出生即过期的死令牌；超大值在 PG make_interval($4::int) 报 500
     if let Some(days) = req.expires_days {
         if !(1..=3650).contains(&days) {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "pat_expires_days_out_of_range",
                 "expires_days 必须在 1..=3650（留空为永不过期）".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -137,7 +141,11 @@ pub async fn revoke_pat(
     .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("PAT {} 不存在或不属于你", id)));
+        return Err(AppError::not_found_coded(
+            "pat_not_found_or_not_owned",
+            format!("PAT {} 不存在或不属于你", id),
+            serde_json::json!({ "id": id }),
+        ));
     }
     Ok(Json(json!({ "revoked": id })))
 }
@@ -150,7 +158,11 @@ pub async fn revoke_pat(
 /// - last_used_at 异步 best-effort 更新，不阻塞请求。
 pub async fn verify_pat(pool: &PgPool, token: &str) -> Result<Claims> {
     if !token.starts_with(PAT_PREFIX) {
-        return Err(AppError::Unauthorized("无效的 PAT 格式".to_string()));
+        return Err(AppError::unauthorized_coded(
+            "pat_invalid_format",
+            "无效的 PAT 格式".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let row = sqlx::query(
@@ -165,7 +177,13 @@ pub async fn verify_pat(pool: &PgPool, token: &str) -> Result<Claims> {
     .bind(hash_token(token))
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::Unauthorized("PAT 无效、已吊销或已过期".to_string()))?;
+    .ok_or_else(|| {
+        AppError::unauthorized_coded(
+            "pat_invalid_revoked_or_expired",
+            "PAT 无效、已吊销或已过期".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
 
     let pat_id: i32 = row.get("id");
 

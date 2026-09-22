@@ -380,7 +380,7 @@ Expected: `Finished` 无 error。
 - [ ] **Step 4: 启动服务 smoke 验证**
 
 ```bash
-cargo run --bin onebase > /tmp/backend.log 2>&1 &
+cargo run --bin planeos > /tmp/backend.log 2>&1 &
 BACKEND_PID=$!
 sleep 8
 curl -sS http://127.0.0.1:3010/health
@@ -554,7 +554,7 @@ chmod +x tests/m1_workspace_test.sh
 - [ ] **Step 3: 启动后端 + 跑测试**
 
 ```bash
-cargo run --bin onebase > /tmp/backend.log 2>&1 &
+cargo run --bin planeos > /tmp/backend.log 2>&1 &
 BACKEND_PID=$!
 sleep 8
 ./tests/m1_workspace_test.sh
@@ -570,7 +570,7 @@ Expected: 末行 `PASS=8 FAIL=0`（test@example.com 至少有 1 个项目时是 
 - [ ] **Step 4: 跑现有 integration_test.sh 确保无回归**
 
 ```bash
-cargo run --bin onebase > /tmp/backend.log 2>&1 &
+cargo run --bin planeos > /tmp/backend.log 2>&1 &
 BACKEND_PID=$!
 sleep 8
 ./tests/integration_test.sh
@@ -1859,7 +1859,7 @@ Expected: `===done===` 无报错。
 
 ```bash
 # 后端
-cargo run --bin onebase > /tmp/backend.log 2>&1 &
+cargo run --bin planeos > /tmp/backend.log 2>&1 &
 BACKEND_PID=$!
 sleep 8
 
@@ -1965,7 +1965,7 @@ Expected: `===done===` 无报错。
 
 ```bash
 # 同时启动后端 + 前端
-cargo run --bin onebase > /tmp/backend.log 2>&1 &
+cargo run --bin planeos > /tmp/backend.log 2>&1 &
 BACKEND_PID=$!
 sleep 8
 cd frontend-nextjs
@@ -2056,7 +2056,7 @@ useEffect(() => {
 - [ ] **Step 2: 手工 smoke 验证**
 
 ```bash
-cargo run --bin onebase > /tmp/backend.log 2>&1 &
+cargo run --bin planeos > /tmp/backend.log 2>&1 &
 BACKEND_PID=$!
 sleep 8
 cd frontend-nextjs
@@ -2092,13 +2092,13 @@ git commit -m "feat(w1): non-superadmin /dashboard access redirects to /workspac
 ```bash
 # 1. Rust 单元 + 构建
 cargo build 2>&1 | tail -3
-cargo test --bin onebase 2>&1 | tail -15
+cargo test --bin planeos 2>&1 | tail -15
 
 # 2. Migration 幂等
 cargo run --bin migrate_all 2>&1 | tail -5
 
 # 3. 启动后端
-cargo run --bin onebase > /tmp/backend.log 2>&1 &
+cargo run --bin planeos > /tmp/backend.log 2>&1 &
 BACKEND_PID=$!
 sleep 8
 
@@ -2134,7 +2134,7 @@ Expected: `===done===` 直出，中间无新增文件的报错。
 - [ ] **Step 3: 手工 smoke 全清单（spec §7.2 子集）**
 
 ```bash
-cargo run --bin onebase > /tmp/backend.log 2>&1 &
+cargo run --bin planeos > /tmp/backend.log 2>&1 &
 BACKEND_PID=$!
 sleep 8
 cd frontend-nextjs
@@ -2196,7 +2196,7 @@ Plan 完成时应满足：
 | 验证项 | 命令 | 期望 |
 |---|---|---|
 | 后端编译 | `cargo build` | `Finished` |
-| 后端单测 | `cargo test --bin onebase` | 无回归 |
+| 后端单测 | `cargo test --bin planeos` | 无回归 |
 | Migration 幂等 | `cargo run --bin migrate_all`（跑 2 次） | 第 2 次 skipped ≥ executed，无 FAILED |
 | 后端 smoke | `curl http://127.0.0.1:3010/health` | 200 |
 | 后端 /api/projects | `curl -H "Authorization: Bearer $TOKEN" /api/projects` | 200，body 有 `"projects":[...]` |

@@ -33,7 +33,7 @@ psql -U your_username -d your_database -f migrations/001_create_users_table.sql
 复制 `.env.example` 到 `.env` 并配置：
 
 ```env
-DATABASE_URL=postgresql://username:password@localhost:5432/onebase_db
+DATABASE_URL=postgresql://username:password@localhost:5432/planeos_db
 JWT_SECRET=your-secret-key-here-make-it-long-and-random
 JWT_EXPIRATION=86400  # 24 小时
 ```

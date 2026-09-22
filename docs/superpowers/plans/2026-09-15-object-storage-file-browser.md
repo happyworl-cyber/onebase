@@ -93,7 +93,7 @@ ORDER BY connection_name ASC, id DESC
 
 Keep existing `POST /api/object-storage-connections/:id/exec`.
 
-- [ ] **Step 3: Run** `cargo check --bin onebase`<br>
+- [ ] **Step 3: Run** `cargo check --bin planeos`<br>
   Expected: success
 
 ---

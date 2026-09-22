@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import api, { type ApiRequestConfig } from '@/lib/api'
@@ -31,6 +32,7 @@ export default function WorkflowVersionBrowser({
   version: number | null
   versionInvalid?: boolean
 }) {
+  const t = useTranslations('wfCanvas')
   const router = useRouter()
   const [header, setHeader] = useState<WorkflowVersionHeader | null>(null)
   const [headerError, setHeaderError] = useState<string | null>(null)
@@ -56,7 +58,7 @@ export default function WorkflowVersionBrowser({
       setHeader({ id: wf.id, name: wf.name, slug: wf.slug })
     } catch (err: any) {
       setHeader(null)
-      setHeaderError(apiError(err, '加载工作流失败'))
+      setHeaderError(apiError(err, t('loadWfFailed')))
     } finally {
       setHeaderLoading(false)
     }
@@ -73,7 +75,7 @@ export default function WorkflowVersionBrowser({
       setVersions(res.data.versions || [])
     } catch (err: any) {
       setVersions([])
-      setListError(apiError(err, '加载版本列表失败'))
+      setListError(apiError(err, t('loadVersionsFailed')))
     } finally {
       setListLoading(false)
     }
@@ -87,7 +89,7 @@ export default function WorkflowVersionBrowser({
   useEffect(() => {
     if (versionInvalid) {
       setSnapshot(null)
-      setDetailError('版本不存在')
+      setDetailError(t('versionNotFound'))
       setDetailLoading(false)
       return
     }
@@ -110,7 +112,7 @@ export default function WorkflowVersionBrowser({
         if (!cancelled) {
           setSnapshot(null)
           setDetailError(
-            err?.response?.status === 404 ? '版本不存在' : apiError(err, '加载版本详情失败'),
+            err?.response?.status === 404 ? t('versionNotFound') : apiError(err, t('loadDetailFailed')),
           )
         }
       })
@@ -139,32 +141,32 @@ export default function WorkflowVersionBrowser({
   const restore = async () => {
     if (!canRestore || restoring) return
     if (
-      !confirm(`确认恢复到版本 v${version}？将写入草稿，不会立刻上线。`)
+      !confirm(t('confirmRestore', { v: version }))
     ) {
       return
     }
     setRestoring(true)
     try {
       await api.post(`/api/admin/workflows/${workflowId}/versions/${version}/restore`, undefined, silent)
-      showToast('success', `已恢复到 v${version}。可打开编辑器查看当前定义。`)
+      showToast('success', t('restoredOk', { v: version }))
       await Promise.all([loadList(), loadHeader()])
     } catch (err: any) {
-      showToast('error', apiError(err, '恢复失败'))
+      showToast('error', apiError(err, t('restoreFailed')))
     } finally {
       setRestoring(false)
     }
   }
 
   if (headerLoading && !header) {
-    return <div className="p-8 text-center text-slate-400 text-sm">加载中…</div>
+    return <div className="p-8 text-center text-slate-400 text-sm">{t('loading')}</div>
   }
 
   if (headerError || !header) {
     return (
       <div className="p-8 text-center space-y-3">
-        <p className="text-sm text-slate-600">{headerError || '工作流不存在或无权访问'}</p>
+        <p className="text-sm text-slate-600">{headerError || t('wfNotFound')}</p>
         <button type="button" onClick={() => void loadHeader()} className="text-sm text-indigo-600 hover:underline">
-          重试
+          {t('retry')}
         </button>
       </div>
     )
@@ -182,7 +184,7 @@ export default function WorkflowVersionBrowser({
             href={workflowEditorPath(projectId, workflowId)}
             className="text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
           >
-            打开编辑器
+            {t('openEditor')}
           </Link>
           {canRestore && (
             <button
@@ -191,7 +193,7 @@ export default function WorkflowVersionBrowser({
               onClick={() => void restore()}
               className="text-xs px-2.5 py-1.5 rounded-lg border border-indigo-300 text-indigo-600 hover:bg-indigo-50 disabled:opacity-50"
             >
-              {restoring ? '恢复中…' : '恢复到此版本'}
+              {restoring ? t('restoring') : t('restoreToVersion')}
             </button>
           )}
         </div>
@@ -209,10 +211,10 @@ export default function WorkflowVersionBrowser({
         <div className="flex-1 min-w-0 min-h-0 flex flex-col">
           {version == null && !versionInvalid ? (
             <div className="flex-1 flex items-center justify-center text-sm text-slate-400">
-              选择一个版本以查看内容
+              {t('selectVersion')}
             </div>
           ) : versionInvalid ? (
-            <div className="flex-1 flex items-center justify-center text-sm text-slate-600">版本不存在</div>
+            <div className="flex-1 flex items-center justify-center text-sm text-slate-600">{t('versionNotFound')}</div>
           ) : validSelected && snapshot != null && snapshot.version === version && !detailLoading ? (
             <WorkflowVersionCanvas snapshot={snapshot} />
           ) : validSelected && !detailLoading && detailError && fetchedVersion === version ? (
@@ -223,11 +225,11 @@ export default function WorkflowVersionBrowser({
                 onClick={() => setDetailNonce((n) => n + 1)}
                 className="text-xs text-indigo-600 hover:underline"
               >
-                重试
+                {t('retry')}
               </button>
             </div>
           ) : (
-            <div className="flex-1 flex items-center justify-center text-sm text-slate-400">加载中…</div>
+            <div className="flex-1 flex items-center justify-center text-sm text-slate-400">{t('loading')}</div>
           )}
         </div>
       </div>

@@ -67,7 +67,7 @@ In `src/cloud_log.rs` replace `window_defaults_and_rejects_oversize` with:
 
 - [ ] **Step 2: 跑测，确认失败**
 
-Run: `cargo test --bin onebase -- window_defaults_and_rejects_oversize -- --nocapture`
+Run: `cargo test --bin planeos -- window_defaults_and_rejects_oversize -- --nocapture`
 
 Expected: FAIL（仍是 24h 常量/文案，`1 + week` 被拒，或 `unwrap_err()` 对不上「7 天」）
 
@@ -89,7 +89,7 @@ Do not change `DEFAULT_WINDOW_SECS` / `clamp_line` / `sls_console_url`.
 
 - [x] **Step 4: 再跑测**
 
-Run: `cargo test --bin onebase -- cloud_log::tests -- --nocapture`
+Run: `cargo test --bin planeos -- cloud_log::tests -- --nocapture`
 
 Expected: PASS（含 `window_defaults_and_rejects_oversize`）
 
@@ -209,6 +209,6 @@ EOF
 
 ## Verification
 
-- `cargo test --bin onebase -- cloud_log::tests`
+- `cargo test --bin planeos -- cloud_log::tests`
 - `node --experimental-strip-types frontend-nextjs/app/workspace/[projectId]/cloud-logs/window.test.ts`（或 `npx tsx` 同源文件）
 - 云日志页：默认仍约 1 小时；跨 25 小时可查；跨 7 天 + 1 秒 toast「时间窗不能超过 7 天」且 Network 无 query POST

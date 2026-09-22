@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Graph } from '@antv/g6'
 import type { WorkflowEdgeDef, WorkflowNodeDef } from '@/components/workflow/WorkflowCanvas'
 import { buildReplayGraphData, REPLAY_SPECIAL_META } from './replayGraphData'
@@ -32,6 +33,7 @@ interface Props {
 }
 
 export default function ReplayGraphCanvas({ nodes, edges, nodeResults, selectedNodeId, onSelectNode }: Props) {
+  const t = useTranslations('wfCanvas')
   const containerRef = useRef<HTMLDivElement | null>(null)
   const graphRef = useRef<Graph | null>(null)
   const [readyGraph, setReadyGraph] = useState<Graph | null>(null)
@@ -84,12 +86,12 @@ export default function ReplayGraphCanvas({ nodes, edges, nodeResults, selectedN
             wrap.className = 'max-w-xs rounded-lg bg-slate-800/95 px-3 py-2 text-xs text-white shadow-lg'
             wrap.innerHTML = `
               <div class="text-sm font-semibold leading-snug">${escapeHtml(String(d.label ?? it?.id ?? ''))}</div>
-              <div class="mt-1 text-slate-300">类型：${escapeHtml(String(d.nodeType ?? '未知'))}${special ? ` · ${escapeHtml(special.label)}` : ''}</div>
-              <div class="text-slate-300">状态：${escapeHtml(String(d.status ?? ''))}</div>
-              ${d.elapsedMs != null ? `<div class="text-slate-300">耗时：${d.elapsedMs}ms</div>` : ''}
-              ${d.branch ? `<div class="text-slate-300">分支：${escapeHtml(String(d.branch))}</div>` : ''}
-              ${d.emptyResponse ? `<div class="mt-1 text-amber-300">⚠ 空响应</div>` : ''}
-              ${d.error ? `<div class="mt-1 text-rose-300">错误：${escapeHtml(String(d.error))}</div>` : ''}
+              <div class="mt-1 text-slate-300">${escapeHtml(t('replayType', { type: String(d.nodeType ?? t('replayUnknown')) }))}${special ? ` · ${escapeHtml(special.label)}` : ''}</div>
+              <div class="text-slate-300">${escapeHtml(t('replayStatus', { status: String(d.status ?? '') }))}</div>
+              ${d.elapsedMs != null ? `<div class="text-slate-300">${escapeHtml(t('replayElapsed', { ms: d.elapsedMs }))}</div>` : ''}
+              ${d.branch ? `<div class="text-slate-300">${escapeHtml(t('replayBranch', { branch: String(d.branch) }))}</div>` : ''}
+              ${d.emptyResponse ? `<div class="mt-1 text-amber-300">${escapeHtml(t('replayEmptyResp'))}</div>` : ''}
+              ${d.error ? `<div class="mt-1 text-rose-300">${escapeHtml(t('replayError', { err: String(d.error) }))}</div>` : ''}
             `
             return wrap
           },
@@ -159,7 +161,7 @@ export default function ReplayGraphCanvas({ nodes, edges, nodeResults, selectedN
       {built.graphData.nodes?.length === 0 && (
         <div data-alt="replay-graph-empty" className="absolute inset-0 flex items-center justify-center">
           <div className="flex items-center gap-2 rounded-lg border border-slate-100 bg-white px-4 py-2.5 text-sm text-slate-400 shadow-soft">
-            该工作流暂无节点，无法渲染执行图
+            {t('noNodesGraph')}
           </div>
         </div>
       )}

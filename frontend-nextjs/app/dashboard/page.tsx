@@ -14,9 +14,11 @@
  */
 
 import { useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 
 export default function DashboardRoot() {
+  const t = useTranslations('dashboardRedirect')
   const router = useRouter()
 
   useEffect(() => {
@@ -37,7 +39,7 @@ export default function DashboardRoot() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
       <div className="text-center text-gray-500">
         <i className="fas fa-spinner fa-spin text-2xl mb-2"></i>
-        <p className="text-sm">正在跳转…</p>
+        <p className="text-sm">{t('redirecting')}</p>
       </div>
     </div>
   )

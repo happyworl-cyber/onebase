@@ -11,6 +11,7 @@
 
 import { Suspense, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import {
   organizationAPI,
   pgPoolAPI,
@@ -28,11 +29,17 @@ type PgMode = 'platform' | 'webhook' | 'pool' | 'manual'
 
 const DEFAULT_TEMPLATE_SLUG = 'blank'
 
-const STEPS: { id: StepId; label: string }[] = [
-  { id: 'name', label: '命名项目' },
-  { id: 'pool', label: '挂载 PG' },
-  { id: 'review', label: '确认创建' },
+const STEPS: { id: StepId }[] = [
+  { id: 'name' },
+  { id: 'pool' },
+  { id: 'review' },
 ]
+
+const STEP_LABEL_KEYS: Record<StepId, string> = {
+  name: 'stepName',
+  pool: 'stepPool',
+  review: 'stepReview',
+}
 
 const EMPTY_MANUAL_PG: ManualPgConnection = {
   db_host: '',
@@ -56,12 +63,13 @@ function isManualPgValid(pg: ManualPgConnection): boolean {
 }
 
 export default function ProvisionWizardPage() {
+  const t = useTranslations('provisionPage')
   return (
     <Suspense
       fallback={
         <div className="min-h-screen flex items-center justify-center bg-gray-50">
           <div className="text-sm text-gray-500">
-            <i className="fas fa-spinner fa-spin mr-2"></i>加载中…
+            <i className="fas fa-spinner fa-spin mr-2"></i>{t('loadingEllipsis')}
           </div>
         </div>
       }
@@ -72,6 +80,7 @@ export default function ProvisionWizardPage() {
 }
 
 function ProvisionWizardInner() {
+  const t = useTranslations('provisionPage')
   const router = useRouter()
   const searchParams = useSearchParams()
   const notify = useNotification()
@@ -91,7 +100,7 @@ function ProvisionWizardInner() {
     }
     // 必须挂在租户下开通项目，禁止无 organization_id 的隐式建租户
     if (!organizationId || !Number.isFinite(organizationId)) {
-      notify.error('请从租户控制台进入「新建项目」')
+      notify.error(t('errNeedOrgConsole'))
       router.replace('/orgs')
       return
     }
@@ -201,9 +210,9 @@ function ProvisionWizardInner() {
           ? await organizationAPI.createProject(organizationId, body)
           : await projectProvisionAPI.provision(body)
       if (res.data.provisioned) {
-        notify.success(`已创建项目 ${res.data.name}`)
+        notify.success(t('projectCreated', { name: res.data.name }))
       } else {
-        notify.info(`你之前已经创建过同名项目，已直接进入`)
+        notify.info(t('alreadyExistsEnter'))
       }
       router.push(`/workspace/${res.data.project_id}`)
     } catch (e) {
@@ -228,11 +237,11 @@ function ProvisionWizardInner() {
             onClick={() => router.push('/workspace')}
             className="text-xs text-gray-500 hover:text-gray-800 mb-4"
           >
-            <i className="fas fa-arrow-left mr-1"></i> 返回项目列表
+            <i className="fas fa-arrow-left mr-1"></i> {t('backToProjectList')}
           </button>
-          <h1 className="text-2xl font-semibold text-gray-900">新建项目</h1>
+          <h1 className="text-2xl font-semibold text-gray-900">{t('newProjectTitle')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            3 步走完，30 秒拿到一个可用项目（带专属 PG 数据库 + 默认 RBAC）
+            {t('newProjectSubtitle')}
           </p>
         </header>
 
@@ -255,7 +264,7 @@ function ProvisionWizardInner() {
                   i === stepIdx ? 'text-gray-900 font-medium' : 'text-gray-500'
                 }`}
               >
-                {s.label}
+                {t(STEP_LABEL_KEYS[s.id])}
               </span>
               {i < STEPS.length - 1 && (
                 <div
@@ -318,7 +327,7 @@ function ProvisionWizardInner() {
             disabled={stepIdx === 0 || submitting}
             className="px-4 py-2 text-sm text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-40"
           >
-            <i className="fas fa-chevron-left mr-1"></i> 上一步
+            <i className="fas fa-chevron-left mr-1"></i> {t('prevStep')}
           </button>
           {stepIdx < STEPS.length - 1 ? (
             <button
@@ -326,7 +335,7 @@ function ProvisionWizardInner() {
               disabled={!canAdvance}
               className="btn-primary disabled:opacity-50"
             >
-              下一步 <i className="fas fa-chevron-right ml-1"></i>
+              {t('nextStep')} <i className="fas fa-chevron-right ml-1"></i>
             </button>
           ) : (
             <button onClick={submit} disabled={!canAdvance} className="btn-primary disabled:opacity-50">
@@ -334,12 +343,12 @@ function ProvisionWizardInner() {
                 <>
                   <i className="fas fa-spinner fa-spin mr-2"></i>
                   {pgMode === 'webhook'
-                    ? '运维开通中（可能需数分钟）…'
-                    : '创建中…'}
+                    ? t('provisioningWebhook')
+                    : t('creatingEllipsis')}
                 </>
               ) : (
                 <>
-                  <i className="fas fa-rocket mr-2"></i> 完成创建
+                  <i className="fas fa-rocket mr-2"></i> {t('finishCreate')}
                 </>
               )}
             </button>
@@ -365,16 +374,17 @@ function StepName({
   onNameChange: (v: string) => void
   onSlugChange: (v: string) => void
 }) {
+  const t = useTranslations('provisionPage')
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-base font-medium text-gray-900 mb-1">给你的项目取个名字</h2>
-        <p className="text-sm text-gray-500">最多 200 字。可用中文。</p>
+        <h2 className="text-base font-medium text-gray-900 mb-1">{t('stepNameTitle')}</h2>
+        <p className="text-sm text-gray-500">{t('stepNameHint')}</p>
       </div>
 
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1.5">
-          项目名 <span className="text-red-500">*</span>
+          {t('projectNameLabel')} <span className="text-red-500">*</span>
         </label>
         <input
           type="text"
@@ -382,7 +392,7 @@ function StepName({
           onChange={(e) => onNameChange(e.target.value)}
           maxLength={200}
           className="w-full input-base"
-          placeholder="例如：我的博客 / 内部任务系统"
+          placeholder={t('projectNamePlaceholder')}
           autoFocus
         />
       </div>
@@ -402,13 +412,13 @@ function StepName({
           placeholder="my-blog"
         />
         <p className="text-xs text-gray-500 mt-1">
-          用作 URL 和数据库名前缀。首字符小写字母，仅含 [a-z0-9_-]，最多 50 字。
+          {t('slugHint')}
           {!slugTouched && name && (
-            <span className="text-gray-400 ml-1">（从项目名自动派生，可手工改）</span>
+            <span className="text-gray-400 ml-1">{t('slugAutoDerived')}</span>
           )}
         </p>
         {slug && !slugIsValid && (
-          <p className="text-xs text-red-600 mt-1">slug 格式不合法</p>
+          <p className="text-xs text-red-600 mt-1">{t('slugInvalid')}</p>
         )}
       </div>
     </div>
@@ -440,11 +450,12 @@ function StepPool({
   onPoolChange: (id: number) => void
   onManualChange: (pg: ManualPgConnection) => void
 }) {
+  const t = useTranslations('provisionPage')
   if (pools === null || platformPg === null || webhookConfig === null) {
     return (
       <div className="text-center py-12">
         <i className="fas fa-spinner fa-spin text-gray-400"></i>
-        <p className="text-sm text-gray-500 mt-2">加载 PG 配置…</p>
+        <p className="text-sm text-gray-500 mt-2">{t('loadingPgConfig')}</p>
       </div>
     )
   }
@@ -454,10 +465,10 @@ function StepPool({
 
   return (
     <div>
-      <h2 className="text-base font-medium text-gray-900 mb-1">把项目数据库挂在哪台 PG？</h2>
+      <h2 className="text-base font-medium text-gray-900 mb-1">{t('stepPoolTitle')}</h2>
       <p className="text-sm text-gray-500 mb-4">
-        推荐直接选用当前 PlaneOS 平台实例；也可从 PG 池选择其他服务器、运维自动开通，或手动填写连接。
-        {mode !== 'webhook' && ' Redis 等中间件可在项目创建后于「环境变量」中自行配置。'}
+        {t('stepPoolDesc1')}
+        {mode !== 'webhook' && ` ${t('stepPoolDescRedisNote')}`}
       </p>
 
       <div className="flex flex-wrap gap-2 mb-5">
@@ -471,10 +482,10 @@ function StepPool({
                 : 'border-gray-200 text-gray-600 hover:border-gray-300'
             }`}
           >
-            当前平台数据库
+            {t('platformDbOption')}
             {platformAvailable && (
               <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-medium">
-                推荐
+                {t('recommendedBadge')}
               </span>
             )}
           </button>
@@ -489,7 +500,7 @@ function StepPool({
                 : 'border-gray-200 text-gray-600 hover:border-gray-300'
             }`}
           >
-            运维自动开通
+            {t('opsAutoProvision')}
           </button>
         )}
         <button
@@ -501,7 +512,7 @@ function StepPool({
               : 'border-gray-200 text-gray-600 hover:border-gray-300'
           }`}
         >
-          从 PG 池选择
+          {t('selectFromPool')}
         </button>
         <button
           type="button"
@@ -512,7 +523,7 @@ function StepPool({
               : 'border-gray-200 text-gray-600 hover:border-gray-300'
           }`}
         >
-          手动填写连接
+          {t('manualConnection')}
         </button>
       </div>
 
@@ -521,17 +532,15 @@ function StepPool({
           <div className="flex items-start gap-3">
             <i className="fas fa-cloud text-violet-600 mt-0.5"></i>
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-gray-900">运维自动开通（Webhook）</div>
+              <div className="text-sm font-medium text-gray-900">{t('opsAutoProvisionWebhookTitle')}</div>
               <p className="text-xs text-gray-600 mt-2 leading-relaxed">
-                {webhookConfig.description ??
-                  '由运维 Provisioner 创建独立 PostgreSQL 实例，耗时可能 1–5 分钟。'}
+                {webhookConfig.description ?? t('webhookDefaultDesc')}
               </p>
               <p className="text-xs text-gray-500 mt-2">
-                点击「完成创建」后，PlaneOS 会调用运维接口 provision 资源，并将返回的连接信息写入项目。
+                {t('webhookClickDesc')}
                 {webhookConfig.supports_async_poll && (
                   <span className="block mt-1 text-violet-700">
-                    若 Provisioner 返回异步任务（HTTP 202），将自动 poll 直至完成（最长约{' '}
-                    {webhookConfig.poll_max_secs ?? 600} 秒）。
+                    {t('webhookAsyncPollNote', { secs: webhookConfig.poll_max_secs ?? 600 })}
                   </span>
                 )}
               </p>
@@ -543,7 +552,7 @@ function StepPool({
                     onChange={(e) => onWebhookWantRedisChange(e.target.checked)}
                     className="rounded border-gray-300 text-violet-600 focus:ring-violet-500"
                   />
-                  同时开通 Redis（`REDIS_URL` 将写入项目环境变量）
+                  {t('webhookRedisCheckbox')}
                 </label>
               )}
             </div>
@@ -556,19 +565,18 @@ function StepPool({
               <i className="fas fa-database text-blue-600 mt-0.5"></i>
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium text-gray-900">
-                  使用当前 PlaneOS 平台数据库实例
+                  {t('platformDbInUse')}
                 </div>
                 <div className="text-xs text-gray-600 font-mono mt-1">
                   {platformPg.db_host}:{platformPg.db_port}
                   {platformPg.management_db_name && (
                     <span className="text-gray-400 ml-2">
-                      （管理库：{platformPg.management_db_name}）
+                      {t('managementDbLabel', { name: platformPg.management_db_name })}
                     </span>
                   )}
                 </div>
                 <p className="text-xs text-gray-500 mt-2 leading-relaxed">
-                  项目会在<strong>同一台 PG 服务器</strong>上新建独立数据库，不会复用管理库。
-                  凭据由服务端从环境变量读取，无需手动填写。
+                  {t.rich('platformDbDesc', { strong: (chunks) => <strong>{chunks}</strong> })}
                 </p>
               </div>
             </div>
@@ -578,7 +586,7 @@ function StepPool({
             <div className="flex items-start gap-3">
               <i className="fas fa-exclamation-triangle text-amber-600 mt-0.5"></i>
               <div className="flex-1 min-w-0 text-sm">
-                <div className="font-medium text-gray-900">平台 PG 建库暂不可用</div>
+                <div className="font-medium text-gray-900">{t('platformDbUnavailable')}</div>
                 <p className="text-xs text-gray-600 mt-1 font-mono">
                   {platformPg.db_host}:{platformPg.db_port}
                 </p>
@@ -586,7 +594,7 @@ function StepPool({
                   <p className="text-xs text-amber-800 mt-2 break-all">{platformPg.provision_error}</p>
                 )}
                 <p className="text-xs text-gray-500 mt-2">
-                  请运维配置 <span className="font-mono">PROVISION_PG_URL</span>（需 CREATEDB 权限），或改用「从 PG 池选择」/「手动填写连接」。
+                  {t.rich('platformDbUnavailableHint', { code: (chunks) => <span className="font-mono">{chunks}</span> })}
                 </p>
               </div>
             </div>
@@ -597,7 +605,7 @@ function StepPool({
           <div className="text-center py-8 border border-dashed border-gray-200 rounded-lg">
             <i className="fas fa-server text-2xl text-gray-300 mb-2"></i>
             <p className="text-sm text-gray-500">
-              平台还没有可用的 PG 池。请切换到「手动填写连接」，或联系管理员在 /platform/pg-pools 添加。
+              {t('poolEmptyHint')}
             </p>
           </div>
         ) : (
@@ -625,7 +633,7 @@ function StepPool({
                         {p.name}
                         {p.is_platform_instance && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-medium">
-                            平台实例
+                            {t('platformInstanceBadge')}
                           </span>
                         )}
                       </div>
@@ -647,19 +655,19 @@ function StepPool({
           <div className="grid grid-cols-3 gap-3">
             <div className="col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                主机 <span className="text-red-500">*</span>
+                {t('hostLabel')} <span className="text-red-500">*</span>
               </label>
               <input
                 type="text"
                 value={manualPg.db_host}
                 onChange={(e) => onManualChange({ ...manualPg, db_host: e.target.value })}
                 className="w-full input-base"
-                placeholder="localhost 或 rm-xxx.pg.rds.aliyuncs.com"
+                placeholder={t('hostPlaceholder')}
               />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                端口 <span className="text-red-500">*</span>
+                {t('portLabel')} <span className="text-red-500">*</span>
               </label>
               <input
                 type="number"
@@ -674,7 +682,7 @@ function StepPool({
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              admin 用户 <span className="text-red-500">*</span>
+              {t('adminUserLabel')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
@@ -687,7 +695,7 @@ function StepPool({
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              admin 密码 <span className="text-red-500">*</span>
+              {t('adminPasswordLabel')} <span className="text-red-500">*</span>
             </label>
             <input
               type="password"
@@ -697,8 +705,7 @@ function StepPool({
               autoComplete="new-password"
             />
             <p className="text-xs text-gray-500 mt-1">
-              该账号需有 CREATE DATABASE 权限。系统会用它创建项目专属数据库，凭据加密存入平台。
-              若账号还具备 CREATEROLE 权限，平台会为该项目创建专属登录角色（仅限本库），运行期不再使用 admin 凭据。
+              {t('adminPasswordHint')}
             </p>
           </div>
         </div>
@@ -724,17 +731,18 @@ function StepReview({
   pool: PgPoolPublicEntry | null
   manualPg: ManualPgConnection
 }) {
+  const t = useTranslations('provisionPage')
   const pgLabel =
     pgMode === 'webhook' ? (
       <>
-        运维自动开通（Webhook）
+        {t('opsAutoProvisionWebhookTitle')}
         {webhookWantRedis && (
           <span className="text-gray-400 text-xs ml-2">+ Redis</span>
         )}
       </>
     ) : pgMode === 'platform' && platformPg?.available ? (
       <>
-        当前平台数据库{' '}
+        {t('platformDbOption')}{' '}
         <span className="text-gray-400 font-mono text-xs">
           ({platformPg.db_host}:{platformPg.db_port})
         </span>
@@ -748,7 +756,7 @@ function StepReview({
       </>
     ) : pgMode === 'manual' ? (
       <>
-        手动连接{' '}
+        {t('manualConnectionShort')}{' '}
         <span className="text-gray-400 font-mono text-xs">
           ({manualPg.db_host}:{manualPg.db_port ?? 5432})
         </span>
@@ -757,24 +765,24 @@ function StepReview({
       '—'
     )
 
-  const rows: { k: string; v: React.ReactNode }[] = [
-    { k: '项目名', v: name },
-    { k: 'slug', v: <span className="font-mono">{slug}</span> },
-    { k: 'PG', v: pgLabel },
+  const rows: { id: string; label: string; v: React.ReactNode }[] = [
+    { id: 'projectName', label: t('projectNameLabel'), v: name },
+    { id: 'slug', label: 'slug', v: <span className="font-mono">{slug}</span> },
+    { id: 'pg', label: 'PG', v: pgLabel },
   ]
 
   return (
     <div>
-      <h2 className="text-base font-medium text-gray-900 mb-1">最后确认</h2>
+      <h2 className="text-base font-medium text-gray-900 mb-1">{t('finalConfirmTitle')}</h2>
       <p className="text-sm text-gray-500 mb-4">
         {pgMode === 'webhook'
-          ? '点击『完成创建』后，系统将调用运维 Provisioner 开通 PG，写入项目元信息并把你设为 owner。耗时可能数分钟，失败可重试，幂等。'
-          : '点击『完成创建』后，系统会：建库 → 写入项目元信息 → 把你设为 owner。失败可重试，幂等。'}
+          ? t('finalConfirmDescWebhook')
+          : t('finalConfirmDescDefault')}
       </p>
       <div className="divide-y divide-gray-100 border border-gray-200 rounded-lg">
         {rows.map((r) => (
-          <div key={r.k} className="flex items-center px-4 py-2.5 text-sm">
-            <div className="w-24 text-gray-500 shrink-0">{r.k}</div>
+          <div key={r.id} className="flex items-center px-4 py-2.5 text-sm">
+            <div className="w-24 text-gray-500 shrink-0">{r.label}</div>
             <div className="text-gray-900 flex-1 break-all">{r.v}</div>
           </div>
         ))}

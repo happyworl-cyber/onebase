@@ -1,11 +1,11 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useParams, useRouter, usePathname } from 'next/navigation'
 import api, { type ApiRequestConfig } from '@/lib/api'
 import { useAppStore, type Project } from '@/lib/store'
 import WorkspaceSidebar from '@/components/workspace/WorkspaceSidebar'
-import ProjectTopbar from '@/components/workspace/ProjectTopbar'
 import WorkspaceTabBar from '@/components/workspace/WorkspaceTabBar'
 import KeepAliveOutlet from '@/components/workspace/KeepAliveOutlet'
 import { useWorkspaceTabs } from '@/lib/workspaceTabs'
@@ -25,13 +25,14 @@ import { resolveNavMeta } from '@/components/workspace/workspaceNav'
  *      - 403 → 友好页"你不是此项目成员"
  *      - 404 → 友好页"项目不存在"
  *      - 其他 → 通用错误页
- *   6. 渲染壳：ProjectTopbar + WorkspaceSidebar + main
+ *   6. 渲染壳：WorkspaceSidebar（含左下角项目切换 / 用户菜单）+ main
  *
  * URL 是单一信源：projectId 始终来自 useParams（不读 Zustand 的 currentProject.id），
  * 这样切项目时 URL 一变就重跑 effect、重新派 setCurrentProject，不会用陈旧数据。
  */
 export default function ProjectLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
+  const t = useTranslations('wsLayout')
   const params = useParams<{ projectId: string }>()
   const pathname = usePathname()
   const setCurrentProject = useAppStore((s) => s.setCurrentProject)
@@ -99,7 +100,7 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
         ) {
           setCurrentOrganization({
             id: resp.data.organization_id,
-            name: resp.data.organization_name || `组织 #${resp.data.organization_id}`,
+            name: resp.data.organization_name || t('orgFallback', { id: resp.data.organization_id }),
             slug: '',
             status: 'active',
             user_role: currentOrganization?.user_role || 'member',
@@ -137,7 +138,7 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
         if (!activeRequest || controller.signal.aborted || err?.code === 'ERR_CANCELED') return
         const status = err?.response?.status ?? null
         const message =
-          err?.response?.data?.error || err?.message || '加载项目失败'
+          err?.response?.data?.error || err?.message || t('loadFailed')
         setErrorState({ status, message })
       })
 
@@ -154,7 +155,7 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
     initProject(params.projectId)
     if (!authorized) return
     const meta = resolveNavMeta(relPath)
-    openTab({ path: relPath, title: meta.label, icon: meta.icon })
+    openTab({ path: relPath, title: meta.label, labelKey: meta.labelKey, icon: meta.icon })
   }, [params.projectId, relPath, authorized, initProject, openTab])
 
   if (errorState) {
@@ -167,16 +168,16 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
             <i className="fas fa-lock text-2xl text-amber-600"></i>
           </div>
           <h2 className="text-base font-medium text-gray-900 mb-2">
-            {isForbidden && '你不是此项目的成员'}
-            {isNotFound && '项目不存在'}
-            {!isForbidden && !isNotFound && '加载项目失败'}
+            {isForbidden && t('notMember')}
+            {isNotFound && t('notFound')}
+            {!isForbidden && !isNotFound && t('loadFailed')}
           </h2>
           <p className="text-sm text-gray-500 mb-6">{errorState.message}</p>
           <button
             onClick={() => router.push('/workspace')}
             className="text-sm text-blue-600 hover:underline"
           >
-            ← 返回项目列表
+            {t('backToList')}
           </button>
         </div>
       </div>
@@ -188,7 +189,7 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
           <i className="fas fa-spinner fa-spin text-2xl text-gray-400 mb-2"></i>
-          <p className="text-sm text-gray-500">加载项目…</p>
+          <p className="text-sm text-gray-500">{t('loadingProject')}</p>
         </div>
       </div>
     )
@@ -196,7 +197,6 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-gray-50">
-      <ProjectTopbar />
       <div className="flex-1 flex min-h-0 overflow-hidden">
         <WorkspaceSidebar />
         {/* 内容区：Tab 栏 + 保活容器。各页面的滚动/内边距下沉到 KeepAliveOutlet

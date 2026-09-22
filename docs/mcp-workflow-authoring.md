@@ -1,7 +1,7 @@
 # MCP 工作流创作工作台
 
 让 AI 客户端（Claude Code 等）通过 MCP 协议在 PlaneOS 中**创作、调试、交付工作流**，
-以工作流替代后端接口代码。设计与安全模型详见 `.omc/plans/onebase-workflow-mcp-plan.md`。
+以工作流替代后端接口代码。设计与安全模型详见 `.omc/plans/planeos-workflow-mcp-plan.md`。
 
 ## 接入（Claude Code）
 

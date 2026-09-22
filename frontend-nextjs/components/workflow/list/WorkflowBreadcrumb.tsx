@@ -1,6 +1,7 @@
 'use client'
 
 import { cn } from '@/lib/utils'
+import { useTranslations } from 'next-intl'
 import { getFolderPath } from './utils'
 import { type WorkflowFolder } from './types'
 
@@ -19,12 +20,13 @@ export default function WorkflowBreadcrumb({
   search,
   onSelectFolder,
 }: WorkflowBreadcrumbProps) {
+  const t = useTranslations('wfList')
   if (globalSearch) {
     return (
       <div className="flex items-center gap-1.5 text-sm min-w-0">
         <i className="fas fa-globe text-indigo-500 text-[11px]" />
-        <span className="font-semibold text-slate-800">全局搜索</span>
-        <span className="text-xs text-slate-400">（全部文件夹）</span>
+        <span className="font-semibold text-slate-800">{t('globalSearch')}</span>
+        <span className="text-xs text-slate-400">{t('allFolders')}</span>
         {search.trim() && <span className="text-xs text-slate-400 ml-1">— &quot;{search}&quot;</span>}
       </div>
     )

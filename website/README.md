@@ -118,7 +118,7 @@ git push
 
 1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)
 2. Pages → Create a project → Connect to Git
-3. 选择 GitHub 仓库 `onebase`
+3. 选择 GitHub 仓库 `planeos`
 4. 配置构建设置：
    - Build command: （留空）
    - Build output directory: `website`

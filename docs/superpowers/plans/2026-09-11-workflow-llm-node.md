@@ -666,7 +666,7 @@ DELETE：`DELETE FROM management.llm_connections WHERE id = $1`，不扫工作�
 
 - [ ] **Step 3: Compile**
 
-Run: `cargo check --bin onebase`（或仓库实际 bin 名；若只有 lib+main：`cargo check`）
+Run: `cargo check --bin planeos`（或仓库实际 bin 名；若只有 lib+main：`cargo check`）
 
 Expected: 无错误。
 

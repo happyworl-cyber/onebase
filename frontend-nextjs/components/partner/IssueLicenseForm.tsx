@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useTranslations } from 'next-intl';
 import { useRouter } from 'next/navigation';
 import {
   Alert,
@@ -37,6 +38,7 @@ interface PriceBreakdown {
 }
 
 export function IssueLicenseForm() {
+  const t = useTranslations('partnerIssueLicense');
   const router = useRouter();
 
   // 基本信息
@@ -87,11 +89,11 @@ export function IssueLicenseForm() {
 
   // 可用模块
   const availableModules = [
-    { id: 'ai', name: 'AI 智能助手', price: 30000 },
-    { id: 'ha', name: '高可用（HA）', price: 40000 },
-    { id: 'multitenant', name: '多租户', price: 0 }, // 标准版包含
-    { id: 'audit', name: '审计日志', price: 15000 },
-    { id: 'pipeline', name: '数据管道', price: 20000 },
+    { id: 'ai', name: t('featAi'), price: 30000 },
+    { id: 'ha', name: t('featHa'), price: 40000 },
+    { id: 'multitenant', name: t('featMultitenant'), price: 0 }, // 标准版包含
+    { id: 'audit', name: t('featAudit'), price: 15000 },
+    { id: 'pipeline', name: t('featPipeline'), price: 20000 },
   ];
 
   // 计算价格
@@ -186,7 +188,7 @@ export function IssueLicenseForm() {
         router.push(`/partner/licenses?id=${response.license_id}`);
       }, 2000);
     } catch (err: any) {
-      setError(err.message || '签发 License 失败，请重试');
+      setError(err.message || t('issueFailed'));
     } finally {
       setIsSubmitting(false);
     }
@@ -197,35 +199,35 @@ export function IssueLicenseForm() {
       {/* 客户信息 */}
       <Card>
         <CardHeader>
-          <CardTitle>客户信息</CardTitle>
-          <CardDescription>填写客户的基本信息</CardDescription>
+          <CardTitle>{t('customerInfo')}</CardTitle>
+          <CardDescription>{t('customerInfoDesc')}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="customerName">客户名称 *</Label>
+              <Label htmlFor="customerName">{t('customerName')} *</Label>
               <Input
                 id="customerName"
                 value={customerName}
                 onChange={(e) => setCustomerName(e.target.value)}
-                placeholder="例：张三"
+                placeholder={t('customerNamePlaceholder')}
                 required
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="customerCompany">公司名称</Label>
+              <Label htmlFor="customerCompany">{t('companyName')}</Label>
               <Input
                 id="customerCompany"
                 value={customerCompany}
                 onChange={(e) => setCustomerCompany(e.target.value)}
-                placeholder="例：XX 科技有限公司"
+                placeholder={t('companyNamePlaceholder')}
               />
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="customerEmail">客户邮箱</Label>
+              <Label htmlFor="customerEmail">{t('customerEmail')}</Label>
               <Input
                 id="customerEmail"
                 type="email"
@@ -235,7 +237,7 @@ export function IssueLicenseForm() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="customerPhone">联系电话</Label>
+              <Label htmlFor="customerPhone">{t('customerPhone')}</Label>
               <Input
                 id="customerPhone"
                 value={customerPhone}
@@ -250,41 +252,41 @@ export function IssueLicenseForm() {
       {/* License 配置 */}
       <Card>
         <CardHeader>
-          <CardTitle>License 配置</CardTitle>
-          <CardDescription>选择版本、模块和资源限制</CardDescription>
+          <CardTitle>{t('licenseConfig')}</CardTitle>
+          <CardDescription>{t('licenseConfigDesc')}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="edition">版本 *</Label>
+              <Label htmlFor="edition">{t('edition')} *</Label>
               <Select value={edition} onValueChange={(value: any) => setEdition(value)}>
                 <SelectTrigger id="edition">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="trial">Trial（试用版）</SelectItem>
-                  <SelectItem value="standard">Standard（标准版）</SelectItem>
-                  <SelectItem value="enterprise">Enterprise（企业版）</SelectItem>
+                  <SelectItem value="trial">Trial（{t('editionTrial')}）</SelectItem>
+                  <SelectItem value="standard">Standard（{t('editionStandard')}）</SelectItem>
+                  <SelectItem value="enterprise">Enterprise（{t('editionEnterprise')}）</SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="licenseType">类型 *</Label>
+              <Label htmlFor="licenseType">{t('type')} *</Label>
               <Select value={licenseType} onValueChange={(value: any) => setLicenseType(value)}>
                 <SelectTrigger id="licenseType">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="perpetual">Perpetual（买断）</SelectItem>
-                  <SelectItem value="subscription">Subscription（订阅）</SelectItem>
+                  <SelectItem value="perpetual">Perpetual（{t('licenseTypePerpetual')}）</SelectItem>
+                  <SelectItem value="subscription">Subscription（{t('licenseTypeSubscription')}）</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </div>
 
           <div className="space-y-2">
-            <Label>功能模块</Label>
+            <Label>{t('functionalModules')}</Label>
             <div className="grid grid-cols-2 gap-3">
               {availableModules.map(module => (
                 <div key={module.id} className="flex items-center space-x-2">
@@ -308,7 +310,7 @@ export function IssueLicenseForm() {
 
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="maxNodes">最大节点数</Label>
+              <Label htmlFor="maxNodes">{t('maxNodes')}</Label>
               <Input
                 id="maxNodes"
                 type="number"
@@ -318,7 +320,7 @@ export function IssueLicenseForm() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="maxTenants">最大租户数</Label>
+              <Label htmlFor="maxTenants">{t('maxTenants')}</Label>
               <Input
                 id="maxTenants"
                 type="number"
@@ -328,7 +330,7 @@ export function IssueLicenseForm() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="maxAccounts">每租户账号数</Label>
+              <Label htmlFor="maxAccounts">{t('maxAccountsPerTenant')}</Label>
               <Input
                 id="maxAccounts"
                 type="number"
@@ -340,7 +342,7 @@ export function IssueLicenseForm() {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="fingerprint">硬件指纹（可选）</Label>
+            <Label htmlFor="fingerprint">{t('fingerprint')}</Label>
             <Input
               id="fingerprint"
               value={fingerprint}
@@ -348,7 +350,7 @@ export function IssueLicenseForm() {
               placeholder="server001.customer.com"
             />
             <p className="text-sm text-muted-foreground">
-              绑定到特定服务器，留空则不限制部署环境
+              {t('fingerprintHint')}
             </p>
           </div>
         </CardContent>
@@ -357,13 +359,13 @@ export function IssueLicenseForm() {
       {/* 时间与价格 */}
       <Card>
         <CardHeader>
-          <CardTitle>时间与价格</CardTitle>
-          <CardDescription>设置 License 有效期和价格</CardDescription>
+          <CardTitle>{t('timeAndPrice')}</CardTitle>
+          <CardDescription>{t('timeAndPriceDesc')}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="days">有效天数 *</Label>
+              <Label htmlFor="days">{t('validDays')} *</Label>
               <Input
                 id="days"
                 type="number"
@@ -373,7 +375,7 @@ export function IssueLicenseForm() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="graceDays">宽限期（天）</Label>
+              <Label htmlFor="graceDays">{t('graceDays')}</Label>
               <Input
                 id="graceDays"
                 type="number"
@@ -385,7 +387,7 @@ export function IssueLicenseForm() {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="price">License 价格（元）*</Label>
+            <Label htmlFor="price">{t('licensePriceYuan')} *</Label>
             <Input
               id="price"
               type="number"
@@ -402,11 +404,11 @@ export function IssueLicenseForm() {
       <Card className="border-2 border-primary/20">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            年度维护服务
-            <span className="text-sm font-normal text-muted-foreground">（推荐）</span>
+            {t('annualMaintenance')}
+            <span className="text-sm font-normal text-muted-foreground">（{t('recommended')}）</span>
           </CardTitle>
           <CardDescription>
-            包含安全补丁、Bug 修复、版本升级等服务
+            {t('annualMaintenanceDesc')}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -417,7 +419,7 @@ export function IssueLicenseForm() {
               onCheckedChange={(checked) => setIncludeMaintenance(!!checked)}
             />
             <Label htmlFor="includeMaintenance" className="font-medium">
-              包含年度维护服务
+              {t('includeAnnualMaintenance')}
             </Label>
           </div>
 
@@ -425,7 +427,7 @@ export function IssueLicenseForm() {
             <>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="maintenanceYears">维护年限</Label>
+                  <Label htmlFor="maintenanceYears">{t('maintenanceYears')}</Label>
                   <Select
                     value={maintenanceYears.toString()}
                     onValueChange={(value) => setMaintenanceYears(parseInt(value))}
@@ -434,26 +436,26 @@ export function IssueLicenseForm() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="1">1 年（推荐）</SelectItem>
-                      <SelectItem value="2">2 年</SelectItem>
-                      <SelectItem value="3">3 年</SelectItem>
-                      <SelectItem value="5">5 年</SelectItem>
+                      <SelectItem value="1">{t('years', { n: 1 })}（{t('recommended')}）</SelectItem>
+                      <SelectItem value="2">{t('years', { n: 2 })}</SelectItem>
+                      <SelectItem value="3">{t('years', { n: 3 })}</SelectItem>
+                      <SelectItem value="5">{t('years', { n: 5 })}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="maintenancePrice">年度维护费（元）</Label>
+                  <Label htmlFor="maintenancePrice">{t('annualMaintenancePriceYuan')}</Label>
                   <Input
                     id="maintenancePrice"
                     type="number"
                     min="0"
                     value={maintenancePriceOverride ?? priceBreakdown.maintenancePrice}
                     onChange={(e) => setMaintenancePriceOverride(parseInt(e.target.value))}
-                    placeholder={`默认 ¥${priceBreakdown.maintenancePrice.toLocaleString()}`}
+                    placeholder={t('defaultPricePlaceholder', { price: priceBreakdown.maintenancePrice.toLocaleString() })}
                   />
                   <p className="text-sm text-muted-foreground">
-                    默认为 License 价格的 20%
+                    {t('defaultMaintenancePriceHint')}
                   </p>
                 </div>
               </div>
@@ -465,7 +467,7 @@ export function IssueLicenseForm() {
                   onCheckedChange={(checked) => setAutoRenewMaintenance(!!checked)}
                 />
                 <Label htmlFor="autoRenew" className="font-normal">
-                  自动续费维护服务
+                  {t('autoRenewMaintenance')}
                 </Label>
               </div>
             </>
@@ -476,11 +478,11 @@ export function IssueLicenseForm() {
       {/* 价格预览 */}
       <Card className="bg-muted/50">
         <CardHeader>
-          <CardTitle>价格预览</CardTitle>
+          <CardTitle>{t('pricePreview')}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex justify-between items-center">
-            <span className="text-sm">License 价格</span>
+            <span className="text-sm">{t('licensePrice')}</span>
             <span className="font-semibold">
               ¥{priceBreakdown.licensePrice.toLocaleString()}
             </span>
@@ -490,7 +492,7 @@ export function IssueLicenseForm() {
             <>
               <div className="flex justify-between items-center">
                 <span className="text-sm">
-                  年度维护（{maintenanceYears} 年）
+                  {t('annualMaintenanceYears', { n: maintenanceYears })}
                 </span>
                 <span className="font-semibold">
                   ¥{priceBreakdown.maintenanceTotalPrice.toLocaleString()}
@@ -498,7 +500,7 @@ export function IssueLicenseForm() {
               </div>
               <div className="flex justify-between items-center text-muted-foreground">
                 <span className="text-sm pl-4">
-                  └ 代理商分成（{maintenanceCommissionRate}%）
+                  └ {t('partnerShare', { rate: maintenanceCommissionRate })}
                 </span>
                 <span className="text-sm">
                   ¥{priceBreakdown.maintenanceCommission.toLocaleString()}
@@ -509,7 +511,7 @@ export function IssueLicenseForm() {
 
           <div className="border-t pt-3 mt-3">
             <div className="flex justify-between items-center">
-              <span className="font-medium">合计</span>
+              <span className="font-medium">{t('total')}</span>
               <span className="text-xl font-bold">
                 ¥{priceBreakdown.totalPrice.toLocaleString()}
               </span>
@@ -518,19 +520,19 @@ export function IssueLicenseForm() {
 
           <div className="bg-primary/10 rounded-lg p-3 mt-3">
             <div className="flex justify-between items-center">
-              <span className="font-medium text-primary">您的佣金</span>
+              <span className="font-medium text-primary">{t('yourCommission')}</span>
               <span className="text-xl font-bold text-primary">
                 ¥{priceBreakdown.totalCommission.toLocaleString()}
               </span>
             </div>
             <div className="text-xs text-muted-foreground mt-2 space-y-1">
               <div className="flex justify-between">
-                <span>License 佣金（{commissionRate}%）</span>
+                <span>{t('licenseCommission', { rate: commissionRate })}</span>
                 <span>¥{priceBreakdown.licenseCommission.toLocaleString()}</span>
               </div>
               {includeMaintenance && (
                 <div className="flex justify-between">
-                  <span>维护费佣金（{maintenanceCommissionRate}%）</span>
+                  <span>{t('maintenanceCommission', { rate: maintenanceCommissionRate })}</span>
                   <span>¥{priceBreakdown.maintenanceCommission.toLocaleString()}</span>
                 </div>
               )}
@@ -552,7 +554,7 @@ export function IssueLicenseForm() {
         <Alert className="border-green-500 bg-green-50">
           <Check className="h-4 w-4 text-green-600" />
           <AlertDescription className="text-green-800">
-            License 签发成功！正在跳转...
+            {t('issueSuccessRedirecting')}
           </AlertDescription>
         </Alert>
       )}
@@ -565,11 +567,11 @@ export function IssueLicenseForm() {
           onClick={() => router.back()}
           disabled={isSubmitting}
         >
-          取消
+          {t('cancel')}
         </Button>
         <Button type="submit" disabled={isSubmitting || !customerName}>
           {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          签发 License
+          {t('issueLicense')}
         </Button>
       </div>
     </form>

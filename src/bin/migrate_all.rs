@@ -3,10 +3,10 @@
 //! 按顺序执行管理库的全部迁移，每步幂等（IF NOT EXISTS / 良性错误跳过）。
 //! 运行方式: `cargo run --bin migrate_all`
 //!
-//! 迁移序列与"app 启动时自动迁移"共用同一份实现（`onebase::migrate::run_all_migrations`），
+//! 迁移序列与"app 启动时自动迁移"共用同一份实现（`planeos::migrate::run_all_migrations`），
 //! 因此这里只是一个带 exit code 的薄壳，供 CI/CD 或人工显式触发使用。
 
-use onebase::migrate::run_all_migrations;
+use planeos::migrate::run_all_migrations;
 use sqlx::postgres::PgPoolOptions;
 use std::env;
 

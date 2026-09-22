@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { useTranslations } from 'next-intl'
 import { createPortal } from 'react-dom'
 import dynamic from 'next/dynamic'
 import {
@@ -189,6 +190,7 @@ function ExpandControl({
   onClick: () => void
   label: string
 }) {
+  const t = useTranslations('wfList')
   // fieldset[disabled] 会禁用 <button>，只读时仍要能放大，所以不用 form control。
   return (
     <div
@@ -202,9 +204,9 @@ function ExpandControl({
         }
       }}
       className="px-1.5 py-0.5 rounded text-[11px] text-gray-500 hover:bg-gray-100 hover:text-gray-800 cursor-pointer select-none"
-      aria-label={`全屏编辑${label}`}
+      aria-label={t('fullscreenEdit', { label })}
     >
-      全屏
+      {t('fullscreen')}
     </div>
   )
 }
@@ -221,6 +223,7 @@ export default function CodeSnippetEditor({
   placeholder,
   fill = false,
 }: CodeSnippetEditorProps) {
+  const t = useTranslations('wfList')
   const reactId = useId()
   const [expanded, setExpanded] = useState(false)
   const [mounted, setMounted] = useState(false)
@@ -320,7 +323,7 @@ export default function CodeSnippetEditor({
                     }
                   }}
                   className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 cursor-pointer"
-                  aria-label="退出全屏"
+                  aria-label={t('exitFullscreen')}
                 >
                   ×
                 </div>

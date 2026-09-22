@@ -56,6 +56,38 @@ fn record_role_op(
     change: Value,
     high_risk: bool,
 ) {
+    // 提取"为用户 #123 分配/移除角色"里的用户 id（该信息只存在于已格式化的 summary 文本中）。
+    let user_id_hint = summary
+        .split('#')
+        .nth(1)
+        .map(|rest| rest.chars().take_while(|c| c.is_ascii_digit()).collect::<String>())
+        .filter(|s| !s.is_empty());
+    let (summary_code, summary_params) = match action {
+        operation_log::action::CREATE => (
+            "oplog_role_create",
+            json!({ "name": role_name }),
+        ),
+        operation_log::action::DELETE => (
+            "oplog_role_delete",
+            json!({ "name": role_name }),
+        ),
+        _ if summary.contains("的权限绑定") => (
+            "oplog_role_update_permissions",
+            json!({ "name": role_name }),
+        ),
+        _ if summary.contains("分配角色") => (
+            "oplog_role_assign_user",
+            json!({ "name": role_name, "user_id": user_id_hint.unwrap_or_default() }),
+        ),
+        _ if summary.contains("移除用户") => (
+            "oplog_role_remove_user",
+            json!({ "name": role_name, "user_id": user_id_hint.unwrap_or_default() }),
+        ),
+        _ => (
+            "oplog_role_update",
+            json!({ "name": role_name }),
+        ),
+    };
     let mut input = OperationLogInput::new(
         tenant_id,
         Actor::from_claims(claims),
@@ -69,7 +101,8 @@ fn record_role_op(
         role_name.to_string(),
         Some(role_id.to_string()),
     )
-    .change(change);
+    .change(change)
+    .summary_code(summary_code, summary_params);
     input.high_risk = Some(high_risk);
     operation_log::record(pool, input);
 }
@@ -84,6 +117,12 @@ fn record_rls_op(
     summary: String,
     change: Value,
 ) {
+    let summary_code = match action {
+        operation_log::action::CREATE => "oplog_rls_create",
+        operation_log::action::DELETE => "oplog_rls_delete",
+        _ => "oplog_rls_update",
+    };
+    let summary_params = json!({ "name": rule_name });
     let mut input = OperationLogInput::new(
         tenant_id,
         Actor::from_claims(claims),
@@ -97,7 +136,8 @@ fn record_rls_op(
         rule_name,
         Some(permission_id.to_string()),
     )
-    .change(change);
+    .change(change)
+    .summary_code(summary_code, summary_params);
     input.high_risk = Some(true);
     operation_log::record(pool, input);
 }
@@ -290,7 +330,13 @@ pub async fn create_role(
     .bind(&req.description)
     .fetch_one(&pool)
     .await
-    .map_err(|e| AppError::InvalidQuery(format!("创建角色失败: {}", e)))?;
+    .map_err(|e| {
+        AppError::validation(
+            "rbac_create_role_failed",
+            format!("创建角色失败: {}", e),
+            serde_json::json!({ "error": e.to_string() }),
+        )
+    })?;
 
     // 新角色暂时没人挂，理论上不影响现有用户的权限缓存——但 list_roles
     // 等只读 API 没有缓存，所以这里失效租户缓存仅作"保险丝"，便于将来
@@ -349,12 +395,20 @@ pub async fn update_role(
             .bind(tenant_id)
             .fetch_optional(&pool)
             .await?
-            .ok_or_else(|| AppError::NotFound("角色不存在".to_string()))?;
+            .ok_or_else(|| AppError::not_found_coded(
+                "rbac_role_not_found",
+                "角色不存在".to_string(),
+                serde_json::json!({}),
+            ))?;
     let old_name: String = existing.get("name");
     let old_description: Option<String> = existing.get("description");
 
     if existing.get::<bool, _>("is_system") {
-        return Err(AppError::Forbidden("不能修改系统角色".to_string()));
+        return Err(AppError::forbidden_coded(
+            "rbac_cannot_modify_system_role",
+            "不能修改系统角色".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let row = sqlx::query(
@@ -429,12 +483,20 @@ pub async fn delete_role(
             .bind(tenant_id)
             .fetch_optional(&pool)
             .await?
-            .ok_or_else(|| AppError::NotFound("角色不存在".to_string()))?;
+            .ok_or_else(|| AppError::not_found_coded(
+                "rbac_role_not_found",
+                "角色不存在".to_string(),
+                serde_json::json!({}),
+            ))?;
     let role_name: String = existing.get("name");
     let description: Option<String> = existing.get("description");
 
     if existing.get::<bool, _>("is_system") {
-        return Err(AppError::Forbidden("不能删除系统角色".to_string()));
+        return Err(AppError::forbidden_coded(
+            "rbac_cannot_delete_system_role",
+            "不能删除系统角色".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     sqlx::query("DELETE FROM management.roles WHERE id = $1 AND tenant_id = $2")
@@ -481,7 +543,11 @@ pub async fn get_role_permissions(
         .bind(tenant_id)
         .fetch_optional(&pool)
         .await?
-        .ok_or_else(|| AppError::NotFound("角色不存在".to_string()))?;
+        .ok_or_else(|| AppError::not_found_coded(
+                "rbac_role_not_found",
+                "角色不存在".to_string(),
+                serde_json::json!({}),
+            ))?;
 
     let rows = sqlx::query(
         r#"
@@ -522,7 +588,11 @@ pub async fn set_role_permissions(
         .bind(tenant_id)
         .fetch_optional(&pool)
         .await?
-        .ok_or_else(|| AppError::NotFound("角色不存在".to_string()))?;
+        .ok_or_else(|| AppError::not_found_coded(
+                "rbac_role_not_found",
+                "角色不存在".to_string(),
+                serde_json::json!({}),
+            ))?;
     let role_name: String = role_row.get("name");
     let old_count: i64 = role_row.get("permission_count");
 
@@ -615,10 +685,11 @@ pub async fn create_permission(
 
     let valid_actions = ["SELECT", "INSERT", "UPDATE", "DELETE", "ALL"];
     if !valid_actions.contains(&req.action.as_str()) {
-        return Err(AppError::InvalidQuery(format!(
-            "无效的 action: {}，允许值: {:?}",
-            req.action, valid_actions
-        )));
+        return Err(AppError::validation(
+            "rbac_invalid_permission_action",
+            format!("无效的 action: {}，允许值: {:?}", req.action, valid_actions),
+            serde_json::json!({ "action": req.action, "allowed_actions": valid_actions }),
+        ));
     }
 
     let row = sqlx::query(
@@ -638,7 +709,13 @@ pub async fn create_permission(
     .bind(&req.description)
     .fetch_one(&pool)
     .await
-    .map_err(|e| AppError::InvalidQuery(format!("创建权限失败: {}", e)))?;
+    .map_err(|e| {
+        AppError::validation(
+            "rbac_create_permission_failed",
+            format!("创建权限失败: {}", e),
+            serde_json::json!({ "error": e.to_string() }),
+        )
+    })?;
 
     // 新建的 permission 可能立即被绑到既有 role；为保一致性窗口干净，提前失效。
     permissions::invalidate_tenant_permissions(redis_ref(&redis), tenant_id).await;
@@ -689,7 +766,11 @@ pub async fn update_permission(
     .bind(tenant_id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("权限不存在".to_string()))?;
+    .ok_or_else(|| AppError::not_found_coded(
+                "rbac_permission_not_found",
+                "权限不存在".to_string(),
+                serde_json::json!({}),
+            ))?;
     let old_perm = row_to_permission(&existing);
 
     let row = sqlx::query(
@@ -717,7 +798,11 @@ pub async fn update_permission(
     .bind(tenant_id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("权限不存在".to_string()))?;
+    .ok_or_else(|| AppError::not_found_coded(
+                "rbac_permission_not_found",
+                "权限不存在".to_string(),
+                serde_json::json!({}),
+            ))?;
 
     // 行列条件 / resource / action 任何字段变了，所有挂这条 permission 的用户视图都受影响。
     permissions::invalidate_tenant_permissions(redis_ref(&redis), tenant_id).await;
@@ -770,7 +855,11 @@ pub async fn delete_permission(
     .bind(tenant_id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("权限不存在".to_string()))?;
+    .ok_or_else(|| AppError::not_found_coded(
+                "rbac_permission_not_found",
+                "权限不存在".to_string(),
+                serde_json::json!({}),
+            ))?;
     let perm = row_to_permission(&existing);
 
     let result = sqlx::query("DELETE FROM management.permissions WHERE id = $1 AND tenant_id = $2")
@@ -780,7 +869,11 @@ pub async fn delete_permission(
         .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound("权限不存在".to_string()));
+        return Err(AppError::not_found_coded(
+                "rbac_permission_not_found",
+                "权限不存在".to_string(),
+                serde_json::json!({}),
+            ));
     }
 
     // 删 permission 直接撤销了所有挂它的 role 的对应资格。
@@ -873,7 +966,11 @@ pub async fn assign_user_role(
     let role_name: String = match role_row {
         Some(row) => row.get("name"),
         None => {
-            return Err(AppError::InvalidQuery("角色不属于该租户".to_string()));
+            return Err(AppError::validation(
+                "rbac_role_not_in_tenant",
+                "角色不属于该租户".to_string(),
+                serde_json::json!({}),
+            ));
         }
     };
 
@@ -887,7 +984,11 @@ pub async fn assign_user_role(
     .fetch_one(&pool)
     .await?;
     if !target_in_tenant {
-        return Err(AppError::InvalidQuery("目标用户不属于该租户".to_string()));
+        return Err(AppError::validation(
+            "rbac_target_user_not_in_tenant",
+            "目标用户不属于该租户".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     sqlx::query(
@@ -902,7 +1003,13 @@ pub async fn assign_user_role(
     .bind(req.tenant_id)
     .execute(&pool)
     .await
-    .map_err(|e| AppError::InvalidQuery(format!("分配角色失败: {}", e)))?;
+    .map_err(|e| {
+        AppError::validation(
+            "rbac_assign_role_failed",
+            format!("分配角色失败: {}", e),
+            serde_json::json!({ "error": e.to_string() }),
+        )
+    })?;
 
     // 仅这一个用户在这个租户内的权限视图变了。
     permissions::invalidate_user_permissions(redis_ref(&redis), req.tenant_id, target_user_id)
@@ -948,7 +1055,11 @@ pub async fn remove_user_role(
             .bind(tenant_id)
             .fetch_optional(&pool)
             .await?
-            .ok_or_else(|| AppError::NotFound("角色不存在".to_string()))?;
+            .ok_or_else(|| AppError::not_found_coded(
+                "rbac_role_not_found",
+                "角色不存在".to_string(),
+                serde_json::json!({}),
+            ))?;
     let role_name: String = role_row.get("name");
 
     sqlx::query(
@@ -1024,10 +1135,11 @@ pub async fn require_table_permission(
     let resource = format!("{}.{}", schema, table);
     let perms = query_user_permissions(pool, user_id, tenant_id, &resource, action).await?;
     if perms.is_empty() {
-        return Err(crate::error::AppError::Forbidden(format!(
-            "没有权限在 {} 上执行 {}",
-            resource, action
-        )));
+        return Err(crate::error::AppError::forbidden_coded(
+            "rbac_no_table_permission",
+            format!("没有权限在 {} 上执行 {}", resource, action),
+            serde_json::json!({ "resource": resource, "action": action }),
+        ));
     }
     Ok(())
 }
@@ -1071,10 +1183,11 @@ pub async fn require_schema_permission(
     .await?;
 
     if count == 0 {
-        return Err(crate::error::AppError::Forbidden(format!(
-            "没有权限对 schema {} 执行 {}",
-            schema, action
-        )));
+        return Err(crate::error::AppError::forbidden_coded(
+            "rbac_no_schema_permission",
+            format!("没有权限对 schema {} 执行 {}", schema, action),
+            serde_json::json!({ "schema": schema, "action": action }),
+        ));
     }
     Ok(())
 }

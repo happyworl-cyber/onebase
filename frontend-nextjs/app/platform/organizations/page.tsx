@@ -12,6 +12,7 @@ import {
   organizationAPI,
   type OrganizationDto,
 } from '@/lib/api'
+import { useTranslations } from 'next-intl'
 import { useNotification } from '@/hooks/useNotification'
 import Drawer from '@/components/Drawer'
 
@@ -29,6 +30,8 @@ function suggestSlug(name: string): string {
 type UserOpt = { id: number; username: string; email: string }
 
 export default function PlatformOrganizationsPage() {
+  const t = useTranslations('platformOrgs')
+  const tc = useTranslations('common')
   const router = useRouter()
   const notify = useNotification()
 
@@ -53,7 +56,7 @@ export default function PlatformOrganizationsPage() {
       .list()
       .then((res) => setOrgs(res.data.organizations || []))
       .catch((err) => {
-        setError(err?.response?.data?.error || err?.message || '加载失败')
+        setError(err?.response?.data?.error || err?.message || tc('loadFailed'))
         setOrgs([])
       })
   }, [])
@@ -84,7 +87,7 @@ export default function PlatformOrganizationsPage() {
   async function handleCreate(e?: React.FormEvent) {
     e?.preventDefault()
     if (!form.name.trim() || !SLUG_REGEX.test(form.slug)) {
-      notify.error('请填写有效名称与 slug')
+      notify.error(t('invalidInput'))
       return
     }
     setCreating(true)
@@ -98,7 +101,7 @@ export default function PlatformOrganizationsPage() {
       if (form.contact_email.trim()) body.contact_email = form.contact_email.trim()
       if (form.owner_user_id) body.owner_user_id = Number(form.owner_user_id)
       const res = await organizationAPI.create(body)
-      notify.success('租户已创建')
+      notify.success(t('created'))
       setShowCreate(false)
       setForm({ name: '', slug: '', contact_email: '', owner_user_id: '' })
       setSlugTouched(false)
@@ -118,7 +121,7 @@ export default function PlatformOrganizationsPage() {
         name: editName.trim(),
         contact_email: editEmail.trim() || undefined,
       })
-      notify.success('已保存')
+      notify.success(tc('saved'))
       setSelected(res.data.organization)
       reload()
     } catch (err) {
@@ -130,13 +133,13 @@ export default function PlatformOrganizationsPage() {
     if (!selected) return
     if (
       status === 'deleted' &&
-      !window.confirm(`确定删除租户「${selected.name}」？此操作将标记为 deleted。`)
+      !window.confirm(t('confirmDelete', { name: selected.name }))
     ) {
       return
     }
     try {
       const res = await organizationAPI.patch(selected.id, { status })
-      notify.success(status === 'active' ? '已启用' : status === 'suspended' ? '已停用' : '已删除')
+      notify.success(status === 'active' ? t('activated') : status === 'suspended' ? t('suspended') : t('deleted'))
       if (status === 'deleted') {
         setSelected(null)
       } else {
@@ -152,14 +155,14 @@ export default function PlatformOrganizationsPage() {
     <div className="w-full space-y-6">
       <header className="mb-6 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">租户管理</h1>
+          <h1 className="text-xl font-semibold text-gray-900">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            平台创建与管理租户基本信息。成员、项目等请在租户控制台中管理。
+            {t('subtitle')}
           </p>
         </div>
         <button type="button" className="btn-primary shrink-0" onClick={() => setShowCreate(true)}>
           <i className="fas fa-plus mr-2"></i>
-          创建租户
+          {t('createBtn')}
         </button>
       </header>
 
@@ -174,24 +177,24 @@ export default function PlatformOrganizationsPage() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-gray-500 border-b border-gray-200">
               <tr>
-                <th className="px-4 py-3 text-left font-medium">租户</th>
+                <th className="px-4 py-3 text-left font-medium">{t('colTenant')}</th>
                 <th className="px-4 py-3 text-left font-medium">Slug</th>
-                <th className="px-4 py-3 text-left font-medium">状态</th>
-                <th className="px-4 py-3 text-left font-medium">联系邮箱</th>
-                <th className="px-4 py-3 text-right font-medium w-40">操作</th>
+                <th className="px-4 py-3 text-left font-medium">{t('colStatus')}</th>
+                <th className="px-4 py-3 text-left font-medium">{t('colEmail')}</th>
+                <th className="px-4 py-3 text-right font-medium w-40">{t('colActions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {orgs === null ? (
                 <tr>
                   <td colSpan={5} className="px-4 py-12 text-center text-gray-400">
-                    <i className="fas fa-spinner fa-spin mr-2"></i>加载中…
+                    <i className="fas fa-spinner fa-spin mr-2"></i>{tc('loading')}
                   </td>
                 </tr>
               ) : orgs.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-4 py-12 text-center text-gray-400">
-                    暂无租户，请先创建
+                    {t('empty')}
                   </td>
                 </tr>
               ) : (
@@ -231,14 +234,14 @@ export default function PlatformOrganizationsPage() {
                         className="text-xs text-blue-600 hover:underline mr-3"
                         onClick={() => openDetail(o)}
                       >
-                        编辑
+                        {tc('edit')}
                       </button>
                       <button
                         type="button"
                         className="text-xs text-gray-500 hover:text-blue-600 hover:underline"
                         onClick={() => router.push(`/org/${o.id}`)}
                       >
-                        控制台
+                        {tc('console')}
                       </button>
                     </td>
                   </tr>
@@ -252,18 +255,18 @@ export default function PlatformOrganizationsPage() {
       <Drawer
         isOpen={!!selected}
         onClose={() => setSelected(null)}
-        title={selected ? `租户 · ${selected.name}` : ''}
+        title={selected ? t('editTitle', { name: selected.name }) : ''}
         size="md"
       >
         {selected && (
           <div className="space-y-6">
             <section>
               <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">
-                基本信息
+                {t('basicInfo')}
               </h4>
               <div className="space-y-3">
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">名称</label>
+                  <label className="block text-xs text-gray-500 mb-1">{t('nameLabel')}</label>
                   <input
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                     value={editName}
@@ -279,7 +282,7 @@ export default function PlatformOrganizationsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">联系邮箱</label>
+                  <label className="block text-xs text-gray-500 mb-1">{t('emailLabel')}</label>
                   <input
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                     value={editEmail}
@@ -288,7 +291,7 @@ export default function PlatformOrganizationsPage() {
                 </div>
                 <div className="flex flex-wrap gap-2 pt-1">
                   <button type="button" className="btn-primary text-sm" onClick={saveMeta}>
-                    保存信息
+                    {t('saveInfo')}
                   </button>
                   {selected.status === 'active' ? (
                     <button
@@ -296,7 +299,7 @@ export default function PlatformOrganizationsPage() {
                       className="px-3 py-2 text-sm border border-amber-300 text-amber-700 rounded-lg"
                       onClick={() => setStatus('suspended')}
                     >
-                      停用
+                      {t('suspend')}
                     </button>
                   ) : (
                     <button
@@ -304,7 +307,7 @@ export default function PlatformOrganizationsPage() {
                       className="px-3 py-2 text-sm border border-green-300 text-green-700 rounded-lg"
                       onClick={() => setStatus('active')}
                     >
-                      启用
+                      {t('activate')}
                     </button>
                   )}
                   <button
@@ -312,7 +315,7 @@ export default function PlatformOrganizationsPage() {
                     className="px-3 py-2 text-sm border border-red-200 text-red-600 rounded-lg"
                     onClick={() => setStatus('deleted')}
                   >
-                    删除
+                    {tc('delete')}
                   </button>
                 </div>
               </div>
@@ -324,7 +327,7 @@ export default function PlatformOrganizationsPage() {
       <Drawer
         isOpen={showCreate}
         onClose={() => setShowCreate(false)}
-        title="创建租户"
+        title={t('createTitle')}
         size="md"
         footer={
           <div className="flex gap-3 justify-end">
@@ -333,7 +336,7 @@ export default function PlatformOrganizationsPage() {
               className="px-4 py-2 text-sm border border-gray-300 rounded-lg"
               onClick={() => setShowCreate(false)}
             >
-              取消
+              {tc('cancel')}
             </button>
             <button
               type="button"
@@ -341,14 +344,14 @@ export default function PlatformOrganizationsPage() {
               className="btn-primary text-sm disabled:opacity-50"
               onClick={() => handleCreate()}
             >
-              {creating ? '创建中…' : '创建'}
+              {creating ? tc('creating') : tc('create')}
             </button>
           </div>
         }
       >
         <form onSubmit={handleCreate} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">名称</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">{t('nameLabel')}</label>
             <input
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               value={form.name}
@@ -375,7 +378,7 @@ export default function PlatformOrganizationsPage() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">联系邮箱</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">{t('emailLabel')}</label>
             <input
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               value={form.contact_email}
@@ -384,14 +387,14 @@ export default function PlatformOrganizationsPage() {
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              初始 Owner（可选）
+              {t('initialOwner')}
             </label>
             <select
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               value={form.owner_user_id}
               onChange={(e) => setForm((f) => ({ ...f, owner_user_id: e.target.value }))}
             >
-              <option value="">— 稍后添加 —</option>
+              <option value="">{t('ownerLater')}</option>
               {users.map((u) => (
                 <option key={u.id} value={u.id}>
                   {u.username} ({u.email})

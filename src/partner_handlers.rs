@@ -21,7 +21,7 @@ use crate::error::{AppError, Result};
 use crate::middleware::PartnerContext;
 use crate::partner_models::*;
 use crate::permissions::require_platform_superadmin;
-use onebase::license::{sign_license, LicenseClaims};
+use planeos::license::{sign_license, LicenseClaims};
 
 // ═══════════════════════════════════════════════════════════
 // 超管 API - 代理商管理
@@ -43,16 +43,19 @@ pub async fn admin_create_partner(
             .await?;
 
     if exists {
-        return Err(AppError::InvalidQuery(format!(
-            "代理商 slug '{}' 已存在",
-            req.slug
-        )));
+        return Err(AppError::validation(
+            "partner_slug_exists",
+            format!("代理商 slug '{}' 已存在", req.slug),
+            serde_json::json!({ "slug": req.slug }),
+        ));
     }
 
     // 验证佣金比例
     if req.commission_rate < Decimal::ZERO || req.commission_rate > Decimal::new(10000, 2) {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "partner_commission_rate_range",
             "佣金比例必须在 0-100 之间".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -149,7 +152,7 @@ pub async fn admin_update_partner(
         .bind(id)
         .fetch_optional(&pool)
         .await?
-        .ok_or_else(|| AppError::NotFound("代理商不存在".to_string()))?;
+        .ok_or_else(|| AppError::not_found_coded("partner_not_found", "代理商不存在".to_string(), serde_json::json!({})))?;
 
     // 构建动态更新 SQL
     let mut updates = Vec::new();
@@ -256,7 +259,7 @@ pub async fn admin_suspend_partner(
     .bind(id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("代理商不存在".to_string()))?;
+    .ok_or_else(|| AppError::not_found_coded("partner_not_found", "代理商不存在".to_string(), serde_json::json!({})))?;
 
     Ok(Json(json!({
         "partner": partner,
@@ -276,7 +279,7 @@ pub async fn admin_partner_statistics(
         .bind(id)
         .fetch_optional(&pool)
         .await?
-        .ok_or_else(|| AppError::NotFound("代理商不存在".to_string()))?;
+        .ok_or_else(|| AppError::not_found_coded("partner_not_found", "代理商不存在".to_string(), serde_json::json!({})))?;
 
     let stats: PartnerStats =
         sqlx::query_as("SELECT * FROM management.v_partner_stats WHERE partner_id = $1")
@@ -300,7 +303,7 @@ pub async fn admin_generate_statement(
         .bind(req.partner_id)
         .fetch_optional(&pool)
         .await?
-        .ok_or_else(|| AppError::NotFound("代理商不存在".to_string()))?;
+        .ok_or_else(|| AppError::not_found_coded("partner_not_found", "代理商不存在".to_string(), serde_json::json!({})))?;
 
     // 统计周期内的 License 佣金（新签）
     #[derive(sqlx::FromRow)]
@@ -421,7 +424,13 @@ pub async fn admin_mark_statement_paid(
     .bind(req.payment_reference)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("对账单不存在".to_string()))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "partner_statement_not_found",
+            "对账单不存在".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
 
     // 更新关联的佣金记录为已支付
     sqlx::query(
@@ -450,7 +459,7 @@ pub async fn partner_get_profile(
         .bind(ctx.partner_id)
         .fetch_optional(&pool)
         .await?
-        .ok_or_else(|| AppError::NotFound("代理商不存在".to_string()))?;
+        .ok_or_else(|| AppError::not_found_coded("partner_not_found", "代理商不存在".to_string(), serde_json::json!({})))?;
 
     let available_quota = partner.license_quota - partner.used_quota;
     let quota_usage_percent = if partner.license_quota > 0 {
@@ -546,45 +555,63 @@ pub async fn partner_issue_license(
         .bind(ctx.partner_id)
         .fetch_optional(&pool)
         .await?
-        .ok_or_else(|| AppError::NotFound("代理商不存在".to_string()))?;
+        .ok_or_else(|| AppError::not_found_coded("partner_not_found", "代理商不存在".to_string(), serde_json::json!({})))?;
 
     if partner.status != "active" {
-        return Err(AppError::Forbidden(format!(
-            "代理商状态为 '{}'，无法签发 License",
-            partner.status
-        )));
+        return Err(AppError::forbidden_coded(
+            "partner_inactive_cannot_issue",
+            format!("代理商状态为 '{}'，无法签发 License", partner.status),
+            serde_json::json!({ "status": partner.status }),
+        ));
     }
 
     // 2. 检查配额
     if !partner.has_quota(1) {
-        return Err(AppError::Forbidden(format!(
-            "配额不足（已用 {}/{}）",
-            partner.used_quota, partner.license_quota
-        )));
+        return Err(AppError::forbidden_coded(
+            "partner_quota_insufficient",
+            format!(
+                "配额不足（已用 {}/{}）",
+                partner.used_quota, partner.license_quota
+            ),
+            serde_json::json!({ "used": partner.used_quota, "total": partner.license_quota }),
+        ));
     }
 
     if partner.is_quota_expired() {
-        return Err(AppError::Forbidden("配额已过期".to_string()));
+        return Err(AppError::forbidden_coded(
+            "partner_quota_expired",
+            "配额已过期".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     // 3. 验证授权范围
     if !partner.is_edition_allowed(&req.edition) {
-        return Err(AppError::Forbidden(format!(
-            "版本 '{}' 不在授权范围内",
-            req.edition
-        )));
+        return Err(AppError::forbidden_coded(
+            "partner_edition_not_allowed",
+            format!("版本 '{}' 不在授权范围内", req.edition),
+            serde_json::json!({ "edition": req.edition }),
+        ));
     }
 
     if !partner.are_modules_allowed(&req.modules) {
-        return Err(AppError::Forbidden("部分模块不在授权范围内".to_string()));
+        return Err(AppError::forbidden_coded(
+            "partner_modules_not_allowed",
+            "部分模块不在授权范围内".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     if !partner.is_days_allowed(req.days) {
-        return Err(AppError::Forbidden(format!(
-            "签发天数 {} 超过限制（最大 {} 天）",
-            req.days,
-            partner.max_license_days.unwrap_or(i32::MAX)
-        )));
+        return Err(AppError::forbidden_coded(
+            "partner_days_exceeds_limit",
+            format!(
+                "签发天数 {} 超过限制（最大 {} 天）",
+                req.days,
+                partner.max_license_days.unwrap_or(i32::MAX)
+            ),
+            serde_json::json!({ "days": req.days, "max_days": partner.max_license_days.unwrap_or(i32::MAX) }),
+        ));
     }
 
     // 4. 生成 License
@@ -597,9 +624,18 @@ pub async fn partner_issue_license(
         customer: req.customer_name.clone(),
         edition: req.edition.clone(),
         modules: req.modules.clone(),
+        // 原厂签发默认写入 enforce：签名字段客户改不了，是私有化部署下的硬约束点。
+        enforce: Some("enforce".to_string()),
         max_nodes: Some(req.max_nodes as u32),
         max_tenants: Some(req.max_tenants as u32),
         max_accounts_per_tenant: req.max_accounts_per_tenant.map(|v| v as u32),
+        max_projects: None,
+        max_workflows: None,
+        max_executions_per_month: None,
+        max_api_endpoints: None,
+        max_scheduled_jobs: None,
+        max_database_connections: None,
+        max_team_members: None,
         issued_at: now.timestamp(),
         expires_at: expires_at.timestamp(),
         grace_days: req.grace_days as i64,
@@ -608,8 +644,8 @@ pub async fn partner_issue_license(
     };
 
     // 从环境变量读取私钥
-    let private_key = std::env::var("ONEBASE_LICENSE_PRIVATE_KEY")
-        .map_err(|_| AppError::Internal("未配置 ONEBASE_LICENSE_PRIVATE_KEY".to_string()))?;
+    let private_key = std::env::var("PLANEOS_LICENSE_PRIVATE_KEY")
+        .map_err(|_| AppError::Internal("未配置 PLANEOS_LICENSE_PRIVATE_KEY".to_string()))?;
 
     let license_file_str = sign_license(&private_key, &claims)
         .map_err(|e| AppError::Internal(format!("签发 License 失败: {}", e)))?;
@@ -809,7 +845,13 @@ pub async fn partner_renew_license(
     .bind(ctx.partner_id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("License 不存在".to_string()))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "partner_license_not_found",
+            "License 不存在".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
 
     // 2. 检查代理商配额
     let partner: Partner = sqlx::query_as("SELECT * FROM management.partners WHERE id = $1")
@@ -818,7 +860,11 @@ pub async fn partner_renew_license(
         .await?;
 
     if !partner.has_quota(1) {
-        return Err(AppError::Forbidden("配额不足".to_string()));
+        return Err(AppError::forbidden_coded(
+            "partner_quota_insufficient_simple",
+            "配额不足".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     // 3. 生成新 License（复制配置，更新时间）
@@ -834,9 +880,17 @@ pub async fn partner_renew_license(
         customer: old_license.customer_name.clone(),
         edition: old_license.edition.clone(),
         modules,
+        enforce: Some("enforce".to_string()),
         max_nodes: Some(old_license.max_nodes as u32),
         max_tenants: Some(old_license.max_tenants as u32),
         max_accounts_per_tenant: old_license.max_accounts_per_tenant.map(|v| v as u32),
+        max_projects: None,
+        max_workflows: None,
+        max_executions_per_month: None,
+        max_api_endpoints: None,
+        max_scheduled_jobs: None,
+        max_database_connections: None,
+        max_team_members: None,
         issued_at: now.timestamp(),
         expires_at: new_expires_at.timestamp(),
         grace_days: old_license.grace_days as i64,
@@ -847,8 +901,8 @@ pub async fn partner_renew_license(
         notes: None,
     };
 
-    let private_key = std::env::var("ONEBASE_LICENSE_PRIVATE_KEY")
-        .map_err(|_| AppError::Internal("未配置 ONEBASE_LICENSE_PRIVATE_KEY".to_string()))?;
+    let private_key = std::env::var("PLANEOS_LICENSE_PRIVATE_KEY")
+        .map_err(|_| AppError::Internal("未配置 PLANEOS_LICENSE_PRIVATE_KEY".to_string()))?;
 
     let license_file_str = sign_license(&private_key, &claims)
         .map_err(|e| AppError::Internal(format!("签发 License 失败: {}", e)))?;
@@ -1169,10 +1223,20 @@ pub async fn partner_mark_maintenance_paid(
     .bind(ctx.partner_id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("维护费续费记录不存在".to_string()))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "partner_maintenance_renewal_not_found",
+            "维护费续费记录不存在".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
 
     if renewal.payment_status == "paid" {
-        return Err(AppError::InvalidQuery("维护费已标记为支付状态".to_string()));
+        return Err(AppError::validation(
+            "partner_maintenance_already_paid",
+            "维护费已标记为支付状态".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     // 更新支付状态

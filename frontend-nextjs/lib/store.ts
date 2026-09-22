@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
 /** 浏览器标签页会话内，通过 /query 成功执行 SQL 的次数（与 sessionStorage 同步） */
-const SESSION_QUERY_EXEC_KEY = 'onebase_session_query_exec_count'
+const SESSION_QUERY_EXEC_KEY = 'planeos_session_query_exec_count'
 
 function readStoredSessionQueryCount(): number {
   if (typeof window === 'undefined') return 0
@@ -270,8 +270,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
         name: 'Default Project',
         host: 'localhost',
         port: 5432,
-        database: 'onebase',
-        description: '默认数据库连接',
+        database: 'planeos',
+        description: 'Default database connection',
       },
   setCurrentDatabase: (db) => {
     set({ currentDatabase: db })
@@ -298,8 +298,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
           name: 'Default Project',
           host: 'localhost',
           port: 5432,
-          database: 'onebase',
-          description: '默认数据库连接',
+          database: 'planeos',
+          description: 'Default database connection',
         },
       ],
   setDatabases: (dbs) => {

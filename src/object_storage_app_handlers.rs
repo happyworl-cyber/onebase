@@ -48,8 +48,10 @@ async fn resolve_access(
     tenant_scope: Option<&EsTenantScope>,
 ) -> Result<ResolvedAccess, AppError> {
     let plain = os_auth::extract_token(headers).ok_or_else(|| {
-        AppError::Unauthorized(
-            "缺少对象存储访问令牌；请用 `Authorization: ApiKey obes_os_xxx`".to_string(),
+        AppError::unauthorized_coded(
+            "objstore_token_missing",
+            "缺少对象存储访问令牌；请用 `Authorization: ApiKey obes_os_xxx`",
+            serde_json::json!({}),
         )
     })?;
     let hash = os_auth::hash_token(&plain);
@@ -62,16 +64,28 @@ async fn resolve_access(
     .fetch_optional(pool)
     .await
     .map_err(|e| AppError::Internal(format!("查询对象存储 token 失败: {e}")))?
-    .ok_or_else(|| AppError::Unauthorized("对象存储访问令牌无效或已停用".to_string()))?;
+    .ok_or_else(|| {
+        AppError::unauthorized_coded(
+            "objstore_token_invalid",
+            "对象存储访问令牌无效或已停用",
+            serde_json::json!({}),
+        )
+    })?;
 
     if token.connection_id != connection_id {
-        return Err(AppError::Forbidden(
-            "令牌与请求的对象存储连接不匹配".to_string(),
+        return Err(AppError::forbidden_coded(
+            "objstore_token_connection_mismatch",
+            "令牌与请求的对象存储连接不匹配",
+            serde_json::json!({}),
         ));
     }
     if let Some(exp) = token.expires_at {
         if exp < Utc::now() {
-            return Err(AppError::Unauthorized("对象存储访问令牌已过期".to_string()));
+            return Err(AppError::unauthorized_coded(
+                "objstore_token_expired",
+                "对象存储访问令牌已过期",
+                serde_json::json!({}),
+            ));
         }
     }
 
@@ -87,7 +101,13 @@ async fn resolve_access(
     .fetch_optional(pool)
     .await
     .map_err(|e| AppError::Internal(format!("查询对象存储连接失败: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("对象存储连接 {connection_id} 不存在")))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "objstore_connection_missing",
+            format!("对象存储连接 {connection_id} 不存在"),
+            serde_json::json!({ "id": connection_id }),
+        )
+    })?;
 
     if !connection.is_active {
         return Err(AppError::ServiceUnavailable(
@@ -96,8 +116,10 @@ async fn resolve_access(
     }
     if let Some(scope) = tenant_scope {
         if connection.tenant_id != scope.tenant_id {
-            return Err(AppError::Forbidden(
-                "对象存储令牌不属于该项目（database_slug 租户不匹配）".to_string(),
+            return Err(AppError::forbidden_coded(
+                "objstore_token_tenant_mismatch",
+                "对象存储令牌不属于该项目（database_slug 租户不匹配）",
+                serde_json::json!({}),
             ));
         }
     }
@@ -130,11 +152,17 @@ pub async fn exec(
 ) -> Result<Json<Value>, AppError> {
     let op = body.op.trim().to_ascii_lowercase();
     if op.is_empty() {
-        return Err(AppError::InvalidQuery("op 不能为空".to_string()));
+        return Err(AppError::validation(
+            "objstore_op_empty",
+            "op 不能为空",
+            serde_json::json!({}),
+        ));
     }
     if op == "health" {
-        return Err(AppError::InvalidQuery(
-            "health 请使用 GET .../health，不要走 /exec".to_string(),
+        return Err(AppError::validation(
+            "objstore_health_wrong_method",
+            "health 请使用 GET .../health，不要走 /exec",
+            serde_json::json!({}),
         ));
     }
 

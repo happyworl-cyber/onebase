@@ -9,7 +9,7 @@
 -- 的定时脚本。安全边界没变 —— 仍然有：
 --   1. bwrap / nsjail 沙盒（运行时强制）
 --   2. 解释器白名单（sh/bash/dash/zsh/python3/node/ruby）
---   3. env_clear + 注入白名单 ENV（不泄露 onebase 自身的 secret）
+--   3. env_clear + 注入白名单 ENV（不泄露 planeos 自身的 secret）
 --   4. kill_on_drop + 超时
 --   5. handler 层 `validate_can_manage`：租户级仍只允许该租户 owner/admin
 --

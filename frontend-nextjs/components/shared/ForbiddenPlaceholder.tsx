@@ -1,5 +1,7 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
+
 /**
  * 403 占位组件：子页面 catch 到 403 时渲染，替代红色 toast 提供更友好的反馈。
  *
@@ -27,16 +29,17 @@ export interface ForbiddenPlaceholderProps {
 }
 
 export default function ForbiddenPlaceholder({
-  reason = '当前账号无访问此内容的权限',
+  reason,
   cta,
 }: ForbiddenPlaceholderProps) {
+  const t = useTranslations('forbiddenPlaceholder')
   return (
     <div className="flex flex-col items-center justify-center py-16 px-6 text-center">
       <div className="w-16 h-16 rounded-full bg-amber-50 border border-amber-200 flex items-center justify-center mb-4">
         <i className="fas fa-lock text-2xl text-amber-600"></i>
       </div>
-      <h2 className="text-base font-medium text-gray-900 mb-2">权限不足</h2>
-      <p className="text-sm text-gray-500 max-w-md">{reason}</p>
+      <h2 className="text-base font-medium text-gray-900 mb-2">{t('title')}</h2>
+      <p className="text-sm text-gray-500 max-w-md">{reason ?? t('defaultReason')}</p>
       {cta && (
         <a
           href={cta.href}
@@ -46,7 +49,7 @@ export default function ForbiddenPlaceholder({
         </a>
       )}
       <p className="mt-6 text-xs text-gray-400">
-        如认为权限设置有误，请联系项目管理员或平台超管。
+        {t('footer')}
       </p>
     </div>
   )

@@ -148,7 +148,7 @@ async fn bridge_send_returns_false_after_rx_drop() {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p onebase --lib workflow_stream::tests -- --nocapture`
+Run: `cargo test -p planeos --lib workflow_stream::tests -- --nocapture`
 
 Expected: compile error or FAIL because functions are missing / `todo!()`.
 
@@ -176,7 +176,7 @@ Do not implement “Commit only once” inside the bridge in this task; Task 3 c
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p onebase --lib workflow_stream::tests -- --nocapture`
+Run: `cargo test -p planeos --lib workflow_stream::tests -- --nocapture`
 
 Expected: PASS (all tests in the module).
 
@@ -255,7 +255,7 @@ If `WorkflowNode` / `edges: vec![]` fails existing “至少需要一个节点�
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p onebase --lib workflow_engine::tests::validate_rejects_two_stream_http_calls workflow_engine::tests::validate_rejects_stream_plus_async_poll workflow_engine::tests::validate_allows_single_stream_http_call -- --nocapture`
+Run: `cargo test -p planeos --lib workflow_engine::tests::validate_rejects_two_stream_http_calls workflow_engine::tests::validate_rejects_stream_plus_async_poll workflow_engine::tests::validate_allows_single_stream_http_call -- --nocapture`
 
 Expected: FAIL (assertions / Ok when Err expected).
 
@@ -294,7 +294,7 @@ Run: the same three-test command as Step 2.
 
 Expected: PASS.
 
-Also run: `cargo test -p onebase --lib workflow_engine::tests::validate_ -- --nocapture`
+Also run: `cargo test -p planeos --lib workflow_engine::tests::validate_ -- --nocapture`
 
 Expected: existing validate tests still PASS.
 
@@ -332,7 +332,7 @@ Add in `workflow_engine.rs` tests (same local TcpListener style as `exec_http_ca
 ```rust
 fn lazy_pool() -> sqlx::PgPool {
     sqlx::postgres::PgPoolOptions::new()
-        .connect_lazy("postgres://localhost/onebase")
+        .connect_lazy("postgres://localhost/planeos")
         .unwrap()
 }
 
@@ -459,7 +459,7 @@ async fn stream_plus_async_poll_is_runtime_error() {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p onebase --lib workflow_engine::tests::stream_http_call_pipes_bytes_and_extracts_openai_text workflow_engine::tests::stream_http_call_does_not_commit_for_subworkflow_trigger workflow_engine::tests::stream_plus_async_poll_is_runtime_error -- --nocapture`
+Run: `cargo test -p planeos --lib workflow_engine::tests::stream_http_call_pipes_bytes_and_extracts_openai_text workflow_engine::tests::stream_http_call_does_not_commit_for_subworkflow_trigger workflow_engine::tests::stream_plus_async_poll_is_runtime_error -- --nocapture`
 
 Expected: compile error (`with_stream_bridge` / extra `ctx` arg missing) or FAIL.
 
@@ -526,7 +526,7 @@ config: `{ "method": "GET|POST|PUT|PATCH|DELETE", "url": "https://...", "headers
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: the three stream tests from Step 2, plus `cargo test -p onebase --lib workflow_engine::tests::exec_http_call_runs_async_poll_when_enabled -- --nocapture`
+Run: the three stream tests from Step 2, plus `cargo test -p planeos --lib workflow_engine::tests::exec_http_call_runs_async_poll_when_enabled -- --nocapture`
 
 Expected: PASS.
 
@@ -617,7 +617,7 @@ async fn wait_stream_or_complete_falls_back_when_no_commit() {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test --bin onebase wait_stream_or_complete_prefers_commit wait_stream_or_complete_falls_back_when_no_commit -- --nocapture`
+Run: `cargo test --bin planeos wait_stream_or_complete_prefers_commit wait_stream_or_complete_falls_back_when_no_commit -- --nocapture`
 
 Expected: compile error (`wait_stream_or_complete` missing).
 
@@ -734,7 +734,7 @@ Return extra fields `"stream": true` and append `stream_note` to `note` (newline
 Run:
 
 ```
-cargo test --bin onebase wait_stream_or_complete_prefers_commit wait_stream_or_complete_falls_back_when_no_commit json_response_keeps_body_and_applies_status_and_headers graceful_error_still_returns_json -- --nocapture
+cargo test --bin planeos wait_stream_or_complete_prefers_commit wait_stream_or_complete_falls_back_when_no_commit json_response_keeps_body_and_applies_status_and_headers graceful_error_still_returns_json -- --nocapture
 ```
 
 Expected: PASS.

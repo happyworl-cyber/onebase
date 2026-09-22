@@ -36,6 +36,6 @@
 
 **Files:** 无
 
-- [ ] **Step 1:** 生产 onebase 设置 `EXEC_INDEX_RETENTION_DAYS=3`、`EXEC_RUNS_RETENTION_DAYS=3` 并重启。
+- [ ] **Step 1:** 生产 planeos 设置 `EXEC_INDEX_RETENTION_DAYS=3`、`EXEC_RUNS_RETENTION_DAYS=3` 并重启。
 - [ ] **Step 2:** 在管理库按 design spec 执行预览 + 分批 DELETE。
 - [ ] **Step 3:** 确认启动日志 `index_retention_days=3`、`runs_retention_days=3`；执行日志页无 3 天前数据。

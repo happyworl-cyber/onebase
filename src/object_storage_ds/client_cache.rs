@@ -31,7 +31,13 @@ impl S3Handle {
             name.to_string(),
             self.region.clone(),
         )
-        .map_err(|e| AppError::InvalidQuery(format!("无效的对象存储 endpoint/bucket: {e}")))
+        .map_err(|e| {
+            AppError::validation(
+                "objstore_bucket_build_invalid",
+                format!("无效的对象存储 endpoint/bucket: {e}"),
+                serde_json::json!({ "error": e.to_string() }),
+            )
+        })
     }
 }
 
@@ -41,10 +47,20 @@ pub(crate) fn build_handle(conn: &ObjectStorageConnection, secret_key: &str) -> 
     let endpoint: Url = conn
         .endpoint
         .trim()
-        .parse()
-        .map_err(|e| AppError::InvalidQuery(format!("endpoint 不是合法 URL: {e}")))?;
+        .parse::<Url>()
+        .map_err(|e| {
+            AppError::validation(
+                "objstore_endpoint_url_invalid",
+                format!("endpoint 不是合法 URL: {e}"),
+                serde_json::json!({ "error": e.to_string() }),
+            )
+        })?;
     if endpoint.host_str().is_none() {
-        return Err(AppError::InvalidQuery("endpoint 缺少 host".into()));
+        return Err(AppError::validation(
+            "objstore_endpoint_missing_host",
+            "endpoint 缺少 host",
+            serde_json::json!({}),
+        ));
     }
 
     let timeout_secs = conn.connect_timeout_secs.clamp(1, 60) as u64;

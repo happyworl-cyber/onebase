@@ -934,7 +934,7 @@ mod tests {
         let opts = PgConnectOptions::new()
             .host("127.0.0.1")
             .port(1)
-            .database("onebase_pool_test")
+            .database("planeos_pool_test")
             .username("u")
             .password("p");
         let pool = PgPoolOptions::new()

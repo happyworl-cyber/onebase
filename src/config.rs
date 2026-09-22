@@ -42,7 +42,7 @@ pub struct Config {
     /// 枚举定义在 `crate::scheduler::executors` 内（lib-exposed），方便集成测试 import。
     pub scheduler_shell_sandbox_mode: crate::scheduler::ShellSandboxMode,
     pub cors_origins: Vec<String>,
-    /// 进程启动时是否自动执行管理库迁移（`onebase::migrate::run_all_migrations`）。
+    /// 进程启动时是否自动执行管理库迁移（`planeos::migrate::run_all_migrations`）。
     /// 默认 `true`：发版重启即同步 schema，免去生产环境手动跑 `migrate_all`。
     /// 设 `AUTO_MIGRATE=off`（或 false/0/no）可关闭，留给"CI/CD 里 gated 迁移"的团队。
     pub auto_migrate: bool,
@@ -163,7 +163,7 @@ impl Config {
             })
             .unwrap_or(true);
 
-        let sse_hub_capacity = onebase::sse_batch_config::sse_hub_capacity_from_env();
+        let sse_hub_capacity = planeos::sse_batch_config::sse_hub_capacity_from_env();
 
         Ok(Config {
             database_url,

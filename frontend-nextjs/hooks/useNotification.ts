@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import { useToast } from '@/components/Toast'
 
 /**
@@ -8,6 +9,7 @@ import { useToast } from '@/components/Toast'
  */
 export function useNotification() {
   const toast = useToast()
+  const t = useTranslations('notifications')
 
   const notifySuccess = useCallback((message: string) => {
     toast.success(message)
@@ -20,9 +22,9 @@ export function useNotification() {
 
     const message = typeof error === 'string'
       ? error
-      : error?.response?.data?.error || error?.response?.data?.message || error?.message || '操作失败'
+      : error?.response?.data?.error || error?.response?.data?.message || error?.message || t('operationFailed')
     toast.error(message)
-  }, [toast])
+  }, [toast, t])
 
   const notifyWarning = useCallback((message: string) => {
     toast.warning(message)

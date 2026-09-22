@@ -269,7 +269,7 @@ If `NaiveDateTime::from_timestamp_opt` is deprecated in this chrono, use the sam
 
 - [ ] **Step 2: Run tests — expect compile/fail**
 
-Run: `cargo test --bin onebase apply_draft_overwrites -- --nocapture`
+Run: `cargo test --bin planeos apply_draft_overwrites -- --nocapture`
 
 Expected: FAIL (module / functions missing) or compile error on new `Workflow` fields.
 
@@ -309,7 +309,7 @@ Fix any in-crate `Workflow { ... }` literals (kafka/notify tests) by adding `pub
 
 - [ ] **Step 4: Re-run tests**
 
-Run: `cargo test --bin onebase workflow_draft -- --nocapture`
+Run: `cargo test --bin planeos workflow_draft -- --nocapture`
 
 Expected: PASS. Also `cargo test --lib` still compiles (`AppError` match is exhaustive).
 
@@ -402,7 +402,7 @@ Every path that executes a workflow must include `published_version`. List/admin
 
 - [ ] **Step 4: Compile**
 
-Run: `cargo test --bin onebase workflow_draft -- --nocapture`
+Run: `cargo test --bin planeos workflow_draft -- --nocapture`
 
 Expected: PASS.
 
@@ -491,7 +491,7 @@ Test:
 
 - [ ] **Step 3: Compile**
 
-Run: `cargo test --bin onebase slug_conflict_sql -- --nocapture`
+Run: `cargo test --bin planeos slug_conflict_sql -- --nocapture`
 
 Expected: PASS. `cargo check` succeeds.
 
@@ -575,7 +575,7 @@ Keep `node_patch` vs full `nodes` mutual exclusion as today.
 
 - [ ] **Step 3: Compile**
 
-Run: `cargo test --bin onebase classify_ -- --nocapture`
+Run: `cargo test --bin planeos classify_ -- --nocapture`
 
 Expected: PASS.
 
@@ -823,7 +823,7 @@ server.registerTool("publish_workflow", { title: "发布工作流", description:
 });
 ```
 
-- [ ] **Step 4: `cargo test --bin onebase` for mcp_tools unit tests if any parse `tool_definitions`**
+- [ ] **Step 4: `cargo test --bin planeos` for mcp_tools unit tests if any parse `tool_definitions`**
 
 Expected: PASS.
 

@@ -421,7 +421,7 @@ pub(crate) fn build_client(conn: &ObjectStorageConnection, secret_key: &str) -> 
         secret_key,
         None,
         None,
-        "onebase-object-storage",
+        "planeos-object-storage",
     );
     let conf = aws_sdk_s3::Config::builder()
         .behavior_version(BehaviorVersion::latest())

@@ -44,7 +44,7 @@ pub struct PublicProvider {
 /// GET /auth/sso/providers[?tenant_id=1]
 ///
 /// - 不带 `tenant_id`：每种 `provider_type` 只返回**一个**登录入口（DISTINCT ON），
-///   登录页只渲染一个「Mind 登录」按钮。登录后进入哪个项目由用户自身权限决定
+///   登录页按已配置的 provider 渲染登录按钮。登录后进入哪个项目由用户自身权限决定
 ///   （回调落地 `/workspace` 的 picker 按成员关系分发），不在登录入口层面区分项目。
 ///   前提：同一种 SSO 建议只在一个项目下配置;若多项目都配了同种 SSO，这里取
 ///   tenant_id 最小（最早创建）的那个作为统一入口。
@@ -134,7 +134,7 @@ pub async fn sso_authorize(
     // 生成 state token 防 CSRF
     let state_token = uuid::Uuid::new_v4().to_string();
 
-    // PKCE：仅对要求它的 provider（Mind）生成；verifier 存服务端，前端无感知。
+    // PKCE：仅对要求它的 provider 生成；verifier 存服务端，前端无感知。
     let (code_verifier, code_challenge) = if sso::provider_requires_pkce(&provider_type) {
         let (v, c) = sso::generate_pkce();
         (Some(v), Some(c))
@@ -208,11 +208,21 @@ pub async fn sso_exchange(
     .bind(&body.state)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::Unauthorized("无效的 SSO state".to_string()))?;
+    .ok_or_else(|| {
+        AppError::unauthorized_coded(
+            "sso_invalid_state",
+            "无效的 SSO state".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
 
     let expires_at: chrono::DateTime<chrono::Utc> = state_row.get("expires_at");
     if expires_at < chrono::Utc::now() {
-        return Err(AppError::Unauthorized("SSO state 已过期".to_string()));
+        return Err(AppError::unauthorized_coded(
+            "sso_state_expired",
+            "SSO state 已过期".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let provider_id: i32 = state_row.get("provider_id");
@@ -445,7 +455,7 @@ pub struct CreateProviderRequest {
     pub userinfo_url: Option<String>,
     pub scopes: Option<String>,
     // userinfo 响应字段映射。不传则用 DB 默认（sub/email/name/picture）。
-    // Mind 等非标准 IdP 的 claim 名（如头像可能叫 icon）可在此覆盖，无需改代码。
+    // 非标准 IdP 的 claim 名（如头像字段命名不同）可在此覆盖，无需改代码。
     pub user_id_field: Option<String>,
     pub email_field: Option<String>,
     pub name_field: Option<String>,
@@ -461,10 +471,11 @@ fn validate_auto_role(role: &str) -> Result<()> {
     if VALID.contains(&role) {
         Ok(())
     } else {
-        Err(AppError::InvalidQuery(format!(
-            "无效的 auto_role: {}，允许值: {:?}",
-            role, VALID
-        )))
+        Err(AppError::validation(
+            "sso_invalid_auto_role",
+            format!("无效的 auto_role: {}，允许值: {:?}", role, VALID),
+            serde_json::json!({ "role": role, "valid_values": format!("{:?}", VALID) }),
+        ))
     }
 }
 
@@ -477,12 +488,16 @@ pub async fn admin_create_provider(
 ) -> Result<Json<Value>> {
     permissions::require_tenant_admin(&pool, &claims, tenant_id).await?;
 
-    let valid_types = ["google", "facebook", "github", "oidc", "mind"];
+    let valid_types = ["google", "apple", "facebook", "github", "oidc"];
     if !valid_types.contains(&req.provider_type.as_str()) {
-        return Err(AppError::InvalidQuery(format!(
-            "无效的 provider_type: {}，允许值: {:?}",
-            req.provider_type, valid_types
-        )));
+        return Err(AppError::validation(
+            "sso_invalid_provider_type",
+            format!(
+                "无效的 provider_type: {}，允许值: {:?}",
+                req.provider_type, valid_types
+            ),
+            serde_json::json!({ "provider_type": req.provider_type, "valid_values": format!("{:?}", valid_types) }),
+        ));
     }
 
     if let Some(ref role) = req.auto_role {
@@ -521,7 +536,13 @@ pub async fn admin_create_provider(
     .bind(&req.auto_role)
     .fetch_one(&pool)
     .await
-    .map_err(|e| AppError::InvalidQuery(format!("创建 SSO Provider 失败: {}", e)))?;
+    .map_err(|e| {
+        AppError::validation(
+            "sso_create_provider_failed",
+            format!("创建 SSO Provider 失败: {}", e),
+            serde_json::json!({ "error": e.to_string() }),
+        )
+    })?;
 
     Ok(Json(json!({
         "success": true,
@@ -605,10 +626,11 @@ pub async fn admin_update_provider(
     // 但 0 行说明该 provider 不属于当前租户（或不存在），要明确报 404，
     // 不能继续返回 success（否则掩盖越权探测、且让前端误以为改成功）。
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!(
-            "SSO Provider {} 不存在或不属于当前租户",
-            provider_id
-        )));
+        return Err(AppError::not_found_coded(
+            "sso_provider_not_found_or_not_owned",
+            format!("SSO Provider {} 不存在或不属于当前租户", provider_id),
+            serde_json::json!({ "provider_id": provider_id }),
+        ));
     }
 
     Ok(Json(json!({
@@ -642,7 +664,11 @@ pub async fn admin_delete_provider(
                 "message": format!("SSO Provider '{}' 已删除", name)
             })))
         }
-        None => Err(AppError::NotFound("SSO Provider 不存在".to_string())),
+        None => Err(AppError::not_found_coded(
+            "sso_provider_not_found",
+            "SSO Provider 不存在".to_string(),
+            serde_json::json!({}),
+        )),
     }
 }
 
@@ -668,7 +694,11 @@ async fn load_provider(pool: &PgPool, tenant_id: i32, provider_type: &str) -> Re
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| {
-        AppError::NotFound(format!("SSO Provider '{}' 未配置或已禁用", provider_type))
+        AppError::not_found_coded(
+            "sso_provider_not_configured",
+            format!("SSO Provider '{}' 未配置或已禁用", provider_type),
+            serde_json::json!({ "provider_type": provider_type }),
+        )
     })?;
 
     Ok(row_to_provider(&row))
@@ -688,7 +718,13 @@ async fn load_provider_by_id(pool: &PgPool, provider_id: i32) -> Result<SsoProvi
     .bind(provider_id)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("SSO Provider 不存在".to_string()))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "sso_provider_not_found",
+            "SSO Provider 不存在".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
 
     Ok(row_to_provider(&row))
 }
@@ -719,7 +755,7 @@ fn row_to_provider(row: &sqlx::postgres::PgRow) -> SsoProvider {
 /// `auto_role` 来自 Provider 配置（适用范围/角色）：通过本 SSO 登录的用户在该项目
 /// 自动获得的角色（owner/admin/member/viewer）。SSO 是该项目访问权限的"真源"，
 /// 因此**每次登录**都把 `user_tenants.role` 与默认 RBAC 角色对齐到 `auto_role`，
-/// 新老用户一致——这样"用 Mind SSO 登录即拥有该项目某角色"的语义稳定成立。
+/// 新老用户一致——这样"用 SSO 登录即拥有该项目某角色"的语义稳定成立。
 async fn find_or_create_user(
     pool: &PgPool,
     tenant_id: i32,
@@ -759,7 +795,7 @@ async fn find_or_create_user(
             // 创建新用户
             let user_email = email
                 .clone()
-                .unwrap_or_else(|| format!("{}@sso.onebase", external_id));
+                .unwrap_or_else(|| format!("{}@sso.planeos", external_id));
             // username 有唯一约束：SSO 显示名可能重名，必须挑一个不冲突的。
             let desired_name = name.clone().unwrap_or_else(|| "SSO User".to_string());
             let display_name = ensure_unique_username(pool, &desired_name, None).await?;

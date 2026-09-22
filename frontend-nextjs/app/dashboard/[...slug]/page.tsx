@@ -21,6 +21,7 @@
  */
 
 import { useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { useParams, useRouter } from 'next/navigation'
 
 /**
@@ -71,6 +72,7 @@ const DASHBOARD_TO_WORKSPACE: Record<string, string> = {
 const PLATFORM_ONLY_LEGACY = new Set<string>()
 
 export default function DashboardCatchAllRedirect() {
+  const t = useTranslations('dashboardRedirect')
   const router = useRouter()
   const params = useParams<{ slug: string[] | string }>()
 
@@ -128,7 +130,7 @@ export default function DashboardCatchAllRedirect() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
       <div className="text-center text-gray-500">
         <i className="fas fa-spinner fa-spin text-2xl mb-2"></i>
-        <p className="text-sm">正在迁移到新的页面位置…</p>
+        <p className="text-sm">{t('migrating')}</p>
       </div>
     </div>
   )

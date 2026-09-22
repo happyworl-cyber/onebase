@@ -1,10 +1,10 @@
 {
-  "name": "onebase-mcp",
+  "name": "planeos-mcp",
   "version": "1.0.0",
   "description": "PlaneOS MCP server: create projects (from PG pool) and workflows over HTTP using a platform service token (obp_).",
   "type": "module",
   "bin": {
-    "onebase-mcp": "dist/index.js"
+    "planeos-mcp": "dist/index.js"
   },
   "files": [
     "dist"

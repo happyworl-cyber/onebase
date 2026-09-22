@@ -11,6 +11,7 @@
  */
 
 import { useParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { useAppStore } from '@/lib/store'
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
@@ -19,29 +20,30 @@ import WorkflowsManager from '@/components/workflow/WorkflowsManager'
 
 export default function WorkspaceWorkflowsPage() {
   const params = useParams<{ projectId: string }>()
+  const t = useTranslations('wsAutomation')
   const projectId = parseInt(params.projectId, 10)
   const currentConnection = useAppStore((s) => s.currentConnection)
   const databaseId = currentConnection?.database_id ?? null
   const caps = useCurrentProjectCapabilities()
 
   if (!caps.canManageEvents) {
-    return <ForbiddenPlaceholder reason="工作流需要 admin+ 角色（owner / admin / 超管）" />
+    return <ForbiddenPlaceholder reason={t('forbiddenWf')} />
   }
 
   if (isNaN(projectId)) {
-    return <div className="p-8 text-center text-gray-500">URL 中的 projectId 无效</div>
+    return <div className="p-8 text-center text-gray-500">{t('invalidProject')}</div>
   }
 
   if (!databaseId) {
     return (
       <div className="p-8 text-center text-gray-500 space-y-3">
         <i className="fas fa-plug text-4xl text-gray-300"></i>
-        <p>本项目尚未绑定主数据库连接，无法管理工作流。</p>
+        <p>{t('noConnWf')}</p>
         <Link
           href={`/workspace/${projectId}/settings/connections`}
           className="text-blue-600 hover:underline"
         >
-          前往设置 → 数据库连接
+          {t('goConn')}
         </Link>
       </div>
     )

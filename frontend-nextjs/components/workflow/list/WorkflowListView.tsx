@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import FolderTree from './FolderTree'
 import WorkflowBreadcrumb from './WorkflowBreadcrumb'
@@ -131,6 +132,7 @@ export default function WorkflowListView({
   onMoveCategory,
   onRenameFolder,
 }: WorkflowListViewProps) {
+  const tr = useTranslations('wfManager')
   const storageKey = customFoldersStorageKey(defaultDatabaseId)
   const folderNavKey = folderNavStorageKey(defaultDatabaseId)
   const [customFolders, setCustomFolders] = useState<WorkflowFolder[]>([])
@@ -173,7 +175,7 @@ export default function WorkflowListView({
       setApiFolders(remote)
       setCustomFolders(apiFoldersToCustomFolders(remote))
     } catch (err) {
-      console.warn('加载空文件夹失败，回退 localStorage:', err)
+      console.warn(tr('loadEmptyFoldersFailed'), err)
       setCustomFolders(sanitizeCustomFolders(loadCustomFolders(storageKey)))
     }
   }, [defaultDatabaseId, storageKey])
@@ -275,7 +277,7 @@ export default function WorkflowListView({
       setSummaryTotal(summary.total)
       onSummaryChange?.(summary.groups, summary.total)
     } catch (err) {
-      console.error('加载工作流统计失败:', err)
+      console.error(tr('loadStatsFailed'), err)
     }
   }, [defaultDatabaseId, onSummaryChange])
 
@@ -288,7 +290,7 @@ export default function WorkflowListView({
       setAuthors(result.authors ?? [])
       setUpdaters(result.updaters ?? [])
     } catch (err) {
-      console.error('加载工作流列表失败:', err)
+      console.error(tr('loadListFailed'), err)
     } finally {
       setLoading(false)
     }
@@ -425,8 +427,8 @@ export default function WorkflowListView({
     newFolderParent === false
       ? ''
       : newFolderParent === null
-        ? '全部工作流'
-        : folders.find((f) => f.id === newFolderParent)?.name ?? '全部工作流'
+        ? tr('allWorkflows')
+        : folders.find((f) => f.id === newFolderParent)?.name ?? tr('allWorkflows')
 
   const newFolderKind: 'department' | 'category' =
     newFolderParent !== false && newFolderParent !== null && newFolderParent.startsWith('dept:')
@@ -483,8 +485,8 @@ export default function WorkflowListView({
         await reloadRemoteFolders()
         void reloadSummary()
       } catch (err) {
-        console.error('创建文件夹失败:', err)
-        showToast('error', '创建文件夹失败，请重试')
+        console.error(tr('createFolderFailed'), err)
+        showToast('error', tr('createFolderFailedToast'))
         return
       }
     } else {
@@ -505,14 +507,14 @@ export default function WorkflowListView({
     const workflowCount = categoryWorkflowCountFromGroups(summaryGroups, cat.dept, cat.cat)
 
     if (categoryExistsInDeptFromGroups(summaryGroups, customFolders, targetDept, cat.cat, categoryFolderId)) {
-      showToast('warning', `目标服务「${targetDept}」下已存在分类「${cat.cat}」，无法移动`)
+      showToast('warning', tr('moveConflict', { dept: targetDept, cat: cat.cat }))
       return
     }
 
     const message =
       workflowCount > 0
-        ? `将分类「${cat.cat}」及其 ${workflowCount} 个工作流从「${cat.dept}」移动到「${targetDept}」。`
-        : `将空分类「${cat.cat}」从「${cat.dept}」移动到「${targetDept}」。`
+        ? tr('moveDescWithWf', { cat: cat.cat, n: workflowCount, from: cat.dept, to: targetDept })
+        : tr('moveDescEmpty', { cat: cat.cat, from: cat.dept, to: targetDept })
 
     setPendingMove({ categoryFolderId, targetDeptFolderId, message, workflowCount })
   }
@@ -557,12 +559,12 @@ export default function WorkflowListView({
         return { ...s, folderId: nextFolderId, expanded: nextExpanded }
       })
       setPendingMove(null)
-      showToast('success', '分类已移动')
+      showToast('success', tr('categoryMoved'))
       void reloadSummary()
       void reloadList()
     } catch (err) {
-      console.error('移动分类失败:', err)
-      showToast('error', '移动分类失败，请重试')
+      console.error(tr('moveCategoryFailed'), err)
+      showToast('error', tr('moveCategoryFailedToast'))
     } finally {
       setMovingCategory(false)
     }
@@ -576,17 +578,17 @@ export default function WorkflowListView({
     const count = countInFolderFromGroups(summaryGroups, folderId)
     const children = folders.filter((f) => f.parent_id === folderId)
     if (count > 0) {
-      showToast('warning', isDept ? '该服务下还有工作流，请先移动或删除' : '该分类下还有工作流，请先移动或删除')
+      showToast('warning', isDept ? tr('deptHasWf') : tr('catHasWf'))
       return
     }
     if (isDept && children.length > 0) {
-      showToast('warning', '该服务下还有分类，请先删除其分类')
+      showToast('warning', tr('deptHasCat'))
       return
     }
-    const label = isDept ? '服务' : '分类'
+    const label = isDept ? tr('kindService') : tr('kindCategory')
     setPendingDelete({
       folderId,
-      message: `确定删除空${label}「${folder.name}」吗？此操作不可撤销。`,
+      message: tr('confirmDeleteEmpty', { label, name: folder.name }),
     })
   }
 
@@ -624,12 +626,12 @@ export default function WorkflowListView({
         setState((s) => ({ ...s, folderId: ROOT_FOLDER_ID }))
       }
       setPendingDelete(null)
-      showToast('success', '已删除')
+      showToast('success', tr('deleted'))
       void reloadSummary()
       void reloadList()
     } catch (err) {
-      console.error('删除文件夹失败:', err)
-      showToast('error', '删除失败，请重试（服务下仍有分类/共享服务不可删）')
+      console.error(tr('deleteFolderFailed'), err)
+      showToast('error', tr('deleteFolderFailedToast'))
     } finally {
       setDeletingFolder(false)
     }
@@ -685,12 +687,12 @@ export default function WorkflowListView({
         }
       })
       setRenameTarget(false)
-      showToast('success', '已重命名')
+      showToast('success', tr('renamed'))
       void reloadSummary()
       void reloadList()
     } catch (err) {
-      console.error('重命名失败:', err)
-      showToast('error', '重命名失败，请重试')
+      console.error(tr('renameFailed'), err)
+      showToast('error', tr('renameFailedToast'))
       void reloadRemoteFolders()
       void reloadSummary()
       void reloadList()
@@ -746,7 +748,7 @@ export default function WorkflowListView({
                 className="px-2.5 py-2 text-sm bg-white text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-50 flex items-center gap-1.5"
               >
                 <i className="fas fa-plug text-[10px]" />
-                MCP 接入
+                {tr('mcpAccess')}
               </button>
               {createFolderAction.visible && (
                 <button
@@ -764,7 +766,7 @@ export default function WorkflowListView({
                 disabled={cleaning}
                 className="px-2.5 py-2 text-sm bg-white text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-50 disabled:opacity-50"
               >
-                {cleaning ? '清理中…' : '清理卡住执行'}
+                {cleaning ? tr('cleaning') : tr('cleanStuck')}
               </button>
               <button
                 type="button"
@@ -772,7 +774,7 @@ export default function WorkflowListView({
                 className="px-2.5 py-2 text-sm bg-white text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-50 flex items-center gap-1.5"
               >
                 <i className="fas fa-layer-group text-[10px]" />
-                批量导入
+                {tr('batchImport')}
               </button>
               {WORKFLOW_GRAPH_ENTRY_VISIBLE && projectId != null && (
                 <button
@@ -780,10 +782,10 @@ export default function WorkflowListView({
                   data-alt="open-dependency-graph-button"
                   onClick={() => router.push(graphHref)}
                   className="px-2.5 py-2 text-sm bg-white text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-50 flex items-center gap-1.5"
-                  title={graphScope ? `查看「${graphScope.dept} / ${graphScope.cat}」的依赖图` : '查看全部工作流的依赖图'}
+                  title={graphScope ? tr('graphScopeTitle', { dept: graphScope.dept, cat: graphScope.cat }) : tr('graphAllTitle')}
                 >
                   <i className="fas fa-share-nodes text-[10px] text-slate-400" />
-                  依赖图
+                  {tr('graph')}
                 </button>
               )}
               <button
@@ -792,7 +794,7 @@ export default function WorkflowListView({
                 className="px-3 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold flex items-center gap-1.5"
               >
                 <i className="fas fa-plus text-[9px]" />
-                新建工作流
+                {tr('newWorkflow')}
               </button>
             </div>
           </div>
@@ -845,26 +847,26 @@ export default function WorkflowListView({
 
           <div className="flex-1 overflow-y-auto" key={`${currentPage}-${state.view}-${state.folderId}`}>
             {loading ? (
-              <div className="text-center py-16 text-slate-400 text-sm">加载中…</div>
+              <div className="text-center py-16 text-slate-400 text-sm">{tr('loading')}</div>
             ) : listTotal === 0 ? (
               <div className="text-center py-16 text-slate-400 fade-in">
                 {isEmptyFolder ? (
                   <>
                     <i className="fas fa-folder-open text-4xl text-slate-200 mb-3 block" />
-                    <p className="text-sm font-medium text-slate-500">此文件夹还没有工作流</p>
+                    <p className="text-sm font-medium text-slate-500">{tr('emptyFolder')}</p>
                     <button
                       type="button"
                       onClick={() => onNewWorkflow(folderPlacementForNew)}
                       className="mt-3 px-3 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold"
                     >
                       <i className="fas fa-plus text-[9px] mr-1" />
-                      新建工作流
+                      {tr('newWorkflow')}
                     </button>
                   </>
                 ) : (
                   <>
                     <i className="fas fa-filter text-3xl text-slate-200 mb-3 block" />
-                    <p className="text-sm">没有符合条件的工作流</p>
+                    <p className="text-sm">{tr('noMatchWorkflows')}</p>
                   </>
                 )}
               </div>
@@ -970,9 +972,9 @@ export default function WorkflowListView({
 
       <WorkflowConfirmDialog
         open={pendingMove !== null}
-        title="移动分类"
+        title={tr('moveCategoryModal')}
         message={pendingMove?.message ?? ''}
-        confirmLabel="移动"
+        confirmLabel={tr('move')}
         loading={movingCategory}
         onConfirm={() => void executeMoveCategory()}
         onCancel={() => {
@@ -982,9 +984,9 @@ export default function WorkflowListView({
 
       <WorkflowConfirmDialog
         open={pendingDelete !== null}
-        title="删除文件夹"
+        title={tr('deleteFolderModal')}
         message={pendingDelete?.message ?? ''}
-        confirmLabel="删除"
+        confirmLabel={tr('delete')}
         loading={deletingFolder}
         onConfirm={() => void executeDeleteFolder()}
         onCancel={() => {

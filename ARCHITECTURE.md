@@ -379,7 +379,7 @@ CREATE POLICY user_isolation ON users
 # Nginx 认证
 location /api/ {
     auth_request /auth;
-    proxy_pass http://onebase:3000;
+    proxy_pass http://planeos:3000;
 }
 ```
 
@@ -834,10 +834,10 @@ pub struct PluginManager {
 
 ```env
 # 开发环境
-RUST_LOG=debug,onebase=trace,sqlx=debug
+RUST_LOG=debug,planeos=trace,sqlx=debug
 
 # 生产环境
-RUST_LOG=info,onebase=info,sqlx=warn
+RUST_LOG=info,planeos=info,sqlx=warn
 ```
 
 ### 日志输出

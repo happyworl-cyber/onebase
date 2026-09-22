@@ -4,7 +4,7 @@
 
 ### 1. 竞品调研与定价策略文档
 
-**文件**：`docs/ONEBASE_PRICING_STRATEGY.md`
+**文件**：`docs/PLANEOS_PRICING_STRATEGY.md`
 
 #### 竞品调研结果（2026 年数据）
 
@@ -492,7 +492,7 @@ INSERT INTO partner_statements (
 
 1. ✅ **运行数据库迁移**
    ```bash
-   cd /Users/haoran/data/code/onebase
+   cd /Users/haoran/data/code/planeos
    cargo run --bin migrate_all
    ```
 

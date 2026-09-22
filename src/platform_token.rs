@@ -77,11 +77,11 @@ pub fn validate_scopes(scopes: &[String]) -> Result<()> {
         if s == "*" || s == "ALL" || ALL_SCOPES.contains(&s.as_str()) {
             continue;
         }
-        return Err(AppError::InvalidQuery(format!(
-            "非法 scope: {}（可选：{} 或 *）",
-            s,
-            ALL_SCOPES.join(", ")
-        )));
+        return Err(AppError::validation(
+            "ptoken_invalid_scope",
+            format!("非法 scope: {}（可选：{} 或 *）", s, ALL_SCOPES.join(", ")),
+            serde_json::json!({ "scope": s, "allowed_scopes": ALL_SCOPES.join(", ") }),
+        ));
     }
     Ok(())
 }
@@ -116,12 +116,22 @@ pub async fn authenticate(
     .await
     .map_err(|e| AppError::Internal(format!("查询平台令牌失败: {}", e)))?;
 
-    let row = row.ok_or_else(|| AppError::Unauthorized("平台令牌无效或已停用".to_string()))?;
+    let row = row.ok_or_else(|| {
+        AppError::unauthorized_coded(
+            "ptoken_invalid_or_disabled",
+            "平台令牌无效或已停用".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
 
     let expires_at: Option<chrono::NaiveDateTime> = row.try_get("expires_at").ok();
     if let Some(exp) = expires_at {
         if exp < chrono::Utc::now().naive_utc() {
-            return Err(AppError::Unauthorized("平台令牌已过期".to_string()));
+            return Err(AppError::unauthorized_coded(
+                "ptoken_expired",
+                "平台令牌已过期".to_string(),
+                serde_json::json!({}),
+            ));
         }
     }
 

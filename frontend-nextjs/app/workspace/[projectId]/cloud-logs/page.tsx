@@ -10,6 +10,7 @@ import {
 } from '@/lib/api'
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import { useNotification } from '@/hooks/useNotification'
+import { useTranslations } from 'next-intl'
 import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
 import { shouldSubmitOnKeyDown } from './enterSubmit'
 import { oversizeWindowError } from './window'
@@ -36,7 +37,7 @@ function contentStr(contents: Record<string, unknown>, key: string): string {
 
 /** 只有能准确指向控制台的 provider 才给按钮文案，避免写死「阿里云」。 */
 function consoleLabelFor(provider: string | undefined): string | null {
-  if (provider === 'aliyun_sls') return '在阿里云打开'
+  if (provider === 'aliyun_sls') return 'openInAliyun'
   return null
 }
 
@@ -100,6 +101,7 @@ export default function ProjectCloudLogsPage() {
   const search = useSearchParams()
   const projectId = parseInt(params.projectId, 10)
   const caps = useCurrentProjectCapabilities()
+  const t = useTranslations('wsCloudLogs')
   const notify = useNotification()
 
   const nowSec = Math.floor(Date.now() / 1000)
@@ -151,7 +153,7 @@ export default function ProjectCloudLogsPage() {
 
   const handleQuery = async () => {
     if (loading) return
-    if (sourceId === '') return notify.warning('请选择日志源')
+    if (sourceId === '') return notify.warning(t('errSelectSource'))
     const spanErr = oversizeWindowError(queryBody.from, queryBody.to)
     if (spanErr) return notify.error(spanErr)
     setLoading(true)
@@ -175,7 +177,7 @@ export default function ProjectCloudLogsPage() {
     }
     const spanErr = oversizeWindowError(queryBody.from, queryBody.to)
     if (spanErr) return notify.error(spanErr)
-    if (sourceId === '') return notify.warning('请选择日志源')
+    if (sourceId === '') return notify.warning(t('errSelectSource'))
     try {
       const res = await projectLogSourceAPI.consoleUrl(projectId, sourceId, queryBody)
       window.open(res.data.console_url, '_blank', 'noopener')
@@ -185,20 +187,20 @@ export default function ProjectCloudLogsPage() {
   }
 
   if (!caps.canManageSecurity) {
-    return <ForbiddenPlaceholder reason="云日志需要项目 admin 或 owner 角色（或平台超管）" />
+    return <ForbiddenPlaceholder reason={t('forbidden')} />
   }
 
   return (
     <div className="p-6 max-w-[1400px] space-y-5">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">云日志</h1>
+        <h1 className="text-2xl font-bold text-gray-900">{t('title')}</h1>
         <p className="text-sm text-gray-500 mt-1">
-          按项目配置的 SLS 日志源查询。未配置时请先到{' '}
+          {t('subtitlePre')}{' '}
           <Link
             href={`/workspace/${projectId}/settings/log-sources`}
             className="text-blue-600 hover:underline"
           >
-            设置 → 云日志源
+            {t('subtitleLink')}
           </Link>
           。
         </p>
@@ -206,12 +208,12 @@ export default function ProjectCloudLogsPage() {
 
       {sources && sources.length === 0 && (
         <div className="bg-white border border-gray-200 rounded-xl py-12 text-center text-gray-400">
-          还没有日志源。
+          {t('noSource')}
           <Link
             href={`/workspace/${projectId}/settings/log-sources`}
             className="text-blue-600 hover:underline ml-1"
           >
-            去配置
+            {t('goConfig')}
           </Link>
         </div>
       )}
@@ -220,7 +222,7 @@ export default function ProjectCloudLogsPage() {
         <>
           <div className="bg-white border border-gray-200 rounded-lg p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             <label className="block text-sm">
-              <span className="text-gray-600">日志源</span>
+              <span className="text-gray-600">{t('sourceLabel')}</span>
               <select
                 value={sourceId}
                 onChange={(e) => {
@@ -229,7 +231,7 @@ export default function ProjectCloudLogsPage() {
                 }}
                 className="w-full input-base mt-1"
               >
-                <option value="">请选择</option>
+                <option value="">{t('selectPlaceholder')}</option>
                 {sources.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
@@ -238,7 +240,7 @@ export default function ProjectCloudLogsPage() {
               </select>
             </label>
             <label className="block text-sm">
-              <span className="text-gray-600">开始</span>
+              <span className="text-gray-600">{t('startLabel')}</span>
               <input
                 type="datetime-local"
                 value={fromLocal}
@@ -247,7 +249,7 @@ export default function ProjectCloudLogsPage() {
               />
             </label>
             <label className="block text-sm">
-              <span className="text-gray-600">结束</span>
+              <span className="text-gray-600">{t('endLabel')}</span>
               <input
                 type="datetime-local"
                 value={toLocal}
@@ -255,9 +257,9 @@ export default function ProjectCloudLogsPage() {
                 className="w-full input-base mt-1"
               />
             </label>
-            <p className="text-xs text-gray-500 sm:col-span-2 lg:col-span-3">单次最长 7 天</p>
+            <p className="text-xs text-gray-500 sm:col-span-2 lg:col-span-3">{t('maxRange')}</p>
             <label className="block text-sm">
-              <span className="text-gray-600">关键字</span>
+              <span className="text-gray-600">{t('keywordLabel')}</span>
               <input
                 value={keyword}
                 onChange={(e) => setKeyword(e.target.value)}
@@ -268,7 +270,7 @@ export default function ProjectCloudLogsPage() {
                   }
                 }}
                 className="w-full input-base mt-1 font-mono"
-                placeholder="搜日志内容，如 超时 / error"
+                placeholder={t('phKeyword')}
               />
             </label>
             <label className="block text-sm">
@@ -283,16 +285,16 @@ export default function ProjectCloudLogsPage() {
                   }
                 }}
                 className="w-full input-base mt-1 font-mono"
-                placeholder="与执行日志 trace_id 相同"
+                placeholder={t('phTraceId')}
               />
             </label>
             <div className="flex items-end gap-2">
               <button onClick={handleQuery} disabled={loading} className="btn-primary">
-                {loading ? '查询中...' : '查询'}
+                {loading ? t('querying') : t('query')}
               </button>
               {consoleLabel && (
                 <button onClick={openConsole} className="btn-default">
-                  {consoleLabel}
+                  {t(consoleLabel)}
                 </button>
               )}
             </div>
@@ -303,9 +305,9 @@ export default function ProjectCloudLogsPage() {
               <table className="min-w-full text-sm">
                 <thead className="bg-gray-50 text-left text-xs text-gray-500">
                   <tr>
-                    <th className="px-3 py-2 whitespace-nowrap">时间</th>
+                    <th className="px-3 py-2 whitespace-nowrap">{t('thTime')}</th>
                     <th className="px-3 py-2 whitespace-nowrap">level</th>
-                    <th className="px-3 py-2">内容</th>
+                    <th className="px-3 py-2">{t('thContent')}</th>
                     <th className="px-3 py-2 whitespace-nowrap">logger</th>
                     <th className="px-3 py-2 whitespace-nowrap">x_request_id</th>
                   </tr>
@@ -314,7 +316,7 @@ export default function ProjectCloudLogsPage() {
                   {logs.length === 0 && (
                     <tr>
                       <td colSpan={5} className="px-3 py-8 text-center text-gray-400">
-                        没有匹配的日志
+                        {t('noMatch')}
                       </td>
                     </tr>
                   )}
@@ -362,7 +364,7 @@ export default function ProjectCloudLogsPage() {
               </table>
               {logs.length > 0 && (
                 <p className="px-3 py-2 text-xs text-gray-400 border-t border-gray-100">
-                  点击一行查看完整字段
+                  {t('clickRowDetail')}
                 </p>
               )}
             </div>

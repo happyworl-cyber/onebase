@@ -12,7 +12,7 @@
 
 **验证基线（每个 Rust 任务结尾）：** 用既有 target 增量编译，跑相关单测：
 ```bash
-cargo test --bin onebase sse:: -- --nocapture
+cargo test --bin planeos sse:: -- --nocapture
 cargo check
 ```
 （沙箱内 `mlua-sys` 可能编译失败；如遇 `Operation not permitted` / `No space left`，用 `required_permissions: ["all"]` 在沙箱外跑，复用默认 `target`，不要另设 `CARGO_TARGET_DIR`。）
@@ -154,7 +154,7 @@ git commit -m "feat(sse): add sse_public_endpoints config table + migration"
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `cargo test --bin onebase sse::tests::render_topic_identity_and_query`
+Run: `cargo test --bin planeos sse::tests::render_topic_identity_and_query`
 Expected: FAIL（`cannot find function render_subscription_topic`）。
 
 - [ ] **Step 3: 实现两个纯函数**
@@ -257,7 +257,7 @@ pub fn render_subscription_topic(
 
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `cargo test --bin onebase sse::tests`
+Run: `cargo test --bin planeos sse::tests`
 Expected: PASS（含上面 7 个新测试 + 原有 topic_matches 测试）。
 
 - [ ] **Step 5: Commit**
@@ -386,7 +386,7 @@ Expected: PASS（此时旧的 growth handler 仍引用 `way_uid`/`project_id`，
 
 - [ ] **Step 3: 编译 + 测试**
 
-Run: `cargo test --bin onebase sse:: && cargo check`
+Run: `cargo test --bin planeos sse:: && cargo check`
 Expected: PASS（无对已删函数的引用残留）。
 
 - [ ] **Step 4: Commit（含 Task 3）**
@@ -1397,7 +1397,7 @@ git commit -m "feat(sse): aggregate monitor connections by endpoint slug"
 
 Run:
 ```bash
-cargo test --bin onebase sse:: && cargo check
+cargo test --bin planeos sse:: && cargo check
 cd frontend-nextjs && npx tsc --noEmit
 ```
 Expected: 后端测试 PASS、`cargo check` 仅历史 warning；前端仅 `table-designer`/`TableEditor` 历史报错。

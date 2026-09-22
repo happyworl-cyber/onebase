@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import api from '@/lib/api'
 
 type Tab = 'audit' | 'slow' | 'raw-sql'
@@ -42,6 +43,7 @@ type RawSqlLog = {
 }
 
 export default function OrgAuditView({ organizationId }: { organizationId: number }) {
+  const t = useTranslations('orgAudit')
   const [tab, setTab] = useState<Tab>('audit')
   const [loading, setLoading] = useState(false)
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([])
@@ -97,18 +99,16 @@ export default function OrgAuditView({ organizationId }: { organizationId: numbe
   return (
     <div className="space-y-4">
       <header>
-        <h1 className="text-xl font-semibold text-gray-900">审计</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          本租户项目的请求审计、慢查询与原始 SQL（不含平台级操作）。
-        </p>
+        <h1 className="text-xl font-semibold text-gray-900">{t('title')}</h1>
+        <p className="text-sm text-gray-500 mt-1">{t('subtitle')}</p>
       </header>
 
       <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5">
         {(
           [
-            ['audit', '请求审计'],
-            ['slow', '慢查询'],
-            ['raw-sql', '原始 SQL'],
+            ['audit', t('tabAudit')],
+            ['slow', t('tabSlow')],
+            ['raw-sql', t('tabRawSql')],
           ] as [Tab, string][]
         ).map(([id, label]) => (
           <button
@@ -130,25 +130,25 @@ export default function OrgAuditView({ organizationId }: { organizationId: numbe
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
         {loading ? (
           <div className="px-4 py-12 text-center text-gray-400 text-sm">
-            <i className="fas fa-spinner fa-spin mr-2"></i>加载中…
+            <i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}
           </div>
         ) : tab === 'audit' ? (
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-xs text-gray-500">
               <tr>
-                <th className="px-4 py-2 text-left">时间</th>
-                <th className="px-4 py-2 text-left">动作</th>
-                <th className="px-4 py-2 text-left">方法</th>
-                <th className="px-4 py-2 text-left">路径</th>
-                <th className="px-4 py-2 text-left">状态</th>
-                <th className="px-4 py-2 text-right">耗时</th>
+                <th className="px-4 py-2 text-left">{t('colTime')}</th>
+                <th className="px-4 py-2 text-left">{t('colAction')}</th>
+                <th className="px-4 py-2 text-left">{t('colMethod')}</th>
+                <th className="px-4 py-2 text-left">{t('colPath')}</th>
+                <th className="px-4 py-2 text-left">{t('colStatus')}</th>
+                <th className="px-4 py-2 text-right">{t('colDuration')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {auditLogs.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-4 py-10 text-center text-gray-400">
-                    暂无审计记录
+                    {t('noAuditRecords')}
                   </td>
                 </tr>
               ) : (
@@ -178,17 +178,17 @@ export default function OrgAuditView({ organizationId }: { organizationId: numbe
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-xs text-gray-500">
               <tr>
-                <th className="px-4 py-2 text-left">时间</th>
-                <th className="px-4 py-2 text-left">库</th>
+                <th className="px-4 py-2 text-left">{t('colTime')}</th>
+                <th className="px-4 py-2 text-left">{t('colDatabase')}</th>
                 <th className="px-4 py-2 text-left">SQL</th>
-                <th className="px-4 py-2 text-right">耗时</th>
+                <th className="px-4 py-2 text-right">{t('colDuration')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {slowQueries.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="px-4 py-10 text-center text-gray-400">
-                    暂无慢查询
+                    {t('noSlowQueries')}
                   </td>
                 </tr>
               ) : (
@@ -216,18 +216,18 @@ export default function OrgAuditView({ organizationId }: { organizationId: numbe
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-xs text-gray-500">
               <tr>
-                <th className="px-4 py-2 text-left">时间</th>
-                <th className="px-4 py-2 text-left">动作</th>
-                <th className="px-4 py-2 text-left">类型</th>
-                <th className="px-4 py-2 text-left">拦截原因</th>
-                <th className="px-4 py-2 text-right">耗时</th>
+                <th className="px-4 py-2 text-left">{t('colTime')}</th>
+                <th className="px-4 py-2 text-left">{t('colAction')}</th>
+                <th className="px-4 py-2 text-left">{t('colType')}</th>
+                <th className="px-4 py-2 text-left">{t('colBlockedReason')}</th>
+                <th className="px-4 py-2 text-right">{t('colDuration')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {rawLogs.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-4 py-10 text-center text-gray-400">
-                    暂无原始 SQL 记录
+                    {t('noRawSqlRecords')}
                   </td>
                 </tr>
               ) : (
@@ -253,7 +253,7 @@ export default function OrgAuditView({ organizationId }: { organizationId: numbe
 
         {(tab === 'audit' || tab === 'raw-sql') && total > 50 && (
           <div className="flex items-center justify-between px-4 py-3 border-t bg-gray-50 text-xs text-gray-500">
-            <span>共 {total} 条</span>
+            <span>{t('totalCount', { total })}</span>
             <div className="flex gap-2">
               <button
                 type="button"
@@ -261,7 +261,7 @@ export default function OrgAuditView({ organizationId }: { organizationId: numbe
                 disabled={page <= 0}
                 onClick={() => setPage(page - 1)}
               >
-                上一页
+                {t('prevPage')}
               </button>
               <button
                 type="button"
@@ -269,7 +269,7 @@ export default function OrgAuditView({ organizationId }: { organizationId: numbe
                 disabled={(page + 1) * 50 >= total}
                 onClick={() => setPage(page + 1)}
               >
-                下一页
+                {t('nextPage')}
               </button>
             </div>
           </div>

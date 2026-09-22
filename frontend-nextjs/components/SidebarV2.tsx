@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { clearAuthToken } from '@/lib/auth'
 
 interface MenuItem {
@@ -13,73 +14,74 @@ interface MenuItem {
 
 const menuStructure: MenuItem[] = [
   {
-    name: '首页',
+    name: 'home',
     icon: 'fa-home',
     path: '/dashboard',
   },
   {
-    name: '数据库管理',
+    name: 'dbManagement',
     icon: 'fa-database',
     children: [
-      { name: 'Schema 浏览器', icon: 'fa-sitemap', path: '/dashboard/schema' },
-      { name: '数据表', icon: 'fa-table', path: '/dashboard/tables' },
-      { name: '表结构设计', icon: 'fa-drafting-compass', path: '/dashboard/table-designer' },
-      { name: '数据导入', icon: 'fa-file-import', path: '/dashboard/import' },
-      { name: '索引管理', icon: 'fa-list-ol', path: '/dashboard/indexes' },
+      { name: 'schemaExplorer', icon: 'fa-sitemap', path: '/dashboard/schema' },
+      { name: 'dataTables', icon: 'fa-table', path: '/dashboard/tables' },
+      { name: 'tableDesigner', icon: 'fa-drafting-compass', path: '/dashboard/table-designer' },
+      { name: 'dataImport', icon: 'fa-file-import', path: '/dashboard/import' },
+      { name: 'indexManagement', icon: 'fa-list-ol', path: '/dashboard/indexes' },
     ],
   },
   {
-    name: '查询工具',
+    name: 'queryTools',
     icon: 'fa-code',
     children: [
-      { name: 'SQL 查询器', icon: 'fa-terminal', path: '/dashboard/query' },
-      { name: '查询性能', icon: 'fa-tachometer-alt', path: '/dashboard/query-analyzer' },
-      { name: '慢查询日志', icon: 'fa-clock', path: '/dashboard/slow-queries' },
+      { name: 'sqlQuery', icon: 'fa-terminal', path: '/dashboard/query' },
+      { name: 'queryPerformance', icon: 'fa-tachometer-alt', path: '/dashboard/query-analyzer' },
+      { name: 'slowQueryLog', icon: 'fa-clock', path: '/dashboard/slow-queries' },
     ],
   },
   {
-    name: '角色与权限',
+    name: 'rolesPermissions',
     icon: 'fa-shield-alt',
     children: [
-      { name: '角色管理', icon: 'fa-user-tag', path: '/dashboard/roles' },
-      { name: '权限管理', icon: 'fa-key', path: '/dashboard/permissions' },
+      { name: 'roleManagement', icon: 'fa-user-tag', path: '/dashboard/roles' },
+      { name: 'permissionManagement', icon: 'fa-key', path: '/dashboard/permissions' },
       // 用户管理已迁至 /platform/users（跨租户，仅超管），见 PlatformSidebar
       // { name: '用户管理', icon: 'fa-users', path: '/dashboard/users' },
     ],
   },
   {
-    name: '性能监控',
+    name: 'perfMonitoring',
     icon: 'fa-chart-line',
     children: [
-      { name: '实时监控', icon: 'fa-heartbeat', path: '/dashboard/monitor' },
-      { name: '数据库健康', icon: 'fa-stethoscope', path: '/dashboard/health' },
-      { name: '连接管理', icon: 'fa-plug', path: '/dashboard/connections' },
+      { name: 'realtimeMonitor', icon: 'fa-heartbeat', path: '/dashboard/monitor' },
+      { name: 'dbHealth', icon: 'fa-stethoscope', path: '/dashboard/health' },
+      { name: 'connectionManagement', icon: 'fa-plug', path: '/dashboard/connections' },
     ],
   },
   {
-    name: '高级功能',
+    name: 'advancedFeatures',
     icon: 'fa-cogs',
     children: [
-      { name: '函数管理', icon: 'fa-function', path: '/dashboard/functions' },
-      { name: '触发器', icon: 'fa-bolt', path: '/dashboard/triggers' },
-      { name: '事务管理', icon: 'fa-exchange-alt', path: '/dashboard/transaction' },
-      { name: '备份恢复', icon: 'fa-save', path: '/dashboard/backup' },
+      { name: 'functionManagement', icon: 'fa-function', path: '/dashboard/functions' },
+      { name: 'triggers', icon: 'fa-bolt', path: '/dashboard/triggers' },
+      { name: 'transactionManagement', icon: 'fa-exchange-alt', path: '/dashboard/transaction' },
+      { name: 'backupRestore', icon: 'fa-save', path: '/dashboard/backup' },
     ],
   },
   {
-    name: '开发工具',
+    name: 'devTools',
     icon: 'fa-wrench',
     children: [
-      { name: 'API 测试', icon: 'fa-vial', path: '/test' },
-      { name: 'Schema 迁移', icon: 'fa-project-diagram', path: '/dashboard/migrations' },
+      { name: 'apiTest', icon: 'fa-vial', path: '/test' },
+      { name: 'schemaMigration', icon: 'fa-project-diagram', path: '/dashboard/migrations' },
     ],
   },
 ]
 
 export default function SidebarV2() {
+  const t = useTranslations('legacySidebarV2')
   const pathname = usePathname()
   const router = useRouter()
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['数据库管理', '查询工具']))
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['dbManagement', 'queryTools']))
 
   const toggleGroup = (groupName: string) => {
     const newExpanded = new Set(expandedGroups)
@@ -111,7 +113,7 @@ export default function SidebarV2() {
           </div>
           <div>
             <h1 className="text-lg font-bold text-white tracking-wide">PlaneOS</h1>
-            <p className="text-xs text-white/60">数据库管理平台</p>
+            <p className="text-xs text-white/60">{t('subtitle')}</p>
           </div>
         </div>
         <div className="flex items-center space-x-2 px-2 py-1.5 bg-white/5 rounded">
@@ -135,7 +137,7 @@ export default function SidebarV2() {
                 >
                   <div className="flex items-center space-x-3">
                     <i className={`fas ${item.icon} text-xs w-4`}></i>
-                    <span className="font-medium">{item.name}</span>
+                    <span className="font-medium">{t(item.name)}</span>
                   </div>
                   <i
                     className={`fas fa-chevron-right text-xs transition-transform duration-200 ${
@@ -159,7 +161,7 @@ export default function SidebarV2() {
                                    }`}
                       >
                         <i className={`fas ${child.icon} text-xs w-4`}></i>
-                        <span>{child.name}</span>
+                        <span>{t(child.name)}</span>
                       </button>
                     ))}
                   </div>
@@ -177,7 +179,7 @@ export default function SidebarV2() {
                            }`}
               >
                 <i className={`fas ${item.icon} text-xs w-4`}></i>
-                <span className="font-medium">{item.name}</span>
+                <span className="font-medium">{t(item.name)}</span>
               </button>
             )}
           </div>
@@ -193,7 +195,7 @@ export default function SidebarV2() {
                    flex items-center space-x-3"
         >
           <i className="fas fa-sign-out-alt text-xs w-4"></i>
-          <span>退出登录</span>
+          <span>{t('logout')}</span>
         </button>
       </div>
     </div>

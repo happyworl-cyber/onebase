@@ -1,15 +1,18 @@
 'use client'
 
 /**
- * 本地 dev 预览页 —— 零后端依赖，数据来自内置 fixture（见 ./fixtures.ts），
- * 供本机 `npm run dev` 后直接在浏览器打开查看依赖图真实交互（G6 combo/角标/BFS高亮/跳转）。
- * 后端在 Windows 编译不过 + 真实 endpoint 本地无数据时，用这个路由代替真实接口联调。
+ * Local dev preview page -- zero backend dependency, data comes from the built-in fixtures
+ * (see ./fixtures.ts). After running `npm run dev` locally, open this in the browser to see
+ * the real dependency graph interactions (G6 combo/badges/BFS highlight/navigation).
+ * Use this route in place of a real backend integration when the backend doesn't build on
+ * Windows or the real endpoint has no local data.
  *
- * 不是生产路由：`/workspace/[projectId]/automation/workflow-graph`（真实页）不依赖这个文件，
- * 该文件也不会被生产页 import。
+ * Not a production route: the real page `/workspace/[projectId]/automation/workflow-graph`
+ * does not depend on this file, and this file is never imported by the production page.
  *
- * 支持 `?focus=<slug或id>` 透传给 WorkflowGraphCanvas 的 focusId prop，方便本地/playwright
- * 免后端验证多入口 focus（P1.3⑤）能否在数据就绪后自动选中并居中目标节点。
+ * Supports `?focus=<slug or id>`, forwarded to WorkflowGraphCanvas's focusId prop, to make it
+ * easy to verify locally/via playwright, without a backend, whether the multi-entry focus
+ * feature (P1.3 (5)) auto-selects and centers the target node once the data is ready.
  */
 
 import { Suspense, useState } from 'react'
@@ -22,7 +25,8 @@ const WorkflowGraphCanvas = dynamic(
   { ssr: false },
 )
 
-/** useSearchParams 在 App Router 里必须包一层 Suspense 才能静态导出，见外层 default export。 */
+/** useSearchParams requires wrapping in Suspense under the App Router for static export to
+ * work -- see the outer default export. */
 export default function DevGraphPreviewPage() {
   return (
     <Suspense fallback={null}>
@@ -50,7 +54,7 @@ function DevGraphPreviewInner() {
           flexShrink: 0,
         }}
       >
-        <span style={{ color: '#64748b' }}>本地 mock 预览（不接后端）：</span>
+        <span style={{ color: '#64748b' }}>Local mock preview (no backend):</span>
         <button
           onClick={() => setMode('full')}
           style={{
@@ -62,7 +66,7 @@ function DevGraphPreviewInner() {
             cursor: 'pointer',
           }}
         >
-          全量 fixture（18 节点）
+          Full fixture (18 nodes)
         </button>
         <button
           onClick={() => setMode('scope')}
@@ -75,7 +79,7 @@ function DevGraphPreviewInner() {
             cursor: 'pointer',
           }}
         >
-          分类 scope fixture（含外部依赖节点）
+          Category scope fixture (includes external dependency nodes)
         </button>
         <button
           onClick={() => setMode('large')}
@@ -88,7 +92,7 @@ function DevGraphPreviewInner() {
             cursor: 'pointer',
           }}
         >
-          大规模 fixture（{LARGE_FIXTURE.nodes.length} 节点）
+          Large fixture ({LARGE_FIXTURE.nodes.length} nodes)
         </button>
         <button
           onClick={() => setMode('xl')}
@@ -101,7 +105,7 @@ function DevGraphPreviewInner() {
             cursor: 'pointer',
           }}
         >
-          超大规模 fixture（{XL_FIXTURE.nodes.length} 节点，含长名字）
+          XL fixture ({XL_FIXTURE.nodes.length} nodes, includes long names)
         </button>
         <button
           onClick={() => setMode('agg-stress')}
@@ -114,7 +118,7 @@ function DevGraphPreviewInner() {
             cursor: 'pointer',
           }}
         >
-          聚合压力 fixture（22 分类，长短名混排+密集跨簇边）
+          Aggregation stress fixture (22 categories, mixed long/short names + dense cross-cluster edges)
         </button>
         <button
           onClick={() => setMode('huge')}
@@ -127,7 +131,7 @@ function DevGraphPreviewInner() {
             cursor: 'pointer',
           }}
         >
-          性能二期 fixture（{HUGE_FIXTURE.nodes.length} 节点，hub+长短名混排）
+          Performance phase-2 fixture ({HUGE_FIXTURE.nodes.length} nodes, hub + mixed long/short names)
         </button>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>

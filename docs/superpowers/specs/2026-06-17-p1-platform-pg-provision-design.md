@@ -8,7 +8,7 @@
 
 ## 背景与目标
 
-用户在创建项目时，希望在**当前 Onebase 运行环境**所在的 PG 实例上自动新建项目库，并自动写入 `tenant_databases` 完成关联，无需选择 PG 池或手填 admin 凭据。
+用户在创建项目时，希望在**当前 PlaneOS 运行环境**所在的 PG 实例上自动新建项目库，并自动写入 `tenant_databases` 完成关联，无需选择 PG 池或手填 admin 凭据。
 
 Redis、MQ 等中间件 **P1 不做自动开通**；用户可在项目「环境变量」中自行配置 `REDIS_URL` 等（已有 `project_env_vars` 表与工作流读取能力）。
 
@@ -56,7 +56,7 @@ Redis、MQ 等中间件 **P1 不做自动开通**；用户可在项目「环境�
 
 ```env
 # 管理库（已有）
-DATABASE_URL=postgresql://onebase:***@10.0.5.33:5432/onebase
+DATABASE_URL=postgresql://planeos:***@10.0.5.33:5432/planeos
 
 # 建库专用（推荐：与业务库账号分离）
 PROVISION_PG_URL=postgresql://postgres:***@10.0.5.33:5432/postgres
@@ -72,7 +72,7 @@ psql "$PROVISION_PG_URL" -c "DROP DATABASE provision_smoke_test"
 
 ### Redis（P1 文档约定）
 
-- 平台 `REDIS_URL` 仍为 Onebase 自身用途（限流、Pub/Sub）。
+- 平台 `REDIS_URL` 仍为 PlaneOS 自身用途（限流、Pub/Sub）。
 - 业务 Redis：项目 owner/admin 在 **项目 → 环境变量** 添加 `REDIS_URL`。
 - 工作流 / 定时任务执行时通过 `ExecutionContext.env_vars` 读取。
 

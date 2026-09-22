@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import api, { projectLogSourceAPI, type ProjectLogSource } from '@/lib/api'
 import Pagination from '@/components/Pagination'
@@ -67,12 +68,12 @@ interface DetailResponse {
 }
 
 const SOURCES = [
-  { id: '', label: '全部' },
-  { id: 'workflow', label: '工作流' },
-  { id: 'scheduler', label: '定时任务' },
-  { id: 'api', label: 'API' },
-  { id: 'db', label: '数据库' },
-  { id: 'rpc', label: 'RPC' },
+  { id: '', labelKey: 'srcAll' },
+  { id: 'workflow', labelKey: 'srcWorkflow' },
+  { id: 'scheduler', labelKey: 'srcScheduler' },
+  { id: 'api', labelKey: 'srcApi' },
+  { id: 'db', labelKey: 'srcDb' },
+  { id: 'rpc', labelKey: 'srcRpc' },
 ]
 
 const sourceBadge = (source: string) => {
@@ -126,6 +127,7 @@ const levelColor = (level: string) => {
 }
 
 function JsonBlock({ label, value }: { label: string; value: unknown }) {
+  const t = useTranslations('wsExecLogs')
   const [copied, setCopied] = useState(false)
   if (value === null || value === undefined) return null
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
@@ -146,7 +148,7 @@ function JsonBlock({ label, value }: { label: string; value: unknown }) {
           }}
           className="text-[11px] px-2 py-0.5 rounded border border-gray-300 text-gray-500 hover:bg-gray-100 shrink-0"
         >
-          {copied ? '已复制' : '复制'}
+          {copied ? t('copied') : t('copy')}
         </button>
       </div>
       <pre className="text-[11px] bg-gray-50 border rounded p-2 overflow-x-auto max-h-72 whitespace-pre-wrap break-all text-gray-700">
@@ -179,9 +181,10 @@ interface WorkflowNode {
 
 /** 工作流逐节点结果：每个节点的入参 → 出参时间线。 */
 function NodeResults({ nodes }: { nodes: WorkflowNode[] }) {
+  const t = useTranslations('wsExecLogs')
   return (
     <div className="mt-2">
-      <div className="text-[11px] font-medium text-gray-500 mb-1">节点结果（{nodes.length}）</div>
+      <div className="text-[11px] font-medium text-gray-500 mb-1">{t('nodeResults', { n: nodes.length })}</div>
       <div className="space-y-2">
         {nodes.map((n, i) => (
           <div key={n.node_id ?? i} className="border rounded p-2">
@@ -194,9 +197,9 @@ function NodeResults({ nodes }: { nodes: WorkflowNode[] }) {
               {n.branch && <span className="text-indigo-500">→ {n.branch}</span>}
               {n.elapsed_ms != null && <span className="text-gray-400 ml-auto">{n.elapsed_ms}ms</span>}
             </div>
-            <JsonBlock label="入参" value={n.input} />
-            <JsonBlock label="出参" value={n.output} />
-            {n.error && <JsonBlock label="错误" value={n.error} />}
+            <JsonBlock label={t('inParam')} value={n.input} />
+            <JsonBlock label={t('outParam')} value={n.output} />
+            {n.error && <JsonBlock label={t('error')} value={n.error} />}
           </div>
         ))}
       </div>
@@ -206,6 +209,7 @@ function NodeResults({ nodes }: { nodes: WorkflowNode[] }) {
 
 /** 渲染回查 run 表得到的输入/输出等细节。 */
 function RefDetail({ d }: { d: ExecRefDetail }) {
+  const t = useTranslations('wsExecLogs')
   const nodes = Array.isArray(d.node_results) ? (d.node_results as WorkflowNode[]) : null
   return (
     <div className="mt-2 border-t pt-2 space-y-0.5">
@@ -217,13 +221,13 @@ function RefDetail({ d }: { d: ExecRefDetail }) {
       )}
       {(d.task_kind || d.triggered_by) && (
         <div className="text-[11px] text-gray-500">
-          类型：{d.task_kind ?? '-'}　触发：{d.triggered_by ?? '-'}
+          {t('typeTriggerLine', { kind: d.task_kind ?? '-', by: d.triggered_by ?? '-' })}
         </div>
       )}
-      <JsonBlock label="输入" value={d.input} />
-      {nodes && nodes.length > 0 ? <NodeResults nodes={nodes} /> : <JsonBlock label="节点结果" value={d.node_results} />}
-      <JsonBlock label="输出" value={d.output} />
-      {d.error && <JsonBlock label="错误" value={d.error} />}
+      <JsonBlock label={t('input')} value={d.input} />
+      {nodes && nodes.length > 0 ? <NodeResults nodes={nodes} /> : <JsonBlock label={t('nodeResultsLabel')} value={d.node_results} />}
+      <JsonBlock label={t('output')} value={d.output} />
+      {d.error && <JsonBlock label={t('error')} value={d.error} />}
     </div>
   )
 }
@@ -241,7 +245,7 @@ interface ExecutionLogsViewProps {
 export default function ExecutionLogsView({
   tenantId,
   organizationId,
-  title = '执行日志',
+  title,
   subtitle,
 }: ExecutionLogsViewProps) {
   const [rows, setRows] = useState<ExecutionIndex[]>([])
@@ -260,6 +264,7 @@ export default function ExecutionLogsView({
   const [sourcePick, setSourcePick] = useState<ProjectLogSource[] | null>(null)
   const router = useRouter()
   const notify = useNotification()
+  const t = useTranslations('wsExecLogs')
 
   // AI 助手面板布局（右侧 fixed 抽屉，z-[10000]）。详情抽屉监听它的广播并向右避让，
   // 避免两者重叠（与 WorkflowsManager 调试抽屉同款约定）。
@@ -276,8 +281,8 @@ export default function ExecutionLogsView({
       const d = (e as CustomEvent).detail || {}
       setAiPanel({ open: !!d.open, width: Number(d.width) || 0, mobile: !!d.mobile })
     }
-    window.addEventListener('onebase:ai-panel', onAiPanel)
-    return () => window.removeEventListener('onebase:ai-panel', onAiPanel)
+    window.addEventListener('planeos:ai-panel', onAiPanel)
+    return () => window.removeEventListener('planeos:ai-panel', onAiPanel)
   }, [])
   // AI 面板占用的右侧宽度（小屏全屏时不避让，靠层级处理）。
   const aiOffset = aiPanel.open && !aiPanel.mobile ? aiPanel.width : 0
@@ -304,7 +309,7 @@ export default function ExecutionLogsView({
       const res = await api.get('/api/platform/executions', { params })
       setRows(res.data.data || [])
     } catch (err) {
-      console.error('加载执行日志失败:', err)
+      console.error(t('loadFailed'), err)
     } finally {
       setLoading(false)
     }
@@ -317,7 +322,7 @@ export default function ExecutionLogsView({
       setTotal(res.data.total || 0)
       setTotalCapped(Boolean(res.data.capped))
     } catch (err) {
-      console.error('加载执行日志总数失败:', err)
+      console.error(t('loadTotalFailed'), err)
     }
   }, [filterParams])
 
@@ -338,7 +343,7 @@ export default function ExecutionLogsView({
       const res = await api.get(`/api/platform/executions/${encodeURIComponent(traceId)}`)
       setDetail(res.data)
     } catch (err) {
-      console.error('加载执行详情失败:', err)
+      console.error(t('loadDetailFailed'), err)
     } finally {
       setDetailLoading(false)
     }
@@ -350,10 +355,10 @@ export default function ExecutionLogsView({
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-gray-900">{title}</h1>
+        <h1 className="text-2xl font-semibold text-gray-900">{title ?? t('defaultTitle')}</h1>
         {subtitle !== '' && (
           <p className="text-sm text-gray-500 mt-1">
-            {subtitle ?? '汇总工作流 / 定时任务 / API / 数据库等各类执行，按 trace 关联，快速定位失败'}
+            {subtitle ?? t('defaultSubtitle')}
           </p>
         )}
       </div>
@@ -368,7 +373,7 @@ export default function ExecutionLogsView({
               source === s.id ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
             }`}
           >
-            {s.label}
+            {t(s.labelKey)}
           </button>
         ))}
       </div>
@@ -381,7 +386,7 @@ export default function ExecutionLogsView({
             onChange={(e) => setFilters({ ...filters, status: e.target.value })}
             className="input-base text-sm"
           >
-            <option value="">全部状态</option>
+            <option value="">{t('allStatus')}</option>
             <option value="success">success</option>
             <option value="running">running</option>
             <option value="failed">failed</option>
@@ -390,14 +395,14 @@ export default function ExecutionLogsView({
           </select>
           <input
             type="text"
-            placeholder="名称筛选（工作流名 / 任务名 / 路径）"
+            placeholder={t('phName')}
             value={filters.name}
             onChange={(e) => setFilters({ ...filters, name: e.target.value })}
             className="input-base text-sm flex-1 min-w-[200px]"
           />
           <input
             type="text"
-            placeholder="trace_id 直查"
+            placeholder={t('phTrace')}
             value={filters.trace_id}
             onChange={(e) => setFilters({ ...filters, trace_id: e.target.value })}
             className="input-base text-sm w-64 font-mono"
@@ -408,10 +413,10 @@ export default function ExecutionLogsView({
               checked={filters.failed_only}
               onChange={(e) => setFilters({ ...filters, failed_only: e.target.checked })}
             />
-            <span>仅看失败/超时</span>
+            <span>{t('failedOnly')}</span>
           </label>
           <button onClick={() => { setPage(0); load(); loadCount() }} className="btn-primary text-sm">
-            <i className="fas fa-search mr-1"></i>筛选
+            <i className="fas fa-search mr-1"></i>{t('filter')}
           </button>
         </div>
       </div>
@@ -421,22 +426,22 @@ export default function ExecutionLogsView({
         <table className="w-full text-sm">
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">时间</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">来源</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">名称</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">状态</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">耗时</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">错误摘要</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('thTime')}</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('thSource')}</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('thName')}</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('thStatus')}</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('thDuration')}</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('thErrorSummary')}</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">trace</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
             {loading ? (
               <tr><td colSpan={7} className="text-center py-8 text-gray-400">
-                <i className="fas fa-spinner fa-spin mr-2"></i>加载中...
+                <i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}
               </td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={7} className="text-center py-8 text-gray-400">暂无执行记录</td></tr>
+              <tr><td colSpan={7} className="text-center py-8 text-gray-400">{t('emptyRows')}</td></tr>
             ) : (
               rows.map((r) => (
                 <tr
@@ -487,7 +492,7 @@ export default function ExecutionLogsView({
           >
             <div className="sticky top-0 bg-white border-b px-5 py-4 flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-semibold text-gray-900">执行详情</h2>
+                <h2 className="text-lg font-semibold text-gray-900">{t('detailTitle')}</h2>
                 <p className="text-xs font-mono text-gray-400 mt-0.5">{detail.trace_id}</p>
               </div>
               <div className="flex items-center gap-2">
@@ -497,7 +502,7 @@ export default function ExecutionLogsView({
                       try {
                         const res = await projectLogSourceAPI.list(tenantId as number)
                         if (res.data.length === 0) {
-                          notify.warning('请先在设置 → 云日志源中配置')
+                          notify.warning(t('errConfigLogSource'))
                           return
                         }
                         if (res.data.length === 1) {
@@ -513,15 +518,15 @@ export default function ExecutionLogsView({
                     }}
                     className="btn-default text-xs"
                   >
-                    <i className="fas fa-cloud mr-1"></i>云日志
+                    <i className="fas fa-cloud mr-1"></i>{t('cloudLog')}
                   </button>
                 )}
                 <button
                   onClick={() => navigator.clipboard?.writeText(detail.trace_id)}
                   className="btn-default text-xs"
-                  title="复制 trace_id"
+                  title={t('copyTraceTitle')}
                 >
-                  <i className="fas fa-copy mr-1"></i>复制 trace
+                  <i className="fas fa-copy mr-1"></i>{t('copyTrace')}
                 </button>
                 <button onClick={() => setDetail(null)} className="text-gray-400 hover:text-gray-600">
                   <i className="fas fa-times text-lg"></i>
@@ -530,7 +535,7 @@ export default function ExecutionLogsView({
             </div>
             {sourcePick && Number.isFinite(tenantId) && (
               <div className="px-5 py-2 border-b bg-gray-50 text-sm">
-                <div className="text-xs text-gray-500 mb-1">选择云日志源</div>
+                <div className="text-xs text-gray-500 mb-1">{t('selectLogSource')}</div>
                 <div className="flex flex-wrap gap-2">
                   {sourcePick.map((s) => (
                     <button
@@ -547,7 +552,7 @@ export default function ExecutionLogsView({
                     </button>
                   ))}
                   <button className="text-xs text-gray-400" onClick={() => setSourcePick(null)}>
-                    取消
+                    {t('cancel')}
                   </button>
                 </div>
               </div>
@@ -556,7 +561,7 @@ export default function ExecutionLogsView({
             <div className="p-5 space-y-5">
               {/* 执行索引（可能多行：重试） */}
               <div>
-                <h3 className="text-sm font-medium text-gray-700 mb-2">执行记录</h3>
+                <h3 className="text-sm font-medium text-gray-700 mb-2">{t('execRecords')}</h3>
                 <div className="space-y-2">
                   {detail.index.map((ix) => {
                     const displayStatus = resolveDisplayStatus(ix)
@@ -569,10 +574,10 @@ export default function ExecutionLogsView({
                         <span className="text-gray-800 font-medium truncate">{ix.name ?? '-'}</span>
                       </div>
                       <div className="text-xs text-gray-500 grid grid-cols-2 gap-x-4 gap-y-0.5">
-                        <span>开始：{fmtTime(ix.started_at)}</span>
-                        <span>结束：{fmtTime(ix.finished_at)}</span>
-                        <span>耗时：{fmtDur(resolveDisplayDuration(ix))}</span>
-                        <span>来源表：{ix.ref_table ?? '-'}{ix.ref_id != null ? `#${ix.ref_id}` : ''}</span>
+                        <span>{t('startedAt', { time: fmtTime(ix.started_at) })}</span>
+                        <span>{t('finishedAt', { time: fmtTime(ix.finished_at) })}</span>
+                        <span>{t('durationLabel', { dur: fmtDur(resolveDisplayDuration(ix)) })}</span>
+                        <span>{t('refTableLabel', { table: `${ix.ref_table ?? '-'}${ix.ref_id != null ? `#${ix.ref_id}` : ''}` })}</span>
                       </div>
                       {displayError && (
                         <div className="mt-2 text-xs text-red-700 bg-red-50 rounded p-2 font-mono whitespace-pre-wrap break-all">
@@ -589,13 +594,13 @@ export default function ExecutionLogsView({
               {/* 细节日志时间线 */}
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-sm font-medium text-gray-700">细节日志时间线</h3>
+                  <h3 className="text-sm font-medium text-gray-700">{t('detailTimeline')}</h3>
                   <select
                     value={levelFilter}
                     onChange={(e) => setLevelFilter(e.target.value)}
                     className="input-base text-xs"
                   >
-                    <option value="">全部级别</option>
+                    <option value="">{t('allLevels')}</option>
                     <option value="ERROR">ERROR</option>
                     <option value="WARN">WARN</option>
                     <option value="INFO">INFO</option>
@@ -605,11 +610,11 @@ export default function ExecutionLogsView({
 
                 {detailLoading ? (
                   <div className="text-center py-8 text-gray-400">
-                    <i className="fas fa-spinner fa-spin mr-2"></i>加载中...
+                    <i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}
                   </div>
                 ) : detail.logs.length === 0 ? (
                   <div className="text-xs text-gray-400 py-6 text-center border rounded-lg">
-                    暂无细节日志（HTTP 触发的执行会记录逐条时间线；cron 触发暂只有上方执行记录）
+                    {t('noDetailLogs')}
                   </div>
                 ) : (
                   <div className="space-y-1 font-mono text-xs">

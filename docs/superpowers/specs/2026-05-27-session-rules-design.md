@@ -10,7 +10,7 @@
 
 ### 1.1 目标
 
-把"上游可信网关 → onebase RPC session GUC 注入"的规则提升为一等公民：
+把"上游可信网关 → planeos RPC session GUC 注入"的规则提升为一等公民：
 
 - **声明式**：JSON 形态规则，无脚本，无沙盒成本。
 - **项目级**：规则绑定到 `tenant_databases.id`，同项目下所有 API Key 共享。

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 
 export interface RowMenuProps {
@@ -64,6 +65,7 @@ export default function RowMenu({
   size = 'compact',
   onOpenChange,
 }: RowMenuProps) {
+  const t = useTranslations('wfList')
   const [open, setOpen] = useState(false)
 
   const setMenuOpen = (next: boolean | ((prev: boolean) => boolean)) => {
@@ -90,7 +92,7 @@ export default function RowMenu({
     <div className="relative">
       <button
         type="button"
-        aria-label="更多操作"
+        aria-label={t('moreActions')}
         aria-expanded={open}
         onClick={(e) => {
           e.stopPropagation()
@@ -108,55 +110,55 @@ export default function RowMenu({
           {onPublish && (
             <MenuItem onClick={onPublish} close={() => setMenuOpen(false)}>
               <i className="fas fa-upload text-[10px] w-3.5 text-indigo-500" />
-              发布
+              {t('publish')}
             </MenuItem>
           )}
           {onDiscardDraft && (
             <MenuItem onClick={onDiscardDraft} close={() => setMenuOpen(false)}>
               <i className="fas fa-rotate-left text-[10px] w-3.5 text-slate-400" />
-              丢弃草稿
+              {t('discardDraft')}
             </MenuItem>
           )}
           <MenuItem onClick={onRun} close={() => setMenuOpen(false)}>
             <i className="fas fa-play text-[10px] w-3.5 text-amber-500" />
-            运行
+            {t('run')}
           </MenuItem>
           <MenuItem onClick={onShowRuns} close={() => setMenuOpen(false)}>
             <i className="fas fa-clock-rotate-left text-[10px] w-3.5 text-slate-400" />
-            执行记录
+            {t('execRecords')}
           </MenuItem>
           <MenuItem onClick={onDuplicate} close={() => setMenuOpen(false)}>
             <i className="fas fa-copy text-[10px] w-3.5 text-slate-400" />
-            复制
+            {t('copy')}
           </MenuItem>
           <MenuItem onClick={onShare} close={() => setMenuOpen(false)}>
             <i className="fas fa-link text-[10px] w-3.5 text-slate-400" />
-            复制编辑链接
+            {t('copyEditLink')}
           </MenuItem>
           {onOpenVersionHistory && (
             <MenuItem onClick={onOpenVersionHistory} close={() => setMenuOpen(false)}>
               <i className="fas fa-clock-rotate-left text-[10px] w-3.5 text-slate-400" />
-              版本历史
+              {t('versionHistory')}
             </MenuItem>
           )}
           <MenuItem onClick={onExport} close={() => setMenuOpen(false)}>
             <i className="fas fa-download text-[10px] w-3.5 text-slate-400" />
-            导出
+            {t('export')}
           </MenuItem>
           {onOpenGraph && (
             <MenuItem onClick={onOpenGraph} close={() => setMenuOpen(false)}>
               <i className="fas fa-share-nodes text-[10px] w-3.5 text-slate-400" />
-              在依赖图中查看
+              {t('viewInGraph')}
             </MenuItem>
           )}
           <MenuItem onClick={onMove} close={() => setMenuOpen(false)}>
             <i className="fas fa-folder-tree text-[10px] w-3.5 text-slate-400" />
-            移动
+            {t('move')}
           </MenuItem>
           <div className="h-px bg-slate-100 my-1" />
           <MenuItem onClick={onDelete} destructive close={() => setMenuOpen(false)}>
             <i className="fas fa-trash text-[10px] w-3.5" />
-            删除
+            {t('delete')}
           </MenuItem>
         </div>
       )}
@@ -201,6 +203,7 @@ export function WorkflowRowActions({
   size = 'compact',
   onMenuOpenChange,
 }: WorkflowRowActionsProps) {
+  const t = useTranslations('wfList')
   const isCard = size === 'card'
   const base = cn(
     'px-2.5 py-1.5 rounded-lg whitespace-nowrap transition-colors',
@@ -219,7 +222,7 @@ export function WorkflowRowActions({
             : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-medium',
         )}
       >
-        编辑
+        {t('edit')}
       </button>
       <button
         type="button"
@@ -235,7 +238,7 @@ export function WorkflowRowActions({
               : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100',
         )}
       >
-        {enabled ? '禁用' : '启用'}
+        {enabled ? t('disable') : t('enable')}
       </button>
       <RowMenu
         size={size}

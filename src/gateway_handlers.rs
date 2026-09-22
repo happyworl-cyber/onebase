@@ -40,18 +40,21 @@ pub struct UpdateRateLimitRule {
 
 fn validate_rule_type(rt: &str) -> Result<()> {
     if !ALLOWED_RULE_TYPES.contains(&rt) {
-        return Err(AppError::InvalidQuery(format!(
-            "rule_type 必须是 {:?} 之一",
-            ALLOWED_RULE_TYPES
-        )));
+        return Err(AppError::validation(
+            "gw_rule_type_invalid",
+            format!("rule_type 必须是 {:?} 之一", ALLOWED_RULE_TYPES),
+            serde_json::json!({ "allowed_types": format!("{:?}", ALLOWED_RULE_TYPES) }),
+        ));
     }
     Ok(())
 }
 
 fn validate_max_requests(n: i32) -> Result<()> {
     if n <= 0 {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "gw_max_requests_must_be_positive",
             "max_requests 必须是正整数".to_string(),
+            serde_json::json!({}),
         ));
     }
     Ok(())
@@ -59,15 +62,18 @@ fn validate_max_requests(n: i32) -> Result<()> {
 
 fn validate_window_seconds(n: i32) -> Result<()> {
     if n <= 0 {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "gw_window_seconds_must_be_positive",
             "window_seconds 必须是正整数".to_string(),
+            serde_json::json!({}),
         ));
     }
     if n > MAX_WINDOW_SECONDS {
-        return Err(AppError::InvalidQuery(format!(
-            "window_seconds 不能超过 {} (1 天)",
-            MAX_WINDOW_SECONDS
-        )));
+        return Err(AppError::validation(
+            "gw_window_seconds_exceeds_max",
+            format!("window_seconds 不能超过 {} (1 天)", MAX_WINDOW_SECONDS),
+            serde_json::json!({ "max_window_seconds": MAX_WINDOW_SECONDS }),
+        ));
     }
     Ok(())
 }
@@ -83,17 +89,20 @@ fn validate_rule_shape(
     match rule_type {
         "tenant" => {
             if tenant_id.is_none() {
-                return Err(AppError::InvalidQuery(
+                return Err(AppError::validation(
+                    "gw_tenant_rule_requires_tenant_id",
                     "rule_type=tenant 时必须填 tenant_id".to_string(),
+                    serde_json::json!({}),
                 ));
             }
         }
         "user" | "endpoint" | "ip" => {
             if match_pattern.map(|s| s.trim().is_empty()).unwrap_or(true) {
-                return Err(AppError::InvalidQuery(format!(
-                    "rule_type={} 时必须填 match_pattern",
-                    rule_type
-                )));
+                return Err(AppError::validation(
+                    "gw_rule_requires_match_pattern",
+                    format!("rule_type={} 时必须填 match_pattern", rule_type),
+                    serde_json::json!({ "rule_type": rule_type }),
+                ));
             }
         }
         _ => {}
@@ -208,7 +217,11 @@ pub async fn update_rule(
     .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("规则 {} 不存在", id)));
+        return Err(AppError::not_found_coded(
+            "gw_rule_not_found",
+            format!("规则 {} 不存在", id),
+            serde_json::json!({ "id": id }),
+        ));
     }
 
     notify_limiter(limiter.as_ref().map(|Extension(l)| l)).await;
@@ -228,7 +241,11 @@ pub async fn delete_rule(
         .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("规则 {} 不存在", id)));
+        return Err(AppError::not_found_coded(
+            "gw_rule_not_found",
+            format!("规则 {} 不存在", id),
+            serde_json::json!({ "id": id }),
+        ));
     }
 
     notify_limiter(limiter.as_ref().map(|Extension(l)| l)).await;

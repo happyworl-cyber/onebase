@@ -70,7 +70,7 @@ format!("SELECT * FROM users WHERE id = {}", user_id)
 ## 📁 项目结构
 
 ```
-onebase/
+planeos/
 ├── src/
 │   ├── main.rs              # 应用入口（138 行）
 │   ├── config.rs            # 配置管理（27 行）
@@ -283,7 +283,7 @@ CREATE POLICY user_policy ON users
 # Nginx 反向代理 + rate limiting
 location /api/ {
     limit_req zone=api burst=10 nodelay;
-    proxy_pass http://onebase:3000;
+    proxy_pass http://planeos:3000;
 }
 ```
 
@@ -297,7 +297,7 @@ services:
   db:
     image: postgres:14
     environment:
-      POSTGRES_DB: onebase_db
+      POSTGRES_DB: planeos_db
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
     volumes:
@@ -308,7 +308,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      DATABASE_URL: postgresql://user:password@db:5432/onebase_db
+      DATABASE_URL: postgresql://user:password@db:5432/planeos_db
     depends_on:
       - db
 
@@ -326,7 +326,7 @@ After=network.target postgresql.service
 [Service]
 Type=simple
 User=www-data
-ExecStart=/opt/onebase/target/release/onebase
+ExecStart=/opt/planeos/target/release/planeos
 Restart=always
 
 [Install]
@@ -509,7 +509,7 @@ WantedBy=multi-user.target
 ```bash
 # 1. 克隆项目
 git clone <repo-url>
-cd onebase
+cd planeos
 
 # 2. 配置环境变量
 echo 'DATABASE_URL=postgresql://user:pass@localhost/db' > .env

@@ -5,6 +5,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useParams, useRouter } from 'next/navigation'
 import {
   organizationAPI,
@@ -29,6 +30,7 @@ type Tab = OrgNavId
 type ProjectAddMode = 'org' | 'platform' | 'create'
 
 export default function OrgConsolePage() {
+  const t = useTranslations('orgAdminPage')
   const params = useParams<{ orgId: string }>()
   const router = useRouter()
   const notify = useNotification()
@@ -112,7 +114,7 @@ export default function OrgConsolePage() {
     } catch (err: unknown) {
       const msg =
         (err as { response?: { data?: { error?: string } } })?.response?.data?.error ||
-        '无法加载租户'
+        t('errLoadOrgFailed')
       setError(msg)
     }
   }, [orgId, router, setCurrentOrganization, isSuperadmin])
@@ -165,7 +167,7 @@ export default function OrgConsolePage() {
       })
       setOrg(res.data.organization)
       setCurrentOrganization(res.data.organization)
-      notify.success('已保存')
+      notify.success(t('successSaved'))
     } catch (err) {
       notify.error(err)
     }
@@ -212,7 +214,7 @@ export default function OrgConsolePage() {
         user_id: Number(addUserId),
         role: addRole,
       })
-      notify.success('已添加租户成员')
+      notify.success(t('successAddedOrgMember'))
       setShowAddMemberModal(false)
       setAddUserId('')
       setSearchQ('')
@@ -241,7 +243,7 @@ export default function OrgConsolePage() {
       await organizationAPI.updateMember(org.id, editMemberTarget.user_id, {
         role: editMemberRole,
       })
-      notify.success('角色已更新')
+      notify.success(t('successRoleUpdated'))
       setEditMemberTarget(null)
       load()
     } catch (err) {
@@ -253,10 +255,10 @@ export default function OrgConsolePage() {
 
   async function removeMember(userId: number, name: string) {
     if (!org) return
-    if (!window.confirm(`移除租户成员「${name}」？其下属项目成员关系将停用。`)) return
+    if (!window.confirm(t('confirmRemoveMember', { name }))) return
     try {
       await organizationAPI.removeMember(org.id, userId)
-      notify.success('已移除')
+      notify.success(t('successRemoved'))
       load()
     } catch (err) {
       notify.error(err)
@@ -271,7 +273,7 @@ export default function OrgConsolePage() {
         user_id: currentUser.id,
         role: 'admin',
       })
-      notify.success('已将你加入该项目')
+      notify.success(t('successJoinedSelfProject'))
       router.push(`/workspace/${project.id}`)
     } catch (err) {
       notify.error(err)
@@ -287,7 +289,7 @@ export default function OrgConsolePage() {
       if (projectAddMode === 'create') {
         const { username, email, password } = projectCreateForm
         if (!projectCreateFormValid) {
-          notify.warning('请填写用户名（≥3）、有效邮箱、密码（≥6）')
+          notify.warning(t('warnFillCreateForm'))
           return
         }
         const res = await organizationAPI.addProjectMember(org.id, projectAddTarget.id, {
@@ -297,10 +299,10 @@ export default function OrgConsolePage() {
           role: projectAddRole,
         })
         joinedUserId = res.data?.user_id ?? null
-        notify.success('已创建账号并加入项目')
+        notify.success(t('successAccountCreatedJoined'))
       } else {
         if (!projectAddUserId) {
-          notify.warning('请选择用户')
+          notify.warning(t('warnSelectUser'))
           return
         }
         joinedUserId = Number(projectAddUserId)
@@ -309,7 +311,9 @@ export default function OrgConsolePage() {
           role: projectAddRole,
         })
         notify.success(
-          projectAddMode === 'platform' ? '已加入租户并加入项目' : '已加入项目成员',
+          projectAddMode === 'platform'
+            ? t('successJoinedOrgAndProject')
+            : t('successJoinedProject'),
         )
       }
       const enteredSelf = currentUser?.id != null && joinedUserId === currentUser.id
@@ -333,12 +337,12 @@ export default function OrgConsolePage() {
 
   async function archiveProject(project: Project) {
     if (!org) return
-    if (!window.confirm(`归档项目「${project.name}」？归档后成员将无法进入，可在本页恢复。`)) {
+    if (!window.confirm(t('confirmArchiveProject', { name: project.name }))) {
       return
     }
     try {
       await organizationAPI.patchProject(org.id, project.id, { status: 'suspended' })
-      notify.success('项目已归档')
+      notify.success(t('successProjectArchived'))
       load()
     } catch (err) {
       notify.error(err)
@@ -349,7 +353,7 @@ export default function OrgConsolePage() {
     if (!org) return
     try {
       await organizationAPI.patchProject(org.id, project.id, { status: 'active' })
-      notify.success('项目已恢复')
+      notify.success(t('successProjectRestored'))
       load()
     } catch (err) {
       notify.error(err)
@@ -361,7 +365,7 @@ export default function OrgConsolePage() {
     const target = members.find((m) => m.user_id === Number(transferUserId))
     if (
       !window.confirm(
-        `将租户 owner 转让给「${target?.username || transferUserId}」？你将降为 admin。`,
+        t('confirmTransferOwner', { name: target?.username || transferUserId }),
       )
     ) {
       return
@@ -369,7 +373,7 @@ export default function OrgConsolePage() {
     setTransferring(true)
     try {
       await organizationAPI.transferOwner(org.id, Number(transferUserId))
-      notify.success('已转让 owner')
+      notify.success(t('successOwnerTransferred'))
       setTransferUserId('')
       setShowTransferModal(false)
       await load()
@@ -390,7 +394,7 @@ export default function OrgConsolePage() {
             className="text-sm text-blue-600 mr-4"
             onClick={() => router.push('/orgs')}
           >
-            返回租户列表
+            {t('backToOrgList')}
           </button>
         </div>
       </div>
@@ -401,7 +405,8 @@ export default function OrgConsolePage() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
         <div className="text-sm text-gray-500">
-          <i className="fas fa-spinner fa-spin mr-2"></i>加载租户控制台…
+          <i className="fas fa-spinner fa-spin mr-2"></i>
+          {t('loadingConsole')}
         </div>
       </div>
     )
@@ -427,11 +432,11 @@ export default function OrgConsolePage() {
             <div>
               <div className="flex items-center justify-between mb-4 gap-4">
                 <div>
-                  <h1 className="text-xl font-semibold text-gray-900">项目</h1>
+                  <h1 className="text-xl font-semibold text-gray-900">{t('heading')}</h1>
                   <p className="text-sm text-gray-500 mt-1">
                     {caps.canViewAllProjects || isSuperadmin
-                      ? '管理视图：可见本租户全部项目。可用「加入成员」把租户成员加进项目。'
-                      : '仅显示你已加入的项目。'}
+                      ? t('descProjectsAdmin')
+                      : t('descProjectsLimited')}
                   </p>
                 </div>
                 {canManageProjects && (
@@ -441,7 +446,7 @@ export default function OrgConsolePage() {
                     onClick={() => router.push(`/workspace/provision?org=${org.id}`)}
                   >
                     <i className="fas fa-plus mr-2"></i>
-                    新建项目
+                    {t('btnNewProject')}
                   </button>
                 )}
               </div>
@@ -450,8 +455,8 @@ export default function OrgConsolePage() {
                 <div className="bg-white border border-dashed border-gray-300 rounded-lg p-10 text-center">
                   <p className="text-sm text-gray-600 mb-4">
                     {canManageProjects
-                      ? '本租户下还没有项目，创建一个开始使用。'
-                      : '你尚未被加入任何项目，请联系租户管理员。'}
+                      ? t('emptyNoProjectsAdmin')
+                      : t('emptyNoProjectsMember')}
                   </p>
                   {canManageProjects && (
                     <button
@@ -459,7 +464,7 @@ export default function OrgConsolePage() {
                       className="btn-primary"
                       onClick={() => router.push(`/workspace/provision?org=${org.id}`)}
                     >
-                      新建项目
+                      {t('btnNewProject')}
                     </button>
                   )}
                 </div>
@@ -468,11 +473,11 @@ export default function OrgConsolePage() {
                   <table className="w-full text-sm">
                     <thead className="bg-gray-50 text-gray-500 border-b border-gray-200">
                       <tr>
-                        <th className="px-4 py-3 text-left font-medium">项目</th>
+                        <th className="px-4 py-3 text-left font-medium">{t('colProject')}</th>
                         <th className="px-4 py-3 text-left font-medium">Slug</th>
-                        <th className="px-4 py-3 text-left font-medium">状态</th>
-                        <th className="px-4 py-3 text-left font-medium">我的角色</th>
-                        <th className="px-4 py-3 text-right font-medium w-56">操作</th>
+                        <th className="px-4 py-3 text-left font-medium">{t('colStatus')}</th>
+                        <th className="px-4 py-3 text-left font-medium">{t('colMyRole')}</th>
+                        <th className="px-4 py-3 text-right font-medium w-56">{t('colActions')}</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -497,7 +502,7 @@ export default function OrgConsolePage() {
                             <td className="px-4 py-3">
                               {archived ? (
                                 <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
-                                  已归档
+                                  {t('statusArchived')}
                                 </span>
                               ) : (
                                 <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">
@@ -506,7 +511,7 @@ export default function OrgConsolePage() {
                               )}
                             </td>
                             <td className="px-4 py-3 font-mono text-xs text-gray-500">
-                              {p.user_role || '未加入'}
+                              {p.user_role || t('roleNotJoined')}
                             </td>
                             <td className="px-4 py-3 text-right whitespace-nowrap space-x-2">
                               {archived ? (
@@ -516,7 +521,7 @@ export default function OrgConsolePage() {
                                     className="text-xs text-blue-600 hover:underline"
                                     onClick={() => restoreProject(p)}
                                   >
-                                    恢复
+                                    {t('btnRestore')}
                                   </button>
                                 )
                               ) : (
@@ -527,7 +532,7 @@ export default function OrgConsolePage() {
                                       className="text-xs text-blue-600 hover:underline"
                                       onClick={() => router.push(`/workspace/${p.id}`)}
                                     >
-                                      进入工作区
+                                      {t('btnEnterWorkspace')}
                                     </button>
                                   ) : canManageProjects ? (
                                     <button
@@ -536,7 +541,7 @@ export default function OrgConsolePage() {
                                       disabled={projectAddSaving}
                                       onClick={() => joinMyselfAndEnter(p)}
                                     >
-                                      加入并进入
+                                      {t('btnJoinAndEnter')}
                                     </button>
                                   ) : null}
                                   {canManageProjects && (
@@ -557,7 +562,7 @@ export default function OrgConsolePage() {
                                         })
                                       }}
                                     >
-                                      加入成员
+                                      {t('btnJoinMember')}
                                     </button>
                                   )}
                                   {canArchive && (
@@ -566,7 +571,7 @@ export default function OrgConsolePage() {
                                       className="text-xs text-amber-700 hover:underline"
                                       onClick={() => archiveProject(p)}
                                     >
-                                      归档
+                                      {t('btnArchive')}
                                     </button>
                                   )}
                                 </>
@@ -633,8 +638,8 @@ export default function OrgConsolePage() {
           {tab === 'execution-logs' && canViewLogs && (
             <ExecutionLogsView
               organizationId={org.id}
-              title="执行日志"
-              subtitle="聚合本租户下全部项目的工作流 / API / 定时任务等执行记录。"
+              title={t('execLogsTitle')}
+              subtitle={t('execLogsSubtitle')}
             />
           )}
 
@@ -642,10 +647,9 @@ export default function OrgConsolePage() {
             <div>
               <div className="flex items-start justify-between gap-4 mb-4">
                 <header>
-                  <h1 className="text-xl font-semibold text-gray-900">租户成员</h1>
+                  <h1 className="text-xl font-semibold text-gray-900">{t('membersHeading')}</h1>
                   <p className="text-sm text-gray-500 mt-1">
-                    加入租户后，还需要在具体项目中添加为项目成员才能进入工作区。转让 owner
-                    请到「设置」；仅 owner 可授予或调整 owner 角色。
+                    {t('membersDesc')}
                   </p>
                 </header>
                 <button
@@ -654,12 +658,12 @@ export default function OrgConsolePage() {
                   onClick={openAddMemberModal}
                 >
                   <i className="fas fa-user-plus mr-2"></i>
-                  添加成员
+                  {t('btnAddMember')}
                 </button>
               </div>
               <div className="bg-white border border-gray-200 rounded-lg divide-y divide-gray-100">
                 {members.length === 0 && (
-                  <p className="px-4 py-8 text-sm text-gray-400 text-center">暂无成员</p>
+                  <p className="px-4 py-8 text-sm text-gray-400 text-center">{t('emptyNoMembers')}</p>
                 )}
                 {members.map((m) => (
                   <div
@@ -683,7 +687,7 @@ export default function OrgConsolePage() {
                         }
                         onClick={() => openEditMemberModal(m)}
                       >
-                        编辑
+                        {t('btnEdit')}
                       </button>
                       <button
                         type="button"
@@ -691,7 +695,7 @@ export default function OrgConsolePage() {
                         disabled={m.user_id === currentUser?.id && !isSuperadmin}
                         onClick={() => removeMember(m.user_id, m.username)}
                       >
-                        移除
+                        {t('btnRemove')}
                       </button>
                     </div>
                   </div>
@@ -703,13 +707,13 @@ export default function OrgConsolePage() {
           {tab === 'settings' && (caps.canManageOrgSettings || isSuperadmin) && (
             <div className="space-y-6">
               <header>
-                <h1 className="text-xl font-semibold text-gray-900">租户设置</h1>
-                <p className="text-sm text-gray-500 mt-1">修改租户基本信息与所有权。</p>
+                <h1 className="text-xl font-semibold text-gray-900">{t('settingsHeading')}</h1>
+                <p className="text-sm text-gray-500 mt-1">{t('settingsDesc')}</p>
               </header>
 
               <div className="bg-white border border-gray-200 rounded-lg p-5 space-y-4 max-w-xl">
                 <div>
-                  <label className="block text-sm text-gray-700 mb-1">名称</label>
+                  <label className="block text-sm text-gray-700 mb-1">{t('labelName')}</label>
                   <input
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                     value={editName}
@@ -717,7 +721,7 @@ export default function OrgConsolePage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm text-gray-700 mb-1">联系邮箱</label>
+                  <label className="block text-sm text-gray-700 mb-1">{t('labelContactEmail')}</label>
                   <input
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                     value={editEmail}
@@ -725,16 +729,16 @@ export default function OrgConsolePage() {
                   />
                 </div>
                 <button type="button" className="btn-primary" onClick={saveSettings}>
-                  保存
+                  {t('btnSave')}
                 </button>
               </div>
 
               {canTransfer && (
                 <div className="bg-white border border-gray-200 rounded-lg p-5 max-w-xl flex items-start justify-between gap-4">
                   <div>
-                    <h2 className="text-base font-semibold text-gray-900">转让 owner</h2>
+                    <h2 className="text-base font-semibold text-gray-900">{t('transferOwner')}</h2>
                     <p className="text-sm text-gray-500 mt-1">
-                      将管理权交给另一位租户成员；你将自动降为 admin。
+                      {t('transferOwnerDesc')}
                     </p>
                   </div>
                   <button
@@ -742,7 +746,7 @@ export default function OrgConsolePage() {
                     className="btn-primary shrink-0"
                     onClick={openTransferModal}
                   >
-                    转让 owner
+                    {t('transferOwner')}
                   </button>
                 </div>
               )}
@@ -754,7 +758,7 @@ export default function OrgConsolePage() {
       {editMemberTarget && org && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 space-y-4">
-            <h2 className="text-lg font-semibold text-gray-900">编辑成员角色</h2>
+            <h2 className="text-lg font-semibold text-gray-900">{t('editMemberModalHeading')}</h2>
             <p className="text-sm text-gray-500">
               {editMemberTarget.username}{' '}
               <span className="font-mono text-xs text-gray-400">
@@ -762,7 +766,7 @@ export default function OrgConsolePage() {
               </span>
             </p>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">租户角色</label>
+              <label className="block text-xs text-gray-500 mb-1">{t('labelOrgRole')}</label>
               <select
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 value={editMemberRole}
@@ -781,7 +785,7 @@ export default function OrgConsolePage() {
                 className="flex-1 px-4 py-2 text-sm border border-gray-300 rounded-lg"
                 onClick={() => setEditMemberTarget(null)}
               >
-                取消
+                {t('btnCancel')}
               </button>
               <button
                 type="button"
@@ -789,7 +793,7 @@ export default function OrgConsolePage() {
                 disabled={editMemberSaving || editMemberRole === editMemberTarget.role}
                 onClick={submitEditMember}
               >
-                {editMemberSaving ? '保存中…' : '保存'}
+                {editMemberSaving ? t('savingEllipsis') : t('btnSave')}
               </button>
             </div>
           </div>
@@ -799,15 +803,15 @@ export default function OrgConsolePage() {
       {showAddMemberModal && org && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 space-y-4">
-            <h2 className="text-lg font-semibold text-gray-900">添加租户成员</h2>
+            <h2 className="text-lg font-semibold text-gray-900">{t('addMemberModalHeading')}</h2>
             <p className="text-sm text-gray-500">
-              搜索平台用户并加入本租户。加入后还需在具体项目中添加为项目成员。
+              {t('addMemberModalDesc')}
             </p>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">搜索用户</label>
+              <label className="block text-xs text-gray-500 mb-1">{t('labelSearchUser')}</label>
               <input
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                placeholder="搜索用户名 / 邮箱（至少 2 字符）"
+                placeholder={t('placeholderSearchUser')}
                 value={searchQ}
                 onChange={(e) => searchUsers(e.target.value)}
               />
@@ -831,16 +835,16 @@ export default function OrgConsolePage() {
               )}
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">用户 ID</label>
+              <label className="block text-xs text-gray-500 mb-1">{t('labelUserId')}</label>
               <input
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono"
                 value={addUserId}
                 onChange={(e) => setAddUserId(e.target.value)}
-                placeholder="从搜索结果选择或手动填写"
+                placeholder={t('placeholderUserId')}
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">租户角色</label>
+              <label className="block text-xs text-gray-500 mb-1">{t('labelOrgRole')}</label>
               <select
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 value={addRole}
@@ -857,7 +861,7 @@ export default function OrgConsolePage() {
                 className="flex-1 px-4 py-2 text-sm border border-gray-300 rounded-lg"
                 onClick={() => setShowAddMemberModal(false)}
               >
-                取消
+                {t('btnCancel')}
               </button>
               <button
                 type="button"
@@ -865,7 +869,7 @@ export default function OrgConsolePage() {
                 disabled={!addUserId || addMemberSaving}
                 onClick={addMember}
               >
-                {addMemberSaving ? '提交中…' : '确认添加'}
+                {addMemberSaving ? t('submittingEllipsis') : t('btnConfirmAdd')}
               </button>
             </div>
           </div>
@@ -875,18 +879,18 @@ export default function OrgConsolePage() {
       {showTransferModal && org && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 space-y-4">
-            <h2 className="text-lg font-semibold text-gray-900">转让 owner</h2>
+            <h2 className="text-lg font-semibold text-gray-900">{t('transferOwner')}</h2>
             <p className="text-sm text-amber-700 bg-amber-50 border border-amber-100 rounded-lg p-3">
-              将管理权交给另一位租户成员后，你将自动降为 admin。确认时会再次提示。
+              {t('transferModalDesc')}
             </p>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">目标成员</label>
+              <label className="block text-xs text-gray-500 mb-1">{t('labelTargetMember')}</label>
               <select
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 value={transferUserId}
                 onChange={(e) => setTransferUserId(e.target.value)}
               >
-                <option value="">— 选择成员 —</option>
+                <option value="">{t('optSelectMember')}</option>
                 {members
                   .filter((m) => m.user_id !== currentUser?.id)
                   .map((m) => (
@@ -902,7 +906,7 @@ export default function OrgConsolePage() {
                 className="flex-1 px-4 py-2 text-sm border border-gray-300 rounded-lg"
                 onClick={() => setShowTransferModal(false)}
               >
-                取消
+                {t('btnCancel')}
               </button>
               <button
                 type="button"
@@ -910,7 +914,7 @@ export default function OrgConsolePage() {
                 disabled={!transferUserId || transferring}
                 onClick={transferOwner}
               >
-                {transferring ? '转让中…' : '确认转让'}
+                {transferring ? t('transferringEllipsis') : t('btnConfirmTransfer')}
               </button>
             </div>
           </div>
@@ -920,17 +924,17 @@ export default function OrgConsolePage() {
       {projectAddTarget && org && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6 space-y-4">
-            <h2 className="text-lg font-semibold text-gray-900">加入项目成员</h2>
+            <h2 className="text-lg font-semibold text-gray-900">{t('joinProjectModalHeading')}</h2>
             <p className="text-sm text-gray-500">
-              项目 <span className="font-medium text-gray-800">{projectAddTarget.name}</span>
+              {t('projectLabelPrefix')} <span className="font-medium text-gray-800">{projectAddTarget.name}</span>
             </p>
 
             <div className="flex p-1 bg-gray-100 rounded-lg text-sm">
               {(
                 [
-                  ['org', '租户成员'],
-                  ['platform', '平台用户'],
-                  ['create', '新建账号'],
+                  ['org', t('orgMembers')],
+                  ['platform', t('platformUsers')],
+                  ['create', t('createAccount')],
                 ] as Array<[ProjectAddMode, string]>
               ).map(([mode, label]) => (
                 <button
@@ -953,21 +957,20 @@ export default function OrgConsolePage() {
             </div>
 
             <p className="text-xs text-gray-500">
-              {projectAddMode === 'org' && '从本租户选人加入该项目'}
-              {projectAddMode === 'platform' && '一步加入租户（org role 默认 member）+ 项目'}
-              {projectAddMode === 'create' &&
-                '创建平台账号并加入租户 + 项目；初始密码线下告知，建议登录后修改'}
+              {projectAddMode === 'org' && t('hintModeOrg')}
+              {projectAddMode === 'platform' && t('hintModePlatform')}
+              {projectAddMode === 'create' && t('hintModeCreate')}
             </p>
 
             {projectAddMode === 'org' && (
               <div>
-                <label className="block text-xs text-gray-500 mb-1">租户成员</label>
+                <label className="block text-xs text-gray-500 mb-1">{t('orgMembers')}</label>
                 <select
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   value={projectAddUserId}
                   onChange={(e) => setProjectAddUserId(e.target.value)}
                 >
-                  <option value="">— 选择成员 —</option>
+                  <option value="">{t('optSelectMember')}</option>
                   {members.map((m) => (
                     <option key={m.user_id} value={m.user_id}>
                       {m.username} ({m.email}) · {m.role}
@@ -976,7 +979,7 @@ export default function OrgConsolePage() {
                 </select>
                 {members.length === 0 && (
                   <p className="text-xs text-amber-600 mt-1">
-                    暂无租户成员，请先在「成员」页添加。
+                    {t('emptyNoOrgMembersHint')}
                   </p>
                 )}
               </div>
@@ -985,11 +988,11 @@ export default function OrgConsolePage() {
             {projectAddMode === 'platform' && (
               <div className="space-y-2">
                 <label className="block text-xs text-gray-500">
-                  搜索平台用户（至少 2 字符）
+                  {t('labelSearchPlatformUser')}
                 </label>
                 <input
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  placeholder="用户名 / 邮箱"
+                  placeholder={t('placeholderUsernameEmail')}
                   value={projectPlatformQ}
                   onChange={(e) => {
                     setProjectPlatformQ(e.target.value)
@@ -1014,10 +1017,12 @@ export default function OrgConsolePage() {
                 )}
                 {projectAddUserId && (
                   <p className="text-xs text-blue-600">
-                    已选择：
-                    {projectPlatformCandidates.find(
-                      (candidate) => String(candidate.id) === projectAddUserId,
-                    )?.username || `用户 ${projectAddUserId}`}
+                    {t('selectedUser', {
+                      name:
+                        projectPlatformCandidates.find(
+                          (candidate) => String(candidate.id) === projectAddUserId,
+                        )?.username || t('userFallback', { id: projectAddUserId }),
+                    })}
                   </p>
                 )}
               </div>
@@ -1026,18 +1031,18 @@ export default function OrgConsolePage() {
             {projectAddMode === 'create' && (
               <div className="space-y-3">
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">用户名</label>
+                  <label className="block text-xs text-gray-500 mb-1">{t('labelUsername')}</label>
                   <input
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                     value={projectCreateForm.username}
                     onChange={(e) =>
                       setProjectCreateForm((form) => ({ ...form, username: e.target.value }))
                     }
-                    placeholder="至少 3 个字符"
+                    placeholder={t('placeholderUsernameMin')}
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">邮箱</label>
+                  <label className="block text-xs text-gray-500 mb-1">{t('labelEmail')}</label>
                   <input
                     type="email"
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
@@ -1049,7 +1054,7 @@ export default function OrgConsolePage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">初始密码</label>
+                  <label className="block text-xs text-gray-500 mb-1">{t('labelInitialPassword')}</label>
                   <input
                     type="password"
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
@@ -1057,14 +1062,14 @@ export default function OrgConsolePage() {
                     onChange={(e) =>
                       setProjectCreateForm((form) => ({ ...form, password: e.target.value }))
                     }
-                    placeholder="至少 6 个字符"
+                    placeholder={t('placeholderPasswordMin')}
                   />
                 </div>
               </div>
             )}
 
             <div>
-              <label className="block text-xs text-gray-500 mb-1">项目角色</label>
+              <label className="block text-xs text-gray-500 mb-1">{t('labelProjectRole')}</label>
               <select
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 value={projectAddRole}
@@ -1082,7 +1087,7 @@ export default function OrgConsolePage() {
                 className="flex-1 px-4 py-2 text-sm border border-gray-300 rounded-lg"
                 onClick={() => setProjectAddTarget(null)}
               >
-                取消
+                {t('btnCancel')}
               </button>
               <button
                 type="button"
@@ -1094,7 +1099,7 @@ export default function OrgConsolePage() {
                 }
                 onClick={submitAddToProject}
               >
-                {projectAddSaving ? '提交中…' : '确认加入'}
+                {projectAddSaving ? t('submittingEllipsis') : t('btnConfirmJoin')}
               </button>
             </div>
           </div>

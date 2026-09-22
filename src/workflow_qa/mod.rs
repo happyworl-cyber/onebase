@@ -1,3 +1,5 @@
+use crate::error::AppError;
+
 mod callers;
 mod finding;
 mod provider;
@@ -155,12 +157,20 @@ pub fn lint_unsaved(
     input_schema: Option<&serde_json::Value>,
     nodes: &serde_json::Value,
     edges: &serde_json::Value,
-) -> Result<Vec<Finding>, String> {
+) -> Result<Vec<Finding>, AppError> {
     if !nodes.is_array() {
-        return Err("nodes 必须是 JSON 数组".into());
+        return Err(AppError::validation(
+            "wfqa_nodes_not_array",
+            "nodes 必须是 JSON 数组",
+            serde_json::json!({}),
+        ));
     }
     if !edges.is_array() {
-        return Err("edges 必须是 JSON 数组".into());
+        return Err(AppError::validation(
+            "wfqa_edges_not_array",
+            "edges 必须是 JSON 数组",
+            serde_json::json!({}),
+        ));
     }
     let wf = WorkflowSnapshot {
         id: 0,

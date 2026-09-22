@@ -18,6 +18,7 @@
  */
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import { Graph, type NodeBadgeStyleProps } from '@antv/g6'
 import { SHARED_DEPARTMENT_NAME } from '@/components/workflow/list/types'
@@ -67,18 +68,18 @@ import {
 
 /** 方案一·聚合视图三档：明细（现状）/ 按分类聚合 / 按服务聚合。 */
 type ViewMode = 'detail' | 'aggregate-category' | 'aggregate-service'
-const VIEW_MODE_META: Record<ViewMode, { label: string; icon: string }> = {
-  detail: { label: '明细', icon: 'fa-diagram-project' },
-  'aggregate-category': { label: '按分类聚合', icon: 'fa-layer-group' },
-  'aggregate-service': { label: '按服务聚合', icon: 'fa-boxes-stacked' },
+const VIEW_MODE_META: Record<ViewMode, { labelKey: string; icon: string }> = {
+  detail: { labelKey: 'vmDetail', icon: 'fa-diagram-project' },
+  'aggregate-category': { labelKey: 'vmAggCat', icon: 'fa-layer-group' },
+  'aggregate-service': { labelKey: 'vmAggSvc', icon: 'fa-boxes-stacked' },
 }
 const VIEW_MODE_ORDER: ViewMode[] = ['detail', 'aggregate-category', 'aggregate-service']
 
 /** 方案二·分簇方式三档：不分簇（纯力导）/ 按分类（现状两级 combo）/ 按服务（只留一级 combo）。 */
-const CLUSTER_MODE_META: Record<ClusterMode, { label: string; icon: string }> = {
-  none: { label: '不分簇', icon: 'fa-braille' },
-  category: { label: '按分类', icon: 'fa-folder-tree' },
-  service: { label: '按服务', icon: 'fa-building' },
+const CLUSTER_MODE_META: Record<ClusterMode, { labelKey: string; icon: string }> = {
+  none: { labelKey: 'clNone', icon: 'fa-braille' },
+  category: { labelKey: 'clCat', icon: 'fa-folder-tree' },
+  service: { labelKey: 'clSvc', icon: 'fa-building' },
 }
 const CLUSTER_MODE_ORDER: ClusterMode[] = ['none', 'category', 'service']
 
@@ -97,29 +98,29 @@ type BuiltUnion =
   | { mode: 'aggregate'; level: AggregationLevel; data: AggregatedGraphData }
 
 /** 盘点治理过滤（P1.2）三档：全部 / 孤儿（无入边） / 无出边。 */
-const GOV_FILTER_META: Record<GovernanceFilter, { label: string; icon: string }> = {
-  none: { label: '全部', icon: 'fa-list' },
-  orphan: { label: '孤儿（无入边）', icon: 'fa-unlink' },
-  'no-outgoing': { label: '无出边', icon: 'fa-hand' },
+const GOV_FILTER_META: Record<GovernanceFilter, { labelKey: string; icon: string }> = {
+  none: { labelKey: 'gfNone', icon: 'fa-list' },
+  orphan: { labelKey: 'gfOrphan', icon: 'fa-unlink' },
+  'no-outgoing': { labelKey: 'gfNoOut', icon: 'fa-hand' },
 }
 const GOV_FILTER_ORDER: GovernanceFilter[] = ['none', 'orphan', 'no-outgoing']
 
 /** 侧栏排行榜三档 key（方案三③）。 */
 type RankingKey = keyof Rankings
-const RANKING_META: Record<RankingKey, { label: string; icon: string }> = {
-  mostDependedOn: { label: '被依赖最多', icon: 'fa-arrow-down-to-bracket' },
-  mostDependencies: { label: '依赖别人最多', icon: 'fa-arrow-up-from-bracket' },
-  bulkiest: { label: '最臃肿', icon: 'fa-weight-hanging' },
+const RANKING_META: Record<RankingKey, { labelKey: string; icon: string }> = {
+  mostDependedOn: { labelKey: 'rkMostDep', icon: 'fa-arrow-down-to-bracket' },
+  mostDependencies: { labelKey: 'rkMostDeps', icon: 'fa-arrow-up-from-bracket' },
+  bulkiest: { labelKey: 'rkBulkiest', icon: 'fa-weight-hanging' },
 }
 const RANKING_ORDER: RankingKey[] = ['mostDependedOn', 'mostDependencies', 'bulkiest']
 
 // 侧栏选中详情·运行状态指标（方案 B）：与配色图例同一套色值/文案，保证"图上配色刻度"和
 // "详情面板文字"读起来是同一件事；这四项与当前 colorMode 无关，选中节点后恒定显示。
 /** 活跃度文案：中档/低档的天数跟随后端返回的统计窗口（= 运行记录保留期），不写死 7。 */
-function activityLabel(activity: DependencyGraphNode['activity'], windowDays: number): string {
-  if (activity === 'active') return '活跃（24 小时内跑过）'
-  if (activity === 'idle') return `一般（${windowDays} 天内跑过）`
-  return `沉寂（${windowDays} 天以上无运行）`
+function activityLabel(activity: DependencyGraphNode['activity'], windowDays: number, tr: (k: string, p?: any) => string): string {
+  if (activity === 'active') return tr('actActive')
+  if (activity === 'idle') return tr('actIdle', { n: windowDays })
+  return tr('actDormant', { n: windowDays })
 }
 const DETAIL_ACTIVITY_DOT: Record<DependencyGraphNode['activity'], string> = { active: '#22c55e', idle: '#f59e0b', dormant: '#94a3b8' }
 
@@ -386,6 +387,7 @@ export default function WorkflowGraphCanvas({
   mockData = null,
   focusId = null,
 }: Props) {
+  const tr = useTranslations('wfGraph')
   const router = useRouter()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const graphRef = useRef<Graph | null>(null)
@@ -492,7 +494,7 @@ export default function WorkflowGraphCanvas({
         if (!cancelled) setResp(data)
       })
       .catch((err) => {
-        if (!cancelled) setErrorMsg(err?.message || '依赖图加载失败')
+        if (!cancelled) setErrorMsg(err?.message || tr('loadFailed'))
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -1083,20 +1085,20 @@ export default function WorkflowGraphCanvas({
               const label = d.level === 'service' ? d.department : `${d.department} / ${d.category}`
               wrap.innerHTML = `
                 <div class="text-sm font-semibold leading-snug">${escapeHtml(label)}</div>
-                <div class="mt-1 text-slate-300">工作流条数：${d.count ?? 0}</div>
-                <div class="mt-1 text-slate-400">点击下钻查看明细</div>
+                <div class="mt-1 text-slate-300">${escapeHtml(tr('ttWfCount', { n: d.count ?? 0 }))}</div>
+                <div class="mt-1 text-slate-400">${escapeHtml(tr('ttClickDrill'))}</div>
               `
               return wrap
             }
             const external = d.external
-              ? '<span class="ml-1.5 rounded bg-slate-500 px-1 py-0.5 text-[10px] font-medium text-white">外部依赖</span>'
+              ? `<span class="ml-1.5 rounded bg-slate-500 px-1 py-0.5 text-[10px] font-medium text-white">${escapeHtml(tr('ttExternalDep'))}</span>`
               : ''
             wrap.innerHTML = `
               <div class="text-sm font-semibold leading-snug">${escapeHtml(d.name || d.slug || '')}${external}</div>
               <div class="mt-1 text-slate-300">slug: ${escapeHtml(d.slug || '')}</div>
               <div class="text-slate-300">id: ${escapeHtml(String(it?.id ?? ''))}</div>
-              <div class="mt-1 text-slate-400">${escapeHtml(d.department || '共享')} / ${escapeHtml(d.category || '未分类')} · 节点数 ${d.nodeCount ?? 0}${
-                typeof d.inDegree === 'number' && d.inDegree > 0 ? ` · 被依赖 ${d.inDegree} 次` : ''
+              <div class="mt-1 text-slate-400">${escapeHtml(tr('ttDeptCat', { dept: d.department || tr('ttShared'), cat: d.category || tr('ttUncategorized'), n: d.nodeCount ?? 0 }))}${
+                typeof d.inDegree === 'number' && d.inDegree > 0 ? escapeHtml(tr('ttInDegree', { n: d.inDegree })) : ''
               }</div>
             `
             return wrap
@@ -2092,7 +2094,7 @@ export default function WorkflowGraphCanvas({
                 }`}
               >
                 <i className={`fas ${VIEW_MODE_META[mode].icon} text-[11px]`} />
-                {VIEW_MODE_META[mode].label}
+                {tr(VIEW_MODE_META[mode].labelKey)}
               </button>
             ))}
           </div>
@@ -2114,7 +2116,7 @@ export default function WorkflowGraphCanvas({
                   }`}
                 >
                   <i className={`fas ${CLUSTER_MODE_META[mode].icon} text-[11px]`} />
-                  {CLUSTER_MODE_META[mode].label}
+                  {tr(CLUSTER_MODE_META[mode].labelKey)}
                 </button>
               ))}
             </div>
@@ -2147,7 +2149,7 @@ export default function WorkflowGraphCanvas({
                       active ? 'bg-slate-700 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
                     }`}
                   >
-                    {meta.shortLabel}
+                    {tr(meta.shortLabelKey)}
                     <span
                       className={`rounded-full px-1.5 text-[10px] ${active ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'}`}
                     >
@@ -2162,7 +2164,7 @@ export default function WorkflowGraphCanvas({
                   onClick={() => setSpecialFlagFilter(new Set())}
                   className="whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-medium text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
                 >
-                  清除
+                  {tr('clear')}
                 </button>
               )}
             </div>
@@ -2175,7 +2177,7 @@ export default function WorkflowGraphCanvas({
               className="flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50/95 px-2.5 py-1.5 text-xs font-medium text-indigo-700 shadow-soft backdrop-blur hover:bg-indigo-100"
             >
               <i className="fas fa-arrow-left text-[10px]" />
-              返回聚合视图 · 当前下钻：{drilldownLabel}
+              {tr('backToAgg', { label: drilldownLabel })}
             </button>
           )}
 
@@ -2196,7 +2198,7 @@ export default function WorkflowGraphCanvas({
                   }`}
                 >
                   <i className={`fas ${COLOR_MODE_META[mode].icon} text-[11px]`} />
-                  {COLOR_MODE_META[mode].label}
+                  {tr(COLOR_MODE_META[mode].labelKey)}
                 </button>
               ))}
             </div>
@@ -2214,7 +2216,7 @@ export default function WorkflowGraphCanvas({
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={handleSearchKeyDown}
-                placeholder="搜索 workflow id / slug / 名称…"
+                placeholder={tr('phSearch')}
                 className="w-full bg-transparent text-xs text-slate-700 placeholder:text-slate-400 outline-none"
               />
               {searchQuery && (
@@ -2229,7 +2231,7 @@ export default function WorkflowGraphCanvas({
               {/* 编号多选筛选入口：粘贴一批 id 只渲染这些工作流 + 它们的下游链路。 */}
               <button
                 data-alt="graph-id-filter-toggle"
-                title="按编号多选筛选"
+                title={tr('multiSelectTitle')}
                 onClick={() => setIdFilterOpen((v) => !v)}
                 className={`relative shrink-0 rounded px-1 transition ${
                   idFilter.size > 0 || idFilterOpen ? 'text-indigo-600' : 'text-slate-400 hover:text-slate-600'
@@ -2259,12 +2261,12 @@ export default function WorkflowGraphCanvas({
                     }
                   }}
                   rows={3}
-                  placeholder="粘贴多个 workflow id，逗号 / 空格 / 换行分隔，Enter 应用"
+                  placeholder={tr('phPasteIds')}
                   className="w-full resize-none rounded-md border border-slate-200 px-2 py-1.5 text-xs text-slate-700 placeholder:text-slate-400 outline-none focus:border-indigo-300"
                 />
                 <div className="mt-1.5 flex items-center justify-between">
                   <span className="text-[10px] text-slate-400">
-                    {idFilter.size > 0 ? `已筛 ${filterIds.size} 个本体（含 chip 命中）` : '未筛选'}
+                    {idFilter.size > 0 ? tr('filteredN', { n: filterIds.size }) : tr('notFiltered')}
                   </span>
                   <div className="flex items-center gap-1">
                     {idFilter.size > 0 && (
@@ -2273,7 +2275,7 @@ export default function WorkflowGraphCanvas({
                         onClick={() => setIdFilter(new Set())}
                         className="rounded-md px-2 py-1 text-xs text-slate-400 hover:bg-slate-100 hover:text-slate-600"
                       >
-                        清空
+                        {tr('clearAll')}
                       </button>
                     )}
                     <button
@@ -2282,7 +2284,7 @@ export default function WorkflowGraphCanvas({
                       disabled={!idFilterDraft.trim()}
                       className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-40"
                     >
-                      应用
+                      {tr('apply')}
                     </button>
                   </div>
                 </div>
@@ -2294,7 +2296,7 @@ export default function WorkflowGraphCanvas({
                         <button
                           key={id}
                           data-alt={`graph-id-filter-chip-${id}`}
-                          title={node ? `${node.name || node.slug}` : '当前数据里不存在'}
+                          title={node ? `${node.name || node.slug}` : tr('notExist')}
                           onClick={() => removeIdFilter(id)}
                           className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] ${
                             node ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-100 text-slate-400 line-through'
@@ -2337,7 +2339,7 @@ export default function WorkflowGraphCanvas({
                 data-alt="graph-search-empty"
                 className="mt-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-400 shadow-soft"
               >
-                无匹配结果
+                {tr('noMatch')}
               </div>
             )}
           </div>
@@ -2350,7 +2352,7 @@ export default function WorkflowGraphCanvas({
             className="absolute right-3 top-3 z-10 rounded-lg border border-slate-200 bg-white/95 px-2.5 py-1.5 text-[11px] text-slate-400 shadow-soft backdrop-blur"
           >
             <i className="fas fa-hand-pointer text-[10px] mr-1" />
-            点击簇节点可下钻查看明细
+            {tr('clickDrillHint')}
           </div>
         )}
 
@@ -2361,7 +2363,7 @@ export default function WorkflowGraphCanvas({
           >
             <div className="flex items-center gap-2 rounded-lg border border-slate-100 bg-white px-4 py-2.5 text-sm text-slate-500 shadow-soft">
               <i className="fas fa-circle-notch fa-spin text-indigo-400" />
-              依赖图加载中…
+              {tr('graphLoading')}
             </div>
           </div>
         )}
@@ -2383,7 +2385,7 @@ export default function WorkflowGraphCanvas({
           >
             <div className="flex items-center gap-2 rounded-lg border border-slate-100 bg-white px-4 py-2.5 text-sm text-slate-400 shadow-soft">
               <i className="fas fa-diagram-project text-slate-300" />
-              当前库暂无工作流，无法生成依赖图
+              {tr('emptyGraph')}
             </div>
           </div>
         )}
@@ -2392,15 +2394,15 @@ export default function WorkflowGraphCanvas({
       <aside data-alt="graph-side-panel" className="w-72 shrink-0 border-l border-slate-200 bg-white p-4 overflow-y-auto">
         {isDetail && colorMode === 'department' && filterActive && (
           <div data-alt="graph-filter-legend" className="mb-6">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">筛选子图</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{tr('filterSubgraph')}</div>
             <div className="space-y-1 text-sm text-slate-700">
               <div className="flex items-center gap-2 px-2 py-1">
                 <span className="h-3 w-3 shrink-0 rounded-full border-2" style={{ background: FILTER_SELF_SWATCH.fill, borderColor: FILTER_SELF_SWATCH.stroke }} />
-                本体（筛选命中）
+                {tr('selfHit')}
               </div>
               <div className="flex items-center gap-2 px-2 py-1">
                 <span className="h-3 w-3 shrink-0 rounded-full border-2 border-dashed" style={{ background: FILTER_DEP_SWATCH.fill, borderColor: FILTER_DEP_SWATCH.stroke }} />
-                下游依赖链路
+                {tr('downstreamChain')}
               </div>
             </div>
           </div>
@@ -2408,7 +2410,7 @@ export default function WorkflowGraphCanvas({
         {isDetail && colorMode === 'department' && (
           <div data-alt="graph-legend" className="mb-6">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">
-              特殊节点图例（点击筛显隐）
+              {tr('specialLegend')}
             </div>
             <div className="space-y-1">
               {Object.entries(SPECIAL_FLAG_META).map(([flag, meta]) => (
@@ -2424,7 +2426,7 @@ export default function WorkflowGraphCanvas({
                 >
                   <span className={`h-2 w-2 shrink-0 rounded-full ${meta.dotClass}`} />
                   <i className={`fas ${meta.faClass} text-xs text-slate-500`} />
-                  <span className="text-slate-700">{meta.label}</span>
+                  <span className="text-slate-700">{tr(meta.labelKey)}</span>
                 </button>
               ))}
             </div>
@@ -2433,29 +2435,29 @@ export default function WorkflowGraphCanvas({
         {isDetail && colorMode !== 'department' && (
           <div data-alt="graph-color-legend" className="mb-6">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">
-              {COLOR_MODE_META[colorMode].label} 色标
+              {tr('colorLegend', { mode: tr(COLOR_MODE_META[colorMode].labelKey) })}
             </div>
             {colorMode === 'errorRate' ? (
               <div data-alt="legend-error-rate-tiers" className="space-y-1">
                 {ERROR_RATE_TIERS.map((t) => (
                   <div key={t.tier} data-alt={`legend-error-rate-${t.tier}`} className="flex items-center gap-2 px-2 py-1 text-sm">
                     <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: t.swatch.stroke }} />
-                    <span className="text-slate-700">{t.tier === 'none' ? `${windowDays} 天内无运行` : t.label}</span>
+                    <span className="text-slate-700">{t.tier === 'none' ? tr('noRunInWindow', { n: windowDays }) : tr(t.labelKey)}</span>
                   </div>
                 ))}
-                <div className="px-2 text-[11px] text-slate-400">近 {windowDays} 天失败率（含超时）</div>
+                <div className="px-2 text-[11px] text-slate-400">{tr('errorRateWindow', { n: windowDays })}</div>
               </div>
             ) : (
               <div className="space-y-1">
                 {(colorMode === 'enabled'
                   ? [
-                      { key: 'on', label: '启用', color: '#10b981' },
-                      { key: 'off', label: '禁用', color: '#94a3b8' },
+                      { key: 'on', label: tr('enabled'), color: '#10b981' },
+                      { key: 'off', label: tr('disabled'), color: '#94a3b8' },
                     ]
                   : [
-                      { key: 'active', label: '活跃（24 小时内跑过）', color: '#22c55e' },
-                      { key: 'idle', label: activityLabel('idle', windowDays), color: '#f59e0b' },
-                      { key: 'dormant', label: activityLabel('dormant', windowDays), color: '#94a3b8' },
+                      { key: 'active', label: tr('actActive'), color: '#22c55e' },
+                      { key: 'idle', label: activityLabel('idle', windowDays, tr), color: '#f59e0b' },
+                      { key: 'dormant', label: activityLabel('dormant', windowDays, tr), color: '#94a3b8' },
                     ]
                 ).map((item) => (
                   <div key={item.key} data-alt={`legend-color-${item.key}`} className="flex items-center gap-2 px-2 py-1 text-sm">
@@ -2471,39 +2473,38 @@ export default function WorkflowGraphCanvas({
         {resp && (
           <div data-alt="graph-summary" className="mb-6 text-xs text-slate-500 space-y-1">
             <div>
-              范围：{scope ? `${scope.department} / ${scope.category}` : '全部工作流'}
+              {tr('scope', { scope: scope ? `${scope.department} / ${scope.category}` : tr('allWorkflows') })}
             </div>
-            <div>节点数：{resp.nodes.length}</div>
-            <div>依赖边数：{resp.edges.length}</div>
-            {resp.unresolved > 0 && <div className="text-amber-600">未解析目标：{resp.unresolved}</div>}
+            <div>{tr('nodeCount', { n: resp.nodes.length })}</div>
+            <div>{tr('edgeCount', { n: resp.edges.length })}</div>
+            {resp.unresolved > 0 && <div className="text-amber-600">{tr('unresolvedTargets', { n: resp.unresolved })}</div>}
           </div>
         )}
 
         {!isDetail && (
           <div data-alt="aggregate-side-hint" className="border-t border-slate-100 pt-4 text-xs text-slate-400">
-            聚合视图下节点是"簇"（{viewMode === 'aggregate-service' ? '按服务' : '按分类'}），大小=簇内工作流条数，
-            簇间连线粗细/数字=跨簇调用条数。点击任意簇节点下钻查看该簇明细。
+            {tr('aggHint', { mode: viewMode === 'aggregate-service' ? tr('clSvc') : tr('clCat') })}
           </div>
         )}
 
         {isDetail && selectedNode ? (
           <div data-alt="graph-selected-panel" className="border-t border-slate-100 pt-4">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">
-              选中工作流（高亮上下游）
+              {tr('selectedWf')}
             </div>
             <div className="flex items-center gap-1.5 mb-1">
               <div className="text-sm font-medium text-slate-800">{selectedNode.name}</div>
               {selectedNode.external && (
                 <span className="rounded bg-slate-500 px-1.5 py-0.5 text-[10px] font-medium text-white">
-                  外部依赖
+                  {tr('ttExternalDep')}
                 </span>
               )}
             </div>
             <div className="text-xs text-slate-500 mb-1">slug: {selectedNode.slug}</div>
             <div className="text-xs text-slate-500 mb-1">
-              {selectedNode.department || '共享'} / {selectedNode.category || '未分类'}
+              {selectedNode.department || tr('ttShared')} / {selectedNode.category || tr('ttUncategorized')}
             </div>
-            <div className="text-xs text-slate-500 mb-3">节点数：{selectedNode.nodeCount}</div>
+            <div className="text-xs text-slate-500 mb-3">{tr('nodeCountShort', { n: selectedNode.nodeCount })}</div>
 
             {/* 运行状态指标恒定显示（与当前配色切换器选的是哪一档无关）——启停/活跃度/
                 窗口内错误率（带运行与失败次数，追踪时先看量级），色值与配色图例刻度同源。 */}
@@ -2513,26 +2514,25 @@ export default function WorkflowGraphCanvas({
                   className="h-2 w-2 shrink-0 rounded-full"
                   style={{ backgroundColor: selectedNode.enabled ? '#10b981' : '#94a3b8' }}
                 />
-                <span className="text-slate-500">启停</span>
-                <span className="ml-auto font-medium text-slate-700">{selectedNode.enabled ? '启用' : '禁用'}</span>
+                <span className="text-slate-500">{tr('onOff')}</span>
+                <span className="ml-auto font-medium text-slate-700">{selectedNode.enabled ? tr('enabled') : tr('disabled')}</span>
               </div>
               <div className="flex items-center gap-1.5 rounded-md bg-slate-50 px-2 py-1 text-[11px]">
                 <span
                   className="h-2 w-2 shrink-0 rounded-full"
                   style={{ backgroundColor: DETAIL_ACTIVITY_DOT[selectedNode.activity] }}
                 />
-                <span className="text-slate-500">活跃度</span>
-                <span className="ml-auto font-medium text-slate-700">{activityLabel(selectedNode.activity, windowDays)}</span>
+                <span className="text-slate-500">{tr('activity')}</span>
+                <span className="ml-auto font-medium text-slate-700">{activityLabel(selectedNode.activity, windowDays, tr)}</span>
               </div>
               <div className="col-span-2 flex items-center gap-1.5 rounded-md bg-slate-50 px-2 py-1 text-[11px]">
                 <span
                   className="h-2 w-2 shrink-0 rounded-full"
                   style={{ backgroundColor: errorRateColor(selectedNode.errorRate, selectedNode.windowRuns).stroke }}
                 />
-                <span className="text-slate-500">近 {windowDays} 天</span>
+                <span className="text-slate-500">{tr('lastNDays', { n: windowDays })}</span>
                 <span className="ml-auto font-medium text-slate-700">
-                  {selectedNode.windowRuns.toLocaleString()} 次 · 失败 {selectedNode.windowFailed.toLocaleString()} 次 ·{' '}
-                  {selectedNode.windowRuns > 0 ? `${(selectedNode.errorRate * 100).toFixed(selectedNode.errorRate < 0.01 && selectedNode.errorRate > 0 ? 2 : 0)}%` : '无运行'}
+                  {tr('runsFailedLine', { runs: selectedNode.windowRuns.toLocaleString(), failed: selectedNode.windowFailed.toLocaleString(), rate: selectedNode.windowRuns > 0 ? `${(selectedNode.errorRate * 100).toFixed(selectedNode.errorRate < 0.01 && selectedNode.errorRate > 0 ? 2 : 0)}%` : tr('noRun') })}
                 </span>
               </div>
             </div>
@@ -2544,7 +2544,7 @@ export default function WorkflowGraphCanvas({
               <label className="flex items-center justify-between gap-2 text-xs text-slate-600 cursor-pointer select-none">
                 <span className="flex items-center gap-1.5">
                   <i className="fas fa-shoe-prints text-[11px] text-slate-400" />
-                  排障逐跳模式
+                  {tr('hopMode')}
                 </span>
                 <input
                   data-alt="step-hop-toggle"
@@ -2564,10 +2564,10 @@ export default function WorkflowGraphCanvas({
                     className="flex-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <i className="fas fa-arrow-left text-[10px] mr-1" />
-                    上一跳
+                    {tr('prevHop')}
                   </button>
                   <span className="shrink-0 text-[11px] tabular-nums text-slate-400">
-                    第 {hopDepth} / {closureInfo.maxDepth} 跳
+                    {tr('hopOf', { cur: hopDepth, max: closureInfo.maxDepth })}
                   </span>
                   <button
                     data-alt="step-hop-next"
@@ -2576,7 +2576,7 @@ export default function WorkflowGraphCanvas({
                     onClick={() => setHopDepth((d) => Math.min(closureInfo.maxDepth, d + 1))}
                     className="flex-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    下一跳
+                    {tr('nextHop')}
                     <i className="fas fa-arrow-right text-[10px] ml-1" />
                   </button>
                 </div>
@@ -2589,13 +2589,13 @@ export default function WorkflowGraphCanvas({
               className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-700"
             >
               <i className="fas fa-arrow-up-right-from-square text-xs" />
-              打开工作流编辑器
+              {tr('openEditor')}
             </button>
-            <div className="mt-2 text-[11px] text-slate-400">双击节点可直接跳转</div>
+            <div className="mt-2 text-[11px] text-slate-400">{tr('dblClickJump')}</div>
           </div>
         ) : isDetail ? (
           <div data-alt="graph-hint" className="border-t border-slate-100 pt-4 text-xs text-slate-400">
-            点击节点查看详情并高亮改动影响面；双击节点跳转到工作流编辑器；鼠标悬停节点可预览其上下游。
+            {tr('clickNodeHint')}
           </div>
         ) : null}
 
@@ -2603,7 +2603,7 @@ export default function WorkflowGraphCanvas({
             浮层堆两套 UI。仅明细视图有意义。选中详情置于最上，榜单类内容沉底。 */}
         {isDetail && (
           <div data-alt="governance-filter-panel" className="mt-6 border-t border-slate-100 pt-4">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">盘点治理过滤</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{tr('govFilter')}</div>
             <div className="flex flex-wrap gap-1">
               {GOV_FILTER_ORDER.map((f) => (
                 <button
@@ -2611,7 +2611,7 @@ export default function WorkflowGraphCanvas({
                   data-alt={`gov-filter-${f}`}
                   onClick={() => setGovFilter((prev) => (prev === f ? 'none' : f))}
                   disabled={!!selectedId}
-                  title={selectedId ? '已选中节点时治理过滤暂不生效，先取消选中' : undefined}
+                  title={selectedId ? tr('govFilterDisabledTitle') : undefined}
                   className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition disabled:opacity-40 disabled:cursor-not-allowed ${
                     govFilter === f
                       ? 'border-amber-500 bg-amber-500 text-white'
@@ -2619,7 +2619,7 @@ export default function WorkflowGraphCanvas({
                   }`}
                 >
                   <i className={`fas ${GOV_FILTER_META[f].icon} text-[11px]`} />
-                  {GOV_FILTER_META[f].label}
+                  {tr(GOV_FILTER_META[f].labelKey)}
                 </button>
               ))}
             </div>
@@ -2649,19 +2649,20 @@ const RankingsPanel = memo(function RankingsPanel({
   rankings: Rankings | null
   onFocus: (id: string) => void
 }) {
+  const tr = useTranslations('wfGraph')
   if (!rankings) return null
   return (
     <div data-alt="graph-rankings-panel" className="mt-6 border-t border-slate-100 pt-4">
-      <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">依赖排行榜</div>
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{tr('rankings')}</div>
       <div className="space-y-3">
         {RANKING_ORDER.map((key) => (
           <div key={key} data-alt={`ranking-group-${key}`}>
             <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 mb-1">
               <i className={`fas ${RANKING_META[key].icon} text-[10px]`} />
-              {RANKING_META[key].label} Top{rankings[key].length}
+              {tr('rankingTop', { label: tr(RANKING_META[key].labelKey), n: rankings[key].length })}
             </div>
             {rankings[key].length === 0 ? (
-              <div className="text-[11px] text-slate-300 pl-1">暂无数据</div>
+              <div className="text-[11px] text-slate-300 pl-1">{tr('noData')}</div>
             ) : (
               <div className="space-y-0.5">
                 {rankings[key].map((entry, idx) => (

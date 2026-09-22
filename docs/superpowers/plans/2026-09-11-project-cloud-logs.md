@@ -157,7 +157,7 @@ mod tests {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p onebase --lib cloud_log:: -- --nocapture`
+Run: `cargo test -p planeos --lib cloud_log:: -- --nocapture`
 
 Expected: compile error or FAIL (functions missing / `todo!()`).
 
@@ -279,7 +279,7 @@ Add `pub mod cloud_log;` in `src/lib.rs` and `mod cloud_log;` in `src/main.rs`.
 
 - [ ] **Step 4: Run tests**
 
-Run: `cargo test -p onebase --lib cloud_log:: -- --nocapture`
+Run: `cargo test -p planeos --lib cloud_log:: -- --nocapture`
 
 Expected: PASS
 
@@ -340,7 +340,7 @@ Append to `src/workflow_credentials.rs` tests:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p onebase --lib workflow_credentials::tests::aliyun_ak_kind_rules -- --nocapture`
+Run: `cargo test -p planeos --lib workflow_credentials::tests::aliyun_ak_kind_rules -- --nocapture`
 
 Expected: FAIL (`workflow_loads_kind` missing and/or `validate_kind` rejects `aliyun_ak`)
 
@@ -382,7 +382,7 @@ Do **not** add `field_value` arms for `aliyun_ak`.
 
 - [ ] **Step 4: Run tests**
 
-Run: `cargo test -p onebase --lib workflow_credentials:: -- --nocapture`
+Run: `cargo test -p planeos --lib workflow_credentials:: -- --nocapture`
 
 Expected: PASS (old tests + new)
 
@@ -452,9 +452,9 @@ After the 064 entry:
 
 - [ ] **Step 3: Compile**
 
-Run: `cargo test -p onebase --lib migrate:: -- --nocapture`
+Run: `cargo test -p planeos --lib migrate:: -- --nocapture`
 
-Expected: compile succeeds. If there is no `migrate` test, `cargo check -p onebase --lib` is enough.
+Expected: compile succeeds. If there is no `migrate` test, `cargo check -p planeos --lib` is enough.
 
 - [ ] **Step 4: Commit** (skip until asked)
 
@@ -514,11 +514,11 @@ Put it in `datasource_handlers.rs` and add under `#[cfg(test)]`:
     }
 ```
 
-If `datasource_handlers` has no `#[cfg(test)]` yet, add `#[cfg(test)] mod tests { use super::*; ... }` at the file end. This module is **bin-only** — run with `cargo test --bin onebase credential_in_use`.
+If `datasource_handlers` has no `#[cfg(test)]` yet, add `#[cfg(test)] mod tests { use super::*; ... }` at the file end. This module is **bin-only** — run with `cargo test --bin planeos credential_in_use`.
 
 - [ ] **Step 2: Run test**
 
-Run: `cargo test --bin onebase credential_in_use -- --nocapture`
+Run: `cargo test --bin planeos credential_in_use -- --nocapture`
 
 Expected: FAIL until the helper exists, then PASS after Step 3 if you implement helper first. Prefer helper + test together, then wire delete.
 
@@ -547,7 +547,7 @@ In `delete_credential`, query both counts (two scalars or one query with two col
 
 - [ ] **Step 4: Run tests**
 
-Run: `cargo test --bin onebase credential_in_use -- --nocapture`
+Run: `cargo test --bin planeos credential_in_use -- --nocapture`
 
 Expected: PASS
 
@@ -691,7 +691,7 @@ mod tests {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p onebase --lib cloud_log_aliyun:: -- --nocapture`
+Run: `cargo test -p planeos --lib cloud_log_aliyun:: -- --nocapture`
 
 Expected: compile error / FAIL
 
@@ -737,7 +737,7 @@ impl SlsHttp for ReqwestSlsHttp {
 
 - [ ] **Step 4: Run tests**
 
-Run: `cargo test -p onebase --lib cloud_log_aliyun:: -- --nocapture`
+Run: `cargo test -p planeos --lib cloud_log_aliyun:: -- --nocapture`
 
 Expected: PASS
 
@@ -875,9 +875,9 @@ List JSON keys: `id, name, provider, credential_id, credential_name, region, sls
 
 - [ ] **Step 4: Compile**
 
-Run: `cargo test --bin onebase log_source_row_json -- --nocapture`
+Run: `cargo test --bin planeos log_source_row_json -- --nocapture`
 
-Expected: PASS. Also `cargo check --bin onebase`.
+Expected: PASS. Also `cargo check --bin planeos`.
 
 - [ ] **Step 5: Commit** (skip until asked)
 

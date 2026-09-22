@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   sseNotifyBridgeAPI,
   tenantAPI,
@@ -61,6 +62,7 @@ interface Props {
 
 export default function SseNotifyBridgePanel({ tenantId, defaultDatabaseId }: Props) {
   const notify = useNotification()
+  const t = useTranslations('sseNotifyBridge')
 
   const [bridges, setBridges] = useState<SseNotifyBridge[]>([])
   const [connections, setConnections] = useState<ConnRow[]>([])
@@ -93,15 +95,16 @@ export default function SseNotifyBridgePanel({ tenantId, defaultDatabaseId }: Pr
       seen.set(c.database_id, {
         id: c.database_id,
         label: `${c.connection_name || c.db_name} (${c.db_host}:${c.db_port}/${c.db_name})${
-          c.is_primary ? ' · 主' : ''
+          c.is_primary ? t('primarySuffix') : ''
         }`,
       })
     }
     return Array.from(seen.values())
-  }, [connections, tenantId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connections, tenantId, t])
 
   const dbLabel = (id: number) =>
-    databaseOptions.find((d) => d.id === id)?.label ?? `库 #${id}`
+    databaseOptions.find((d) => d.id === id)?.label ?? t('dbFallbackLabel', { id })
 
   const load = async () => {
     try {
@@ -153,19 +156,19 @@ export default function SseNotifyBridgePanel({ tenantId, defaultDatabaseId }: Pr
 
   const handleSave = async () => {
     if (!form.database_id.trim()) {
-      notify.warning('请选择数据库')
+      notify.warning(t('selectDb'))
       return
     }
     if (!form.channel.trim()) {
-      notify.warning('请填写 NOTIFY channel')
+      notify.warning(t('fillChannel'))
       return
     }
     if (!form.topic_template.trim()) {
-      notify.warning('请填写目标 topic 模板')
+      notify.warning(t('fillTopicTemplate'))
       return
     }
     if (!form.event_name.trim()) {
-      notify.warning('请填写 SSE event 名')
+      notify.warning(t('fillEventName'))
       return
     }
 
@@ -179,7 +182,7 @@ export default function SseNotifyBridgePanel({ tenantId, defaultDatabaseId }: Pr
           event_name: form.event_name.trim(),
         }
         await sseNotifyBridgeAPI.create(payload)
-        notify.success('监听桥已创建')
+        notify.success(t('createSuccess'))
       } else {
         // database_id 不可改（改库等于换 listener）；只更新模板/channel/event/启停。
         const payload: UpdateSseNotifyBridgeInput = {
@@ -188,7 +191,7 @@ export default function SseNotifyBridgePanel({ tenantId, defaultDatabaseId }: Pr
           event_name: form.event_name.trim(),
         }
         await sseNotifyBridgeAPI.update(editingId, payload)
-        notify.success('监听桥已更新')
+        notify.success(t('updateSuccess'))
       }
       setDrawerOpen(false)
       load()
@@ -202,7 +205,7 @@ export default function SseNotifyBridgePanel({ tenantId, defaultDatabaseId }: Pr
   const handleToggle = async (b: SseNotifyBridge) => {
     try {
       await sseNotifyBridgeAPI.update(b.id, { is_active: !b.is_active })
-      notify.success(b.is_active ? '监听桥已停用' : '监听桥已启用')
+      notify.success(b.is_active ? t('deactivateSuccess') : t('activateSuccess'))
       load()
     } catch (err) {
       notify.error(err as Error)
@@ -210,10 +213,10 @@ export default function SseNotifyBridgePanel({ tenantId, defaultDatabaseId }: Pr
   }
 
   const handleDelete = async (b: SseNotifyBridge) => {
-    if (!confirm(`确定删除监听桥 "${b.channel}"？`)) return
+    if (!confirm(t('deleteConfirm', { channel: b.channel }))) return
     try {
       await sseNotifyBridgeAPI.delete(b.id)
-      notify.success('监听桥已删除')
+      notify.success(t('deleteSuccess'))
       load()
     } catch (err) {
       notify.error(err as Error)
@@ -224,12 +227,13 @@ export default function SseNotifyBridgePanel({ tenantId, defaultDatabaseId }: Pr
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-4">
         <p className="text-sm text-gray-600">
-          监听业务库的 PG <code className="font-mono text-xs">NOTIFY</code>，按 topic 模板（占位符取
-          payload 字段）推成 SSE。适用于触发器 / RPC 内部产生、不经 PlaneOS API 的事件（如成长动画）。
+          {t.rich('description', {
+            code: (chunks) => <code className="font-mono text-xs">{chunks}</code>,
+          })}
         </p>
         <button onClick={openCreate} className="btn-primary whitespace-nowrap flex-shrink-0">
           <i className="fas fa-plus mr-2"></i>
-          新建监听桥
+          {t('createButton')}
         </button>
       </div>
 
@@ -241,10 +245,10 @@ export default function SseNotifyBridgePanel({ tenantId, defaultDatabaseId }: Pr
         ) : visibleBridges.length === 0 ? (
           <div className="p-12 text-center text-gray-500">
             <i className="fas fa-satellite-dish text-4xl mb-4 text-gray-300"></i>
-            <p className="mb-4">暂无监听桥</p>
+            <p className="mb-4">{t('emptyState')}</p>
             <button onClick={openCreate} className="btn-primary">
               <i className="fas fa-plus mr-2"></i>
-              新建第一条监听桥
+              {t('createFirstButton')}
             </button>
           </div>
         ) : (
@@ -288,7 +292,7 @@ export default function SseNotifyBridgePanel({ tenantId, defaultDatabaseId }: Pr
                       b.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
                     }`}
                   >
-                    {b.is_active ? '监听中' : '已停用'}
+                    {b.is_active ? t('statusActive') : t('statusInactive')}
                   </span>
                   <button
                     onClick={() => handleToggle(b)}
@@ -298,19 +302,19 @@ export default function SseNotifyBridgePanel({ tenantId, defaultDatabaseId }: Pr
                         : 'text-green-700 hover:bg-green-50'
                     }`}
                   >
-                    {b.is_active ? '停用' : '启用'}
+                    {b.is_active ? t('deactivateAction') : t('activateAction')}
                   </button>
                   <button
                     onClick={() => openEdit(b)}
                     className="px-3 py-1 text-sm text-blue-600 hover:bg-blue-50 rounded-lg"
                   >
-                    编辑
+                    {t('editAction')}
                   </button>
                   <button
                     onClick={() => handleDelete(b)}
                     className="px-3 py-1 text-sm text-red-600 hover:bg-red-50 rounded-lg"
                   >
-                    删除
+                    {t('deleteAction')}
                   </button>
                 </div>
               </div>
@@ -322,7 +326,7 @@ export default function SseNotifyBridgePanel({ tenantId, defaultDatabaseId }: Pr
       <Drawer
         isOpen={drawerOpen}
         onClose={closeDrawer}
-        title={editingId == null ? '新建监听桥' : `编辑监听桥 #${editingId}`}
+        title={editingId == null ? t('createButton') : t('editTitle', { id: editingId })}
         size="lg"
         footer={
           <div className="flex gap-3">
@@ -331,10 +335,10 @@ export default function SseNotifyBridgePanel({ tenantId, defaultDatabaseId }: Pr
               disabled={saving}
               className="flex-1 h-11 px-5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
             >
-              取消
+              {t('cancelAction')}
             </button>
             <button onClick={handleSave} disabled={saving} className="flex-1 btn-primary disabled:opacity-50">
-              {saving ? '保存中...' : editingId == null ? '创建' : '保存'}
+              {saving ? t('savingLabel') : editingId == null ? t('createSubmit') : t('saveSubmit')}
             </button>
           </div>
         }
@@ -342,7 +346,7 @@ export default function SseNotifyBridgePanel({ tenantId, defaultDatabaseId }: Pr
         <div className="space-y-5">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              数据库 <span className="text-red-500">*</span>
+              {t('fieldDatabase')} <span className="text-red-500">*</span>
             </label>
             <select
               value={form.database_id}
@@ -350,7 +354,7 @@ export default function SseNotifyBridgePanel({ tenantId, defaultDatabaseId }: Pr
               className="w-full input-base"
               disabled={editingId != null}
             >
-              <option value="">— 选择要监听 NOTIFY 的数据库 —</option>
+              <option value="">{t('selectDbOption')}</option>
               {databaseOptions.map((d) => (
                 <option key={d.id} value={String(d.id)}>
                   {d.label}
@@ -358,10 +362,10 @@ export default function SseNotifyBridgePanel({ tenantId, defaultDatabaseId }: Pr
               ))}
             </select>
             {editingId != null && (
-              <p className="mt-1 text-xs text-gray-400">数据库不可修改；如需换库请新建监听桥。</p>
+              <p className="mt-1 text-xs text-gray-400">{t('dbImmutableHint')}</p>
             )}
             {editingId == null && databaseOptions.length === 0 && (
-              <p className="mt-1 text-xs text-gray-500">本项目下暂无可用数据库</p>
+              <p className="mt-1 text-xs text-gray-500">{t('noDbAvailable')}</p>
             )}
           </div>
 
@@ -373,58 +377,73 @@ export default function SseNotifyBridgePanel({ tenantId, defaultDatabaseId }: Pr
               type="text"
               value={form.channel}
               onChange={(e) => setForm({ ...form, channel: e.target.value })}
-              placeholder="如 growth_animation_available"
+              placeholder={t('phGrowthAnimationExample')}
               className="w-full input-base font-mono text-sm"
               maxLength={63}
             />
             <p className="mt-1 text-xs text-gray-400">
-              业务库里 <code className="font-mono">NOTIFY &lt;channel&gt;, &apos;...json...&apos;</code> 用的频道名（≤63 字节）。
+              {t.rich('channelHint', {
+                code: (chunks) => <code className="font-mono">{chunks}</code>,
+              })}
             </p>
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              目标 topic 模板 <span className="text-red-500">*</span>
+              {t('fieldTopicTemplate')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
               value={form.topic_template}
               onChange={(e) => setForm({ ...form, topic_template: e.target.value })}
-              placeholder="如 way:{wayUid}:growth:{projectId}"
+              placeholder={t('phTopicTemplateExample')}
               className="w-full input-base font-mono text-xs"
             />
             <p className="mt-1 text-xs text-gray-400">
-              <code className="font-mono">{'{key}'}</code> 取 NOTIFY payload 的同名字段；任一字段缺失则跳过该条。
+              {t.rich('topicKeyHint', {
+                code: (chunks) => <code className="font-mono">{chunks}</code>,
+              })}
             </p>
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              SSE event 名 <span className="text-red-500">*</span>
+              {t('fieldEventName')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
               value={form.event_name}
               onChange={(e) => setForm({ ...form, event_name: e.target.value })}
-              placeholder="如 growth_animation_available"
+              placeholder={t('phGrowthAnimationExample')}
               className="w-full input-base"
               maxLength={100}
             />
           </div>
 
           <div className="rounded-lg bg-indigo-50 border border-indigo-100 p-3 text-xs text-indigo-700 space-y-1">
-            <p className="font-medium">成长动画示例</p>
-            <p>channel：<code className="font-mono">growth_animation_available</code></p>
-            <p>topic：<code className="font-mono">way:{'{wayUid}'}:growth:{'{projectId}'}</code></p>
-            <p>event：<code className="font-mono">growth_animation_available</code></p>
+            <p className="font-medium">{t('exampleTitle')}</p>
+            <p>
+              {t('exampleChannelPrefix')}
+              <code className="font-mono">growth_animation_available</code>
+            </p>
+            <p>
+              {t('exampleTopicPrefix')}
+              <code className="font-mono">way:{'{wayUid}'}:growth:{'{projectId}'}</code>
+            </p>
+            <p>
+              {t('exampleEventPrefix')}
+              <code className="font-mono">growth_animation_available</code>
+            </p>
             <p className="pt-1">
-              业务前端订阅地址（统一域名，与其他模块一致）：
+              {t('exampleSubscribeIntro')}
             </p>
             <code className="block font-mono bg-white/70 border border-indigo-100 rounded px-2 py-1 break-all">
-              GET {origin || '<平台域名>'}/events/growth-animation?projectId={'{社区id}'}
+              GET {origin || t('platformDomainPlaceholder')}/events/growth-animation?projectId={t('communityIdPlaceholder')}
             </code>
             <p className="text-indigo-500">
-              鉴权头 <code className="font-mono">X-Way-UID</code> 由网关注入；projectId 省略 = 订阅该用户全部社区。
+              {t.rich('authHeaderHint', {
+                code: (chunks) => <code className="font-mono">{chunks}</code>,
+              })}
             </p>
           </div>
         </div>

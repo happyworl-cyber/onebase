@@ -24,6 +24,7 @@ mod es;
 mod events;
 mod execution_log;
 mod execution_log_handlers;
+mod execution_tracker;
 mod export_handlers;
 mod gateway_handlers;
 mod handlers;
@@ -133,7 +134,7 @@ mod workflow_trigger;
 mod zlib_primitives;
 
 // binary 侧 `mod workflow_engine` 与 lib 共用源文件，需在此 re-export 批量配置模块。
-pub(crate) use onebase::sse_batch_config;
+pub(crate) use planeos::sse_batch_config;
 
 use axum::http::HeaderValue;
 use axum::{
@@ -167,9 +168,9 @@ async fn main() -> anyhow::Result<()> {
 
     // 商用授权（License）加载：读取签名 License 文件并判定状态。
     // - 默认 enforce=warn：只校验 + 告警，不拦截，兼容既有部署；
-    // - 客户交付镜像设 ONEBASE_LICENSE_ENFORCE=enforce 后，到期/无效将只读降级。
+    // - 客户交付镜像设 PLANEOS_LICENSE_ENFORCE=enforce 后，到期/无效将只读降级。
     // 后台任务周期重载，续期换文件 / 到期迁移无需重启即可生效。
-    let license_state = onebase::license::LicenseState::init_from_env();
+    let license_state = planeos::license::LicenseState::init_from_env();
     license_state.log_startup();
     license_state.spawn_refresh();
 
@@ -181,7 +182,7 @@ async fn main() -> anyhow::Result<()> {
     // - 失败不 panic：健康库重复跑只会是 skipped/ok（零错误）；真出错就大声告警，
     //   但不让一次迁移问题把 API 拖崩或陷入崩溃重启循环。
     if config.auto_migrate {
-        match onebase::migrate::run_all_migrations(&pool).await {
+        match planeos::migrate::run_all_migrations(&pool).await {
             Ok(stats) if stats.has_error() => {
                 tracing::error!(
                     ok = stats.ok,
@@ -342,7 +343,7 @@ async fn main() -> anyhow::Result<()> {
     //
     // ⚠️ 数据隔离：必须串接 dynamic_db_middleware，按请求头 X-Database-Id 切换到
     // 目标租户库的连接池；否则不带 / 误带头时 handler 会 fallback 到管理库
-    // (onebase) 上跑 SELECT * FROM users，把超管 / 租户元数据当作业务数据返回，
+    // (planeos) 上跑 SELECT * FROM users，把超管 / 租户元数据当作业务数据返回，
     // 这是严重的跨租户数据泄漏。
     let sql_routes = Router::new()
         .route("/transaction", post(transaction::execute_transaction))
@@ -1678,7 +1679,7 @@ async fn main() -> anyhow::Result<()> {
     let mcp_routes = Router::new()
         .route("/mcp", post(mcp_server::mcp_endpoint))
         .layer(axum_middleware::from_fn(|req, next| {
-            onebase::license::require_module(req, next, "ai")
+            planeos::license::require_module(req, next, "ai")
         }));
     // 项目级通用 AI 助手：Provider 配置 admin+，聊天 member+。
     // 配置和聊天均挂 AI License 模块闸门；聊天是长连接 SSE，不进入全局 TimeoutLayer。
@@ -1696,7 +1697,7 @@ async fn main() -> anyhow::Result<()> {
             post(ai::test_provider),
         )
         .layer(axum_middleware::from_fn(|req, next| {
-            onebase::license::require_module(req, next, "ai")
+            planeos::license::require_module(req, next, "ai")
         }))
         .layer(axum_middleware::from_fn(ai::interactive_jwt_guard))
         .layer(axum_middleware::from_fn_with_state(
@@ -1706,7 +1707,7 @@ async fn main() -> anyhow::Result<()> {
     let ai_chat_routes = Router::new()
         .route("/api/projects/:id/ai/chat", post(ai::chat))
         .layer(axum_middleware::from_fn(|req, next| {
-            onebase::license::require_module(req, next, "ai")
+            planeos::license::require_module(req, next, "ai")
         }))
         .layer(axum_middleware::from_fn(ai::interactive_jwt_guard))
         .layer(axum_middleware::from_fn_with_state(
@@ -1918,7 +1919,7 @@ async fn main() -> anyhow::Result<()> {
         )
         // 模块闸门：ES 属于「数据管道」加购模块。
         .layer(axum_middleware::from_fn(|req, next| {
-            onebase::license::require_module(req, next, "pipeline")
+            planeos::license::require_module(req, next, "pipeline")
         }))
         .layer(axum_middleware::from_fn_with_state(
             pool.clone(),
@@ -1953,7 +1954,7 @@ async fn main() -> anyhow::Result<()> {
         )
         // 模块闸门：Redis 属于「数据管道」加购模块。
         .layer(axum_middleware::from_fn(|req, next| {
-            onebase::license::require_module(req, next, "pipeline")
+            planeos::license::require_module(req, next, "pipeline")
         }))
         .layer(axum_middleware::from_fn_with_state(
             pool.clone(),
@@ -2025,7 +2026,7 @@ async fn main() -> anyhow::Result<()> {
         )
         // 模块闸门：Kafka 属于「数据管道」加购模块（enforce 模式下未授权即 402）。
         .layer(axum_middleware::from_fn(|req, next| {
-            onebase::license::require_module(req, next, "pipeline")
+            planeos::license::require_module(req, next, "pipeline")
         }))
         .layer(axum_middleware::from_fn_with_state(
             pool.clone(),
@@ -2073,7 +2074,7 @@ async fn main() -> anyhow::Result<()> {
         )
         // 模块闸门：对象存储属于「数据管道」加购模块。
         .layer(axum_middleware::from_fn(|req, next| {
-            onebase::license::require_module(req, next, "pipeline")
+            planeos::license::require_module(req, next, "pipeline")
         }))
         .layer(axum_middleware::from_fn_with_state(
             pool.clone(),
@@ -2099,7 +2100,7 @@ async fn main() -> anyhow::Result<()> {
         )
         // 模块闸门：Kafka 数据面属于「数据管道」加购模块。
         .layer(axum_middleware::from_fn(|req, next| {
-            onebase::license::require_module(req, next, "pipeline")
+            planeos::license::require_module(req, next, "pipeline")
         }));
 
     // 对象存储令牌面 REST：obes_os_* 自鉴权，不挂 JWT。
@@ -2123,7 +2124,7 @@ async fn main() -> anyhow::Result<()> {
         )
         // 模块闸门：对象存储数据面属于「数据管道」加购模块。
         .layer(axum_middleware::from_fn(|req, next| {
-            onebase::license::require_module(req, next, "pipeline")
+            planeos::license::require_module(req, next, "pipeline")
         }));
 
     // 代理路由：不挂 auth_middleware（token 自鉴权）。注册所有 ES 用的 HTTP 方法。
@@ -2151,7 +2152,7 @@ async fn main() -> anyhow::Result<()> {
         )
         // 模块闸门：ES 代理属于「数据管道」加购模块。
         .layer(axum_middleware::from_fn(|req, next| {
-            onebase::license::require_module(req, next, "pipeline")
+            planeos::license::require_module(req, next, "pipeline")
         }));
 
     // ES 高层「应用」API：业务侧无需 ES DSL / SDK，直接发简化 JSON。
@@ -2189,7 +2190,7 @@ async fn main() -> anyhow::Result<()> {
         )
         // 模块闸门：ES 应用面属于「数据管道」加购模块。
         .layer(axum_middleware::from_fn(|req, next| {
-            onebase::license::require_module(req, next, "pipeline")
+            planeos::license::require_module(req, next, "pipeline")
         }));
 
     // SSE / WebSocket 长连接：不挂全局 TimeoutLayer（默认 30s 会切断流）。
@@ -2320,7 +2321,7 @@ async fn main() -> anyhow::Result<()> {
     // 与 audit 同款 layer 顺序不变式：先 .layer(中间件)（内层），再 .layer(Extension)
     // （外层，请求一进 router 就注入 LicenseState，下游中间件才读得到）。
     app = app.layer(axum_middleware::from_fn(
-        onebase::license::license_enforcement_middleware,
+        planeos::license::license_enforcement_middleware,
     ));
     app = app.layer(axum::Extension(license_state.clone()));
 
@@ -2405,7 +2406,7 @@ async fn main() -> anyhow::Result<()> {
             event_bus.clone(),
             config.redis_url.clone(),
         );
-        // SSE 通用消息的跨实例扇出（独立 channel onebase:sse）
+        // SSE 通用消息的跨实例扇出（独立 channel planeos:sse）
         sse_redis::SseRedisBridge::start_publisher(sse_hub.clone(), redis.clone());
         sse_redis::SseRedisBridge::start_subscriber(sse_hub.clone(), config.redis_url.clone());
         tracing::info!("Redis Pub/Sub 事件桥接已启动");
@@ -2599,7 +2600,7 @@ async fn main() -> anyhow::Result<()> {
 
 /// GET /api/license - 授权状态摘要（公开只读，供运维 / 客户查看到期与续保状态）
 async fn license_status_handler(
-    state: Option<axum::extract::Extension<onebase::license::LicenseState>>,
+    state: Option<axum::extract::Extension<planeos::license::LicenseState>>,
 ) -> Json<Value> {
     use serde_json::json;
     match state {
@@ -2639,7 +2640,7 @@ async fn root_handler() -> Result<Json<Value>, AppError> {
             },
             "transaction": "/transaction"
         },
-        "documentation": "https://github.com/yourusername/onebase"
+        "documentation": "https://github.com/happyworl-cyber/planeos"
     })))
 }
 
@@ -2935,6 +2936,8 @@ async fn execute_sql_query(
                     "rows": rows,
                 })),
                 None,
+                Some("oplog_db_execute_sql"),
+                json!({ "sql_type": sql_type }),
             );
         }
     }

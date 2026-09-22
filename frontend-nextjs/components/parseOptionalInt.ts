@@ -16,10 +16,10 @@ export function parsePoolSettings(
   const maxN = Number(max)
   const timeoutN = Number(timeout)
   if (!Number.isFinite(maxN) || maxN < 1 || maxN > maxCap) {
-    return { ok: false, text: `最大连接数必须在 1–${maxCap}` }
+    return { ok: false, text: `Max connections must be between 1 and ${maxCap}` }
   }
   if (!Number.isFinite(timeoutN) || timeoutN < 1 || timeoutN > 600) {
-    return { ok: false, text: '获取超时必须在 1–600 秒' }
+    return { ok: false, text: 'Acquire timeout must be between 1 and 600 seconds' }
   }
   return { ok: true, max: maxN, timeout: timeoutN }
 }

@@ -1,5 +1,7 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
+
 // M4 权限矩阵：rows = schema.table 资源；cols = SELECT / INSERT / UPDATE / DELETE / ALL
 //
 // 顶部 role tab → 切换查看哪个角色的权限。Cell 显示该 (role, resource, action) 三元组的状态：
@@ -25,11 +27,11 @@ const ACTIONS = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'ALL'] as const
 type Action = (typeof ACTIONS)[number]
 
 const ACTION_LABEL: Record<Action, string> = {
-  SELECT: '读',
-  INSERT: '建',
-  UPDATE: '改',
-  DELETE: '删',
-  ALL: '全',
+  SELECT: 'actRead',
+  INSERT: 'actInsert',
+  UPDATE: 'actUpdate',
+  DELETE: 'actDelete',
+  ALL: 'actAll',
 }
 
 interface Role {
@@ -65,6 +67,7 @@ export default function PermissionMatrix({
   onReload,
   notify,
 }: PermissionMatrixProps) {
+  const t = useTranslations('wsPermMatrix')
   const [activeRoleId, setActiveRoleId] = useState<number | null>(
     roles[0]?.id ?? null,
   )
@@ -114,7 +117,7 @@ export default function PermissionMatrix({
   if (roles.length === 0) {
     return (
       <div className="text-sm text-gray-400 italic p-4 border border-dashed border-gray-200 rounded">
-        当前项目没有角色 — 请先在上方创建角色，再来分配权限。
+        {t('noRoles')}
       </div>
     )
   }
@@ -135,7 +138,7 @@ export default function PermissionMatrix({
           >
             {r.name}
             {r.is_system && (
-              <span className="ml-1 text-[10px] text-gray-400">[内置]</span>
+              <span className="ml-1 text-[10px] text-gray-400">{t('builtin')}</span>
             )}
           </button>
         ))}
@@ -147,7 +150,7 @@ export default function PermissionMatrix({
           <thead className="bg-gray-50">
             <tr>
               <th className="text-left px-4 py-2 text-xs font-medium text-gray-600 sticky left-0 bg-gray-50">
-                资源 (schema.table)
+                {t('resourceCol')}
               </th>
               {ACTIONS.map((a) => (
                 <th
@@ -155,7 +158,7 @@ export default function PermissionMatrix({
                   className="text-center px-3 py-2 text-xs font-medium text-gray-600 w-20"
                   title={a}
                 >
-                  {ACTION_LABEL[a]}
+                  {t(ACTION_LABEL[a])}
                   <span className="block text-[9px] text-gray-400 font-normal">
                     {a}
                   </span>
@@ -170,7 +173,7 @@ export default function PermissionMatrix({
                   colSpan={ACTIONS.length + 1}
                   className="text-center text-gray-400 text-sm py-6 italic"
                 >
-                  当前角色没有任何权限。点击下方 "+ 添加资源" 开始配置。
+                  {t('noPerms')}
                 </td>
               </tr>
             ) : (
@@ -189,10 +192,10 @@ export default function PermissionMatrix({
                           className="inline-flex items-center justify-center w-9 h-7 rounded hover:bg-blue-50 group relative"
                           title={
                             owned
-                              ? `已持有 ${action}`
+                              ? t('cellOwned', { action })
                               : perm
-                                ? `${action} 权限存在但未挂到此角色`
-                                : `点击为此角色创建 ${action} 权限`
+                                ? t('cellExistsNotAttached', { action })
+                                : t('cellCreate', { action })
                           }
                         >
                           <CellIndicator owned={owned} perm={perm} />
@@ -215,7 +218,7 @@ export default function PermissionMatrix({
               type="text"
               value={newResourceInput}
               onChange={(e) => setNewResourceInput(e.target.value)}
-              placeholder={`${defaultSchema}.table_name 或仅 table_name`}
+              placeholder={t('phResource', { schema: defaultSchema })}
               className="input-base text-xs h-8 flex-1"
               onKeyDown={(e) => e.key === 'Enter' && onAddResource()}
               autoFocus
@@ -224,7 +227,7 @@ export default function PermissionMatrix({
               onClick={onAddResource}
               className="px-3 py-1 text-xs bg-blue-500 text-white rounded"
             >
-              添加
+              {t('add')}
             </button>
             <button
               onClick={() => {
@@ -233,7 +236,7 @@ export default function PermissionMatrix({
               }}
               className="px-3 py-1 text-xs text-gray-600"
             >
-              取消
+              {t('cancel')}
             </button>
           </div>
         ) : (
@@ -242,7 +245,7 @@ export default function PermissionMatrix({
             className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
           >
             <i className="fas fa-plus text-[10px]"></i>
-            添加资源行
+            {t('addResourceRow')}
           </button>
         )}
       </div>
@@ -274,6 +277,7 @@ function CellIndicator({
   owned: boolean
   perm: Permission | null
 }) {
+  const t = useTranslations('wsPermMatrix')
   if (owned && perm) {
     const hasCond = perm.conditions.length > 0
     const hasCol =
@@ -282,11 +286,11 @@ function CellIndicator({
     return (
       <span className="inline-flex items-center gap-0.5 text-green-600">
         <i className="fas fa-check text-xs"></i>
-        {hasCond && <i className="fas fa-filter text-[9px] text-amber-500" title="有行级条件"></i>}
+        {hasCond && <i className="fas fa-filter text-[9px] text-amber-500" title={t('hasRowCond')}></i>}
         {hasCol && (
           <i
             className="fas fa-columns text-[9px] text-purple-500"
-            title="有列级限制"
+            title={t('hasColLimit')}
           ></i>
         )}
       </span>
@@ -319,6 +323,8 @@ function CellEditorDrawer({
   onSaved: () => void
   notify: PermissionMatrixProps['notify']
 }) {
+  const t = useTranslations('wsPermMatrix')
+  const trTpl = useTranslations('rbacTemplates')
   const isOwned = !!existing && rolePermIds.has(existing.id)
   const [conditions, setConditions] = useState<RowCondition[]>(
     existing?.conditions ?? [],
@@ -367,7 +373,7 @@ function CellEditorDrawer({
       setAllowed(c.allowed_columns)
       setDenied(c.denied_columns)
     }
-    notify.success(`已应用模板：${tpl.label}（可继续调整后保存）`)
+    notify.success(t('applied', { label: trTpl(tpl.labelKey) }))
   }
 
   const save = async () => {
@@ -393,7 +399,7 @@ function CellEditorDrawer({
         })
         permId = res.data?.id ?? res.data?.data?.id
         if (!permId) {
-          throw new Error('创建权限后未返回 id')
+          throw new Error(t('errNoId'))
         }
       }
 
@@ -404,7 +410,7 @@ function CellEditorDrawer({
         await rbacAPI.setRolePermissions(role.id, Array.from(want))
       }
 
-      notify.success('已保存')
+      notify.success(t('saved'))
       onSaved()
     } catch (err) {
       notify.error(err)
@@ -415,7 +421,7 @@ function CellEditorDrawer({
 
   const removeFromRole = async () => {
     if (!existing) return
-    if (!window.confirm(`从 "${role.name}" 角色移除该权限？\n权限记录本身不会被删除。`)) {
+    if (!window.confirm(t('confirmRemove', { role: role.name }))) {
       return
     }
     setSaving(true)
@@ -423,7 +429,7 @@ function CellEditorDrawer({
       const next = new Set(rolePermIds)
       next.delete(existing.id)
       await rbacAPI.setRolePermissions(role.id, Array.from(next))
-      notify.success('已移除')
+      notify.success(t('removed'))
       onSaved()
     } catch (err) {
       notify.error(err)
@@ -444,7 +450,7 @@ function CellEditorDrawer({
             onClick={onClose}
             className="flex-1 h-10 px-4 text-sm text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
           >
-            取消
+            {t('cancel')}
           </button>
           {isOwned && existing && (
             <button
@@ -452,7 +458,7 @@ function CellEditorDrawer({
               disabled={saving}
               className="h-10 px-4 text-sm text-red-600 bg-white border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-50"
             >
-              从角色移除
+              {t('removeFromRole')}
             </button>
           )}
           <button
@@ -460,7 +466,7 @@ function CellEditorDrawer({
             disabled={saving}
             className="flex-1 h-10 px-4 text-sm text-white bg-blue-500 rounded-lg hover:bg-blue-600 disabled:opacity-50"
           >
-            {saving ? '保存中…' : isOwned ? '保存修改' : existing ? '挂到角色并保存' : '新建并挂到角色'}
+            {saving ? t('saving') : isOwned ? t('saveEdit') : existing ? t('attachAndSave') : t('createAndAttach')}
           </button>
         </div>
       }
@@ -469,11 +475,11 @@ function CellEditorDrawer({
         {/* 上下文条幅 */}
         <div className="p-3 bg-blue-50 border border-blue-100 rounded text-xs text-blue-900 leading-relaxed">
           <p>
-            正在为角色 <strong>{role.name}</strong> 配置 <code className="bg-white px-1 rounded">{resource}</code> 的 <strong>{action}</strong> 权限。
+            {t.rich('contextBanner', { role: role.name, resource, action, b: (c) => <strong>{c}</strong>, code: (c) => <code className="bg-white px-1 rounded">{c}</code> })}
           </p>
           {existing && (
             <p className="mt-1 text-blue-700">
-              此权限记录 (#{existing.id}) 可能被多个角色引用；编辑会影响所有引用方。
+              {t('multiRefWarn', { id: existing.id })}
             </p>
           )}
         </div>
@@ -482,15 +488,15 @@ function CellEditorDrawer({
           <div className="p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
             <p className="flex items-center gap-2 font-medium">
               <i className="fas fa-exclamation-triangle"></i>
-              该权限包含**旧版字符串条件**
+              {t.rich('legacyTitle', { b: (c) => <strong>{c}</strong> })}
             </p>
             <p className="mt-1">
-              运行时已被后端拒绝。请用下方结构化条件 builder 重建后保存。
+              {t('legacyBody')}
               <button
                 onClick={() => setShowLegacy(!showLegacy)}
                 className="ml-2 text-amber-700 underline"
               >
-                {showLegacy ? '隐藏' : '查看'}原条件
+                {showLegacy ? t('hide') : t('show')}{t('origConditions')}
               </button>
             </p>
             {showLegacy && (
@@ -504,7 +510,7 @@ function CellEditorDrawer({
         {/* 模板下拉 */}
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-1">
-            应用模板（可选）
+            {t('applyTemplateLabel')}
           </label>
           <div className="grid grid-cols-3 gap-2">
             {PERMISSION_TEMPLATES.map((tpl) => (
@@ -513,10 +519,10 @@ function CellEditorDrawer({
                 type="button"
                 onClick={() => applyTemplate(tpl.id)}
                 className="text-left p-2 border border-gray-200 rounded hover:border-blue-300 hover:bg-blue-50 transition-colors"
-                title={tpl.hint}
+                title={trTpl(tpl.hintKey)}
               >
-                <p className="text-xs font-medium text-gray-800">{tpl.label}</p>
-                <p className="text-[10px] text-gray-500 line-clamp-2">{tpl.hint}</p>
+                <p className="text-xs font-medium text-gray-800">{trTpl(tpl.labelKey)}</p>
+                <p className="text-[10px] text-gray-500 line-clamp-2">{trTpl(tpl.hintKey)}</p>
               </button>
             ))}
           </div>
@@ -525,7 +531,7 @@ function CellEditorDrawer({
         {/* 行级条件 */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
-            行级过滤条件
+            {t('rowFilter')}
           </label>
           <ConditionBuilder
             value={conditions.filter(
@@ -536,7 +542,7 @@ function CellEditorDrawer({
           />
           {conditions.length > 0 && (
             <p className="text-[10px] text-gray-400 mt-2">
-              生效后：{conditions.map(describeCondition).join(' AND ')}
+              {t('effect', { cond: conditions.map((c) => describeCondition(c, trTpl)).join(' AND ') })}
             </p>
           )}
         </div>
@@ -544,7 +550,7 @@ function CellEditorDrawer({
         {/* 列级 */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
-            列级可见性
+            {t('columnVisibility')}
           </label>
           <ColumnControl
             availableColumns={tableColumns}
@@ -562,13 +568,13 @@ function CellEditorDrawer({
         {/* 备注 */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
-            描述（可选）
+            {t('descLabel')}
           </label>
           <input
             type="text"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="说明该权限用途，便于团队审阅"
+            placeholder={t('phDesc')}
             className="input-base w-full text-sm"
           />
         </div>

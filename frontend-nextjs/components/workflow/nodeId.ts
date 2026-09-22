@@ -3,10 +3,10 @@ const NODE_ID_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 export function validateNodeId(id: string, usedIds: string[], currentId: string): string | null {
   const next = id.trim()
-  if (!next) return '节点 ID 不能为空'
-  if (RESERVED_NODE_IDS.has(next)) return `节点 ID「${next}」为保留名`
-  if (!NODE_ID_RE.test(next)) return '只能用字母、数字、下划线，且不能以数字开头'
-  if (next !== currentId && usedIds.includes(next)) return `节点 ID「${next}」已存在`
+  if (!next) return 'Node ID cannot be empty'
+  if (RESERVED_NODE_IDS.has(next)) return `Node ID "${next}" is reserved`
+  if (!NODE_ID_RE.test(next)) return 'Only letters, digits, and underscores are allowed, and it cannot start with a digit'
+  if (next !== currentId && usedIds.includes(next)) return `Node ID "${next}" already exists`
   return null
 }
 

@@ -109,7 +109,7 @@ mod tests {
 
 - [ ] **Step 2: Run tests — expect compile fail**
 
-Run: `cargo test -p onebase --lib workflow_logs:: -- --nocapture`
+Run: `cargo test -p planeos --lib workflow_logs:: -- --nocapture`
 
 Expected: module / items missing.
 
@@ -119,7 +119,7 @@ Byte budget: use `message.len()` (UTF-8 bytes) for `MAX_LOG_BYTES`. When adding 
 
 - [ ] **Step 4: Run tests — expect pass**
 
-Run: `cargo test -p onebase --lib workflow_logs:: -- --nocapture`
+Run: `cargo test -p planeos --lib workflow_logs:: -- --nocapture`
 
 Expected: `ok`
 
@@ -201,7 +201,7 @@ Do not wrap JS/Lua/Py yet. Goal is compile + serialize test green.
 
 - [ ] **Step 3: Run**
 
-Run: `cargo test -p onebase --lib workflow_engine:: -- --nocapture`
+Run: `cargo test -p planeos --lib workflow_engine:: -- --nocapture`
 
 Expected: pass (existing behavior, empty logs).
 
@@ -277,7 +277,7 @@ If `minimal_ctx` is not in scope, copy the `PluginContext` literal used by the n
 
 - [ ] **Step 2: Run — expect fail**
 
-Run: `cargo test -p onebase --lib lua_engine:: -- --nocapture`
+Run: `cargo test -p planeos --lib lua_engine:: -- --nocapture`
 
 - [ ] **Step 3: Implement sink + PluginResult.logs + ExecutionError logs**
 
@@ -285,7 +285,7 @@ Update `test_log_module` only if `register_log_module` signature change requires
 
 - [ ] **Step 4: Run lua_engine + lua_builtins tests**
 
-Run: `cargo test -p onebase --lib lua_engine:: lua_builtins:: -- --nocapture`
+Run: `cargo test -p planeos --lib lua_engine:: lua_builtins:: -- --nocapture`
 
 Expected: pass.
 
@@ -376,7 +376,7 @@ Import `NodeLogLevel` from `workflow_logs`.
 
 - [ ] **Step 2: Run — expect fail** (old `Result<Value,String>` or missing logs)
 
-Run: `cargo test -p onebase --lib js_runner:: -- --nocapture`
+Run: `cargo test -p planeos --lib js_runner:: -- --nocapture`
 
 - [ ] **Step 3: Implement types + ENTRY_JS + read logs on failure**
 
@@ -410,7 +410,7 @@ git commit -m "feat: JavaScript 代码节点收集 console 与 log。"
 
 - [ ] **Step 1: Failing test** (same shape as JS, `print("hello", 1)` + `log.error("e")` + a throw after `print("before")`)
 
-Run: `cargo test -p onebase --lib py_runner:: -- --nocapture`
+Run: `cargo test -p planeos --lib py_runner:: -- --nocapture`
 
 - [ ] **Step 2: Implement ENTRY_PY + return types**
 
@@ -454,7 +454,7 @@ Also assert 201 prints → 200 + `日志已截断` on that node's `logs`.
 
 - [ ] **Step 1: Write the failing engine test**
 
-- [ ] **Step 2: Run `cargo test -p onebase --lib workflow_engine::code_node_logs -- --nocapture`** — fail (empty logs)
+- [ ] **Step 2: Run `cargo test -p planeos --lib workflow_engine::code_node_logs -- --nocapture`** — fail (empty logs)
 
 - [ ] **Step 3: Wire exec_code_node**
 

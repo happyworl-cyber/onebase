@@ -542,28 +542,36 @@ const MAX_COMPOSITE_SOURCES: usize = 10;
 /// 校验 ES App 暴露的聚合子集，拒绝 script 和其它高成本/高权限聚合。
 fn validate_aggregations(aggs: &Map<String, Value>) -> Result<Value, AppError> {
     if aggs.len() > MAX_AGGREGATIONS {
-        return Err(AppError::InvalidQuery(format!(
-            "aggs 最多支持 {} 项",
-            MAX_AGGREGATIONS
-        )));
+        return Err(AppError::validation(
+            "es_app_aggs_max_count",
+            format!("aggs 最多支持 {} 项", MAX_AGGREGATIONS),
+            serde_json::json!({ "max": MAX_AGGREGATIONS }),
+        ));
     }
 
     let mut validated = Map::new();
     let mut total_bucket_budget = 0_u64;
     for (name, definition) in aggs {
         if name.trim().is_empty() || name.len() > 128 {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "es_app_aggs_name_invalid",
                 "aggs 名称不能为空且不能超过 128 字节".to_string(),
+                serde_json::json!({}),
             ));
         }
-        let definition = definition
-            .as_object()
-            .ok_or_else(|| AppError::InvalidQuery(format!("aggs.{} 必须是对象", name)))?;
+        let definition = definition.as_object().ok_or_else(|| {
+            AppError::validation(
+                "es_app_aggs_not_object",
+                format!("aggs.{} 必须是对象", name),
+                serde_json::json!({ "name": name }),
+            )
+        })?;
         if definition.len() != 1 {
-            return Err(AppError::InvalidQuery(format!(
-                "aggs.{} 必须且只能包含 terms 或 composite",
-                name
-            )));
+            return Err(AppError::validation(
+                "es_app_aggs_single_key",
+                format!("aggs.{} 必须且只能包含 terms 或 composite", name),
+                serde_json::json!({ "name": name }),
+            ));
         }
 
         let (validated_definition, bucket_budget) = if let Some(terms) = definition.get("terms") {
@@ -571,19 +579,27 @@ fn validate_aggregations(aggs: &Map<String, Value>) -> Result<Value, AppError> {
         } else if let Some(composite) = definition.get("composite") {
             validate_composite_aggregation(name, composite)?
         } else {
-            return Err(AppError::InvalidQuery(format!(
-                "aggs.{} 仅支持 terms 或 composite 聚合",
-                name
-            )));
+            return Err(AppError::validation(
+                "es_app_aggs_unsupported_type",
+                format!("aggs.{} 仅支持 terms 或 composite 聚合", name),
+                serde_json::json!({ "name": name }),
+            ));
         };
         total_bucket_budget = total_bucket_budget
             .checked_add(bucket_budget)
-            .ok_or_else(|| AppError::InvalidQuery("aggs size 总和过大".to_string()))?;
+            .ok_or_else(|| {
+                AppError::validation(
+                    "es_app_aggs_budget_overflow",
+                    "aggs size 总和过大".to_string(),
+                    serde_json::json!({}),
+                )
+            })?;
         if total_bucket_budget > MAX_TOTAL_AGG_BUCKETS {
-            return Err(AppError::InvalidQuery(format!(
-                "aggs 所有 size 总和不能超过 {}",
-                MAX_TOTAL_AGG_BUCKETS
-            )));
+            return Err(AppError::validation(
+                "es_app_aggs_total_size_exceeded",
+                format!("aggs 所有 size 总和不能超过 {}", MAX_TOTAL_AGG_BUCKETS),
+                serde_json::json!({ "max": MAX_TOTAL_AGG_BUCKETS }),
+            ));
         }
         validated.insert(name.clone(), validated_definition);
     }
@@ -591,17 +607,22 @@ fn validate_aggregations(aggs: &Map<String, Value>) -> Result<Value, AppError> {
 }
 
 fn validate_terms_aggregation(name: &str, terms: &Value) -> Result<(Value, u64), AppError> {
-    let terms = terms
-        .as_object()
-        .ok_or_else(|| AppError::InvalidQuery(format!("aggs.{}.terms 必须是对象", name)))?;
+    let terms = terms.as_object().ok_or_else(|| {
+        AppError::validation(
+            "es_app_terms_agg_not_object",
+            format!("aggs.{}.terms 必须是对象", name),
+            serde_json::json!({ "name": name }),
+        )
+    })?;
     if let Some(unknown) = terms
         .keys()
         .find(|key| !matches!(key.as_str(), "field" | "size"))
     {
-        return Err(AppError::InvalidQuery(format!(
-            "aggs.{}.terms 不支持参数 `{}`；支持 field/size",
-            name, unknown
-        )));
+        return Err(AppError::validation(
+            "es_app_terms_agg_unknown_param",
+            format!("aggs.{}.terms 不支持参数 `{}`；支持 field/size", name, unknown),
+            serde_json::json!({ "name": name, "param": unknown }),
+        ));
     }
 
     let field =
@@ -621,17 +642,25 @@ fn validate_terms_aggregation(name: &str, terms: &Value) -> Result<(Value, u64),
 }
 
 fn validate_composite_aggregation(name: &str, composite: &Value) -> Result<(Value, u64), AppError> {
-    let composite = composite
-        .as_object()
-        .ok_or_else(|| AppError::InvalidQuery(format!("aggs.{}.composite 必须是对象", name)))?;
+    let composite = composite.as_object().ok_or_else(|| {
+        AppError::validation(
+            "es_app_composite_agg_not_object",
+            format!("aggs.{}.composite 必须是对象", name),
+            serde_json::json!({ "name": name }),
+        )
+    })?;
     if let Some(unknown) = composite
         .keys()
         .find(|key| !matches!(key.as_str(), "size" | "sources" | "after"))
     {
-        return Err(AppError::InvalidQuery(format!(
-            "aggs.{}.composite 不支持参数 `{}`；支持 size/sources/after",
-            name, unknown
-        )));
+        return Err(AppError::validation(
+            "es_app_composite_agg_unknown_param",
+            format!(
+                "aggs.{}.composite 不支持参数 `{}`；支持 size/sources/after",
+                name, unknown
+            ),
+            serde_json::json!({ "name": name, "param": unknown }),
+        ));
     }
 
     let size = validate_optional_size(
@@ -644,10 +673,14 @@ fn validate_composite_aggregation(name: &str, composite: &Value) -> Result<(Valu
         .and_then(Value::as_array)
         .filter(|sources| !sources.is_empty() && sources.len() <= MAX_COMPOSITE_SOURCES)
         .ok_or_else(|| {
-            AppError::InvalidQuery(format!(
-                "aggs.{}.composite.sources 必须是 1..={} 项的数组",
-                name, MAX_COMPOSITE_SOURCES
-            ))
+            AppError::validation(
+                "es_app_composite_sources_size",
+                format!(
+                    "aggs.{}.composite.sources 必须是 1..={} 项的数组",
+                    name, MAX_COMPOSITE_SOURCES
+                ),
+                serde_json::json!({ "name": name, "max": MAX_COMPOSITE_SOURCES }),
+            )
         })?;
 
     let mut source_names: Vec<String> = Vec::with_capacity(sources.len());
@@ -657,48 +690,67 @@ fn validate_composite_aggregation(name: &str, composite: &Value) -> Result<(Valu
             .as_object()
             .filter(|source| source.len() == 1)
             .ok_or_else(|| {
-                AppError::InvalidQuery(format!(
-                    "aggs.{}.composite.sources[{}] 必须只包含一个命名 source",
-                    name, index
-                ))
+                AppError::validation(
+                    "es_app_composite_source_single_key",
+                    format!(
+                        "aggs.{}.composite.sources[{}] 必须只包含一个命名 source",
+                        name, index
+                    ),
+                    serde_json::json!({ "name": name, "index": index }),
+                )
             })?;
         let (source_name, source_definition) = source.iter().next().expect("长度已校验为 1");
         if source_name.trim().is_empty() || source_name.len() > 128 {
-            return Err(AppError::InvalidQuery(format!(
-                "aggs.{}.composite.sources[{}] 名称不能为空且不能超过 128 字节",
-                name, index
-            )));
+            return Err(AppError::validation(
+                "es_app_composite_source_name_invalid",
+                format!(
+                    "aggs.{}.composite.sources[{}] 名称不能为空且不能超过 128 字节",
+                    name, index
+                ),
+                serde_json::json!({ "name": name, "index": index }),
+            ));
         }
         if source_names.contains(source_name) {
-            return Err(AppError::InvalidQuery(format!(
-                "aggs.{}.composite source `{}` 重复",
-                name, source_name
-            )));
+            return Err(AppError::validation(
+                "es_app_composite_source_duplicate",
+                format!("aggs.{}.composite source `{}` 重复", name, source_name),
+                serde_json::json!({ "name": name, "source": source_name }),
+            ));
         }
 
         let source_definition = source_definition.as_object().ok_or_else(|| {
-            AppError::InvalidQuery(format!(
-                "aggs.{}.composite source `{}` 必须是对象",
-                name, source_name
-            ))
+            AppError::validation(
+                "es_app_composite_source_not_object",
+                format!("aggs.{}.composite source `{}` 必须是对象", name, source_name),
+                serde_json::json!({ "name": name, "source": source_name }),
+            )
         })?;
         if source_definition.len() != 1 || !source_definition.contains_key("terms") {
-            return Err(AppError::InvalidQuery(format!(
-                "aggs.{}.composite source `{}` 仅支持 terms",
-                name, source_name
-            )));
+            return Err(AppError::validation(
+                "es_app_composite_source_terms_only",
+                format!("aggs.{}.composite source `{}` 仅支持 terms", name, source_name),
+                serde_json::json!({ "name": name, "source": source_name }),
+            ));
         }
         let source_terms = source_definition["terms"].as_object().ok_or_else(|| {
-            AppError::InvalidQuery(format!(
-                "aggs.{}.composite source `{}`.terms 必须是对象",
-                name, source_name
-            ))
+            AppError::validation(
+                "es_app_composite_source_terms_not_object",
+                format!(
+                    "aggs.{}.composite source `{}`.terms 必须是对象",
+                    name, source_name
+                ),
+                serde_json::json!({ "name": name, "source": source_name }),
+            )
         })?;
         if let Some(unknown) = source_terms.keys().find(|key| key.as_str() != "field") {
-            return Err(AppError::InvalidQuery(format!(
-                "aggs.{}.composite source `{}`.terms 不支持参数 `{}`；仅支持 field",
-                name, source_name, unknown
-            )));
+            return Err(AppError::validation(
+                "es_app_composite_source_terms_unknown_param",
+                format!(
+                    "aggs.{}.composite source `{}`.terms 不支持参数 `{}`；仅支持 field",
+                    name, source_name, unknown
+                ),
+                serde_json::json!({ "name": name, "source": source_name, "param": unknown }),
+            ));
         }
         let field = validate_aggregation_field(
             source_terms.get("field"),
@@ -721,23 +773,32 @@ fn validate_composite_aggregation(name: &str, composite: &Value) -> Result<(Valu
     composite_out.insert("sources".to_string(), Value::Array(validated_sources));
     if let Some(after) = composite.get("after") {
         let after = after.as_object().ok_or_else(|| {
-            AppError::InvalidQuery(format!("aggs.{}.composite.after 必须是对象", name))
+            AppError::validation(
+                "es_app_composite_after_not_object",
+                format!("aggs.{}.composite.after 必须是对象", name),
+                serde_json::json!({ "name": name }),
+            )
         })?;
         if after.len() != source_names.len() || after.keys().any(|key| !source_names.contains(key))
         {
-            return Err(AppError::InvalidQuery(format!(
-                "aggs.{}.composite.after 必须包含且仅包含所有 source 名称",
-                name
-            )));
+            return Err(AppError::validation(
+                "es_app_composite_after_keys_mismatch",
+                format!("aggs.{}.composite.after 必须包含且仅包含所有 source 名称", name),
+                serde_json::json!({ "name": name }),
+            ));
         }
         if let Some((key, _)) = after
             .iter()
             .find(|(_, value)| !(value.is_string() || value.is_number() || value.is_boolean()))
         {
-            return Err(AppError::InvalidQuery(format!(
-                "aggs.{}.composite.after.{} 必须是字符串、数字或布尔值",
-                name, key
-            )));
+            return Err(AppError::validation(
+                "es_app_composite_after_value_type",
+                format!(
+                    "aggs.{}.composite.after.{} 必须是字符串、数字或布尔值",
+                    name, key
+                ),
+                serde_json::json!({ "name": name, "key": key }),
+            ));
         }
         composite_out.insert("after".to_string(), Value::Object(after.clone()));
     }
@@ -751,7 +812,11 @@ fn validate_aggregation_field(value: Option<&Value>, path: &str) -> Result<Strin
         .filter(|field| !field.trim().is_empty() && field.len() <= 512)
         .map(ToString::to_string)
         .ok_or_else(|| {
-            AppError::InvalidQuery(format!("{} 必须是非空字符串且不超过 512 字节", path))
+            AppError::validation(
+                "es_app_agg_field_invalid",
+                format!("{} 必须是非空字符串且不超过 512 字节", path),
+                serde_json::json!({ "path": path }),
+            )
         })
 }
 
@@ -763,14 +828,19 @@ fn validate_optional_size(
     let Some(value) = value else {
         return Ok(None);
     };
-    let value = value
-        .as_u64()
-        .ok_or_else(|| AppError::InvalidQuery(format!("{} 必须是正整数", path)))?;
+    let value = value.as_u64().ok_or_else(|| {
+        AppError::validation(
+            "es_app_agg_size_not_integer",
+            format!("{} 必须是正整数", path),
+            serde_json::json!({ "path": path }),
+        )
+    })?;
     if value == 0 || value > max {
-        return Err(AppError::InvalidQuery(format!(
-            "{} 必须在 1..={} 之间",
-            path, max
-        )));
+        return Err(AppError::validation(
+            "es_app_agg_size_out_of_range",
+            format!("{} 必须在 1..={} 之间", path, max),
+            serde_json::json!({ "path": path, "max": max }),
+        ));
     }
     Ok(Some(value))
 }
@@ -1049,13 +1119,21 @@ fn translate_where_entry(
             "ne" => must_not.push(json!({ "term": { field: v } })),
             "in" => {
                 let arr = v.as_array().ok_or_else(|| {
-                    AppError::InvalidQuery(format!("where.{}.in 必须是数组", field))
+                    AppError::validation(
+                        "es_app_where_in_not_array",
+                        format!("where.{}.in 必须是数组", field),
+                        serde_json::json!({ "field": field }),
+                    )
                 })?;
                 filter.push(json!({ "terms": { field: arr } }));
             }
             "nin" | "not_in" => {
                 let arr = v.as_array().ok_or_else(|| {
-                    AppError::InvalidQuery(format!("where.{}.{} 必须是数组", field, op))
+                    AppError::validation(
+                        "es_app_where_nin_not_array",
+                        format!("where.{}.{} 必须是数组", field, op),
+                        serde_json::json!({ "field": field, "op": op }),
+                    )
                 })?;
                 must_not.push(json!({ "terms": { field: arr } }));
             }
@@ -1064,7 +1142,11 @@ fn translate_where_entry(
             }
             "contains" | "match" => {
                 let s = v.as_str().ok_or_else(|| {
-                    AppError::InvalidQuery(format!("where.{}.{} 必须是字符串", field, op))
+                    AppError::validation(
+                        "es_app_where_contains_not_string",
+                        format!("where.{}.{} 必须是字符串", field, op),
+                        serde_json::json!({ "field": field, "op": op }),
+                    )
                 })?;
                 filter.push(json!({ "match": { field: s } }));
             }
@@ -1074,7 +1156,11 @@ fn translate_where_entry(
             }
             "exists" => {
                 let b = v.as_bool().ok_or_else(|| {
-                    AppError::InvalidQuery(format!("where.{}.exists 必须是布尔", field))
+                    AppError::validation(
+                        "es_app_where_exists_not_bool",
+                        format!("where.{}.exists 必须是布尔", field),
+                        serde_json::json!({ "field": field }),
+                    )
                 })?;
                 if b {
                     filter.push(json!({ "exists": { "field": field } }));
@@ -1087,10 +1173,14 @@ fn translate_where_entry(
                 filter.push(json!({ "wildcard": { field: wildcard } }));
             }
             other => {
-                return Err(AppError::InvalidQuery(format!(
-                    "where.{}: 不支持的操作符 `{}`；支持 eq/ne/in/nin/gt/gte/lt/lte/contains/prefix/exists/wildcard",
-                    field, other
-                )));
+                return Err(AppError::validation(
+                    "es_app_where_unknown_operator",
+                    format!(
+                        "where.{}: 不支持的操作符 `{}`；支持 eq/ne/in/nin/gt/gte/lt/lte/contains/prefix/exists/wildcard",
+                        field, other
+                    ),
+                    serde_json::json!({ "field": field, "operator": other }),
+                ));
             }
         }
     }
@@ -1115,41 +1205,49 @@ fn translate_multi_term_value(
     }
 
     let options = value.as_object().ok_or_else(|| {
-        AppError::InvalidQuery(format!(
-            "where.{}.{} 必须是字符串或参数对象",
-            field, operator
-        ))
+        AppError::validation(
+            "es_app_multiterm_value_type",
+            format!("where.{}.{} 必须是字符串或参数对象", field, operator),
+            serde_json::json!({ "field": field, "operator": operator }),
+        )
     })?;
 
     let query_value = options
         .get("value")
         .and_then(Value::as_str)
         .ok_or_else(|| {
-            AppError::InvalidQuery(format!("where.{}.{}.value 必须是字符串", field, operator))
+            AppError::validation(
+                "es_app_multiterm_value_not_string",
+                format!("where.{}.{}.value 必须是字符串", field, operator),
+                serde_json::json!({ "field": field, "operator": operator }),
+            )
         })?;
 
     if let Some(case_insensitive) = options.get("case_insensitive") {
         if !case_insensitive.is_boolean() {
-            return Err(AppError::InvalidQuery(format!(
-                "where.{}.{}.case_insensitive 必须是布尔值",
-                field, operator
-            )));
+            return Err(AppError::validation(
+                "es_app_multiterm_case_insensitive_type",
+                format!("where.{}.{}.case_insensitive 必须是布尔值", field, operator),
+                serde_json::json!({ "field": field, "operator": operator }),
+            ));
         }
     }
     if let Some(rewrite) = options.get("rewrite") {
         if !rewrite.is_string() {
-            return Err(AppError::InvalidQuery(format!(
-                "where.{}.{}.rewrite 必须是字符串",
-                field, operator
-            )));
+            return Err(AppError::validation(
+                "es_app_multiterm_rewrite_type",
+                format!("where.{}.{}.rewrite 必须是字符串", field, operator),
+                serde_json::json!({ "field": field, "operator": operator }),
+            ));
         }
     }
     if let Some(boost) = options.get("boost") {
         if !boost.is_number() {
-            return Err(AppError::InvalidQuery(format!(
-                "where.{}.{}.boost 必须是数字",
-                field, operator
-            )));
+            return Err(AppError::validation(
+                "es_app_multiterm_boost_type",
+                format!("where.{}.{}.boost 必须是数字", field, operator),
+                serde_json::json!({ "field": field, "operator": operator }),
+            ));
         }
     }
 
@@ -1158,10 +1256,14 @@ fn translate_multi_term_value(
         .keys()
         .find(|key| !ALLOWED_OPTIONS.contains(&key.as_str()))
     {
-        return Err(AppError::InvalidQuery(format!(
-            "where.{}.{} 不支持参数 `{}`；支持 value/case_insensitive/rewrite/boost",
-            field, operator, unknown
-        )));
+        return Err(AppError::validation(
+            "es_app_multiterm_unknown_option",
+            format!(
+                "where.{}.{} 不支持参数 `{}`；支持 value/case_insensitive/rewrite/boost",
+                field, operator, unknown
+            ),
+            serde_json::json!({ "field": field, "operator": operator, "param": unknown }),
+        ));
     }
 
     let mut translated = Map::new();
@@ -1223,13 +1325,17 @@ pub async fn bulk(
     enforce_app_access(&token, "POST", &index)?;
 
     if req.operations.is_empty() {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "es_app_bulk_empty",
             "bulk.operations 不能为空".to_string(),
+            serde_json::json!({}),
         ));
     }
     if req.operations.len() > 1000 {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "es_app_bulk_too_many",
             "bulk.operations 单次最多 1000 条".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -1282,10 +1388,11 @@ fn build_bulk_ndjson(index: &str, req: &BulkRequest) -> Result<String, AppError>
         match action.as_str() {
             "index" | "create" => {
                 let doc = op.doc.as_ref().ok_or_else(|| {
-                    AppError::InvalidQuery(format!(
-                        "bulk.operations[{}]: action={} 需要 doc",
-                        i, action
-                    ))
+                    AppError::validation(
+                        "es_app_bulk_doc_required",
+                        format!("bulk.operations[{}]: action={} 需要 doc", i, action),
+                        serde_json::json!({ "index": i, "action": action }),
+                    )
                 })?;
                 let header = match &op.id {
                     Some(id) => json!({ &action: { "_index": index, "_id": id } }),
@@ -1298,13 +1405,18 @@ fn build_bulk_ndjson(index: &str, req: &BulkRequest) -> Result<String, AppError>
             }
             "update" => {
                 let id = op.id.as_ref().ok_or_else(|| {
-                    AppError::InvalidQuery(format!("bulk.operations[{}]: action=update 需要 id", i))
+                    AppError::validation(
+                        "es_app_bulk_update_id_required",
+                        format!("bulk.operations[{}]: action=update 需要 id", i),
+                        serde_json::json!({ "index": i }),
+                    )
                 })?;
                 let doc = op.doc.as_ref().ok_or_else(|| {
-                    AppError::InvalidQuery(format!(
-                        "bulk.operations[{}]: action=update 需要 doc",
-                        i
-                    ))
+                    AppError::validation(
+                        "es_app_bulk_update_doc_required",
+                        format!("bulk.operations[{}]: action=update 需要 doc", i),
+                        serde_json::json!({ "index": i }),
+                    )
                 })?;
                 let header = json!({ "update": { "_index": index, "_id": id } });
                 let mut body = json!({ "doc": doc });
@@ -1320,17 +1432,25 @@ fn build_bulk_ndjson(index: &str, req: &BulkRequest) -> Result<String, AppError>
             }
             "delete" => {
                 let id = op.id.as_ref().ok_or_else(|| {
-                    AppError::InvalidQuery(format!("bulk.operations[{}]: action=delete 需要 id", i))
+                    AppError::validation(
+                        "es_app_bulk_delete_id_required",
+                        format!("bulk.operations[{}]: action=delete 需要 id", i),
+                        serde_json::json!({ "index": i }),
+                    )
                 })?;
                 let header = json!({ "delete": { "_index": index, "_id": id } });
                 out.push_str(&serde_json::to_string(&header).unwrap());
                 out.push('\n');
             }
             other => {
-                return Err(AppError::InvalidQuery(format!(
-                    "bulk.operations[{}]: 不支持的 action `{}`（支持 index/create/update/delete）",
-                    i, other
-                )));
+                return Err(AppError::validation(
+                    "es_app_bulk_unknown_action",
+                    format!(
+                        "bulk.operations[{}]: 不支持的 action `{}`（支持 index/create/update/delete）",
+                        i, other
+                    ),
+                    serde_json::json!({ "index": i, "action": other }),
+                ));
             }
         }
     }
@@ -1518,8 +1638,10 @@ pub async fn list_indices(
 
     // 只校 method（这条 endpoint 不针对具体 index）
     if !token.allowed_methods.iter().any(|m| m == "GET") {
-        return Err(AppError::Forbidden(
+        return Err(AppError::forbidden_coded(
+            "es_app_list_indices_method_forbidden",
             "method GET 不在 token 允许列表".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -2047,8 +2169,8 @@ mod tests {
         let r = req(r#"{"where": {"x": {"bogus": 1}}}"#);
         let err = build_search_query(&r).unwrap_err();
         match err {
-            AppError::InvalidQuery(msg) => assert!(msg.contains("bogus")),
-            _ => panic!("expected InvalidQuery"),
+            AppError::Coded { message, .. } => assert!(message.contains("bogus")),
+            _ => panic!("expected Coded"),
         }
     }
 
@@ -2057,8 +2179,8 @@ mod tests {
         let r = req(r#"{"where": {"x": {"in": "not-array"}}}"#);
         let err = build_search_query(&r).unwrap_err();
         match err {
-            AppError::InvalidQuery(msg) => assert!(msg.contains("in 必须是数组")),
-            _ => panic!("expected InvalidQuery"),
+            AppError::Coded { message, .. } => assert!(message.contains("in 必须是数组")),
+            _ => panic!("expected Coded"),
         }
     }
 
@@ -2151,7 +2273,7 @@ mod tests {
         };
         let err = build_bulk_ndjson("t", &req).unwrap_err();
         match err {
-            AppError::InvalidQuery(m) => assert!(m.contains("doc")),
+            AppError::Coded { message, .. } => assert!(message.contains("doc")),
             _ => panic!(),
         }
     }
@@ -2168,7 +2290,7 @@ mod tests {
         };
         let err = build_bulk_ndjson("t", &req).unwrap_err();
         match err {
-            AppError::InvalidQuery(m) => assert!(m.contains("upsert")),
+            AppError::Coded { message, .. } => assert!(message.contains("upsert")),
             _ => panic!(),
         }
     }

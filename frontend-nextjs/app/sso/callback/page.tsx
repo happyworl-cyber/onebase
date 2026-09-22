@@ -1,20 +1,23 @@
 'use client'
 
 import { Suspense, useEffect, useRef, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useSearchParams } from 'next/navigation'
 import { ssoAPI } from '@/lib/api'
 import { setAuthToken } from '@/lib/auth'
 import { useAppStore } from '@/lib/store'
 
 export default function SsoCallbackPage() {
+  const t = useTranslations('ssoCallbackPage')
   return (
-    <Suspense fallback={<CallbackShell message="正在完成登录..." />}>
+    <Suspense fallback={<CallbackShell message={t('completingLogin')} />}>
       <SsoCallbackInner />
     </Suspense>
   )
 }
 
 function SsoCallbackInner() {
+  const t = useTranslations('ssoCallbackPage')
   const searchParams = useSearchParams()
   const setCurrentUser = useAppStore((state) => state.setCurrentUser)
   const [error, setError] = useState('')
@@ -30,11 +33,11 @@ function SsoCallbackInner() {
     const providerError = searchParams.get('error')
 
     if (providerError) {
-      setError(`第三方登录失败：${providerError}`)
+      setError(t('thirdPartyLoginFailed', { error: providerError }))
       return
     }
     if (!code || !state) {
-      setError('回调缺少 code 或 state 参数')
+      setError(t('missingCodeOrState'))
       return
     }
 
@@ -43,7 +46,7 @@ function SsoCallbackInner() {
       .then((res) => {
         const token = res.data?.token
         if (!token) {
-          setError('登录失败：未返回令牌')
+          setError(t('loginFailedNoToken'))
           return
         }
         setAuthToken(token)
@@ -55,7 +58,7 @@ function SsoCallbackInner() {
         window.location.assign('/workspace')
       })
       .catch((err: any) => {
-        setError(err.response?.data?.error || '登录失败，请重试')
+        setError(err.response?.data?.error || t('loginFailedRetry'))
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -70,14 +73,14 @@ function SsoCallbackInner() {
             href="/login"
             className="inline-flex items-center justify-center h-10 px-6 bg-primary-500 hover:bg-primary-400 text-white font-medium rounded-lg transition-colors"
           >
-            返回登录
+            {t('backToLogin')}
           </a>
         }
       />
     )
   }
 
-  return <CallbackShell message="正在完成登录..." />
+  return <CallbackShell message={t('completingLogin')} />
 }
 
 function CallbackShell({

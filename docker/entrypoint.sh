@@ -3,9 +3,9 @@ set -e
 
 PGDATA="/var/lib/postgresql/15/main"
 PG_BIN="/usr/lib/postgresql/15/bin"
-PG_USER="${POSTGRES_USER:-onebase}"
-PG_PASS="${POSTGRES_PASSWORD:-onebase123}"
-PG_DB="${POSTGRES_DB:-onebase}"
+PG_USER="${POSTGRES_USER:-planeos}"
+PG_PASS="${POSTGRES_PASSWORD:-planeos123}"
+PG_DB="${POSTGRES_DB:-planeos}"
 
 echo "========================================="
 echo "  PlaneOS All-in-One Container"
@@ -59,7 +59,7 @@ apply_aio_pg_conf "$PGDATA/postgresql.conf"
 
 # ─── 2. 启动 PostgreSQL（临时，用于迁移）───
 echo "[2/5] 启动 PostgreSQL..."
-su - postgres -c "$PG_BIN/pg_ctl -D $PGDATA -l /var/log/onebase/pg_init.log start -w -t 30"
+su - postgres -c "$PG_BIN/pg_ctl -D $PGDATA -l /var/log/planeos/pg_init.log start -w -t 30"
 
 # 等待就绪
 for i in $(seq 1 30); do
@@ -94,11 +94,11 @@ cd /app
 if [ -x /app/bin/migrate_all ]; then
     echo "  -> /app/bin/migrate_all"
     if DATABASE_URL="$DATABASE_URL" /app/bin/migrate_all \
-        >/var/log/onebase/migrate_all.log 2>&1; then
+        >/var/log/planeos/migrate_all.log 2>&1; then
         echo "  -> migrate_all 完成"
     else
-        echo "  !! migrate_all 失败，详见 /var/log/onebase/migrate_all.log（继续启动，主进程 AUTO_MIGRATE 会再试）"
-        tail -n 40 /var/log/onebase/migrate_all.log || true
+        echo "  !! migrate_all 失败，详见 /var/log/planeos/migrate_all.log（继续启动，主进程 AUTO_MIGRATE 会再试）"
+        tail -n 40 /var/log/planeos/migrate_all.log || true
     fi
 else
     echo "  !! /app/bin/migrate_all 不存在，跳过入口迁移（依赖主进程 AUTO_MIGRATE）"
@@ -111,15 +111,15 @@ PGPASSWORD="$PG_PASS" psql -h 127.0.0.1 -U "$PG_USER" -d "$PG_DB" -f /app/init_m
 
 # 确保超级管理员账号的密码有效（migrations/001 里的种子哈希不可用，统一用 create_admin 重置一次）
 echo "  -> 确保 admin@example.com / Admin123 可用"
-DATABASE_URL="$DATABASE_URL" /app/bin/create_admin >/var/log/onebase/create_admin.log 2>&1 || true
+DATABASE_URL="$DATABASE_URL" /app/bin/create_admin >/var/log/planeos/create_admin.log 2>&1 || true
 
 # ─── 4.5 历史密码迁移：把所有非 v2: 格式的连接密码升级为 v2 AES-256-GCM ───
 # 仅在配置了 ENCRYPTION_KEY 时执行；失败不会阻断启动（仅日志告警）。
 if [ -n "$ENCRYPTION_KEY" ]; then
     echo "  -> 升级历史 base64 密码到 v2 加密格式（migrate_passwords）"
     DATABASE_URL="$DATABASE_URL" ENCRYPTION_KEY="$ENCRYPTION_KEY" \
-        /app/bin/migrate_passwords >/var/log/onebase/migrate_passwords.log 2>&1 || \
-        echo "     (密码迁移失败，详见 /var/log/onebase/migrate_passwords.log)"
+        /app/bin/migrate_passwords >/var/log/planeos/migrate_passwords.log 2>&1 || \
+        echo "     (密码迁移失败，详见 /var/log/planeos/migrate_passwords.log)"
 fi
 
 # ─── 5. 停止临时 PostgreSQL（交给 supervisord 管理）───
@@ -137,4 +137,4 @@ echo "========================================="
 echo ""
 
 # 启动 supervisord（接管所有进程）
-exec /usr/bin/supervisord -c /etc/supervisor/conf.d/onebase.conf
+exec /usr/bin/supervisord -c /etc/supervisor/conf.d/planeos.conf

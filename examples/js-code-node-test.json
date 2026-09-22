@@ -31,7 +31,7 @@
       "config": {
         "_position": { "x": 60, "y": 200 },
         "language": "javascript",
-        "code": "async function execute(ctx) {\n  const body = ctx.body || {};\n  const seed = (ctx.nodes && ctx.nodes.seed) || {};\n  const name = body.name || seed.name || 'onebase';\n  const a = Number(body.a != null ? body.a : seed.a) || 0;\n  const b = Number(body.b != null ? body.b : seed.b) || 0;\n  return {\n    result: {\n      engine: 'javascript',\n      sum: a + b,\n      greeting: 'hello ' + name,\n      sha256_of_name: crypto.sha256(String(name)),\n      has_api_token: !!env.get('API_TOKEN'),\n      server_ts_ms: time.now_ms(),\n      echo_body: body\n    }\n  };\n}\n"
+        "code": "async function execute(ctx) {\n  const body = ctx.body || {};\n  const seed = (ctx.nodes && ctx.nodes.seed) || {};\n  const name = body.name || seed.name || 'planeos';\n  const a = Number(body.a != null ? body.a : seed.a) || 0;\n  const b = Number(body.b != null ? body.b : seed.b) || 0;\n  return {\n    result: {\n      engine: 'javascript',\n      sum: a + b,\n      greeting: 'hello ' + name,\n      sha256_of_name: crypto.sha256(String(name)),\n      has_api_token: !!env.get('API_TOKEN'),\n      server_ts_ms: time.now_ms(),\n      echo_body: body\n    }\n  };\n}\n"
       }
     },
     {

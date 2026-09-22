@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import { useParams, useRouter } from 'next/navigation'
 import { schemaAPI, tableAPI } from '@/lib/api'
 import { downloadFile } from '@/lib/utils'
@@ -17,6 +18,7 @@ interface TableInfo {
 }
 
 export default function TablesPage() {
+  const t = useTranslations('wsTables')
   const { currentSchema } = useAppStore()
   const { canWriteDatabase } = useCurrentProjectCapabilities()
   const router = useRouter()
@@ -52,8 +54,8 @@ export default function TablesPage() {
       setTables(response.data)
     } catch (err: any) {
       if (token !== loadTokenRef.current) return
-      console.error('加载表列表失败:', err)
-      setError(err.response?.data?.error || err.message || '加载失败')
+      console.error(t('loadListFailed'), err)
+      setError(err.response?.data?.error || err.message || t('loadFailed'))
       setTables([])
     } finally {
       if (token === loadTokenRef.current) setLoading(false)
@@ -91,7 +93,7 @@ export default function TablesPage() {
       const response = await tableAPI.exportCSV(currentSchema, tableName, { limit: 10000 })
       downloadFile(response.data, `${currentSchema}_${tableName}.csv`)
     } catch (err: any) {
-      alert('导出失败：' + (err.response?.data?.error || err.message))
+      alert(t('exportFailed', { err: err.response?.data?.error || err.message }))
     }
   }
 
@@ -101,7 +103,7 @@ export default function TablesPage() {
       const blob = new Blob([JSON.stringify(response.data, null, 2)], { type: 'application/json' })
       downloadFile(blob, `${currentSchema}_${tableName}.json`)
     } catch (err: any) {
-      alert('导出失败：' + (err.response?.data?.error || err.message))
+      alert(t('exportFailed', { msg: err.response?.data?.error || err.message }))
     }
   }
 
@@ -111,8 +113,7 @@ export default function TablesPage() {
     const fq = `${currentSchema}.${tableName}`
     askAi({
       prompt:
-        `请分析数据库表 \`${fq}\` 的表结构、字段类型、索引设计与潜在优化点，` +
-        '并指出可能的范式 / 性能 / 数据一致性问题。当前数据库连接信息见环境变量（database_id / db_name）。',
+        t('aiPrompt', { fq }),
       requestId: genRequestId('table-analyze'),
     })
   }
@@ -133,7 +134,7 @@ export default function TablesPage() {
             className="flex items-center text-sm text-gray-600 hover:text-gray-900"
           >
             <i className="fas fa-arrow-left mr-2"></i>
-            返回表列表
+            {t('backToList')}
           </button>
           <span className="text-gray-400">/</span>
           <span className="text-sm font-medium text-gray-900">{currentSchema}.{selectedTable}</span>
@@ -156,10 +157,10 @@ export default function TablesPage() {
       {/* 页面头部 */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-800">数据表管理</h1>
+          <h1 className="text-2xl font-semibold text-gray-800">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            当前 Schema: <span className="font-mono font-medium text-gray-900">{currentSchema}</span>
-            {!loading && <span className="ml-2">· {tables.length} 个表</span>}
+            {t('currentSchema')} <span className="font-mono font-medium text-gray-900">{currentSchema}</span>
+            {!loading && <span className="ml-2">{t('tableCount', { n: tables.length })}</span>}
           </p>
         </div>
         
@@ -171,7 +172,7 @@ export default function TablesPage() {
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="搜索表名..."
+              placeholder={t('searchPlaceholder')}
               className="pl-9 pr-4 py-2 text-sm border border-gray-300 rounded-lg w-64 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             />
           </div>
@@ -199,7 +200,7 @@ export default function TablesPage() {
             className="btn-default"
           >
             <i className={`fas ${loading ? 'fa-spinner fa-spin' : 'fa-sync-alt'} text-xs mr-2`}></i>
-            刷新
+            {t('refresh')}
           </button>
 
           {/* M3 入口：建表 CTA。viewer 角色按钮还是显示，但点了会跳到 designer，
@@ -207,10 +208,10 @@ export default function TablesPage() {
           <button
             onClick={() => router.push(designerHref('?mode=create'))}
             className="btn-primary"
-            title={canWriteDatabase ? '在当前 Schema 下创建新表' : '需 member+ 角色才能建表'}
+            title={canWriteDatabase ? t('newTableTitle') : t('newTableNoPerms')}
           >
             <i className="fas fa-plus text-xs mr-2"></i>
-            新建表
+            {t('newTable')}
           </button>
         </div>
       </div>
@@ -221,7 +222,7 @@ export default function TablesPage() {
           <div className="flex items-start space-x-3">
             <i className="fas fa-exclamation-circle text-red-500 mt-0.5"></i>
             <div className="flex-1">
-              <p className="text-sm font-medium text-red-800">加载失败</p>
+              <p className="text-sm font-medium text-red-800">{t('loadFailedTitle')}</p>
               <p className="text-sm text-red-600 mt-1">{error}</p>
             </div>
           </div>
@@ -233,7 +234,7 @@ export default function TablesPage() {
         <div className="flex items-center justify-center py-20">
           <div className="text-center">
             <i className="fas fa-spinner fa-spin text-4xl text-blue-500 mb-4"></i>
-            <p className="text-gray-500">加载表列表...</p>
+            <p className="text-gray-500">{t('loadingList')}</p>
           </div>
         </div>
       ) : filteredTables.length === 0 ? (
@@ -242,29 +243,29 @@ export default function TablesPage() {
             <i className="fas fa-table text-5xl text-gray-300 mb-4"></i>
             {searchTerm ? (
               <>
-                <p className="text-gray-500 mb-2">没有找到匹配的表</p>
+                <p className="text-gray-500 mb-2">{t('noMatch')}</p>
                 <button
                   onClick={() => setSearchTerm('')}
                   className="text-blue-600 hover:text-blue-800 text-sm"
                 >
-                  清除搜索
+                  {t('clearSearch')}
                 </button>
               </>
             ) : (
               <>
                 {/* M3：空 schema 不再死路一条——直接给"建第一张表" CTA。 */}
                 <h3 className="text-base font-medium text-gray-800 mb-2">
-                  当前 Schema 还没有数据表
+                  {t('emptyTitle')}
                 </h3>
                 <p className="text-sm text-gray-500 mb-5">
-                  你的项目刚开通时是空白的——点下方按钮设计第一张表，几秒钟就能跑起 API。
+                  {t('emptyDesc')}
                 </p>
                 <button
                   onClick={() => router.push(designerHref('?mode=create'))}
                   className="btn-primary"
                 >
                   <i className="fas fa-plus mr-2"></i>
-                  建第一张表
+                  {t('createFirst')}
                 </button>
               </>
             )}
@@ -301,7 +302,7 @@ export default function TablesPage() {
                         analyzeTableWithAi(table.table_name)
                       }}
                       className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded"
-                      title="用 AI 分析这张表"
+                      title={t('aiAnalyze')}
                     >
                       <i className="fas fa-robot text-xs"></i>
                     </button>
@@ -312,7 +313,7 @@ export default function TablesPage() {
                         router.push(designerHref(`?mode=edit&table=${encodeURIComponent(table.table_name)}`))
                       }}
                       className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"
-                      title="编辑结构（加列 / 删列 / 改 NOT NULL / 改默认）"
+                      title={t('editStructure')}
                     >
                       <i className="fas fa-pen-ruler text-xs"></i>
                     </button>
@@ -322,7 +323,7 @@ export default function TablesPage() {
                         handleExportCSV(table.table_name)
                       }}
                       className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
-                      title="导出 CSV"
+                      title={t('exportCsv')}
                     >
                       <i className="fas fa-file-csv text-xs"></i>
                     </button>
@@ -332,7 +333,7 @@ export default function TablesPage() {
                         handleExportJSON(table.table_name)
                       }}
                       className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
-                      title="导出 JSON"
+                      title={t('exportJson')}
                     >
                       <i className="fas fa-file-code text-xs"></i>
                     </button>
@@ -343,7 +344,7 @@ export default function TablesPage() {
               <div className="flex items-center justify-between text-xs text-gray-500">
                 <span>
                   <i className="fas fa-list-ol mr-1"></i>
-                  {table.row_count != null ? `${table.row_count.toLocaleString()} 行` : '-'}
+                  {table.row_count != null ? t('rowsN', { n: table.row_count.toLocaleString() }) : '-'}
                 </span>
                 <span>
                   <i className="fas fa-database mr-1"></i>
@@ -359,11 +360,11 @@ export default function TablesPage() {
           <table className="w-full">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">表名</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">类型</th>
-                <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase">行数</th>
-                <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase">大小</th>
-                <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase">操作</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">{t('colName')}</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">{t('colType')}</th>
+                <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase">{t('colRows')}</th>
+                <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase">{t('colSize')}</th>
+                <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase">{t('colActions')}</th>
               </tr>
             </thead>
             <tbody>
@@ -404,7 +405,7 @@ export default function TablesPage() {
                           analyzeTableWithAi(table.table_name)
                         }}
                         className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded"
-                        title="用 AI 分析这张表"
+                        title={t('aiAnalyze')}
                       >
                         <i className="fas fa-robot"></i>
                       </button>
@@ -414,7 +415,7 @@ export default function TablesPage() {
                           router.push(designerHref(`?mode=edit&table=${encodeURIComponent(table.table_name)}`))
                         }}
                         className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"
-                        title="编辑结构（加列 / 删列 / 改 NOT NULL / 改默认）"
+                        title={t('editStructure')}
                       >
                         <i className="fas fa-pen-ruler"></i>
                       </button>
@@ -424,7 +425,7 @@ export default function TablesPage() {
                           handleExportCSV(table.table_name)
                         }}
                         className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
-                        title="导出 CSV"
+                        title={t('exportCsv')}
                       >
                         <i className="fas fa-file-csv"></i>
                       </button>
@@ -434,7 +435,7 @@ export default function TablesPage() {
                           handleExportJSON(table.table_name)
                         }}
                         className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
-                        title="导出 JSON"
+                        title={t('exportJson')}
                       >
                         <i className="fas fa-file-code"></i>
                       </button>
@@ -444,7 +445,7 @@ export default function TablesPage() {
                           setSelectedTable(table.table_name)
                         }}
                         className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded"
-                        title="编辑数据"
+                        title={t('editData')}
                       >
                         <i className="fas fa-edit"></i>
                       </button>

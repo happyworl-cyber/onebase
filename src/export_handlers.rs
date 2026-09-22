@@ -19,7 +19,11 @@ use std::collections::HashMap;
 /// 既会返回错误数据，又会泄漏 management schema。所以这里 strict 一些。
 fn require_target_pool<'a>(dynamic: &'a Option<Extension<PgPool>>) -> Result<&'a PgPool> {
     dynamic.as_deref().ok_or_else(|| {
-        AppError::InvalidQuery("缺少 X-Database-Id 请求头，无法定位导出目标数据库".to_string())
+        AppError::validation(
+            "export_missing_database_id_header",
+            "缺少 X-Database-Id 请求头，无法定位导出目标数据库".to_string(),
+            serde_json::json!({}),
+        )
     })
 }
 
@@ -34,7 +38,11 @@ async fn require_export_access(
     let database_id = db_id
         .map(|Extension(CurrentDatabaseId(id))| id)
         .ok_or_else(|| {
-            AppError::InvalidQuery("缺少 X-Database-Id 请求头，无法定位导出目标数据库".to_string())
+            AppError::validation(
+                "export_missing_database_id_header",
+                "缺少 X-Database-Id 请求头，无法定位导出目标数据库".to_string(),
+                serde_json::json!({}),
+            )
         })?;
     permissions::require_database_admin(main_pool, claims, database_id).await
 }
@@ -77,6 +85,8 @@ pub async fn export_csv(
             None,
             None,
             Some(serde_json::json!({ "format": "csv", "rows": rows.len() })),
+            Some("oplog_export_csv"),
+            serde_json::json!({ "schema": schema, "table": table, "rows": rows.len() }),
         );
     }
 
@@ -160,6 +170,8 @@ pub async fn export_json(
             None,
             None,
             Some(serde_json::json!({ "format": "json", "rows": rows.len() })),
+            Some("oplog_export_json"),
+            serde_json::json!({ "schema": schema, "table": table, "rows": rows.len() }),
         );
     }
 
@@ -238,19 +250,28 @@ pub async fn export_sql_csv(
         .as_ref()
         .map(|Extension(CurrentDatabaseId(id))| *id)
         .ok_or_else(|| {
-            AppError::InvalidQuery("缺少 X-Database-Id 请求头，无法定位导出目标数据库".to_string())
+            AppError::validation(
+                "export_missing_database_id_header",
+                "缺少 X-Database-Id 请求头，无法定位导出目标数据库".to_string(),
+                serde_json::json!({}),
+            )
         })?;
     let pool = require_target_pool(&dynamic_pool)?;
 
-    let sql = req
-        .get("sql")
-        .and_then(|s| s.as_str())
-        .ok_or_else(|| crate::error::AppError::InvalidQuery("缺少 sql 参数".to_string()))?;
+    let sql = req.get("sql").and_then(|s| s.as_str()).ok_or_else(|| {
+        crate::error::AppError::validation(
+            "export_missing_sql_param",
+            "缺少 sql 参数".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
 
     let sql_upper = sql.trim().to_uppercase();
     if !sql_upper.starts_with("SELECT") && !sql_upper.starts_with("WITH") {
-        return Err(crate::error::AppError::InvalidQuery(
+        return Err(crate::error::AppError::validation(
+            "export_sql_select_only",
             "只允许执行 SELECT 查询语句".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -271,6 +292,8 @@ pub async fn export_sql_csv(
         None,
         Some(serde_json::json!({ "v": 1, "kind": "sql", "sql": sql, "sql_type": "SELECT" })),
         Some(serde_json::json!({ "format": "csv", "rows": rows.len() })),
+        Some("oplog_export_sql_csv"),
+        serde_json::json!({ "rows": rows.len() }),
     );
 
     if rows.is_empty() {

@@ -70,7 +70,7 @@ PlaneOS 已具备：通用 SSE 总线 `SseHub`、`GET /sse` query-token 订阅�
 
 PostgreSQL 把 NOTIFY 投给**所有**正在 `LISTEN` 的会话。每个 PlaneOS 实例各持一条 LISTEN
 连接，故每个实例都会收到同一条通知，并**只向本实例的本地连接**投递（`publish_local`，
-`replicate = false`，不经 `onebase:sse` Redis 扇出）。浏览器只连一个实例 → **恰好一次**，
+`replicate = false`，不经 `planeos:sse` Redis 扇出）。浏览器只连一个实例 → **恰好一次**，
 无重复、本路径无需 Redis。
 
 ### 4.2 一个用户一条连接（覆盖多社区）

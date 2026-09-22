@@ -31,8 +31,10 @@ async fn require_tenant_admin(
     if admins.contains(&tenant_id) {
         Ok(())
     } else {
-        Err(AppError::Forbidden(
+        Err(AppError::forbidden_coded(
+            "llmconn_admin_required",
             "仅超管或该租户 owner/admin 可管理 LLM 连接".to_string(),
+            serde_json::json!({}),
         ))
     }
 }
@@ -49,7 +51,13 @@ async fn fetch_connection_authorized(
     .fetch_optional(pool)
     .await
     .map_err(|e| AppError::Internal(format!("查询 LLM 连接失败: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("LLM 连接 {id} 不存在")))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "llmconn_connection_not_found",
+            format!("LLM 连接 {id} 不存在"),
+            serde_json::json!({ "id": id }),
+        )
+    })?;
     require_tenant_admin(pool, claims, conn.tenant_id).await?;
     Ok(conn)
 }
@@ -153,7 +161,11 @@ async fn assert_credential_in_tenant(
     .await
     .map_err(|e| AppError::Internal(format!("校验凭证失败: {e}")))?;
     if exists.is_none() {
-        return Err(AppError::InvalidQuery("凭证不存在或不属于当前项目".into()));
+        return Err(AppError::validation(
+            "llmconn_credential_not_found",
+            "凭证不存在或不属于当前项目".to_string(),
+            serde_json::json!({}),
+        ));
     }
     Ok(())
 }
@@ -165,9 +177,19 @@ pub async fn create_connection(
 ) -> Result<Json<LlmConnection>, AppError> {
     require_tenant_admin(&pool, &claims, req.tenant_id).await?;
     if req.connection_name.trim().is_empty() {
-        return Err(AppError::InvalidQuery("connection_name 不能为空".into()));
+        return Err(AppError::validation(
+            "llmconn_connection_name_required",
+            "connection_name 不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
-    let base_url = normalize_base_url(&req.base_url).map_err(AppError::InvalidQuery)?;
+    let base_url = normalize_base_url(&req.base_url).map_err(|reason| {
+        AppError::validation(
+            "llmconn_base_url_invalid",
+            reason.clone(),
+            serde_json::json!({ "reason": reason }),
+        )
+    })?;
     let models = normalize_models(&req.models.unwrap_or_default());
     if let Some(cid) = req.credential_id {
         assert_credential_in_tenant(&pool, req.tenant_id, cid).await?;
@@ -200,7 +222,13 @@ pub async fn update_connection(
     let existing = fetch_connection_authorized(&pool, &claims, id).await?;
     let base_url = match req.base_url.as_deref() {
         None => None,
-        Some(raw) => Some(normalize_base_url(raw).map_err(AppError::InvalidQuery)?),
+        Some(raw) => Some(normalize_base_url(raw).map_err(|reason| {
+            AppError::validation(
+                "llmconn_base_url_invalid",
+                reason.clone(),
+                serde_json::json!({ "reason": reason }),
+            )
+        })?),
     };
     if let Some(Some(cid)) = req.credential_id {
         assert_credential_in_tenant(&pool, existing.tenant_id, cid).await?;
@@ -212,7 +240,11 @@ pub async fn update_connection(
         .map(str::trim)
         .filter(|s| !s.is_empty());
     if req.connection_name.as_ref().is_some() && name.is_none() {
-        return Err(AppError::InvalidQuery("connection_name 不能为空".into()));
+        return Err(AppError::validation(
+            "llmconn_connection_name_required",
+            "connection_name 不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let row = sqlx::query_as::<_, LlmConnection>(
@@ -261,10 +293,20 @@ async fn probe_models(
     let mut headers_obj = serde_json::Map::new();
     if let Some(cid) = credential_id {
         let store = load_credential_store(pool, tenant_id).await;
-        let cred = store
-            .get_by_id(cid)
-            .ok_or_else(|| AppError::InvalidQuery("探活凭证不存在".into()))?;
-        apply_http_auth_headers(&mut headers_obj, cred).map_err(AppError::InvalidQuery)?;
+        let cred = store.get_by_id(cid).ok_or_else(|| {
+            AppError::validation(
+                "llmconn_probe_credential_not_found",
+                "探活凭证不存在".to_string(),
+                serde_json::json!({}),
+            )
+        })?;
+        apply_http_auth_headers(&mut headers_obj, cred).map_err(|reason| {
+            AppError::validation(
+                "llmconn_credential_header_apply_failed",
+                reason.clone(),
+                serde_json::json!({ "reason": reason }),
+            )
+        })?;
     }
     let url = models_url(base_url);
     let client = crate::workflow_llm::client_for_url(&url).await?;
@@ -300,7 +342,13 @@ pub async fn test_connection(
     Json(req): Json<TestConnectionReq>,
 ) -> Result<Json<Value>, AppError> {
     require_tenant_admin(&pool, &claims, req.tenant_id).await?;
-    let base_url = normalize_base_url(&req.base_url).map_err(AppError::InvalidQuery)?;
+    let base_url = normalize_base_url(&req.base_url).map_err(|reason| {
+        AppError::validation(
+            "llmconn_base_url_invalid",
+            reason.clone(),
+            serde_json::json!({ "reason": reason }),
+        )
+    })?;
     if let Some(cid) = req.credential_id {
         assert_credential_in_tenant(&pool, req.tenant_id, cid).await?;
     }
@@ -326,7 +374,11 @@ pub async fn health_connection(
 fn map_unique_violation(e: sqlx::Error, msg: &str) -> AppError {
     if let sqlx::Error::Database(ref db_err) = e {
         if db_err.code().as_deref() == Some("23505") {
-            return AppError::InvalidQuery(msg.to_string());
+            return AppError::validation(
+                "llmconn_duplicate_connection_name",
+                msg.to_string(),
+                serde_json::json!({}),
+            );
         }
     }
     AppError::Internal(format!("DB 错误: {e}"))

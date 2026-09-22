@@ -1,13 +1,13 @@
 version: "3.9"
 
 services:
-  onebase:
+  planeos:
     build:
       context: .
       dockerfile: Dockerfile.aio
       args:
         - NEXT_PUBLIC_API_URL=http://127.0.0.1:3000
-    container_name: onebase
+    container_name: planeos
     ports:
       - "3000:3000"   # Rust API
       - "3001:3001"   # Next.js 前端
@@ -16,11 +16,11 @@ services:
       # - "6379:6379"
     environment:
       # ── 数据库 ──
-      - POSTGRES_USER=onebase
-      - POSTGRES_PASSWORD=onebase123
-      - POSTGRES_DB=onebase
-      - DATABASE_URL=postgresql://onebase:onebase123@127.0.0.1:5432/onebase
-      - PROVISION_PG_URL=postgresql://onebase:onebase123@127.0.0.1:5432/postgres
+      - POSTGRES_USER=planeos
+      - POSTGRES_PASSWORD=planeos123
+      - POSTGRES_DB=planeos
+      - DATABASE_URL=postgresql://planeos:planeos123@127.0.0.1:5432/planeos
+      - PROVISION_PG_URL=postgresql://planeos:planeos123@127.0.0.1:5432/postgres
       # ── Redis ──
       - REDIS_URL=redis://127.0.0.1:6379
       # ── 认证 / 加密（生产环境务必由 docker-compose.override.yml + .env 提供真值）──
@@ -47,7 +47,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/15/main
       - redisdata:/var/lib/redis
-      - logs:/var/log/onebase
+      - logs:/var/log/planeos
     restart: unless-stopped
     # 自愈探针只看进程存活（/health/live，不碰 DB）。用 /health/ready 会在连接池
     # 短时打满时误判 unhealthy 触发重启，重启反而加剧耗尽。摘流交给外部 LB / k8s

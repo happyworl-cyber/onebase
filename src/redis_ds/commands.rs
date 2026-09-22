@@ -88,21 +88,33 @@ async fn timed<T>(
 }
 
 fn arg_str<'a>(args: &'a JsonValue, name: &str) -> Result<&'a str> {
-    args.get(name)
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::InvalidQuery(format!("缺少字符串参数 `{name}`")))
+    args.get(name).and_then(|v| v.as_str()).ok_or_else(|| {
+        AppError::validation(
+            "rediscmd_missing_string_arg",
+            format!("缺少字符串参数 `{name}`"),
+            serde_json::json!({ "name": name }),
+        )
+    })
 }
 
 fn arg_i64(args: &JsonValue, name: &str) -> Result<i64> {
-    args.get(name)
-        .and_then(|v| v.as_i64())
-        .ok_or_else(|| AppError::InvalidQuery(format!("缺少整数参数 `{name}`")))
+    args.get(name).and_then(|v| v.as_i64()).ok_or_else(|| {
+        AppError::validation(
+            "rediscmd_missing_int_arg",
+            format!("缺少整数参数 `{name}`"),
+            serde_json::json!({ "name": name }),
+        )
+    })
 }
 
 fn arg_f64(args: &JsonValue, name: &str) -> Result<f64> {
-    args.get(name)
-        .and_then(|v| v.as_f64())
-        .ok_or_else(|| AppError::InvalidQuery(format!("缺少数值参数 `{name}`")))
+    args.get(name).and_then(|v| v.as_f64()).ok_or_else(|| {
+        AppError::validation(
+            "rediscmd_missing_number_arg",
+            format!("缺少数值参数 `{name}`"),
+            serde_json::json!({ "name": name }),
+        )
+    })
 }
 
 /// 把任意 JSON 值转成可作为 redis 参数的字符串：字符串原样，标量转字面量，
@@ -123,9 +135,11 @@ fn arg_value_list(args: &JsonValue, name: &str) -> Result<Vec<String>> {
     match args.get(name) {
         Some(JsonValue::Array(arr)) => {
             if arr.is_empty() {
-                return Err(AppError::InvalidQuery(format!(
-                    "参数 `{name}` 不能为空数组"
-                )));
+                return Err(AppError::validation(
+                    "rediscmd_empty_array_arg",
+                    format!("参数 `{name}` 不能为空数组"),
+                    serde_json::json!({ "name": name }),
+                ));
             }
             Ok(arr.iter().map(value_to_redis_arg).collect())
         }
@@ -137,13 +151,19 @@ fn arg_value_list(args: &JsonValue, name: &str) -> Result<Vec<String>> {
                 .map(str::to_string)
                 .collect();
             if parts.is_empty() {
-                return Err(AppError::InvalidQuery(format!("参数 `{name}` 不能为空")));
+                return Err(AppError::validation(
+                    "rediscmd_empty_string_arg",
+                    format!("参数 `{name}` 不能为空"),
+                    serde_json::json!({ "name": name }),
+                ));
             }
             Ok(parts)
         }
-        _ => Err(AppError::InvalidQuery(format!(
-            "缺少数组 / 字符串参数 `{name}`"
-        ))),
+        _ => Err(AppError::validation(
+            "rediscmd_missing_array_or_string_arg",
+            format!("缺少数组 / 字符串参数 `{name}`"),
+            serde_json::json!({ "name": name }),
+        )),
     }
 }
 
@@ -161,10 +181,13 @@ pub async fn execute(conn: &ConnectionManager, op: &str, args: &JsonValue) -> Re
         }
         "set" => {
             let key = arg_str(args, "key")?;
-            let value = value_to_redis_arg(
-                args.get("value")
-                    .ok_or_else(|| AppError::InvalidQuery("缺少参数 `value`".into()))?,
-            );
+            let value = value_to_redis_arg(args.get("value").ok_or_else(|| {
+                AppError::validation(
+                    "rediscmd_missing_value_arg",
+                    "缺少参数 `value`".to_string(),
+                    serde_json::json!({}),
+                )
+            })?);
             let mut cmd = redis::cmd("SET");
             cmd.arg(key).arg(value);
             if let Some(ttl) = args.get("ttl").and_then(|v| v.as_i64()) {
@@ -191,7 +214,11 @@ pub async fn execute(conn: &ConnectionManager, op: &str, args: &JsonValue) -> Re
                 vec![arg_str(args, "key")?.to_string()]
             };
             if keys.is_empty() {
-                return Err(AppError::InvalidQuery("del 需要 key 或非空 keys[]".into()));
+                return Err(AppError::validation(
+                    "rediscmd_del_requires_key",
+                    "del 需要 key 或非空 keys[]".to_string(),
+                    serde_json::json!({}),
+                ));
             }
             let deleted: i64 =
                 timed("DEL", redis::cmd("DEL").arg(&keys).query_async(&mut c)).await?;
@@ -251,10 +278,13 @@ pub async fn execute(conn: &ConnectionManager, op: &str, args: &JsonValue) -> Re
         "hset" => {
             let key = arg_str(args, "key")?;
             let field = arg_str(args, "field")?;
-            let value = value_to_redis_arg(
-                args.get("value")
-                    .ok_or_else(|| AppError::InvalidQuery("缺少参数 `value`".into()))?,
-            );
+            let value = value_to_redis_arg(args.get("value").ok_or_else(|| {
+                AppError::validation(
+                    "rediscmd_missing_value_arg",
+                    "缺少参数 `value`".to_string(),
+                    serde_json::json!({}),
+                )
+            })?);
             let added: i64 = timed(
                 "HSET",
                 redis::cmd("HSET")
@@ -373,10 +403,14 @@ pub async fn execute(conn: &ConnectionManager, op: &str, args: &JsonValue) -> Re
             .await?;
             Ok(json!({ "removed": removed }))
         }
-        other => Err(AppError::InvalidQuery(format!(
-            "不支持的 Redis 操作 `{other}`（支持：{})",
-            SUPPORTED_OPS.join(", ")
-        ))),
+        other => Err(AppError::validation(
+            "rediscmd_unsupported_op",
+            format!(
+                "不支持的 Redis 操作 `{other}`（支持：{})",
+                SUPPORTED_OPS.join(", ")
+            ),
+            serde_json::json!({ "op": other, "supported_ops": SUPPORTED_OPS.join(", ") }),
+        )),
     }
 }
 
@@ -387,7 +421,11 @@ fn list_values(args: &JsonValue) -> Result<Vec<String>> {
     } else if let Some(v) = args.get("value") {
         Ok(vec![value_to_redis_arg(v)])
     } else {
-        Err(AppError::InvalidQuery("需要 value 或 values[]".into()))
+        Err(AppError::validation(
+            "rediscmd_need_value_or_values",
+            "需要 value 或 values[]".to_string(),
+            serde_json::json!({}),
+        ))
     }
 }
 

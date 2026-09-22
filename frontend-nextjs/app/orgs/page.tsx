@@ -6,11 +6,13 @@
  */
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import { organizationAPI } from '@/lib/api'
 import { useAppStore, type Organization } from '@/lib/store'
 
 export default function OrgsPickerPage() {
+  const t = useTranslations('orgsPage')
   const router = useRouter()
   const setCurrentOrganization = useAppStore((s) => s.setCurrentOrganization)
   const [orgs, setOrgs] = useState<Organization[] | null>(null)
@@ -46,7 +48,7 @@ export default function OrgsPickerPage() {
         }
       })
       .catch((err) => {
-        setError(err?.response?.data?.error || err?.message || '加载失败')
+        setError(err?.response?.data?.error || err?.message || t('loadFailed'))
       })
   }, [router, setCurrentOrganization])
 
@@ -56,7 +58,7 @@ export default function OrgsPickerPage() {
         <div className="text-center">
           <p className="text-sm text-gray-700 mb-4">{error}</p>
           <button type="button" className="text-sm text-blue-600" onClick={() => location.reload()}>
-            重试
+            {t('retry')}
           </button>
         </div>
       </div>
@@ -68,7 +70,7 @@ export default function OrgsPickerPage() {
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center text-sm text-gray-500">
           <i className="fas fa-spinner fa-spin text-2xl text-gray-400 mb-2 block"></i>
-          加载租户…
+          {t('loadingOrgs')}
         </div>
       </div>
     )
@@ -79,9 +81,9 @@ export default function OrgsPickerPage() {
       <div className="min-h-screen flex items-center justify-center bg-gray-50 px-6">
         <div className="max-w-md text-center bg-white border border-gray-200 rounded-lg p-8">
           <i className="fas fa-building text-3xl text-gray-300 mb-3"></i>
-          <h1 className="text-lg font-semibold text-gray-900 mb-2">尚未加入任何租户</h1>
+          <h1 className="text-lg font-semibold text-gray-900 mb-2">{t('noOrgsTitle')}</h1>
           <p className="text-sm text-gray-500">
-            租户由平台管理员创建并分配成员。请联系平台开通租户，或确认账号已被加入租户。
+            {t('noOrgsDesc')}
           </p>
         </div>
       </div>
@@ -92,9 +94,9 @@ export default function OrgsPickerPage() {
     <div className="min-h-screen bg-gray-50 py-12 px-6">
       <div className="max-w-3xl mx-auto">
         <header className="mb-8">
-          <h1 className="text-2xl font-semibold text-gray-900">选择租户</h1>
+          <h1 className="text-2xl font-semibold text-gray-900">{t('selectOrgTitle')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            进入租户后可管理项目；项目内再使用数据库、工作流等功能。
+            {t('selectOrgDesc')}
           </p>
         </header>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

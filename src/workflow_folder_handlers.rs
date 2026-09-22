@@ -45,14 +45,24 @@ pub struct UpdateWorkflowFolderRequest {
 fn trim_name(name: &str) -> Result<String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
-        return Err(AppError::InvalidQuery("文件夹名称不能为空".to_string()));
+        return Err(AppError::validation(
+            "wffolder_name_required",
+            "文件夹名称不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if trimmed.contains('/') {
-        return Err(AppError::InvalidQuery("文件夹名称不能包含 '/'".to_string()));
+        return Err(AppError::validation(
+            "wffolder_name_invalid_char",
+            "文件夹名称不能包含 '/'".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if trimmed.chars().count() > 64 {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "wffolder_name_too_long",
             "文件夹名称不能超过 64 个字符".to_string(),
+            serde_json::json!({}),
         ));
     }
     Ok(trimmed.to_string())
@@ -63,7 +73,13 @@ async fn fetch_folder(pool: &PgPool, id: i32) -> Result<WorkflowFolder> {
         .bind(id)
         .fetch_optional(pool)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("文件夹 {} 不存在", id)))
+        .ok_or_else(|| {
+            AppError::not_found_coded(
+                "wffolder_not_found",
+                format!("文件夹 {} 不存在", id),
+                serde_json::json!({ "id": id }),
+            )
+        })
 }
 
 /// GET /api/admin/workflow-folders?database_id=
@@ -75,7 +91,13 @@ pub async fn list_workflow_folders(
     let database_id: i32 = params
         .get("database_id")
         .and_then(|v| v.parse().ok())
-        .ok_or_else(|| AppError::InvalidQuery("缺少 database_id".to_string()))?;
+        .ok_or_else(|| {
+            AppError::validation(
+                "wffolder_missing_database_id",
+                "缺少 database_id".to_string(),
+                serde_json::json!({}),
+            )
+        })?;
 
     crate::permissions::require_database_admin(&pool, &claims, database_id).await?;
 
@@ -111,8 +133,10 @@ pub async fn create_workflow_folder(
         .fetch_one(&pool)
         .await?;
         if exists {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "wffolder_shared_already_exists",
                 "共享服务已存在，每个项目库仅允许一个".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -120,13 +144,17 @@ pub async fn create_workflow_folder(
     if let Some(parent_id) = req.parent_id {
         let parent = fetch_folder(&pool, parent_id).await?;
         if parent.database_id != req.database_id {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "wffolder_parent_database_mismatch",
                 "parent_id 与 database_id 不匹配".to_string(),
+                serde_json::json!({}),
             ));
         }
         if parent.parent_id.is_some() {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "wffolder_category_nesting_not_allowed",
                 "分类文件夹下不能再建子文件夹（仅支持 服务 → 分类 两级）".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -145,7 +173,11 @@ pub async fn create_workflow_folder(
     .await
     .map_err(|e| {
         if e.to_string().contains("idx_workflow_folders_unique_name") {
-            AppError::InvalidQuery(format!("文件夹「{}」已存在", name))
+            AppError::validation(
+                "wffolder_name_conflict",
+                format!("文件夹「{}」已存在", name),
+                serde_json::json!({ "name": name }),
+            )
         } else {
             AppError::from(e)
         }
@@ -172,36 +204,52 @@ pub async fn update_workflow_folder(
 
     let (parent_provided, new_parent_id) = if let Some(parent_opt) = req.parent_id {
         if existing.is_shared && existing.parent_id.is_none() {
-            return Err(AppError::InvalidQuery("共享服务不可移动".to_string()));
+            return Err(AppError::validation(
+                "wffolder_shared_immutable_move",
+                "共享服务不可移动".to_string(),
+                serde_json::json!({}),
+            ));
         }
         match parent_opt {
             None => {
                 if existing.parent_id.is_some() {
-                    return Err(AppError::InvalidQuery(
+                    return Err(AppError::validation(
+                        "wffolder_category_requires_service",
                         "分类文件夹必须归属某个服务".to_string(),
+                        serde_json::json!({}),
                     ));
                 }
                 (true, None)
             }
             Some(parent_id) => {
                 if existing.parent_id.is_none() {
-                    return Err(AppError::InvalidQuery(
+                    return Err(AppError::validation(
+                        "wffolder_service_cannot_nest",
                         "服务文件夹不能挂到其他服务下".to_string(),
+                        serde_json::json!({}),
                     ));
                 }
                 let parent = fetch_folder(&pool, parent_id).await?;
                 if parent.database_id != existing.database_id {
-                    return Err(AppError::InvalidQuery(
+                    return Err(AppError::validation(
+                        "wffolder_parent_database_mismatch",
                         "parent_id 与 database_id 不匹配".to_string(),
+                        serde_json::json!({}),
                     ));
                 }
                 if parent.parent_id.is_some() {
-                    return Err(AppError::InvalidQuery(
+                    return Err(AppError::validation(
+                        "wffolder_category_target_must_be_service",
                         "分类只能移动到服务节点下".to_string(),
+                        serde_json::json!({}),
                     ));
                 }
                 if parent.id == id {
-                    return Err(AppError::InvalidQuery("不能将文件夹移动到自身".to_string()));
+                    return Err(AppError::validation(
+                        "wffolder_cannot_move_to_self",
+                        "不能将文件夹移动到自身".to_string(),
+                        serde_json::json!({}),
+                    ));
                 }
                 (true, Some(parent_id))
             }
@@ -228,7 +276,11 @@ pub async fn update_workflow_folder(
     .await
     .map_err(|e| {
         if e.to_string().contains("idx_workflow_folders_unique_name") {
-            AppError::InvalidQuery("目标服务下已存在同名文件夹".to_string())
+            AppError::validation(
+                "wffolder_update_name_conflict",
+                "目标服务下已存在同名文件夹".to_string(),
+                serde_json::json!({}),
+            )
         } else {
             AppError::from(e)
         }
@@ -247,7 +299,11 @@ pub async fn delete_workflow_folder(
     crate::permissions::require_database_admin(&pool, &claims, existing.database_id).await?;
 
     if existing.is_shared {
-        return Err(AppError::InvalidQuery("共享服务不可删除".to_string()));
+        return Err(AppError::validation(
+            "wffolder_shared_immutable_delete",
+            "共享服务不可删除".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let child_count: i64 =
@@ -257,8 +313,10 @@ pub async fn delete_workflow_folder(
             .await?;
 
     if child_count > 0 {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "wffolder_has_children",
             "请先删除该服务下的分类文件夹".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -277,8 +335,8 @@ mod tests {
 
     fn query_msg(r: Result<String>) -> String {
         match r {
-            Err(AppError::InvalidQuery(msg)) => msg,
-            other => panic!("expected InvalidQuery, got {other:?}"),
+            Err(AppError::Coded { message, .. }) => message,
+            other => panic!("expected Coded, got {other:?}"),
         }
     }
 

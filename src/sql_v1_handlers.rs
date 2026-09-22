@@ -159,7 +159,13 @@ pub async fn sql_auth_middleware(
         .await
         .map_err(|e| AppError::Internal(format!("校验 API Key 失败: {}", e)))?;
 
-        let row = row.ok_or_else(|| AppError::Unauthorized("API Key 无效或已过期".to_string()))?;
+        let row = row.ok_or_else(|| {
+            AppError::unauthorized_coded(
+                "sqlv1_api_key_invalid_or_expired",
+                "API Key 无效或已过期".to_string(),
+                serde_json::json!({}),
+            )
+        })?;
         let key_database_id: i32 = row.get("database_id");
         let permissions: Value = row.get("permissions");
 
@@ -177,8 +183,10 @@ pub async fn sql_auth_middleware(
             row.is_some()
         };
         if !key_path_match {
-            return Err(AppError::Unauthorized(
+            return Err(AppError::unauthorized_coded(
+                "sqlv1_api_key_slug_mismatch",
                 "URL 中的 database_slug 与 API Key 绑定的数据库不一致".to_string(),
+                serde_json::json!({}),
             ));
         }
 
@@ -200,15 +208,21 @@ pub async fn sql_auth_middleware(
         return Ok(next.run(req).await);
     }
 
-    Err(AppError::Unauthorized(
+    Err(AppError::unauthorized_coded(
+        "sqlv1_missing_jwt_or_api_key",
         "缺少有效的 JWT 或 API Key".to_string(),
+        serde_json::json!({}),
     ))
 }
 
 fn require_database_id(opt: Option<Extension<CurrentDatabaseId>>) -> Result<i32> {
     opt.map(|Extension(CurrentDatabaseId(id))| id)
         .ok_or_else(|| {
-            AppError::InvalidQuery("缺少 X-Database-Id 请求头，无法在租户库上执行 DDL".to_string())
+            AppError::validation(
+                "sqlv1_missing_database_id_header",
+                "缺少 X-Database-Id 请求头，无法在租户库上执行 DDL".to_string(),
+                serde_json::json!({}),
+            )
         })
 }
 
@@ -235,14 +249,22 @@ pub async fn v1_execute_raw_ddl(
     let database_id = require_database_id(db_id)?;
     let schema = req.schema.trim();
     if schema.is_empty() {
-        return Err(AppError::InvalidQuery("schema 不能为空".to_string()));
+        return Err(AppError::validation(
+            "sqlv1_schema_empty",
+            "schema 不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     ddl_handlers::enforce_ddl_schema_access(&main_pool, &subject, database_id, schema).await?;
 
     let sql = req.sql.trim();
     if sql.is_empty() {
-        return Err(AppError::InvalidQuery("sql 不能为空".to_string()));
+        return Err(AppError::validation(
+            "sqlv1_sql_empty",
+            "sql 不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let sql_type = raw_sql_guard::get_sql_type(sql);
@@ -302,14 +324,18 @@ pub async fn v1_execute_raw_ddl(
     }
     if raw_sql_guard::is_dangerous_operation(sql) {
         push_audit("v1_raw_ddl_blocked", Some("dangerous_keyword_blacklist"));
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "sqlv1_dangerous_operation_blocked",
             "检测到危险操作（DROP DATABASE / DROP SCHEMA / TRUNCATE），已拒绝".to_string(),
+            serde_json::json!({}),
         ));
     }
     if sql_type == "TRANSACTION" {
         push_audit("v1_raw_ddl_blocked", Some("bare_transaction_control"));
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "sqlv1_transaction_control_unsupported",
             "不支持事务控制语句；多条 DDL 将按 autocommit 逐条执行".to_string(),
+            serde_json::json!({}),
         ));
     }
 

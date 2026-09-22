@@ -253,12 +253,12 @@ psql -U your_username -d your_database -f migrations/001_create_users_table.sql
 创建 `.env` 文件：
 
 ```env
-DATABASE_URL=postgresql://username:password@localhost:5432/onebase_db
+DATABASE_URL=postgresql://username:password@localhost:5432/planeos_db
 JWT_SECRET=your-secret-key-change-this-in-production
 JWT_EXPIRATION=86400  # 24 小时
 HOST=127.0.0.1
 PORT=3000
-RUST_LOG=info,onebase=debug
+RUST_LOG=info,planeos=debug
 ```
 
 ### 3. 启动服务器

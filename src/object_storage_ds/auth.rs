@@ -65,9 +65,11 @@ pub fn op_allowed(op: &str, allowed_ops: &[String]) -> Result<(), AppError> {
     {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "令牌不允许操作 `{op}`（allowed_ops={allowed_ops:?}）"
-        )))
+        Err(AppError::forbidden_coded(
+            "objstore_op_forbidden",
+            format!("令牌不允许操作 `{op}`（allowed_ops={allowed_ops:?}）"),
+            serde_json::json!({ "op": op, "allowed_ops": allowed_ops }),
+        ))
     }
 }
 
@@ -79,9 +81,11 @@ pub fn key_allowed(key: &str, key_prefix_allowlist: &[String]) -> Result<(), App
     if key_prefix_allowlist.iter().any(|pat| glob_match(pat, key)) {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "对象 key `{key}` 不在令牌白名单内（key_prefix_allowlist={key_prefix_allowlist:?}）"
-        )))
+        Err(AppError::forbidden_coded(
+            "objstore_key_forbidden",
+            format!("对象 key `{key}` 不在令牌白名单内（key_prefix_allowlist={key_prefix_allowlist:?}）"),
+            serde_json::json!({ "key": key, "key_prefix_allowlist": key_prefix_allowlist }),
+        ))
     }
 }
 
@@ -110,17 +114,20 @@ pub fn glob_match(pattern: &str, candidate: &str) -> bool {
 
 pub fn validate_ops(ops: &[String]) -> Result<(), AppError> {
     if ops.is_empty() {
-        return Err(AppError::InvalidQuery(
-            "allowed_ops 至少要有一项".to_string(),
+        return Err(AppError::validation(
+            "objstore_allowed_ops_empty",
+            "allowed_ops 至少要有一项",
+            serde_json::json!({}),
         ));
     }
     for op in ops {
         let o = op.trim().to_ascii_lowercase();
         if !DEFAULT_OPS.contains(&o.as_str()) {
-            return Err(AppError::InvalidQuery(format!(
-                "不支持的 op `{op}`（支持：{}）",
-                DEFAULT_OPS.join(", ")
-            )));
+            return Err(AppError::validation(
+                "objstore_auth_op_unsupported",
+                format!("不支持的 op `{op}`（支持：{}）", DEFAULT_OPS.join(", ")),
+                serde_json::json!({ "op": op, "supported_ops": DEFAULT_OPS.join(", ") }),
+            ));
         }
     }
     Ok(())
@@ -128,13 +135,17 @@ pub fn validate_ops(ops: &[String]) -> Result<(), AppError> {
 
 pub fn validate_key_prefix_allowlist(keys: &[String]) -> Result<(), AppError> {
     if keys.is_empty() {
-        return Err(AppError::InvalidQuery(
-            "key_prefix_allowlist 至少要有一项（用 [\"*\"] 表示不限）".to_string(),
+        return Err(AppError::validation(
+            "objstore_key_prefix_allowlist_empty",
+            "key_prefix_allowlist 至少要有一项（用 [\"*\"] 表示不限）",
+            serde_json::json!({}),
         ));
     }
     if keys.iter().any(|k| k.trim().is_empty()) {
-        return Err(AppError::InvalidQuery(
-            "key_prefix_allowlist 不能含空字符串".to_string(),
+        return Err(AppError::validation(
+            "objstore_key_prefix_allowlist_blank",
+            "key_prefix_allowlist 不能含空字符串",
+            serde_json::json!({}),
         ));
     }
     Ok(())
@@ -160,10 +171,20 @@ pub fn keys_for_acl(op: &str, args: &serde_json::Value) -> Result<Vec<String>, A
             let key = args
                 .get("key")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| AppError::InvalidQuery("缺少字符串参数 `key`".into()))?
+                .ok_or_else(|| {
+                    AppError::validation(
+                        "objstore_missing_string_arg",
+                        "缺少字符串参数 `key`",
+                        serde_json::json!({ "name": "key" }),
+                    )
+                })?
                 .trim();
             if key.is_empty() {
-                return Err(AppError::InvalidQuery("key 不能为空".into()));
+                return Err(AppError::validation(
+                    "objstore_key_empty",
+                    "key 不能为空",
+                    serde_json::json!({}),
+                ));
             }
             Ok(vec![key.to_string()])
         }
@@ -173,10 +194,20 @@ pub fn keys_for_acl(op: &str, args: &serde_json::Value) -> Result<Vec<String>, A
                 for v in arr {
                     let k = v
                         .as_str()
-                        .ok_or_else(|| AppError::InvalidQuery("`keys` 元素必须是字符串".into()))?
+                        .ok_or_else(|| {
+                            AppError::validation(
+                                "objstore_delete_keys_not_string",
+                                "`keys` 元素必须是字符串",
+                                serde_json::json!({}),
+                            )
+                        })?
                         .trim();
                     if k.is_empty() {
-                        return Err(AppError::InvalidQuery("keys 含空字符串".into()));
+                        return Err(AppError::validation(
+                            "objstore_delete_keys_blank_entry",
+                            "keys 含空字符串",
+                            serde_json::json!({}),
+                        ));
                     }
                     out.push(k.to_string());
                 }
@@ -185,10 +216,20 @@ pub fn keys_for_acl(op: &str, args: &serde_json::Value) -> Result<Vec<String>, A
                 let key = args
                     .get("key")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| AppError::InvalidQuery("缺少字符串参数 `key`".into()))?
+                    .ok_or_else(|| {
+                        AppError::validation(
+                            "objstore_missing_string_arg",
+                            "缺少字符串参数 `key`",
+                            serde_json::json!({ "name": "key" }),
+                        )
+                    })?
                     .trim();
                 if key.is_empty() {
-                    return Err(AppError::InvalidQuery("key 不能为空".into()));
+                    return Err(AppError::validation(
+                        "objstore_key_empty",
+                        "key 不能为空",
+                        serde_json::json!({}),
+                    ));
                 }
                 Ok(vec![key.to_string()])
             }

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { rbacAPI, type Permission } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
 import { useNotification } from '@/hooks/useNotification'
+import { useTranslations } from 'next-intl'
 import Drawer from '@/components/Drawer'
 import PermissionGate from '@/components/PermissionGate'
 import PermissionMatrix from '@/components/rbac/PermissionMatrix'
@@ -20,16 +21,19 @@ interface Role {
 }
 
 export default function RolesPage() {
+  const t = useTranslations('wsRoles')
   // 顶层包一层 PermissionGate：非 tenant admin 直链进来时给降级提示，不再裸着 403。
   // 把内部组件单独命名，避免 hooks 顺序依赖闸门分支返回。
   return (
-    <PermissionGate requires="canManageRbac" pageName="RBAC 角色管理">
+    <PermissionGate requires="canManageRbac" pageName={t('gate')}>
       <RolesPageInner />
     </PermissionGate>
   )
 }
 
 function RolesPageInner() {
+  const t = useTranslations('wsRoles')
+  const trTpl = useTranslations('rbacTemplates')
   const notify = useNotification()
   const { currentSchema } = useAppStore()
   const [roles, setRoles] = useState<Role[]>([])
@@ -61,7 +65,7 @@ function RolesPageInner() {
       const res = await rbacAPI.listPermissions()
       setPermissions(res.data)
     } catch (err: any) {
-      console.error('加载权限失败:', err)
+      console.error(t('loadPermFailed'), err)
     }
   }
 
@@ -71,7 +75,7 @@ function RolesPageInner() {
       setRolePermissions(res.data)
       setSelectedPermIds(res.data.map((p: Permission) => p.id))
     } catch (err: any) {
-      console.error('加载角色权限失败:', err)
+      console.error(t('loadRolePermFailed'), err)
     }
   }, [])
 
@@ -117,10 +121,10 @@ function RolesPageInner() {
   }, [selectedRole, loadRolePermissions])
 
   const createRole = async () => {
-    if (!newRole.name.trim()) { notify.warning('请输入角色名称'); return }
+    if (!newRole.name.trim()) { notify.warning(t('errRoleName')); return }
     try {
       await rbacAPI.createRole({ name: newRole.name, description: newRole.description || undefined })
-      notify.success('角色创建成功')
+      notify.success(t('createOk'))
       setShowCreateForm(false)
       setNewRole({ name: '', description: '' })
       loadRoles()
@@ -128,11 +132,11 @@ function RolesPageInner() {
   }
 
   const deleteRole = async (role: Role) => {
-    if (role.is_system) { notify.warning('不能删除系统角色'); return }
-    if (!window.confirm(`确定要删除角色 "${role.name}" 吗？`)) return
+    if (role.is_system) { notify.warning(t('errSystemRole')); return }
+    if (!window.confirm(t('confirmDelete', { name: role.name }))) return
     try {
       await rbacAPI.deleteRole(role.id)
-      notify.success('角色已删除')
+      notify.success(t('deleteOk'))
       if (selectedRole?.id === role.id) setSelectedRole(null)
       loadRoles()
     } catch (err: any) { notify.error(err) }
@@ -148,7 +152,7 @@ function RolesPageInner() {
     if (!selectedRole) return
     try {
       await rbacAPI.setRolePermissions(selectedRole.id, selectedPermIds)
-      notify.success('权限已保存')
+      notify.success(t('permSaved'))
       loadRolePermissions(selectedRole.id)
     } catch (err: any) { notify.error(err) }
   }
@@ -165,11 +169,11 @@ function RolesPageInner() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-800">RBAC 角色管理</h1>
-          <p className="text-sm text-gray-500 mt-1">管理应用层角色和权限分配</p>
+          <h1 className="text-2xl font-semibold text-gray-800">{t('title')}</h1>
+          <p className="text-sm text-gray-500 mt-1">{t('subtitle')}</p>
         </div>
         <button onClick={() => setShowCreateForm(true)} className="btn-primary">
-          <i className="fas fa-plus mr-2"></i>创建角色
+          <i className="fas fa-plus mr-2"></i>{t('createRole')}
         </button>
       </div>
 
@@ -178,13 +182,13 @@ function RolesPageInner() {
         <div className="col-span-4">
           <div className="card">
             <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
-              <h3 className="text-sm font-semibold text-gray-700">应用角色</h3>
+              <h3 className="text-sm font-semibold text-gray-700">{t('appRoles')}</h3>
             </div>
             <div className="max-h-[600px] overflow-y-auto">
               {loading && roles.length === 0 ? (
-                <div className="p-4 text-center text-gray-500"><i className="fas fa-spinner fa-spin mr-2"></i>加载中...</div>
+                <div className="p-4 text-center text-gray-500"><i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}</div>
               ) : roles.length === 0 ? (
-                <div className="p-4 text-center text-gray-500">暂无角色</div>
+                <div className="p-4 text-center text-gray-500">{t('emptyRoles')}</div>
               ) : (
                 <div className="divide-y divide-gray-100">
                   {roles.map(role => (
@@ -208,7 +212,7 @@ function RolesPageInner() {
                               <p className="text-xs text-gray-500 mt-0.5">{role.description}</p>
                             )}
                             {role.is_system && (
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium">系统角色</span>
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium">{t('systemRole')}</span>
                             )}
                           </div>
                         </div>
@@ -234,23 +238,23 @@ function RolesPageInner() {
           {!selectedRole ? (
             <div className="card p-8 text-center">
               <i className="fas fa-user-shield text-5xl text-gray-300 mb-4"></i>
-              <p className="text-gray-500">选择一个角色来配置其权限</p>
+              <p className="text-gray-500">{t('selectRole')}</p>
             </div>
           ) : (
             <>
               <div className="card">
                 <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
                   <h3 className="text-sm font-semibold text-gray-700">
-                    {selectedRole.name} 的权限配置
+                    {t('roleConfig', { name: selectedRole.name })}
                   </h3>
                   <button onClick={saveRolePermissions} className="btn-primary text-sm">
-                    <i className="fas fa-save mr-2"></i>保存权限
+                    <i className="fas fa-save mr-2"></i>{t('savePerm')}
                   </button>
                 </div>
 
                 {permissions.length === 0 ? (
                   <div className="p-8 text-center text-gray-500">
-                    <p>暂无权限定义，请先在权限管理页面创建权限</p>
+                    <p>{t('noPermDef')}</p>
                   </div>
                 ) : (
                   <div className="divide-y divide-gray-100 max-h-[500px] overflow-y-auto">
@@ -281,12 +285,12 @@ function RolesPageInner() {
                             )}
                             {perm.conditions && perm.conditions.length > 0 && (
                               <div className="mt-1">
-                                <span className="text-xs text-gray-400">条件: </span>
+                                <span className="text-xs text-gray-400">{t('conditionLabel')}</span>
                                 <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">
                                   {perm.conditions
                                     .map((c) =>
                                       typeof c === 'object' && c !== null && 'field' in c
-                                        ? describeCondition(c)
+                                        ? describeCondition(c, trTpl)
                                         : String(c),
                                     )
                                     .join(' AND ')}
@@ -295,7 +299,7 @@ function RolesPageInner() {
                             )}
                             {perm.allowed_columns && (
                               <div className="mt-1">
-                                <span className="text-xs text-gray-400">列: </span>
+                                <span className="text-xs text-gray-400">{t('columnLabel')}</span>
                                 <span className="text-xs text-gray-600">{perm.allowed_columns.join(', ')}</span>
                               </div>
                             )}
@@ -316,10 +320,10 @@ function RolesPageInner() {
         <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
           <h3 className="text-sm font-semibold text-gray-700">
             <i className="fas fa-th text-gray-400 mr-2"></i>
-            权限矩阵
+            {t('permMatrix')}
           </h3>
           <p className="text-xs text-gray-500 mt-1">
-            按角色查看其在各资源上的 SELECT / INSERT / UPDATE / DELETE 权限；点击格子直接编辑条件 / 列控制 / 模板。
+            {t('permMatrixHint')}
           </p>
         </div>
         <div className="p-4">
@@ -342,25 +346,25 @@ function RolesPageInner() {
       <Drawer
         isOpen={showCreateForm}
         onClose={() => setShowCreateForm(false)}
-        title="创建角色"
+        title={t('createRoleTitle')}
         size="md"
         footer={
           <div className="flex gap-3">
-            <button onClick={() => setShowCreateForm(false)} className="flex-1 h-11 px-5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-all">取消</button>
+            <button onClick={() => setShowCreateForm(false)} className="flex-1 h-11 px-5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-all">{t('cancel')}</button>
             <button onClick={createRole} disabled={!newRole.name.trim()} className="flex-1 h-11 px-5 text-sm font-medium text-white bg-gradient-to-r from-blue-500 to-blue-600 rounded-lg hover:from-blue-600 hover:to-blue-700 disabled:opacity-50 transition-all shadow-sm hover:shadow-md flex items-center justify-center">
-              <i className="fas fa-plus mr-2"></i>创建角色
+              <i className="fas fa-plus mr-2"></i>{t('createRole')}
             </button>
           </div>
         }
       >
         <div className="space-y-5">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">角色名称</label>
-            <input type="text" value={newRole.name} onChange={(e) => setNewRole({ ...newRole, name: e.target.value })} placeholder="如 editor, moderator, vip" className="w-full input-base" autoFocus />
+            <label className="block text-sm font-medium text-gray-700 mb-2">{t('roleName')}</label>
+            <input type="text" value={newRole.name} onChange={(e) => setNewRole({ ...newRole, name: e.target.value })} placeholder={t('phRoleName')} className="w-full input-base" autoFocus />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">描述（可选）</label>
-            <textarea value={newRole.description} onChange={(e) => setNewRole({ ...newRole, description: e.target.value })} placeholder="描述该角色的用途" rows={3} className="w-full input-base" />
+            <label className="block text-sm font-medium text-gray-700 mb-2">{t('descLabel')}</label>
+            <textarea value={newRole.description} onChange={(e) => setNewRole({ ...newRole, description: e.target.value })} placeholder={t('phDesc')} rows={3} className="w-full input-base" />
           </div>
         </div>
       </Drawer>

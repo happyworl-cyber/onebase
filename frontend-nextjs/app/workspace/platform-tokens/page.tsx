@@ -4,12 +4,13 @@
  * `/workspace/platform-tokens` —— 平台服务令牌（obp_）管理 + 使用说明。
  *
  * 仅平台超管可访问。令牌用于机器 / AI 通过 HTTP 或 MCP 创建项目、管理工作流。
- * 入口在 ProjectTopbar 右上角用户菜单「平台服务令牌」（仅超管可见）。
+ * 入口在侧边栏左下角用户菜单「平台服务令牌」（仅超管可见）。
  */
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { platformTokenAPI } from '@/lib/api'
 import { useNotification } from '@/hooks/useNotification'
 import Drawer from '@/components/Drawer'
@@ -28,14 +29,15 @@ interface PlatformToken {
   expires_at: string | null
 }
 
-const ALL_SCOPES: { value: string; label: string; hint: string }[] = [
-  { value: 'project:create', label: '创建项目', hint: '在 PG 池上建库 + 开通新项目' },
-  { value: 'workflow:read', label: '读工作流', hint: '列出 / 查看工作流' },
-  { value: 'workflow:write', label: '写工作流', hint: '创建 / 更新 / 调试工作流' },
-  { value: 'workflow:run', label: '运行工作流', hint: '触发 endpoint 工作流执行' },
+const ALL_SCOPES: { value: string; labelKey: string; hintKey: string }[] = [
+  { value: 'project:create', labelKey: 'scopeProjectCreateLabel', hintKey: 'scopeProjectCreateHint' },
+  { value: 'workflow:read', labelKey: 'scopeWorkflowReadLabel', hintKey: 'scopeWorkflowReadHint' },
+  { value: 'workflow:write', labelKey: 'scopeWorkflowWriteLabel', hintKey: 'scopeWorkflowWriteHint' },
+  { value: 'workflow:run', labelKey: 'scopeWorkflowRunLabel', hintKey: 'scopeWorkflowRunHint' },
 ]
 
 export default function PlatformTokensPage() {
+  const tr = useTranslations('platformTokensPage')
   const notify = useNotification()
   const router = useRouter()
   const currentUser = useAppStore((s) => s.currentUser)
@@ -103,7 +105,7 @@ export default function PlatformTokensPage() {
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
           <i className="fas fa-spinner fa-spin text-2xl text-gray-400 mb-2"></i>
-          <p className="text-sm text-gray-500">加载中...</p>
+          <p className="text-sm text-gray-500">{tr('loadingEllipsis')}</p>
         </div>
       </div>
     )
@@ -120,11 +122,11 @@ export default function PlatformTokensPage() {
 
   const handleCreate = async () => {
     if (!form.name.trim()) {
-      notify.warning('请填写令牌名称')
+      notify.warning(tr('errNameRequired'))
       return
     }
     if (form.scopes.length === 0) {
-      notify.warning('请至少选择一个 scope')
+      notify.warning(tr('errScopeRequired'))
       return
     }
     setCreating(true)
@@ -135,7 +137,7 @@ export default function PlatformTokensPage() {
         expires_in_days: form.expires_in_days || undefined,
       })
       setCreatedToken(res.data?.token ?? null)
-      notify.success('平台令牌创建成功')
+      notify.success(tr('tokenCreated'))
       loadTokens()
     } catch (err: any) {
       notify.error(err)
@@ -145,10 +147,10 @@ export default function PlatformTokensPage() {
   }
 
   const handleDelete = async (id: number, name: string) => {
-    if (!confirm(`确定要停用令牌 "${name}" 吗？停用后使用该令牌的调用将立即失效。`)) return
+    if (!confirm(tr('confirmDeactivate', { name }))) return
     try {
       await platformTokenAPI.delete(id)
-      notify.success('令牌已停用')
+      notify.success(tr('tokenDeactivated'))
       loadTokens()
     } catch (err: any) {
       notify.error(err)
@@ -157,17 +159,17 @@ export default function PlatformTokensPage() {
 
   const copy = (text: string) => {
     navigator.clipboard.writeText(text)
-    notify.success('已复制到剪贴板')
+    notify.success(tr('copiedToClipboard'))
   }
 
   const mcpConfig = `{
   "mcpServers": {
     "planeos": {
       "command": "node",
-      "args": ["/绝对路径/planeos/mcp-server/dist/index.js"],
+      "args": ["/absolute/path/planeos/mcp-server/dist/index.js"],
       "env": {
         "PLANEOS_BASE_URL": "${apiBase}",
-        "PLANEOS_TOKEN": "obp_你的令牌"
+        "PLANEOS_TOKEN": "obp_your_token"
       }
     }
   }
@@ -180,12 +182,11 @@ export default function PlatformTokensPage() {
         <div className="flex items-end justify-between">
           <div>
             <Link href="/workspace" className="text-sm text-blue-600 hover:underline">
-              <i className="fas fa-arrow-left mr-1"></i> 返回项目列表
+              <i className="fas fa-arrow-left mr-1"></i> {tr('backToProjectList')}
             </Link>
-            <h1 className="text-2xl font-bold text-gray-900 mt-2">平台服务令牌</h1>
+            <h1 className="text-2xl font-bold text-gray-900 mt-2">{tr('pageTitle')}</h1>
             <p className="text-gray-600 mt-1 text-sm">
-              给机器 / AI 用的长期凭证（<span className="font-mono">obp_</span> 前缀）。可通过 HTTP 或
-              MCP 直接创建项目、管理工作流，权限受令牌 scope 约束。
+              {tr.rich('pageSubtitle', { code: (chunks) => <span className="font-mono">{chunks}</span> })}
             </p>
           </div>
           <button
@@ -196,7 +197,7 @@ export default function PlatformTokensPage() {
             className="btn-primary shrink-0"
           >
             <i className="fas fa-plus mr-2"></i>
-            创建令牌
+            {tr('createTokenBtn')}
           </button>
         </div>
 
@@ -209,7 +210,7 @@ export default function PlatformTokensPage() {
           ) : tokens.length === 0 ? (
             <div className="p-12 text-center text-gray-500">
               <i className="fas fa-robot text-4xl mb-4 text-gray-300"></i>
-              <p className="mb-4">暂无平台令牌</p>
+              <p className="mb-4">{tr('noTokensYet')}</p>
               <button
                 onClick={() => {
                   resetForm()
@@ -218,7 +219,7 @@ export default function PlatformTokensPage() {
                 className="btn-primary"
               >
                 <i className="fas fa-plus mr-2"></i>
-                创建第一个令牌
+                {tr('createFirstTokenBtn')}
               </button>
             </div>
           ) : (
@@ -244,7 +245,7 @@ export default function PlatformTokensPage() {
                       <p className="font-medium text-gray-900 truncate">
                         {t.name}
                         {!t.is_active && (
-                          <span className="ml-2 text-xs text-gray-400">（已停用）</span>
+                          <span className="ml-2 text-xs text-gray-400">{tr('deactivatedSuffix')}</span>
                         )}
                       </p>
                       <p className="text-sm text-gray-500 font-mono">{t.token_prefix}</p>
@@ -264,13 +265,13 @@ export default function PlatformTokensPage() {
                     <div className="text-xs text-gray-500 text-right">
                       <div>
                         {t.last_used_at
-                          ? `最后使用: ${new Date(t.last_used_at).toLocaleString()}`
-                          : '从未使用'}
+                          ? tr('lastUsed', { date: new Date(t.last_used_at).toLocaleString() })
+                          : tr('neverUsed')}
                       </div>
                       <div>
                         {t.expires_at
-                          ? `到期: ${new Date(t.expires_at).toLocaleDateString()}`
-                          : '永不过期'}
+                          ? tr('expiresAtLabel', { date: new Date(t.expires_at).toLocaleDateString() })
+                          : tr('neverExpires')}
                       </div>
                     </div>
                     {t.is_active && (
@@ -278,7 +279,7 @@ export default function PlatformTokensPage() {
                         onClick={() => handleDelete(t.id, t.name)}
                         className="px-3 py-1 text-sm text-red-600 hover:bg-red-50 rounded-lg"
                       >
-                        停用
+                        {tr('deactivateBtn')}
                       </button>
                     )}
                   </div>
@@ -292,43 +293,43 @@ export default function PlatformTokensPage() {
         <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-5">
           <h2 className="text-lg font-semibold text-gray-900">
             <i className="fas fa-book-open mr-2 text-blue-500"></i>
-            使用说明
+            {tr('usageGuideTitle')}
           </h2>
 
           <div>
-            <h3 className="text-sm font-semibold text-gray-700 mb-1">Scope 一览</h3>
+            <h3 className="text-sm font-semibold text-gray-700 mb-1">{tr('scopeOverviewTitle')}</h3>
             <div className="text-sm text-gray-600 space-y-1">
               {ALL_SCOPES.map((s) => (
                 <div key={s.value}>
                   <span className="font-mono text-indigo-700">{s.value}</span>
                   <span className="text-gray-400"> —— </span>
-                  {s.hint}
+                  {tr(s.hintKey)}
                 </div>
               ))}
             </div>
           </div>
 
           <div>
-            <h3 className="text-sm font-semibold text-gray-700 mb-1">方式一：直接 HTTP 调用</h3>
+            <h3 className="text-sm font-semibold text-gray-700 mb-1">{tr('methodOneTitle')}</h3>
             <p className="text-sm text-gray-600 mb-2">
-              所有请求带 <span className="font-mono">Authorization: Bearer obp_...</span>。典型流程：列池 → 列模板 → 建项目 → 建工作流 → 触发。
+              {tr.rich('methodOneDesc', { code: (chunks) => <span className="font-mono">{chunks}</span> })}
             </p>
             <pre className="bg-gray-900 text-gray-100 text-xs rounded-lg p-4 overflow-x-auto">
 {`BASE=${apiBase}
-TOKEN=obp_你的令牌
+TOKEN=obp_your_token
 
-# 1) 可用 PG 池
+# 1) Available PG pools
 curl -s "$BASE/api/provision/pg-pools/available" -H "Authorization: Bearer $TOKEN"
 
-# 2) 项目模板
+# 2) Project templates
 curl -s "$BASE/api/project-templates" -H "Authorization: Bearer $TOKEN"
 
-# 3) 开通项目（owner = 令牌绑定用户），返回 database_id / db_name
+# 3) Provision a project (owner = the token-bound user); returns database_id / db_name
 curl -s -X POST "$BASE/api/projects/provision" \\
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \\
-  -d '{"name":"我的项目","slug":"my-proj","pg_pool_id":1,"template_slug":"blank"}'
+  -d '{"name":"My Project","slug":"my-proj","pg_pool_id":1,"template_slug":"blank"}'
 
-# 4) 在该项目库建工作流（database_id 用上一步返回的）
+# 4) Create a workflow in that project DB (use the database_id from the previous step)
 curl -s -X POST "$BASE/api/admin/workflows" \\
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \\
   -d '{"name":"Echo","slug":"echo","database_id":5,"trigger_type":"endpoint",
@@ -336,7 +337,7 @@ curl -s -X POST "$BASE/api/admin/workflows" \\
                 {"id":"r","type":"response","config":{"status_code":200,"body":"{{t1}}"}}],
        "edges":[{"from":"t1","to":"r"}]}'
 
-# 5) 触发执行（database_slug = 项目 slug，workflow_slug = 工作流 slug）
+# 5) Trigger execution (database_slug = project slug, workflow_slug = workflow slug)
 curl -s -X POST "$BASE/workflow/my-proj/echo" \\
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \\
   -d '{"hello":"world"}'`}
@@ -345,25 +346,27 @@ curl -s -X POST "$BASE/workflow/my-proj/echo" \\
 
           <div>
             <div className="flex items-center justify-between mb-1">
-              <h3 className="text-sm font-semibold text-gray-700">方式二：MCP（给 AI / Cursor 用）</h3>
+              <h3 className="text-sm font-semibold text-gray-700">{tr('methodTwoTitle')}</h3>
               <button
                 onClick={() => copy(mcpConfig)}
                 className="text-xs text-blue-600 hover:underline"
               >
-                <i className="fas fa-copy mr-1"></i> 复制配置
+                <i className="fas fa-copy mr-1"></i> {tr('copyConfigBtn')}
               </button>
             </div>
             <p className="text-sm text-gray-600 mb-2">
-              先在 <span className="font-mono">mcp-server/</span> 里 <span className="font-mono">npm install &amp;&amp; npm run build</span>，
-              再把下面配置加进 Cursor / Claude 的 <span className="font-mono">mcpServers</span>（令牌填本页创建的 <span className="font-mono">obp_</span>）：
+              {tr.rich('methodTwoDesc', {
+                code1: (chunks) => <span className="font-mono">{chunks}</span>,
+                code2: (chunks) => <span className="font-mono">{chunks}</span>,
+                code3: (chunks) => <span className="font-mono">{chunks}</span>,
+                code4: (chunks) => <span className="font-mono">{chunks}</span>,
+              })}
             </p>
             <pre className="bg-gray-900 text-gray-100 text-xs rounded-lg p-4 overflow-x-auto">
 {mcpConfig}
             </pre>
             <p className="text-xs text-gray-500 mt-2">
-              启用后会得到 9 个工具：list_pg_pools / list_templates / create_project /
-              list_workflows / get_workflow / create_workflow / update_workflow /
-              debug_workflow / run_workflow。
+              {tr('methodTwoToolsNote')}
             </p>
           </div>
         </div>
@@ -373,7 +376,7 @@ curl -s -X POST "$BASE/workflow/my-proj/echo" \\
       <Drawer
         isOpen={showCreate}
         onClose={() => setShowCreate(false)}
-        title={createdToken ? '保存平台令牌' : '创建平台令牌'}
+        title={createdToken ? tr('savedTokenTitle') : tr('createTokenTitle')}
         size="md"
         footer={
           createdToken ? (
@@ -384,7 +387,7 @@ curl -s -X POST "$BASE/workflow/my-proj/echo" \\
               }}
               className="w-full btn-primary"
             >
-              我已保存，关闭
+              {tr('savedCloseBtn')}
             </button>
           ) : (
             <div className="flex gap-3">
@@ -392,14 +395,14 @@ curl -s -X POST "$BASE/workflow/my-proj/echo" \\
                 onClick={() => setShowCreate(false)}
                 className="flex-1 h-11 px-5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
               >
-                取消
+                {tr('cancelBtn')}
               </button>
               <button
                 onClick={handleCreate}
                 disabled={creating || !form.name.trim() || form.scopes.length === 0}
                 className="flex-1 btn-primary disabled:opacity-50"
               >
-                {creating ? '创建中...' : '创建'}
+                {creating ? tr('creatingEllipsis') : tr('createBtn')}
               </button>
             </div>
           )
@@ -410,11 +413,11 @@ curl -s -X POST "$BASE/workflow/my-proj/echo" \\
             <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
               <p className="text-sm text-yellow-800">
                 <i className="fas fa-exclamation-triangle mr-2"></i>
-                <strong>重要：</strong>令牌只会显示这一次，请立即保存！
+                {tr.rich('importantWarning', { strong: (chunks) => <strong>{chunks}</strong> })}
               </p>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">您的平台令牌</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{tr('yourTokenLabel')}</label>
               <div className="flex items-center space-x-2">
                 <input
                   type="text"
@@ -435,19 +438,19 @@ curl -s -X POST "$BASE/workflow/my-proj/echo" \\
           <div className="space-y-5">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                令牌名称 <span className="text-red-500">*</span>
+                {tr('tokenNameLabel')} <span className="text-red-500">*</span>
               </label>
               <input
                 type="text"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="例如：mcp-bot"
+                placeholder={tr('tokenNamePlaceholder')}
                 className="w-full input-base"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">权限 Scope</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{tr('scopePermissionLabel')}</label>
               <div className="space-y-2">
                 {ALL_SCOPES.map((s) => (
                   <label key={s.value} className="flex items-start space-x-2 cursor-pointer">
@@ -459,7 +462,7 @@ curl -s -X POST "$BASE/workflow/my-proj/echo" \\
                     />
                     <span className="text-sm">
                       <span className="font-mono text-indigo-700">{s.value}</span>
-                      <span className="text-gray-500"> —— {s.hint}</span>
+                      <span className="text-gray-500"> —— {tr(s.hintKey)}</span>
                     </span>
                   </label>
                 ))}
@@ -467,17 +470,17 @@ curl -s -X POST "$BASE/workflow/my-proj/echo" \\
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">有效期</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{tr('expiryLabel')}</label>
               <select
                 value={form.expires_in_days}
                 onChange={(e) => setForm({ ...form, expires_in_days: parseInt(e.target.value) })}
                 className="w-full input-base"
               >
-                <option value={0}>永不过期</option>
-                <option value={7}>7 天</option>
-                <option value={30}>30 天</option>
-                <option value={90}>90 天</option>
-                <option value={365}>1 年</option>
+                <option value={0}>{tr('neverExpires')}</option>
+                <option value={7}>{tr('days7')}</option>
+                <option value={30}>{tr('days30')}</option>
+                <option value={90}>{tr('days90')}</option>
+                <option value={365}>{tr('year1')}</option>
               </select>
             </div>
           </div>

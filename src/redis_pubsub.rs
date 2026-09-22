@@ -1,7 +1,7 @@
 use crate::events::{DataChangeEvent, EventBus};
 use crate::redis_manager::RedisManager;
 
-const CHANNEL: &str = "onebase:events";
+const CHANNEL: &str = "planeos:events";
 
 /// 将本地 EventBus 的事件发布到 Redis Pub/Sub，使多实例共享
 pub struct RedisPubSubBridge;

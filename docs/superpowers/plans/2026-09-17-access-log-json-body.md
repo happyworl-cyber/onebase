@@ -6,7 +6,7 @@
 
 **Architecture:** 纯函数负责 Content-Type 判定、键名脱敏、UTF-8 截断。`request_id_middleware` 在 `next.run` 前把 body 读出再塞回 Request，把准备好的字符串传给现有 `emit_access_log`。不新增中间件层，不改云日志检索。
 
-**Tech Stack:** Rust, axum 0.7, serde_json, tracing。测试：`cargo test --bin onebase`。
+**Tech Stack:** Rust, axum 0.7, serde_json, tracing。测试：`cargo test --bin planeos`。
 
 **Spec:** `docs/superpowers/specs/2026-09-17-access-log-json-body-design.md`
 
@@ -19,7 +19,7 @@
 - Sensitive keys: case-insensitive exact match OR suffix `_{name}` for `password` / `token` / `secret` / `authorization` / `api_key` / `access_key` / `cookie`. Not substring (do not treat `token_count` as secret).
 - Log copy max **4096 bytes** at UTF-8 char boundary; handler still receives the full original body.
 - Read/parse/redact failure: omit `request_body` only; do not 500; do not drop other access_log fields.
-- `request_id.rs` is bin-only. Run tests with `cargo test --bin onebase <filter>`.
+- `request_id.rs` is bin-only. Run tests with `cargo test --bin planeos <filter>`.
 
 ---
 
@@ -187,7 +187,7 @@ mod request_id;
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test --bin onebase access_log_body -- --nocapture`
+Run: `cargo test --bin planeos access_log_body -- --nocapture`
 
 Expected: FAIL / panic at `todo!()` (or compile error if Step 1 skipped the stubs)
 
@@ -261,7 +261,7 @@ pub fn prepare_request_body_for_log(raw: &[u8]) -> Option<String> {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test --bin onebase access_log_body -- --nocapture`
+Run: `cargo test --bin planeos access_log_body -- --nocapture`
 
 Expected: PASS
 
@@ -312,7 +312,7 @@ Add to `src/request_id.rs` `mod tests` (need `use axum::body::{Body, to_bytes};`
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test --bin onebase copy_request_body_restores_full_bytes -- --nocapture`
+Run: `cargo test --bin planeos copy_request_body_restores_full_bytes -- --nocapture`
 
 Expected: FAIL（`copy_request_body` 未定义）
 
@@ -446,9 +446,9 @@ fn emit_access_log(
 Run:
 
 ```
-cargo test --bin onebase copy_request_body_restores_full_bytes -- --nocapture
-cargo test --bin onebase access_log_body -- --nocapture
-cargo test --bin onebase request_id:: -- --nocapture
+cargo test --bin planeos copy_request_body_restores_full_bytes -- --nocapture
+cargo test --bin planeos access_log_body -- --nocapture
+cargo test --bin planeos request_id:: -- --nocapture
 ```
 
 Expected: all PASS. GET/非法 JSON 路径不读或 `prepare` 返回 None，access log 无 `request_body` 字段。

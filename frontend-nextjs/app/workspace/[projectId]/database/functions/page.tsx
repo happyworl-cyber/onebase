@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useTranslations } from 'next-intl'
 import { queryAPI, schemaAPI, type FunctionMetadata } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
 import { pgFunctionIdentity } from '@/lib/utils'
@@ -20,7 +21,7 @@ type FunctionInfo = FunctionMetadata
 // 常用函数模板
 const FUNCTION_TEMPLATES = [
   {
-    name: '简单查询函数',
+    nameKey: 'tplSimpleQuery',
     language: 'sql',
     code: `CREATE OR REPLACE FUNCTION my_function(param1 integer)
 RETURNS TABLE(id integer, name text) AS $$
@@ -28,7 +29,7 @@ RETURNS TABLE(id integer, name text) AS $$
 $$ LANGUAGE sql;`,
   },
   {
-    name: 'PL/pgSQL 函数',
+    nameKey: 'tplPlpgsql',
     language: 'plpgsql',
     code: `CREATE OR REPLACE FUNCTION calculate_total(order_id integer)
 RETURNS numeric AS $$
@@ -44,7 +45,7 @@ END;
 $$ LANGUAGE plpgsql;`,
   },
   {
-    name: '触发器函数',
+    nameKey: 'tplTrigger',
     language: 'plpgsql',
     code: `CREATE OR REPLACE FUNCTION update_timestamp()
 RETURNS trigger AS $$
@@ -55,7 +56,7 @@ END;
 $$ LANGUAGE plpgsql;`,
   },
   {
-    name: '验证函数',
+    nameKey: 'tplValidate',
     language: 'plpgsql',
     code: `CREATE OR REPLACE FUNCTION validate_email(email text)
 RETURNS boolean AS $$
@@ -68,6 +69,7 @@ $$ LANGUAGE plpgsql;`,
 
 export default function FunctionsPage() {
   const { currentSchema } = useAppStore()
+  const t = useTranslations('wsFunctions')
   const notify = useNotification()
   const [functions, setFunctions] = useState<FunctionInfo[]>([])
   const [selectedFunction, setSelectedFunction] = useState<FunctionInfo | null>(null)
@@ -113,7 +115,7 @@ export default function FunctionsPage() {
   // 创建/更新函数
   const saveFunction = async () => {
     if (!functionCode.trim()) {
-      notify.warning('请输入函数代码')
+      notify.warning(t('errCode'))
       return
     }
     
@@ -121,7 +123,7 @@ export default function FunctionsPage() {
       // 编辑器抽屉就是"二次确认"——点击保存即代表明确意图，用 executeManaged
       // 直接带 acknowledge_destructive=true，避免再额外弹一层通用 modal。
       await queryAPI.executeManaged(functionCode)
-      notify.success('函数保存成功')
+      notify.success(t('saveOk'))
       setShowCreateForm(false)
       setFunctionCode('')
       loadFunctions()
@@ -132,7 +134,7 @@ export default function FunctionsPage() {
 
   // 删除函数
   const deleteFunction = async (func: FunctionInfo) => {
-    const confirmed = window.confirm(`确定要删除函数 "${func.function_name}" 吗？`)
+    const confirmed = window.confirm(t('confirmDelete', { name: func.function_name }))
     if (!confirmed) return
     
     try {
@@ -141,7 +143,7 @@ export default function FunctionsPage() {
         : `DROP FUNCTION IF EXISTS "${currentSchema}"."${func.function_name}"();`
       
       await queryAPI.executeManaged(dropSql)
-      notify.success('函数已删除')
+      notify.success(t('deleteOk'))
       setSelectedFunction(null)
       loadFunctions()
     } catch (err: any) {
@@ -160,7 +162,7 @@ export default function FunctionsPage() {
       const testSql = `SELECT "${currentSchema}"."${selectedFunction.function_name}"(${params}) as result;`
       const result = await queryAPI.execute(testSql)
       setTestResult(result.data)
-      notify.success('函数执行成功')
+      notify.success(t('execOk'))
     } catch (err: any) {
       notify.error(err)
     }
@@ -190,9 +192,9 @@ export default function FunctionsPage() {
       {/* 页面头部 */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-800">函数管理</h1>
+          <h1 className="text-2xl font-semibold text-gray-800">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            管理 PostgreSQL 存储函数和过程
+            {t('subtitle')}
           </p>
         </div>
         
@@ -204,7 +206,7 @@ export default function FunctionsPage() {
           className="btn-primary"
         >
           <i className="fas fa-plus mr-2"></i>
-          创建函数
+          {t('createFn')}
         </button>
       </div>
 
@@ -220,7 +222,7 @@ export default function FunctionsPage() {
                   type="text"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="搜索函数..."
+                  placeholder={t('phSearch')}
                   className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />
               </div>
@@ -235,12 +237,12 @@ export default function FunctionsPage() {
                       onChange={(e) => setShowExtensionFunctions(e.target.checked)}
                       className="rounded border-gray-300 text-blue-600"
                     />
-                    <span>显示扩展函数</span>
+                    <span>{t('showExtFns')}</span>
                   </span>
                   <span className="text-gray-400">
                     {showExtensionFunctions
-                      ? `共 ${hiddenExtensionCount} 个`
-                      : `已隐藏 ${hiddenExtensionCount} 个`}
+                      ? t('countTotal', { n: hiddenExtensionCount })
+                      : t('countHidden', { n: hiddenExtensionCount })}
                   </span>
                 </label>
               )}
@@ -249,13 +251,13 @@ export default function FunctionsPage() {
               {loading && functions.length === 0 ? (
                 <div className="p-4 text-center text-gray-500">
                   <i className="fas fa-spinner fa-spin mr-2"></i>
-                  加载中...
+                  {t('loading')}
                 </div>
               ) : filteredFunctions.length === 0 ? (
                 <div className="p-8 text-center">
                   <i className="fas fa-code text-4xl text-gray-300 mb-3"></i>
                   <p className="text-gray-500">
-                    {searchTerm ? '未找到匹配的函数' : '暂无函数'}
+                    {searchTerm ? t('noMatch') : t('empty')}
                   </p>
                 </div>
               ) : (
@@ -299,7 +301,7 @@ export default function FunctionsPage() {
                         {func.extension_name && (
                           <span
                             className="text-[10px] px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded font-mono"
-                            title={`来自 PostgreSQL 扩展 ${func.extension_name}`}
+                            title={t('fromExtension', { name: func.extension_name })}
                           >
                             ext: {func.extension_name}
                           </span>
@@ -319,7 +321,7 @@ export default function FunctionsPage() {
           {!selectedFunction ? (
             <div className="card p-8 text-center">
               <i className="fas fa-code text-5xl text-gray-300 mb-4"></i>
-              <p className="text-gray-500">选择一个函数查看详情</p>
+              <p className="text-gray-500">{t('selectHint')}</p>
             </div>
           ) : (
             <>
@@ -335,14 +337,14 @@ export default function FunctionsPage() {
                       className="btn-default text-sm"
                     >
                       <i className="fas fa-play mr-2"></i>
-                      测试
+                      {t('test')}
                     </button>
                     <button
                       onClick={() => editFunction(selectedFunction)}
                       className="btn-default text-sm"
                     >
                       <i className="fas fa-edit mr-2"></i>
-                      编辑
+                      {t('edit')}
                     </button>
                     <button
                       onClick={() => deleteFunction(selectedFunction)}
@@ -355,25 +357,25 @@ export default function FunctionsPage() {
                 <div className="p-4">
                   <div className="grid grid-cols-3 gap-4 mb-4">
                     <div>
-                      <span className="text-xs text-gray-500">参数</span>
+                      <span className="text-xs text-gray-500">{t('params')}</span>
                       <p className="text-sm font-mono text-gray-900">
-                        {selectedFunction.argument_types || '无'}
+                        {selectedFunction.argument_types || t('none')}
                       </p>
                     </div>
                     <div>
-                      <span className="text-xs text-gray-500">返回类型</span>
+                      <span className="text-xs text-gray-500">{t('returnType')}</span>
                       <p className="text-sm font-mono text-gray-900">{selectedFunction.return_type}</p>
                     </div>
                     <div>
-                      <span className="text-xs text-gray-500">语言</span>
+                      <span className="text-xs text-gray-500">{t('language')}</span>
                       <p className="text-sm text-gray-900">{selectedFunction.language}</p>
                     </div>
                   </div>
                   
                   <div>
-                    <span className="text-xs text-gray-500">源代码</span>
+                    <span className="text-xs text-gray-500">{t('sourceCode')}</span>
                     <pre className="mt-2 p-4 bg-gray-900 text-green-400 rounded-lg text-sm font-mono overflow-auto max-h-[400px]">
-                      {selectedFunction.source_code || '-- 无法获取源代码'}
+                      {selectedFunction.source_code || t('noSource')}
                     </pre>
                   </div>
                 </div>
@@ -387,7 +389,7 @@ export default function FunctionsPage() {
       <Drawer
         isOpen={showCreateForm}
         onClose={() => setShowCreateForm(false)}
-        title={functionCode.includes('CREATE OR REPLACE') ? '编辑函数' : '创建函数'}
+        title={functionCode.includes('CREATE OR REPLACE') ? t('editTitle') : t('createTitle')}
         size="xl"
         footer={
           <div className="flex gap-3">
@@ -395,7 +397,7 @@ export default function FunctionsPage() {
               onClick={() => setShowCreateForm(false)}
               className="flex-1 h-11 px-5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-all duration-200"
             >
-              取消
+              {t('cancel')}
             </button>
             <button
               onClick={saveFunction}
@@ -403,7 +405,7 @@ export default function FunctionsPage() {
               className="flex-1 h-11 px-5 text-sm font-medium text-white bg-gradient-to-r from-blue-500 to-blue-600 rounded-lg hover:from-blue-600 hover:to-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-sm hover:shadow-md flex items-center justify-center"
             >
               <i className="fas fa-save mr-2"></i>
-              保存函数
+              {t('saveFn')}
             </button>
           </div>
         }
@@ -411,7 +413,7 @@ export default function FunctionsPage() {
         <div className="space-y-5">
           {/* 模板选择 */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-3">快速模板</label>
+            <label className="block text-sm font-medium text-gray-700 mb-3">{t('quickTemplate')}</label>
             <div className="grid grid-cols-2 gap-2">
               {FUNCTION_TEMPLATES.map((template, idx) => (
                 <button
@@ -419,7 +421,7 @@ export default function FunctionsPage() {
                   onClick={() => applyTemplate(template)}
                   className="p-3 text-left border border-gray-200 rounded-lg hover:border-blue-400 hover:bg-blue-50 transition-colors"
                 >
-                  <p className="text-sm font-medium text-gray-900">{template.name}</p>
+                  <p className="text-sm font-medium text-gray-900">{t(template.nameKey)}</p>
                   <p className="text-xs text-gray-500 mt-0.5">{template.language}</p>
                 </button>
               ))}
@@ -428,7 +430,7 @@ export default function FunctionsPage() {
           
           {/* 代码编辑器 */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">函数定义</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">{t('fnDefinition')}</label>
             <textarea
               value={functionCode}
               onChange={(e) => setFunctionCode(e.target.value)}
@@ -448,7 +450,7 @@ export default function FunctionsPage() {
           setTestResult(null)
           setTestParams('')
         }}
-        title={`测试函数: ${selectedFunction?.function_name || ''}`}
+        title={t('testTitle', { name: selectedFunction?.function_name || '' })}
         size="md"
         footer={
           <button
@@ -456,42 +458,42 @@ export default function FunctionsPage() {
             className="w-full h-11 px-5 text-sm font-medium text-white bg-gradient-to-r from-green-500 to-green-600 rounded-lg hover:from-green-600 hover:to-green-700 transition-all duration-200 shadow-sm hover:shadow-md flex items-center justify-center"
           >
             <i className="fas fa-play mr-2"></i>
-            执行函数
+            {t('execFn')}
           </button>
         }
       >
         <div className="space-y-5">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              函数参数
+              {t('fnParams')}
             </label>
             <div className="p-3 bg-gray-50 rounded-lg mb-3">
               <p className="text-sm font-mono text-gray-700">
-                ({selectedFunction?.argument_types || '无参数'})
+({selectedFunction?.argument_types || t('noParams')})
               </p>
             </div>
             <input
               type="text"
               value={testParams}
               onChange={(e) => setTestParams(e.target.value)}
-              placeholder="例如: 1, 'test', true"
+              placeholder={t('phArgs')}
               className="w-full input-base font-mono"
             />
             <p className="text-xs text-gray-500 mt-2">
               <i className="fas fa-info-circle mr-1"></i>
-              多个参数用逗号分隔，字符串需要用单引号包裹
+              {t('argsHint')}
             </p>
           </div>
           
           {testResult && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">执行结果</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{t('execResult')}</label>
               <pre className="p-4 bg-gray-900 text-green-400 rounded-lg text-sm font-mono overflow-auto max-h-[250px]">
                 {JSON.stringify(testResult.data, null, 2)}
               </pre>
               <p className="text-xs text-gray-500 mt-2 flex items-center">
                 <i className="fas fa-clock mr-1"></i>
-                执行时间: {testResult.elapsed_ms} ms
+                {t('execTime', { ms: testResult.elapsed_ms })}
               </p>
             </div>
           )}

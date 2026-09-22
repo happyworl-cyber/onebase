@@ -15,7 +15,7 @@
    - `pipeline`（数据管道）：ES、Kafka、Redis、对象存储（管理面 + 数据面）
    - `ai`（智能体）：MCP
 3. **代码隔离清理**（已沉进 `brandify.ps1`，每次同步自动生效）
-   - VISION 命名释义去掉 `Crest`/`Rail` 拉丁血缘
+   - VISION 命名释义统一为 PlaneOS 品牌表述
    - 第三方名 `Acme` / `acme` → `Acme` / `acme`
    - Token 前缀去血缘：`cr* → ob*`（见下表）
 
@@ -35,13 +35,13 @@
 ### 1. 后端编译（必做）
 ```bash
 # 方式 A：Docker（推荐，镜像自带 libsasl2）
-docker build -t onebase:verify .
+docker build -t planeos:verify .
 
 # 方式 B：Linux 本机
 sudo apt-get install -y libsasl2-dev   # 或 RHEL: cyrus-sasl-devel
 cargo build --release
 ```
-- [ ] 编译通过（含 `onebase` 与 `license_tool` 两个 bin）
+- [ ] 编译通过（含 `planeos` 与 `license_tool` 两个 bin）
 
 ### 2. License 单元测试
 ```bash
@@ -58,7 +58,7 @@ cd frontend-nextjs && npm run build
 
 ### 4. 品牌 / 血缘残留检查（应全部为 0）
 ```bash
-rg -i onebase                       # 期望：0
+rg -i planeos                       # 期望：0
 rg -i acme                        # 期望：0
 rg -n '\bcr_|obp_|obm_|cres_|obs_live_'   # 期望：0（旧 token 前缀清零）
 rg -n 'inob_|deob_'                   # 期望：0（确认 incr_/decr_ 等未被误伤）
@@ -81,7 +81,7 @@ rg -n 'inob_|deob_'                   # 期望：0（确认 incr_/decr_ 等未�
 - [ ] keygen / issue / verify 均成功，verify 打印状态为 `active`
 
 ### 6. 运行时行为
-- [ ] 默认（不设 `ONEBASE_LICENSE_ENFORCE`）：`warn` 模式，不拦截任何请求；`GET /api/license` 可查状态
+- [ ] 默认（不设 `PLANEOS_LICENSE_ENFORCE`）：`warn` 模式，不拦截任何请求；`GET /api/license` 可查状态
 - [ ] `enforce` + 授权过期/无效：写操作返回 `402`，读操作放行（只读降级）
 - [ ] `enforce` + 未购模块：该模块路由（如 Kafka/ES）返回 `402 license_module_required`
 
@@ -89,18 +89,18 @@ rg -n 'inob_|deob_'                   # 期望：0（确认 incr_/decr_ 等未�
 
 | 变量 | 说明 | 默认 |
 | --- | --- | --- |
-| `ONEBASE_LICENSE_ENFORCE` | `off` / `warn` / `enforce` | `warn`（只校验+告警，不拦截） |
-| `ONEBASE_LICENSE_PATH` | License 文件路径 | 探测 `./license.lic`、`/etc/onebase/license.lic` |
-| `ONEBASE_LICENSE_PUBLIC_KEY` | 验签公钥（PEM 内联） | 优先用内嵌公钥 |
-| `ONEBASE_LICENSE_PUBLIC_KEY_PATH` | 验签公钥文件路径 | 同上，二选一 |
-| `ONEBASE_DEPLOY_FINGERPRINT` | 覆盖部署指纹 | 由主机名派生 |
-| `ONEBASE_LICENSE_REFRESH_SECS` | 后台重载间隔（秒） | `300` |
+| `PLANEOS_LICENSE_ENFORCE` | `off` / `warn` / `enforce` | `warn`（只校验+告警，不拦截） |
+| `PLANEOS_LICENSE_PATH` | License 文件路径 | 探测 `./license.lic`、`/etc/planeos/license.lic` |
+| `PLANEOS_LICENSE_PUBLIC_KEY` | 验签公钥（PEM 内联） | 优先用内嵌公钥 |
+| `PLANEOS_LICENSE_PUBLIC_KEY_PATH` | 验签公钥文件路径 | 同上，二选一 |
+| `PLANEOS_DEPLOY_FINGERPRINT` | 覆盖部署指纹 | 由主机名派生 |
+| `PLANEOS_LICENSE_REFRESH_SECS` | 后台重载间隔（秒） | `300` |
 
 > 私钥只留原厂；`.gitignore` 已忽略 `*_private.pem` 与 `*.lic`。续保 = 原厂重新签发到期日更晚的 License 文件替换进去，后台任务自动生效、无需重启。
 
 ## 四、PlaneOS-only 覆盖文件（同步时必须保留）
 
-以下文件上游没有，`sync-from-onebase.ps1` 的 `robocopy /MIR` 镜像会**删除**它们；每次同步后需从上一次提交恢复，并在新 `main.rs` 上重挂 License 接线：
+以下文件上游没有，`sync-from-planeos.ps1` 的 `robocopy /MIR` 镜像会**删除**它们；每次同步后需从上一次提交恢复，并在新 `main.rs` 上重挂 License 接线：
 
 - `src/license.rs`
 - `src/bin/license_tool.rs`

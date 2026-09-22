@@ -211,7 +211,7 @@ async fn run_node(
             "HOME",
             temp_dir.to_str().ok_or("temporary path is not UTF-8")?,
             "--setenv",
-            "ONEBASE_HOST_SOCK",
+            "PLANEOS_HOST_SOCK",
             socket_path.to_str().ok_or("socket path is not UTF-8")?,
             "--setenv",
             "NODE_PATH",
@@ -236,7 +236,7 @@ async fn run_node(
             .env_clear()
             .env("PATH", SAFE_PATH)
             .env("HOME", temp_dir)
-            .env("ONEBASE_HOST_SOCK", socket_path)
+            .env("PLANEOS_HOST_SOCK", socket_path)
             .env("NODE_PATH", node_modules);
         command
     };
@@ -307,7 +307,7 @@ fn runtime_path() -> Result<PathBuf, String> {
     }
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("js-runtime")
-        .join("onebase-runtime")
+        .join("planeos-runtime")
         .join("index.js");
     path.is_file()
         .then_some(path)
@@ -445,7 +445,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("js-runtime")
-            .join("onebase-runtime")
+            .join("planeos-runtime")
             .join("index.js");
         std::env::set_var("WORKFLOW_JS_RUNTIME", &path);
         assert_eq!(runtime_path().unwrap(), path);

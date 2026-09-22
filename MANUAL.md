@@ -34,8 +34,8 @@
 ### 一键启动（Docker）
 
 ```bash
-git clone <repo-url> onebase
-cd onebase
+git clone <repo-url> planeos
+cd planeos
 docker compose up --build -d
 ```
 
@@ -99,7 +99,7 @@ docker compose up -d
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `DATABASE_URL` | `postgresql://onebase:onebase123@127.0.0.1:5432/onebase` | 管理库连接串 |
+| `DATABASE_URL` | `postgresql://planeos:planeos123@127.0.0.1:5432/planeos` | 管理库连接串 |
 | `REDIS_URL` | `redis://127.0.0.1:6379` | Redis 连接地址 |
 | `JWT_SECRET` | ⚠️ **必须设置** | JWT 签名密钥，**生产环境未设置时服务拒绝启动**。至少 16 位，推荐 32+ 位。可用 `openssl rand -base64 48` 生成 |
 | `RUST_ENV` | `production` | 运行环境。设为 `development` 时允许不设 JWT_SECRET（仅限开发调试） |
@@ -564,7 +564,7 @@ GET    /realtime/ws?token=<jwt>
 
 ### 推荐项
 
-- [ ] 配置日志收集（`/var/log/onebase/`，日志已配置自动轮转）
+- [ ] 配置日志收集（`/var/log/planeos/`，日志已配置自动轮转）
 - [ ] 配置健康检查探针（`/health/ready`）
 - [ ] 测试优雅停机流程（`docker stop` 等待 30s）
 - [ ] 配置数据库备份策略

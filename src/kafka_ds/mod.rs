@@ -24,7 +24,13 @@ pub async fn fetch_active(pool: &PgPool, id: i64) -> Result<KafkaConnection> {
     .fetch_optional(pool)
     .await
     .map_err(|e| AppError::Internal(format!("查询 Kafka 连接失败: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("Kafka 连接 {id} 不存在或已禁用")))
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "kafkads_connection_not_found_or_disabled",
+            format!("Kafka 连接 {id} 不存在或已禁用"),
+            serde_json::json!({ "id": id }),
+        )
+    })
 }
 
 /// 按 id + tenant_id 取"启用中"的连接（工作流节点用：锁死在本租户，杜绝跨租户取数）。
@@ -42,5 +48,11 @@ pub async fn fetch_active_for_tenant(
     .fetch_optional(pool)
     .await
     .map_err(|e| AppError::Internal(format!("查询 Kafka 连接失败: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("Kafka 连接 {id} 不存在 / 已禁用 / 不属于当前租户")))
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "kafkads_connection_not_found_for_tenant",
+            format!("Kafka 连接 {id} 不存在 / 已禁用 / 不属于当前租户"),
+            serde_json::json!({ "id": id }),
+        )
+    })
 }

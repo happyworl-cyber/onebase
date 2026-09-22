@@ -18,7 +18,7 @@ function zlibInput(bytes, name) {
  * PlaneOS JavaScript workflow host API.
  *
  * IPC is newline-delimited JSON over the Unix-domain socket named by
- * ONEBASE_HOST_SOCK. Each request is `{id, op, args}` and receives exactly
+ * PLANEOS_HOST_SOCK. Each request is `{id, op, args}` and receives exactly
  * one `{id, ok, result|error}` response line. The public functions are
  * synchronous so they match Lua builtin ergonomics; Node has no synchronous
  * Unix-socket client, so each call launches a tiny non-preloaded Node helper
@@ -29,7 +29,7 @@ const { spawnSync } = require('child_process');
 const HELPER = String.raw`
 const net = require('net');
 const request = JSON.parse(Buffer.from(process.argv[1], 'base64').toString('utf8'));
-const socket = net.createConnection(process.env.ONEBASE_HOST_SOCK);
+const socket = net.createConnection(process.env.PLANEOS_HOST_SOCK);
 let buffer = '';
 socket.setEncoding('utf8');
 socket.on('connect', () => socket.write(JSON.stringify(request) + '\n'));
@@ -49,8 +49,8 @@ socket.on('error', (error) => {
 let nextId = 1;
 
 function call(op, args) {
-  if (!process.env.ONEBASE_HOST_SOCK) {
-    throw new Error('ONEBASE_HOST_SOCK is not configured');
+  if (!process.env.PLANEOS_HOST_SOCK) {
+    throw new Error('PLANEOS_HOST_SOCK is not configured');
   }
   const request = Buffer.from(JSON.stringify({ id: String(nextId++), op, args }), 'utf8').toString('base64');
   const output = spawnSync(process.execPath, ['-e', HELPER, request], {

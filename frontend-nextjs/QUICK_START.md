@@ -137,9 +137,9 @@ console.error('Error:', error)
 后端日志会显示在运行 `cargo run` 的终端：
 
 ```
-2024-11-14T12:00:00.000Z INFO  onebase::main: 配置加载成功
-2024-11-14T12:00:00.001Z INFO  onebase::main: 数据库连接成功
-2024-11-14T12:00:00.002Z INFO  onebase::main: 服务器启动: http://127.0.0.1:3000
+2024-11-14T12:00:00.000Z INFO  planeos::main: 配置加载成功
+2024-11-14T12:00:00.001Z INFO  planeos::main: 数据库连接成功
+2024-11-14T12:00:00.002Z INFO  planeos::main: 服务器启动: http://127.0.0.1:3000
 ```
 
 ### 4. 测试 API 端点

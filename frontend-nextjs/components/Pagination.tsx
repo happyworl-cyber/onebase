@@ -13,6 +13,7 @@
  */
 
 import { useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 
 export interface PaginationProps {
   /** 数据总条数 */
@@ -72,6 +73,7 @@ export default function Pagination({
   totalCapped = false,
   className = '',
 }: PaginationProps) {
+  const t = useTranslations('pagination')
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   // 越界保护：删除最后一页的最后一行后 page 可能会越界
   const safePage = Math.min(Math.max(1, page), totalPages)
@@ -122,17 +124,17 @@ export default function Pagination({
       } ${className}`}
     >
       <div className="flex-1 min-w-0 text-gray-500">
-        共{' '}
+        {t('totalPre')}{' '}
         <span className="font-medium text-gray-900">
           {totalCapped ? `${total}+` : total}
         </span>{' '}
-        条 ·
+        {t('totalUnit')}
         <span className="ml-1">
-          第 {fromIdx}–{toIdx} 条
+          {t('range', { from: fromIdx, to: toIdx })}
         </span>
         {totalCapped && (
-          <span className="ml-1 text-xs text-gray-400" title="总数过大，已截断精确计数以加快响应">
-            （已截断）
+          <span className="ml-1 text-xs text-gray-400" title={t('cappedTitle')}>
+            {t('capped')}
           </span>
         )}
       </div>
@@ -140,7 +142,7 @@ export default function Pagination({
       <div className="flex items-center gap-1.5 shrink-0">
         <button
           type="button"
-          aria-label="上一页"
+          aria-label={t('prevPage')}
           onClick={() => goto(safePage - 1)}
           disabled={safePage <= 1}
           className={`${btnBase} ${sizeCls} border-gray-300 bg-white text-gray-600 hover:bg-gray-50`}
@@ -179,7 +181,7 @@ export default function Pagination({
 
         <button
           type="button"
-          aria-label="下一页"
+          aria-label={t('nextPage')}
           onClick={() => goto(safePage + 1)}
           disabled={safePage >= totalPages}
           className={`${btnBase} ${sizeCls} border-gray-300 bg-white text-gray-600 hover:bg-gray-50`}
@@ -192,7 +194,7 @@ export default function Pagination({
       <div className="flex-1 min-w-0 flex justify-end items-center gap-3">
         {onPageSizeChange && (
           <div className="flex items-center gap-1.5 text-gray-500">
-            <span>每页</span>
+            <span>{t('perPage')}</span>
             <select
               value={pageSize}
               onChange={(e) => onPageSizeChange(Number(e.target.value))}
@@ -209,11 +211,11 @@ export default function Pagination({
 
         {jumperEnabled && (
           <div className="flex items-center gap-1.5 text-gray-500">
-            <span>跳至</span>
+            <span>{t('jumpTo')}</span>
             <input
               type="text"
               inputMode="numeric"
-              aria-label={`跳至指定页，共 ${totalPages} 页`}
+              aria-label={t('jumpAria', { total: totalPages })}
               value={jumpValue}
               onChange={(e) => setJumpValue(e.target.value.replace(/\D/g, ''))}
               onKeyDown={(e) => {
@@ -226,7 +228,7 @@ export default function Pagination({
               placeholder={String(safePage)}
               className={`${jumperInputCls} px-1.5 text-center border border-gray-300 bg-white rounded text-gray-700 placeholder-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500`}
             />
-            <span>页</span>
+            <span>{t('pageUnit')}</span>
           </div>
         )}
       </div>

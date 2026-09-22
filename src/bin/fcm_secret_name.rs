@@ -1,7 +1,7 @@
 //! FCM/Google SA 密钥名派生工具（运维放 K8s Secret 时用）
 //!
 //! 与运行期 `google.sa_assertion` **共用同一套派生规则**
-//! （`onebase::lua_builtins::derive_fcm_secret_name`），确保"读/写两侧"算出的
+//! （`planeos::lua_builtins::derive_fcm_secret_name`），确保"读/写两侧"算出的
 //! K8s 密钥文件名一致。
 //!
 //! 派生：`hex(sha256(project \0 tenant_id \0 FCM_KEY_SALT))` + `.json`。
@@ -15,7 +15,7 @@
 //! （默认 /app/secrets/fcm），运行期就能按 project + 工作流 tenant_id 找到它。
 //! 盐是机密：只从进程 env 读，绝不作为参数/日志回显。
 
-use onebase::lua_builtins::derive_fcm_secret_name;
+use planeos::lua_builtins::derive_fcm_secret_name;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

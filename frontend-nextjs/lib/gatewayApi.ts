@@ -229,9 +229,9 @@ export function getGatewayErrorMessage(error: unknown): string {
     if (typeof data.error === 'string' && data.error) return data.error
     if (typeof data.message === 'string' && data.message) return data.message
   }
-  if (err.code === 'ECONNABORTED') return '网关控制面请求超时'
-  if (err.message === 'Network Error') return '无法连接到网关控制面'
-  return err.message || '网关控制面请求失败'
+  if (err.code === 'ECONNABORTED') return 'Gateway control plane request timed out'
+  if (err.message === 'Network Error') return 'Cannot connect to the gateway control plane'
+  return err.message || 'Gateway control plane request failed'
 }
 
 export const gatewayControlAPI = {

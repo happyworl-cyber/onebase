@@ -190,12 +190,12 @@ pub async fn probe_provision_webhook() -> serde_json::Value {
             serde_json::json!({
                 "ok": true,
                 "http_status": status,
-                "message": "Provisioner 端点可达",
+                "message": "Provisioner endpoint reachable",
             })
         }
         Err(e) => serde_json::json!({
             "ok": false,
-            "error": format!("Provisioner 不可达: {}", e),
+            "error": format!("Provisioner unreachable: {}", e),
         }),
     }
 }
@@ -243,10 +243,11 @@ pub fn normalize_requested_resources(raw: Option<Vec<String>>) -> Result<Vec<Str
 
     for r in &out {
         if r != "postgresql" && r != "redis" {
-            return Err(AppError::InvalidQuery(format!(
-                "不支持的 requested_resources: {}（允许: postgresql, redis）",
-                r
-            )));
+            return Err(AppError::validation(
+                "provwh_unsupported_requested_resource",
+                format!("不支持的 requested_resources: {}（允许: postgresql, redis）", r),
+                serde_json::json!({ "resource": r }),
+            ));
         }
     }
 
@@ -285,7 +286,7 @@ pub async fn call_provision_webhook(
     let mut req = client
         .post(&cfg.url)
         .header(CONTENT_TYPE, "application/json")
-        .header("X-Onebase-Request-Id", &request_id)
+        .header("X-PlaneOS-Request-Id", &request_id)
         .json(&body);
 
     if let Some(token) = &cfg.token {
@@ -302,7 +303,11 @@ pub async fn call_provision_webhook(
     );
 
     let resp = req.send().await.map_err(|e| {
-        AppError::InvalidQuery(format!("Provisioner 请求失败（{}）：{}", cfg.url, e))
+        AppError::validation(
+            "provwh_request_failed",
+            format!("Provisioner 请求失败（{}）：{}", cfg.url, e),
+            serde_json::json!({ "url": cfg.url, "error": e.to_string() }),
+        )
     })?;
 
     let status = resp.status();
@@ -389,10 +394,11 @@ async fn poll_provision_until_ready(
 
     loop {
         if Instant::now() >= deadline {
-            return Err(AppError::InvalidQuery(format!(
-                "Provisioner 异步开通超时（已等待 {} 秒）",
-                cfg.poll_max.as_secs()
-            )));
+            return Err(AppError::validation(
+                "provwh_poll_timeout",
+                format!("Provisioner 异步开通超时（已等待 {} 秒）", cfg.poll_max.as_secs()),
+                serde_json::json!({ "seconds": cfg.poll_max.as_secs() }),
+            ));
         }
 
         tokio::time::sleep(Duration::from_secs(next_sleep)).await;
@@ -406,7 +412,7 @@ async fn poll_provision_until_ready(
         let mut req = client
             .post(&cfg.url)
             .header(CONTENT_TYPE, "application/json")
-            .header("X-Onebase-Request-Id", &uuid::Uuid::new_v4().to_string())
+            .header("X-PlaneOS-Request-Id", &uuid::Uuid::new_v4().to_string())
             .json(&body);
 
         if let Some(token) = &cfg.token {
@@ -416,7 +422,13 @@ async fn poll_provision_until_ready(
         let resp = req
             .send()
             .await
-            .map_err(|e| AppError::InvalidQuery(format!("Provisioner poll 请求失败: {}", e)))?;
+            .map_err(|e| {
+                AppError::validation(
+                    "provwh_poll_request_failed",
+                    format!("Provisioner poll 请求失败: {}", e),
+                    serde_json::json!({ "error": e.to_string() }),
+                )
+            })?;
 
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();

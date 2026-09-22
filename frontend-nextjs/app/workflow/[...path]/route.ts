@@ -20,7 +20,7 @@ const HOP_BY_HOP_HEADERS = new Set([
 ])
 
 function backendUrl() {
-  return (process.env.ONEBASE_BACKEND_URL || 'http://127.0.0.1:3000').replace(/\/+$/, '')
+  return (process.env.PLANEOS_BACKEND_URL || 'http://127.0.0.1:3000').replace(/\/+$/, '')
 }
 
 function forwardedHeaders(source: Headers) {
@@ -62,7 +62,7 @@ async function proxyWorkflow(request: NextRequest, context: { params: { path: st
     const message = error instanceof Error ? error.message : String(error)
     console.error(`[workflow proxy] ${method} ${target} failed: ${message}`)
     return Response.json(
-      { error: `工作流代理请求失败: ${message}` },
+      { error: `Workflow proxy request failed: ${message}` },
       { status: 502 },
     )
   }

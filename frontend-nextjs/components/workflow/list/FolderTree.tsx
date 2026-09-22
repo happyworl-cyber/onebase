@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import TruncatedText from './TruncatedText'
 import {
@@ -15,7 +16,7 @@ import {
 } from './utils'
 import { ROOT_FOLDER_ID, type WorkflowFolder } from './types'
 
-const DRAG_MIME = 'application/x-onebase-category-folder'
+const DRAG_MIME = 'application/x-planeos-category-folder'
 
 interface FolderTreeProps {
   folders: WorkflowFolder[]
@@ -58,6 +59,7 @@ function TreeNode({
   draggingCategoryId: string | null
   setDraggingCategoryId: (id: string | null) => void
 }) {
+  const t = useTranslations('wfList')
   const folder = folders.find((f) => f.id === folderId)
   if (!folder) return null
 
@@ -145,7 +147,7 @@ function TreeNode({
         {isCategory && (
           <i
             className="fas fa-grip-vertical text-[8px] text-slate-300 shrink-0 opacity-0 group-hover:opacity-100"
-            title="拖拽到其他服务以移动此分类"
+            title={t('dragMoveCategory')}
           />
         )}
         <i
@@ -175,7 +177,7 @@ function TreeNode({
           {!isRoot && isDept && (
             <button
               type="button"
-              title="新建分类"
+              title={t('newCategory')}
               onClick={(e) => {
                 e.stopPropagation()
                 onNewFolder(folderId)
@@ -188,7 +190,7 @@ function TreeNode({
           {!isRoot && onRenameFolder && canRenameFolder(folderId) && (
             <button
               type="button"
-              title="重命名"
+              title={t('rename')}
               onClick={(e) => {
                 e.stopPropagation()
                 onRenameFolder(folderId)
@@ -201,7 +203,7 @@ function TreeNode({
           {!isRoot && onDeleteFolder && (isDept || isCategory) && (
             <button
               type="button"
-              title="删除"
+              title={t('delete')}
               onClick={(e) => {
                 e.stopPropagation()
                 onDeleteFolder(folderId)
@@ -254,6 +256,7 @@ export default function FolderTree({
   onMoveCategory,
   movingCategory,
 }: FolderTreeProps) {
+  const t = useTranslations('wfList')
   const [dropDeptId, setDropDeptId] = useState<string | null>(null)
   const [draggingCategoryId, setDraggingCategoryId] = useState<string | null>(null)
   const folderCount = folders.filter((f) => f.id !== ROOT_FOLDER_ID).length
@@ -261,10 +264,10 @@ export default function FolderTree({
   return (
     <div className="w-60 border-r border-slate-100 bg-slate-50/60 flex flex-col shrink-0 select-none">
       <div className="px-3 pt-3 pb-2 border-b border-slate-100 flex items-center justify-between">
-        <span className="text-xs font-semibold text-slate-400 uppercase tracking-widest">工作流</span>
+        <span className="text-xs font-semibold text-slate-400 uppercase tracking-widest">{t('colWorkflow')}</span>
         <button
           type="button"
-          title="新建服务"
+          title={t('newService')}
           onClick={() => onNewFolder(null)}
           className="w-5 h-5 flex items-center justify-center rounded hover:bg-slate-200 text-slate-400 hover:text-slate-600"
         >
@@ -274,7 +277,7 @@ export default function FolderTree({
 
       {onMoveCategory && (
         <p className="px-3 py-1.5 text-xs text-slate-400 leading-snug border-b border-slate-100">
-          拖拽分类到目标服务可移动
+          {t('dragHint')}
         </p>
       )}
 
@@ -302,11 +305,11 @@ export default function FolderTree({
 
       <div className="px-3 py-2 border-t border-slate-100 text-xs text-slate-400 leading-relaxed">
         <div className="flex items-center justify-between">
-          <span>工作流总数</span>
+          <span>{t('totalWorkflows')}</span>
           <span className="font-semibold text-slate-600">{totalCount ?? 0}</span>
         </div>
         <div className="flex items-center justify-between mt-0.5">
-          <span>文件夹</span>
+          <span>{t('folders')}</span>
           <span className="font-semibold text-slate-600">{folderCount}</span>
         </div>
       </div>

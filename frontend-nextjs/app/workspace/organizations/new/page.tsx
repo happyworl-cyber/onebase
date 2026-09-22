@@ -5,9 +5,11 @@
  */
 
 import { useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 
 export default function NewOrganizationRedirect() {
+  const t = useTranslations('orgNewPage')
   const router = useRouter()
   useEffect(() => {
     let superadmin = false
@@ -20,7 +22,7 @@ export default function NewOrganizationRedirect() {
   }, [router])
   return (
     <div className="min-h-screen flex items-center justify-center text-sm text-gray-500">
-      租户只能由平台管理员创建，正在跳转…
+      {t('redirecting')}
     </div>
   )
 }

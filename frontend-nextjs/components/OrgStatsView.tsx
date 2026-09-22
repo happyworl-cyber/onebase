@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { organizationAPI } from '@/lib/api'
 
 type OrgStats = {
@@ -15,6 +16,7 @@ type OrgStats = {
 }
 
 export default function OrgStatsView({ organizationId }: { organizationId: number }) {
+  const t = useTranslations('orgStats')
   const [stats, setStats] = useState<OrgStats | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -23,10 +25,10 @@ export default function OrgStatsView({ organizationId }: { organizationId: numbe
       .stats(organizationId)
       .then((res) => setStats(res.data))
       .catch((err) => {
-        setError(err?.response?.data?.error || err?.message || '加载失败')
+        setError(err?.response?.data?.error || err?.message || t('loadFailed'))
         setStats(null)
       })
-  }, [organizationId])
+  }, [organizationId, t])
 
   if (error) {
     return <p className="text-sm text-red-600">{error}</p>
@@ -34,29 +36,33 @@ export default function OrgStatsView({ organizationId }: { organizationId: numbe
   if (!stats) {
     return (
       <p className="text-sm text-gray-400">
-        <i className="fas fa-spinner fa-spin mr-2"></i>加载统计…
+        <i className="fas fa-spinner fa-spin mr-2"></i>{t('loadingStats')}
       </p>
     )
   }
 
   const cards: Array<{ label: string; value: number; hint: string; tone?: string }> = [
-    { label: '活跃项目', value: stats.projects_active, hint: `归档 ${stats.projects_archived}` },
-    { label: '租户成员', value: stats.members_active, hint: '活跃成员' },
     {
-      label: '近 24h API 调用',
+      label: t('activeProjects'),
+      value: stats.projects_active,
+      hint: t('archived', { n: stats.projects_archived }),
+    },
+    { label: t('orgMembers'), value: stats.members_active, hint: t('activeMembers') },
+    {
+      label: t('apiCalls24h'),
       value: stats.audit_calls_24h,
-      hint: `错误 ${stats.audit_errors_24h}`,
+      hint: t('errors', { n: stats.audit_errors_24h }),
     },
     {
-      label: '近 24h 执行',
+      label: t('exec24h'),
       value: stats.exec_total_24h,
-      hint: `失败 ${stats.exec_failed_24h}`,
+      hint: t('failed', { n: stats.exec_failed_24h }),
       tone: stats.exec_failed_24h > 0 ? 'text-amber-700' : undefined,
     },
     {
-      label: '近 24h 慢查询',
+      label: t('slowQueries24h'),
       value: stats.slow_queries_24h,
-      hint: '应用层慢查询',
+      hint: t('appLayerSlowQueries'),
       tone: stats.slow_queries_24h > 0 ? 'text-orange-600' : undefined,
     },
   ]
@@ -64,8 +70,8 @@ export default function OrgStatsView({ organizationId }: { organizationId: numbe
   return (
     <div className="space-y-4">
       <header>
-        <h1 className="text-xl font-semibold text-gray-900">统计</h1>
-        <p className="text-sm text-gray-500 mt-1">本租户项目与近 24 小时运行概况。</p>
+        <h1 className="text-xl font-semibold text-gray-900">{t('title')}</h1>
+        <p className="text-sm text-gray-500 mt-1">{t('subtitle')}</p>
       </header>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
         {cards.map((c) => (

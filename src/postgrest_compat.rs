@@ -59,14 +59,14 @@ pub fn resolve_schema(method: &Method, headers: &HeaderMap) -> String {
         .unwrap_or_else(|| "public".to_string())
 }
 
-/// PostgREST `field=op.value` 语法翻译为 onebase 内部 `field.op=value`。
+/// PostgREST `field=op.value` 语法翻译为 planeos 内部 `field.op=value`。
 ///
 /// 规则：
 /// - 保留字 `select` / `order` / `limit` / `offset` 原样保留（这四个 PostgREST 与
-///   onebase 同款语义，handler 直接消费 `Query<QueryParams>`）。
+///   planeos 同款语义，handler 直接消费 `Query<QueryParams>`）。
 /// - value 以已知算子前缀 `gte.|lte.|neq.|ilike.|like.|eq.|gt.|lt.|is.|in.` 开头
 ///   → 拆成 `key.op=rest_value`。**长前缀优先**，避免 `gte.` 被 `gt.` 误吞。
-/// - key 已含 `.`（已经是 onebase 内部风格）或无识别算子前缀的 value：原样透传。
+/// - key 已含 `.`（已经是 planeos 内部风格）或无识别算子前缀的 value：原样透传。
 ///
 /// 我们把"翻译后的"中间件级 query 当成不可信输入交给 [`parse_filters`]，下游会走
 /// `is_valid_identifier(field)` + 仅允许的 op 列表，最终参数化绑定 sqlx；本翻译层
@@ -100,7 +100,7 @@ pub fn translate_query(q: &str) -> String {
         .join("&")
 }
 
-/// 把 `X-Project-IDs: 1,4,5` 转成 `project_id.in=(1,4,5)`（onebase 内部风格）。
+/// 把 `X-Project-IDs: 1,4,5` 转成 `project_id.in=(1,4,5)`（planeos 内部风格）。
 ///
 /// 注意是 `project_id.in=(...)` 而不是 PostgREST 风格 `project_id=in.(...)`：
 /// 这个 fragment 会直接拼到已经经过 `translate_query` 处理过的 query 后面，再不

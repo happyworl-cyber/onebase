@@ -26,7 +26,13 @@ async fn require_admin_for_existing_route(
         .bind(route_id)
         .fetch_optional(pool)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("SSE 路由规则 {} 不存在", route_id)))?;
+        .ok_or_else(|| {
+            AppError::not_found_coded(
+                "sseroute_route_not_found",
+                format!("SSE 路由规则 {} 不存在", route_id),
+                serde_json::json!({ "id": route_id }),
+            )
+        })?;
     let tenant_id: i32 = row.get("tenant_id");
     permissions::require_tenant_admin(pool, claims, tenant_id).await?;
     Ok(tenant_id)
@@ -129,13 +135,25 @@ pub async fn create_route(
     permissions::require_tenant_admin(&pool, &claims, body.tenant_id).await?;
 
     if body.name.trim().is_empty() {
-        return Err(AppError::InvalidQuery("规则名不能为空".to_string()));
+        return Err(AppError::validation(
+            "sseroute_name_empty",
+            "规则名不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if body.event_pattern.trim().is_empty() {
-        return Err(AppError::InvalidQuery("事件模式不能为空".to_string()));
+        return Err(AppError::validation(
+            "sseroute_event_pattern_empty",
+            "事件模式不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if body.topic_template.trim().is_empty() {
-        return Err(AppError::InvalidQuery("topic 模板不能为空".to_string()));
+        return Err(AppError::validation(
+            "sseroute_topic_template_empty",
+            "topic 模板不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let row = sqlx::query(
@@ -193,7 +211,11 @@ pub async fn update_route(
     .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("SSE 路由规则 {} 不存在", id)));
+        return Err(AppError::not_found_coded(
+            "sseroute_route_not_found",
+            format!("SSE 路由规则 {} 不存在", id),
+            serde_json::json!({ "id": id }),
+        ));
     }
     Ok(Json(json!({ "message": "更新成功" })))
 }
@@ -211,7 +233,11 @@ pub async fn delete_route(
         .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("SSE 路由规则 {} 不存在", id)));
+        return Err(AppError::not_found_coded(
+            "sseroute_route_not_found",
+            format!("SSE 路由规则 {} 不存在", id),
+            serde_json::json!({ "id": id }),
+        ));
     }
     Ok(Json(json!({ "message": "删除成功" })))
 }

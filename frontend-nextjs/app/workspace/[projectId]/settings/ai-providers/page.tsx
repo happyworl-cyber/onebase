@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation'
 import Modal, { ConfirmDialog } from '@/components/Modal'
 import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
 import { useNotification } from '@/hooks/useNotification'
+import { useTranslations } from 'next-intl'
 import {
   aiProviderAPI,
   type AiProvider,
@@ -76,6 +77,7 @@ export default function AiProvidersPage() {
   const params = useParams<{ projectId: string }>()
   const projectId = Number(params.projectId)
   const caps = useCurrentProjectCapabilities()
+  const t = useTranslations('wsAiProviders')
   const notify = useNotification()
   const [providers, setProviders] = useState<AiProvider[]>([])
   const [loading, setLoading] = useState(true)
@@ -113,11 +115,11 @@ export default function AiProvidersPage() {
   }, [form])
 
   if (!AI_ASSISTANT_ENABLED) {
-    return <ForbiddenPlaceholder reason="AI 助手已被环境变量 NEXT_PUBLIC_AI_ASSISTANT_ENABLED 关闭" />
+    return <ForbiddenPlaceholder reason={t('forbiddenDisabled')} />
   }
 
   if (!caps.canManageMembers) {
-    return <ForbiddenPlaceholder reason="AI 模型配置需要项目 admin、owner 或平台超管权限" />
+    return <ForbiddenPlaceholder reason={t('forbiddenPerm')} />
   }
 
   const openCreate = () => setForm(emptyForm())
@@ -146,7 +148,7 @@ export default function AiProvidersPage() {
 
   const save = async () => {
     if (!form || !formValid) {
-      notify.warning('请完整填写名称、Base URL、模型和 API Key')
+      notify.warning(t('errRequired'))
       return
     }
     setSaving(true)
@@ -161,7 +163,7 @@ export default function AiProvidersPage() {
           is_active: form.is_active,
           is_default: form.is_default,
         })
-        notify.success('AI Provider 已更新')
+        notify.success(t('updated'))
       } else {
         const body: CreateAiProviderBody = {
           provider: form.provider,
@@ -173,7 +175,7 @@ export default function AiProvidersPage() {
           is_default: form.is_default,
         }
         await aiProviderAPI.create(projectId, body)
-        notify.success('AI Provider 已创建并启用')
+        notify.success(t('createdEnabled'))
       }
       setForm(null)
       await load()
@@ -188,7 +190,7 @@ export default function AiProvidersPage() {
     setUpdatingId(provider.id)
     try {
       await aiProviderAPI.update(projectId, provider.id, { is_default: true })
-      notify.success(`已将 ${provider.name} 设为默认模型`)
+      notify.success(t('setDefaultOk', { name: provider.name }))
       await load()
     } catch (error) {
       notify.error(error)
@@ -201,7 +203,7 @@ export default function AiProvidersPage() {
     setTestingId(provider.id)
     try {
       const response = await aiProviderAPI.test(projectId, provider.id)
-      notify.success(`连接成功，耗时 ${response.data.latency_ms} ms`)
+      notify.success(t('testOk', { ms: response.data.latency_ms }))
     } catch (error) {
       notify.error(error)
     } finally {
@@ -215,7 +217,7 @@ export default function AiProvidersPage() {
     setUpdatingId(toggling.id)
     try {
       await aiProviderAPI.update(projectId, toggling.id, { is_active: nextActive })
-      notify.success(`${toggling.name} 已${nextActive ? '启用' : '停用'}`)
+      notify.success(t('toggled', { name: toggling.name, state: nextActive ? t('enable') : t('disable') }))
       setToggling(null)
       await load()
     } catch (error) {
@@ -230,7 +232,7 @@ export default function AiProvidersPage() {
     setUpdatingId(deleting.id)
     try {
       await aiProviderAPI.remove(projectId, deleting.id)
-      notify.success(`已删除 ${deleting.name}`)
+      notify.success(t('deleted', { name: deleting.name }))
       setDeleting(null)
       await load()
     } catch (error) {
@@ -244,13 +246,13 @@ export default function AiProvidersPage() {
     <div className="max-w-6xl space-y-6 p-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">AI 模型</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t('title')}</h1>
           <p className="mt-1 text-sm text-gray-500">
-            配置项目级 AI Provider。API Key 加密保存且永不回显；聊天默认使用标记为“默认”的模型。
+            {t('subtitle')}
           </p>
         </div>
         <button type="button" onClick={openCreate} className="btn-primary whitespace-nowrap">
-          <i className="fas fa-plus mr-2" />新建 Provider
+          <i className="fas fa-plus mr-2" />{t('newProvider')}
         </button>
       </div>
 
@@ -259,18 +261,18 @@ export default function AiProvidersPage() {
           <thead className="bg-gray-50 text-xs uppercase tracking-wider text-gray-500">
             <tr>
               <th className="px-5 py-3 text-left font-medium">Provider</th>
-              <th className="px-5 py-3 text-left font-medium">模型 / Base URL</th>
-              <th className="px-5 py-3 text-left font-medium">状态</th>
-              <th className="px-5 py-3 text-left font-medium">更新时间</th>
-              <th className="px-5 py-3 text-right font-medium">操作</th>
+              <th className="px-5 py-3 text-left font-medium">{t('thModel')}</th>
+              <th className="px-5 py-3 text-left font-medium">{t('thStatus')}</th>
+              <th className="px-5 py-3 text-left font-medium">{t('thUpdated')}</th>
+              <th className="px-5 py-3 text-right font-medium">{t('thActions')}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {loading && (
-              <tr><td colSpan={5} className="px-5 py-12 text-center text-gray-400"><i className="fas fa-spinner fa-spin mr-2" />加载中...</td></tr>
+              <tr><td colSpan={5} className="px-5 py-12 text-center text-gray-400"><i className="fas fa-spinner fa-spin mr-2" />{t('loading')}</td></tr>
             )}
             {!loading && providers.length === 0 && (
-              <tr><td colSpan={5} className="px-5 py-12 text-center text-gray-400">尚未配置 Provider，AI 对话暂不可用。</td></tr>
+              <tr><td colSpan={5} className="px-5 py-12 text-center text-gray-400">{t('empty')}</td></tr>
             )}
             {!loading && providers.map((provider) => (
               <tr key={provider.id} className="hover:bg-gray-50/60">
@@ -296,22 +298,22 @@ export default function AiProvidersPage() {
                         ? 'bg-emerald-50 text-emerald-700'
                         : 'bg-gray-100 text-gray-600'
                     }`}>
-                      {provider.is_active ? '已启用' : '已停用'}
+                      {provider.is_active ? t('statusActive') : t('statusInactive')}
                     </span>
-                    {provider.is_default && <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-700">默认</span>}
+                    {provider.is_default && <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-700">{t('default')}</span>}
                     <span className={`rounded-full px-2 py-0.5 text-xs ${provider.api_key_configured ? 'bg-gray-100 text-gray-600' : 'bg-red-50 text-red-700'}`}>
-                      {provider.api_key_configured ? '密钥已配置' : '缺少密钥'}
+                      {provider.api_key_configured ? t('keyConfigured') : t('keyMissing')}
                     </span>
                   </div>
                 </td>
                 <td className="px-5 py-4 text-xs text-gray-500">{formatDate(provider.updated_at)}</td>
                 <td className="px-5 py-4 text-right whitespace-nowrap">
                   <button type="button" onClick={() => void test(provider)} disabled={testingId === provider.id} className="mr-3 text-emerald-600 hover:text-emerald-800 disabled:opacity-50">
-                    {testingId === provider.id ? <i className="fas fa-spinner fa-spin" /> : '测试'}
+                    {testingId === provider.id ? <i className="fas fa-spinner fa-spin" /> : t('test')}
                   </button>
                   {provider.is_active && !provider.is_default && (
                     <button type="button" onClick={() => void setDefault(provider)} disabled={updatingId === provider.id} className="mr-3 text-indigo-600 hover:text-indigo-800 disabled:opacity-50">
-                      设为默认
+                      {t('setDefault')}
                     </button>
                   )}
                   <button
@@ -324,10 +326,10 @@ export default function AiProvidersPage() {
                         : 'text-emerald-600 hover:text-emerald-800'
                     }`}
                   >
-                    {provider.is_active ? '停用' : '启用'}
+                    {provider.is_active ? t('disableAction') : t('enableAction')}
                   </button>
-                  <button type="button" onClick={() => openEdit(provider)} className="mr-3 text-blue-600 hover:text-blue-800">编辑</button>
-                  <button type="button" onClick={() => setDeleting(provider)} className="text-red-600 hover:text-red-800">删除</button>
+                  <button type="button" onClick={() => openEdit(provider)} className="mr-3 text-blue-600 hover:text-blue-800">{t('edit')}</button>
+                  <button type="button" onClick={() => setDeleting(provider)} className="text-red-600 hover:text-red-800">{t('delete')}</button>
                 </td>
               </tr>
             ))}
@@ -338,13 +340,13 @@ export default function AiProvidersPage() {
       <Modal
         isOpen={!!form}
         onClose={() => { if (!saving) setForm(null) }}
-        title={form?.editing ? '编辑 AI Provider' : '新建 AI Provider'}
+        title={form?.editing ? t('editTitle') : t('createTitle')}
         size="lg"
         footer={
           <div className="flex justify-end gap-3">
-            <button type="button" onClick={() => setForm(null)} disabled={saving} className="btn-default">取消</button>
+            <button type="button" onClick={() => setForm(null)} disabled={saving} className="btn-default">{t('cancel')}</button>
             <button type="button" onClick={() => void save()} disabled={saving || !formValid} className="btn-primary disabled:opacity-50">
-              {saving ? <><i className="fas fa-spinner fa-spin mr-2" />保存中...</> : '保存'}
+              {saving ? <><i className="fas fa-spinner fa-spin mr-2" />{t('saving')}</> : t('save')}
             </button>
           </div>
         }
@@ -358,17 +360,17 @@ export default function AiProvidersPage() {
               </select>
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-gray-700">配置名称 *</label>
-              <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} className="input-base w-full" placeholder="如：生产 OpenAI" />
+              <label className="mb-1.5 block text-sm font-medium text-gray-700">{t('nameLabel')}</label>
+              <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} className="input-base w-full" placeholder={t('phName')} />
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-gray-700">模型 *</label>
+              <label className="mb-1.5 block text-sm font-medium text-gray-700">{t('modelLabel')}</label>
               <input value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })} className="input-base w-full font-mono" />
             </div>
             <div>
               <label className="mb-1.5 block text-sm font-medium text-gray-700">Base URL *</label>
               <input type="url" value={form.base_url} onChange={(event) => setForm({ ...form, base_url: event.target.value })} className="input-base w-full font-mono" />
-              <p className="mt-1 text-xs text-gray-400">生产环境仅允许 HTTPS；后端会拦截内网、环回和保留地址。</p>
+              <p className="mt-1 text-xs text-gray-400">{t('baseUrlHint')}</p>
             </div>
             <div>
               <label className="mb-1.5 block text-sm font-medium text-gray-700">
@@ -380,9 +382,9 @@ export default function AiProvidersPage() {
                 value={form.api_key}
                 onChange={(event) => setForm({ ...form, api_key: event.target.value })}
                 className="input-base w-full font-mono"
-                placeholder={form.editing ? '留空表示保留现有密钥' : '输入 API Key'}
+                placeholder={form.editing ? t('phKeyEdit') : t('phKeyNew')}
               />
-              <p className="mt-1 text-xs text-gray-400">密钥只在本次提交中使用，保存后不会回显。</p>
+              <p className="mt-1 text-xs text-gray-400">{t('keyHint')}</p>
             </div>
             <label className="flex items-center gap-2 text-sm text-gray-700">
               <input
@@ -395,7 +397,7 @@ export default function AiProvidersPage() {
                 })}
                 className="h-4 w-4 rounded text-indigo-600"
               />
-              启用此 Provider
+              {t('enableThis')}
             </label>
             <label className={`flex items-center gap-2 text-sm ${
               form.is_active ? 'text-gray-700' : 'text-gray-400'
@@ -407,7 +409,7 @@ export default function AiProvidersPage() {
                 onChange={(event) => setForm({ ...form, is_default: event.target.checked })}
                 className="h-4 w-4 rounded text-indigo-600 disabled:opacity-50"
               />
-              设为项目默认 Provider
+              {t('setProjectDefault')}
             </label>
           </div>
         )}
@@ -417,13 +419,13 @@ export default function AiProvidersPage() {
         isOpen={!!toggling}
         onClose={() => setToggling(null)}
         onConfirm={() => void toggleActive()}
-        title={`${toggling?.is_active ? '停用' : '启用'} AI Provider`}
+        title={t('toggleTitle', { action: toggling?.is_active ? t('disableAction') : t('enableAction') })}
         message={
           toggling?.is_active
-            ? `确认停用「${toggling?.name || ''}」吗？聊天将不再选择该 Provider；若它是默认项，后端会自动切换默认模型。`
-            : `确认启用「${toggling?.name || ''}」吗？启用后它可被 AI 聊天使用。`
+            ? t('confirmDisable', { name: toggling?.name || '' })
+            : t('confirmEnable', { name: toggling?.name || '' })
         }
-        confirmText={toggling?.is_active ? '停用' : '启用'}
+        confirmText={toggling?.is_active ? t('disableAction') : t('enableAction')}
         type={toggling?.is_active ? 'warning' : 'info'}
         loading={!!toggling && updatingId === toggling.id}
       />
@@ -432,9 +434,9 @@ export default function AiProvidersPage() {
         isOpen={!!deleting}
         onClose={() => setDeleting(null)}
         onConfirm={() => void remove()}
-        title="删除 AI Provider"
-        message={`确认删除「${deleting?.name || ''}」吗？该操作不会删除任何聊天记录，但可能导致项目暂时无法使用 AI 助手。`}
-        confirmText="删除"
+        title={t('deleteTitle')}
+        message={t('confirmDelete', { name: deleting?.name || '' })}
+        confirmText={t('delete')}
         loading={!!deleting && updatingId === deleting.id}
       />
     </div>

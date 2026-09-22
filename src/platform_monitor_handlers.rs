@@ -524,6 +524,7 @@ fn build_anomalies(
             "level":"warning",
             "code":"circuit_open",
             "message": format!("{} 个数据库熔断 Open", runtime.circuit_open_count),
+            "params": { "count": runtime.circuit_open_count },
         }));
     }
     if runtime.rate_limit_degraded {
@@ -535,6 +536,7 @@ fn build_anomalies(
                 "level":"warning",
                 "code":"error_rate",
                 "message": format!("24h 错误率 {:.1}%", rate * 100.0),
+                "params": { "rate": format!("{:.1}", rate * 100.0) },
             }));
         }
     }
@@ -544,6 +546,7 @@ fn build_anomalies(
                 "level":"warning",
                 "code":"slow_queries",
                 "message": format!("近 5 分钟慢查询 {} 条", slow),
+                "params": { "count": slow },
             }));
         }
     }
@@ -552,6 +555,7 @@ fn build_anomalies(
             "level":"warning",
             "code":"exec_failed",
             "message": format!("24h 异步执行失败 {} 次", asyncs.exec_failed_24h),
+            "params": { "count": asyncs.exec_failed_24h },
         }));
     }
     out
@@ -561,25 +565,25 @@ fn build_anomalies(
 fn signals_to_anomalies(s: &Signals) -> Vec<Value> {
     let mut out = Vec::new();
     if s.stuck_running > 0 {
-        out.push(json!({"level":"warning","code":"stuck_running","message":format!("{} 条执行 running 超过 10 分钟（疑似卡死）", s.stuck_running)}));
+        out.push(json!({"level":"warning","code":"stuck_running","message":format!("{} 条执行 running 超过 10 分钟（疑似卡死）", s.stuck_running),"params":{"count":s.stuck_running}}));
     }
     if s.stuck_workflow > 0 {
-        out.push(json!({"level":"warning","code":"stuck_workflow","message":format!("{} 个工作流 run 卡在 running", s.stuck_workflow)}));
+        out.push(json!({"level":"warning","code":"stuck_workflow","message":format!("{} 个工作流 run 卡在 running", s.stuck_workflow),"params":{"count":s.stuck_workflow}}));
     }
     if s.auth_failures_1h >= 20 {
-        out.push(json!({"level":"warning","code":"auth_failures","message":format!("近 1h 认证失败(401/403) {} 次", s.auth_failures_1h)}));
+        out.push(json!({"level":"warning","code":"auth_failures","message":format!("近 1h 认证失败(401/403) {} 次", s.auth_failures_1h),"params":{"count":s.auth_failures_1h}}));
     }
     if s.rate_limited_429_1h >= 20 {
-        out.push(json!({"level":"warning","code":"rate_limited","message":format!("近 1h 触发限流(429) {} 次", s.rate_limited_429_1h)}));
+        out.push(json!({"level":"warning","code":"rate_limited","message":format!("近 1h 触发限流(429) {} 次", s.rate_limited_429_1h),"params":{"count":s.rate_limited_429_1h}}));
     }
     if s.webhook_failures_24h > 0 {
-        out.push(json!({"level":"info","code":"webhook_failed","message":format!("24h Webhook 投递失败 {} 次", s.webhook_failures_24h)}));
+        out.push(json!({"level":"info","code":"webhook_failed","message":format!("24h Webhook 投递失败 {} 次", s.webhook_failures_24h),"params":{"count":s.webhook_failures_24h}}));
     }
     if s.expiring_api_keys_7d > 0 {
-        out.push(json!({"level":"info","code":"api_key_expiring","message":format!("{} 个 API Key 将在 7 天内过期", s.expiring_api_keys_7d)}));
+        out.push(json!({"level":"info","code":"api_key_expiring","message":format!("{} 个 API Key 将在 7 天内过期", s.expiring_api_keys_7d),"params":{"count":s.expiring_api_keys_7d}}));
     }
     if s.expiring_tokens_7d > 0 {
-        out.push(json!({"level":"info","code":"token_expiring","message":format!("{} 个平台令牌将在 7 天内过期", s.expiring_tokens_7d)}));
+        out.push(json!({"level":"info","code":"token_expiring","message":format!("{} 个平台令牌将在 7 天内过期", s.expiring_tokens_7d),"params":{"count":s.expiring_tokens_7d}}));
     }
     out
 }
@@ -1045,22 +1049,28 @@ pub async fn put_alert_config(
     if let Some(Some(ref url)) = body.webhook_url {
         let t = url.trim();
         if t.is_empty() || !(t.starts_with("http://") || t.starts_with("https://")) {
-            return Err(AppError::InvalidQuery(
-                "webhook_url 必须是 http(s) URL，或传 null 清空".into(),
+            return Err(AppError::validation(
+                "pmon_webhook_url_invalid",
+                "webhook_url 必须是 http(s) URL，或传 null 清空",
+                serde_json::json!({}),
             ));
         }
     }
     if let Some(hours) = body.default_throttle_hours {
         if !(0..=720).contains(&hours) {
-            return Err(AppError::InvalidQuery(
-                "default_throttle_hours 需在 0..=720".into(),
+            return Err(AppError::validation(
+                "pmon_throttle_hours_range",
+                "default_throttle_hours 需在 0..=720",
+                serde_json::json!({}),
             ));
         }
     }
     if let Some(Some(ref tmpl)) = body.webhook_template {
         if !tmpl.is_object() {
-            return Err(AppError::InvalidQuery(
-                "webhook_template 必须是 JSON object".into(),
+            return Err(AppError::validation(
+                "pmon_webhook_template_invalid",
+                "webhook_template 必须是 JSON object",
+                serde_json::json!({}),
             ));
         }
     }
@@ -1163,7 +1173,11 @@ fn validate_metric(m: &str) -> Result<()> {
     if OK.contains(&m) {
         Ok(())
     } else {
-        Err(AppError::InvalidQuery(format!("不支持的 metric: {m}")))
+        Err(AppError::validation(
+            "pmon_unsupported_metric",
+            format!("不支持的 metric: {m}"),
+            serde_json::json!({ "metric": m }),
+        ))
     }
 }
 
@@ -1171,7 +1185,11 @@ fn validate_operator(op: &str) -> Result<()> {
     if matches!(op, ">" | ">=" | "==" | "<" | "<=") {
         Ok(())
     } else {
-        Err(AppError::InvalidQuery(format!("不支持的 operator: {op}")))
+        Err(AppError::validation(
+            "pmon_unsupported_operator",
+            format!("不支持的 operator: {op}"),
+            serde_json::json!({ "operator": op }),
+        ))
     }
 }
 
@@ -1187,18 +1205,22 @@ pub async fn create_alert_rule(
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| AppError::InvalidQuery("name 必填".into()))?;
+        .ok_or_else(|| AppError::validation("pmon_name_required", "name 必填", serde_json::json!({})))?;
     let metric = body
         .metric
         .as_deref()
-        .ok_or_else(|| AppError::InvalidQuery("metric 必填".into()))?;
+        .ok_or_else(|| AppError::validation("pmon_metric_required", "metric 必填", serde_json::json!({})))?;
     let operator = body
         .operator
         .as_deref()
-        .ok_or_else(|| AppError::InvalidQuery("operator 必填".into()))?;
+        .ok_or_else(|| {
+            AppError::validation("pmon_operator_required", "operator 必填", serde_json::json!({}))
+        })?;
     let threshold = body
         .threshold
-        .ok_or_else(|| AppError::InvalidQuery("threshold 必填".into()))?;
+        .ok_or_else(|| {
+            AppError::validation("pmon_threshold_required", "threshold 必填", serde_json::json!({}))
+        })?;
     validate_metric(metric)?;
     validate_operator(operator)?;
     let metric_window = body.window.unwrap_or_else(|| "live".to_string());
@@ -1247,7 +1269,13 @@ pub async fn patch_alert_rule(
     .bind(id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("规则 {id} 不存在")))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "pmon_rule_not_found",
+            format!("规则 {id} 不存在"),
+            serde_json::json!({ "id": id }),
+        )
+    })?;
 
     let name = body
         .name
@@ -1287,7 +1315,11 @@ pub async fn patch_alert_rule(
     .rows_affected();
 
     if n == 0 {
-        return Err(AppError::NotFound(format!("规则 {id} 不存在")));
+        return Err(AppError::not_found_coded(
+            "pmon_rule_not_found",
+            format!("规则 {id} 不存在"),
+            serde_json::json!({ "id": id }),
+        ));
     }
     Ok(Json(json!({ "id": id, "message": "updated" })))
 }
@@ -1305,7 +1337,11 @@ pub async fn delete_alert_rule(
         .await?
         .rows_affected();
     if n == 0 {
-        return Err(AppError::NotFound(format!("规则 {id} 不存在")));
+        return Err(AppError::not_found_coded(
+            "pmon_rule_not_found",
+            format!("规则 {id} 不存在"),
+            serde_json::json!({ "id": id }),
+        ));
     }
     Ok(Json(json!({ "message": "deleted" })))
 }

@@ -1,5 +1,7 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactFlow, {
   Background,
@@ -88,11 +90,11 @@ function isReachableByNormalEdges(
 }
 
 /** 添加节点面板分组（控制流 / 数据操作 / 集成 / 输出），loop 归控制流并与 condition 并列 */
-const NODE_PALETTE_GROUPS: { label: string; types: string[] }[] = [
-  { label: '数据操作', types: ['db_query', 'db_execute', 'db_transaction', 'foreach', 'transform', 'code'] },
-  { label: '控制流', types: ['condition', 'loop'] },
-  { label: '集成', types: ['http_call', 'llm', 'email_send', 'sse_publish', 'call_workflow', 'redis', 'kafka', 'object_storage'] },
-  { label: '输出', types: ['response'] },
+const NODE_PALETTE_GROUPS: { labelKey: string; types: string[] }[] = [
+  { labelKey: 'palData', types: ['db_query', 'db_execute', 'db_transaction', 'foreach', 'transform', 'code'] },
+  { labelKey: 'palControl', types: ['condition', 'loop'] },
+  { labelKey: 'palIntegration', types: ['http_call', 'llm', 'email_send', 'sse_publish', 'call_workflow', 'redis', 'kafka', 'object_storage'] },
+  { labelKey: 'palOutput', types: ['response'] },
 ]
 
 interface Props {
@@ -146,7 +148,7 @@ function toFlowEdges(defs: WorkflowEdgeDef[], nodes: WorkflowNodeDef[]): Edge[] 
       target: e.to,
       sourceHandle: handle,
       targetHandle: isLoopBack ? 'back' : targetHandle || undefined,
-      label: isLoopBack ? '↺ 回边' : e.branch || undefined,
+      label: isLoopBack ? '↺' : e.branch || undefined,
       data: {
         ...(isLoopBack ? { edgeType: 'loop_back' } : {}),
         sourceNodeType: nodeTypeById.get(e.from),
@@ -181,6 +183,7 @@ function fromFlowEdges(edges: Edge[]): WorkflowEdgeDef[] {
 }
 
 function ZoomControls({ onFit }: { onFit: () => void }) {
+  const t = useTranslations('wfCanvas')
   const { zoomIn, zoomOut, getZoom } = useReactFlow()
   const [zoom, setZoom] = useState(100)
 
@@ -198,13 +201,14 @@ function ZoomControls({ onFit }: { onFit: () => void }) {
         <button type="button" onClick={() => { zoomIn({ duration: 150 }); setTimeout(refresh, 160) }} className="w-[30px] h-[30px] flex items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 text-[15px]">+</button>
         <div className="text-center text-[10px] font-bold text-slate-400 leading-4">{zoom}%</div>
         <button type="button" onClick={() => { zoomOut({ duration: 150 }); setTimeout(refresh, 160) }} className="w-[30px] h-[30px] flex items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 text-[15px]">−</button>
-        <button type="button" onClick={handleFit} className="w-[30px] h-[30px] flex items-center justify-center rounded-md text-indigo-500 hover:bg-indigo-50 text-[11px] font-bold" title="适配视图">⊡</button>
+        <button type="button" onClick={handleFit} className="w-[30px] h-[30px] flex items-center justify-center rounded-md text-indigo-500 hover:bg-indigo-50 text-[11px] font-bold" title={t('fitViewTitle')}>⊡</button>
       </div>
     </Panel>
   )
 }
 
 function WorkflowCanvasInner({ initialNodes, initialEdges, workflowSlug, onChange, readOnly = false }: Props) {
+  const t = useTranslations('wfCanvas')
   const [nodes, setNodes, onNodesChange] = useNodesState(toFlowNodes(initialNodes))
   const [edges, setEdges, onEdgesChange] = useEdgesState(
     toFlowEdges(initialEdges, initialNodes),
@@ -351,7 +355,7 @@ function WorkflowCanvasInner({ initialNodes, initialEdges, workflowSlug, onChang
   const runAutoLayout = useCallback(() => {
     setLayouting(true)
     void applyLayout(nodes, edges)
-      .catch((err) => console.error('自动排布失败:', err))
+      .catch((err) => console.error(t('autoLayoutFailed'), err))
       .finally(() => setTimeout(() => setLayouting(false), 300))
   }, [nodes, edges, applyLayout])
 
@@ -360,7 +364,7 @@ function WorkflowCanvasInner({ initialNodes, initialEdges, workflowSlug, onChang
     if (nodesOverlap(nodes)) {
       didAutoLayout.current = true
       void applyLayout(nodes, edges, true).catch((err) =>
-        console.error('初始自动排布失败:', err),
+        console.error(t('initLayoutFailed'), err),
       )
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -403,7 +407,7 @@ function WorkflowCanvasInner({ initialNodes, initialEdges, workflowSlug, onChang
         },
         style: { stroke, strokeWidth: 2 },
         markerEnd,
-        label: isLoopBack ? '↺ 回边' : params.sourceHandle || undefined,
+        label: isLoopBack ? '↺' : params.sourceHandle || undefined,
       }, eds)
       setTimeout(() => syncChange(nodes, newEdges), 0)
       return newEdges
@@ -672,7 +676,7 @@ function WorkflowCanvasInner({ initialNodes, initialEdges, workflowSlug, onChang
               >
                 <button
                   type="button"
-                  aria-label="收起概览图"
+                  aria-label={t('collapseMinimapAria')}
                   onClick={(e) => {
                     e.stopPropagation()
                     setShowMinimapPersisted(false)
@@ -691,13 +695,13 @@ function WorkflowCanvasInner({ initialNodes, initialEdges, workflowSlug, onChang
                   <div className="relative">
                     <button ref={paletteBtnRef} type="button" onClick={() => setShowPalette(!showPalette)} className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium bg-indigo-50 text-indigo-600 hover:bg-indigo-100">
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                      添加节点
+                      {t('addNode')}
                     </button>
                     {showPalette && (
                       <div className="nowheel absolute top-full left-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-lg p-1.5 w-[220px] z-50 overflow-y-auto" style={{ maxHeight: paletteMaxH }}>
                         {NODE_PALETTE_GROUPS.map((group) => (
-                          <div key={group.label} className="mb-1.5 last:mb-0">
-                            <div className="px-2 pt-1 pb-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-300">{group.label}</div>
+                          <div key={group.labelKey} className="mb-1.5 last:mb-0">
+                            <div className="px-2 pt-1 pb-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-300">{t(group.labelKey)}</div>
                             {group.types.filter((t) => NODE_TYPE_META[t]).map((type) => {
                               const meta = NODE_TYPE_META[type]
                               return (
@@ -715,17 +719,17 @@ function WorkflowCanvasInner({ initialNodes, initialEdges, workflowSlug, onChang
                   <div className="w-px h-5 bg-slate-200 mx-0.5" />
                   <button type="button" onClick={runAutoLayout} disabled={layouting || nodes.length === 0} className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50">
                     <svg className={`w-4 h-4 ${layouting ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12" /></svg>
-                    {layouting ? '排布中…' : '自动排布'}
+                    {layouting ? t('layouting') : t('autoLayout')}
                   </button>
                 </>
               )}
               <button type="button" onClick={() => fitCanvas(false)} className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-slate-600 hover:bg-slate-100">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" /></svg>
-                适配视图
+                {t('fitView')}
               </button>
               <button
                 type="button"
-                aria-label="概览图"
+                aria-label={t('minimapAria')}
                 aria-pressed={showMinimap}
                 onClick={toggleMinimap}
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
@@ -737,7 +741,7 @@ function WorkflowCanvasInner({ initialNodes, initialEdges, workflowSlug, onChang
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A2 2 0 013 15.382V6.618a2 2 0 011.553-1.894L9 2m0 18l6-3m-6 3V2m6 15l5.447 2.724A2 2 0 0021 17.382V8.618a2 2 0 00-1.553-1.894L15 4m0 13V4m0 0L9 2" />
                 </svg>
-                概览
+                {t('minimap')}
               </button>
             </div>
           </Panel>

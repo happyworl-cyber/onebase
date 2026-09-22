@@ -8,12 +8,12 @@
 
 ## 背景
 
-用户希望 **在 Onebase 里创建项目时，由运维侧自动 provision 全新的 PostgreSQL 服务器**（或 RDS / K8s Pod / Docker 容器），而不是：
+用户希望 **在 PlaneOS 里创建项目时，由运维侧自动 provision 全新的 PostgreSQL 服务器**（或 RDS / K8s Pod / Docker 容器），而不是：
 
 - 只在已有 PG 上 `CREATE DATABASE`（P1），或
 - 超管手工在 `/platform/pg-pools` 登记已有 PG。
 
-P3 把「建基础设施」交给运维已有的自动化（Ansible / Terraform / 内部 API / K8s Operator），Onebase 只负责 **调用 → 落库 → 关联项目 → 失败回滚/告警**。
+P3 把「建基础设施」交给运维已有的自动化（Ansible / Terraform / 内部 API / K8s Operator），PlaneOS 只负责 **调用 → 落库 → 关联项目 → 失败回滚/告警**。
 
 ---
 
@@ -21,17 +21,17 @@ P3 把「建基础设施」交给运维已有的自动化（Ansible / Terraform 
 
 | 方式 | 谁创建 PG **服务器** | 谁创建 **database** | 适用场景 |
 |------|----------------------|---------------------|----------|
-| PG 池登记 | 运维事先装好 | Onebase `CREATE DATABASE` | 共享 PG 集群，多项目共实例 |
-| P1 平台 PG | 已存在（同 Onebase） | Onebase | 单机 / 内网 PoC |
-| **P3 Webhook** | **运维脚本** | 运维脚本或 Onebase | 每项目独立 RDS / 新容器 / 新 VM |
+| PG 池登记 | 运维事先装好 | PlaneOS `CREATE DATABASE` | 共享 PG 集群，多项目共实例 |
+| P1 平台 PG | 已存在（同 PlaneOS） | PlaneOS | 单机 / 内网 PoC |
+| **P3 Webhook** | **运维脚本** | 运维脚本或 PlaneOS | 每项目独立 RDS / 新容器 / 新 VM |
 
 ---
 
 ## 用户故事
 
-1. 运维部署 Provisioner 服务（HTTP），并配置 Onebase 环境变量。
+1. 运维部署 Provisioner 服务（HTTP），并配置 PlaneOS 环境变量。
 2. 用户 `/workspace/provision` 选择 **「运维自动开通（Webhook）」**。
-3. Onebase `POST` Provisioner → 收到 PG（+ 可选 Redis）连接信息 → 写入 `tenant_databases` / `project_env_vars`。
+3. PlaneOS `POST` Provisioner → 收到 PG（+ 可选 Redis）连接信息 → 写入 `tenant_databases` / `project_env_vars`。
 4. 用户进入项目即可使用；删项目时可选用 Webhook **deprovision**（可选）。
 
 ---
@@ -40,21 +40,21 @@ P3 把「建基础设施」交给运维已有的自动化（Ansible / Terraform 
 
 ```env
 # 必填：Provisioner 基址（无尾斜杠）
-PROVISION_WEBHOOK_URL=https://ops.internal.example.com/onebase/provision
+PROVISION_WEBHOOK_URL=https://ops.internal.example.com/planeos/provision
 
 # 可选：Bearer 或 HMAC 密钥
 PROVISION_WEBHOOK_TOKEN=...
 PROVISION_WEBHOOK_TIMEOUT_SECS=120
 
 # 可选：删项目时回调 deprovision
-PROVISION_WEBHOOK_DEPROVISION_URL=https://ops.internal.example.com/onebase/deprovision
+PROVISION_WEBHOOK_DEPROVISION_URL=https://ops.internal.example.com/planeos/deprovision
 ```
 
 ---
 
 ## Provisioner 契约
 
-### 请求（Onebase → 运维）
+### 请求（PlaneOS → 运维）
 
 `POST {PROVISION_WEBHOOK_URL}`
 
@@ -63,7 +63,7 @@ Headers:
 ```
 Authorization: Bearer {PROVISION_WEBHOOK_TOKEN}   # 若配置
 Content-Type: application/json
-X-Onebase-Request-Id: {uuid}
+X-PlaneOS-Request-Id: {uuid}
 ```
 
 Body:
@@ -108,7 +108,7 @@ Body:
 规则：
 
 - `postgresql` **必填**（v1）；`redis` / `env_vars` 可选。
-- Onebase 将 `postgresql` 写入 `tenant_databases`（密码加密）。
+- PlaneOS 将 `postgresql` 写入 `tenant_databases`（密码加密）。
 - `env_vars` 写入 `project_env_vars`（与 P2 Redis 逻辑一致）。
 
 ### 失败响应（4xx/5xx）
@@ -119,11 +119,11 @@ Body:
 }
 ```
 
-Onebase 向用户返回该 `error`；**不**写 `tenants` / `tenant_databases`。
+PlaneOS 向用户返回该 `error`；**不**写 `tenants` / `tenant_databases`。
 
 ### 幂等
 
-- 同一 `(caller_user_id, slug)` 重复 provision：Provisioner 应返回**同一**资源或 409；Onebase 侧已有 slug 幂等（返回已有项目）。
+- 同一 `(caller_user_id, slug)` 重复 provision：Provisioner 应返回**同一**资源或 409；PlaneOS 侧已有 slug 幂等（返回已有项目）。
 
 ### 异步开通（P3.2）
 
@@ -138,7 +138,7 @@ Provisioner 可立即返回 **HTTP 202** 或 `status: "pending"`（无 `postgres
 }
 ```
 
-Onebase 随后对同一 URL 轮询：
+PlaneOS 随后对同一 URL 轮询：
 
 ```json
 {
@@ -182,7 +182,7 @@ PROVISION_WEBHOOK_POLL_MAX_SECS=600
 
 ---
 
-## Onebase 后端改动
+## PlaneOS 后端改动
 
 ### `ProvisionRequest` 扩展
 
@@ -258,7 +258,7 @@ provision_project():
 
 - Token 仅存服务端 env，不下发前端。
 - Webhook 响应中的 password 只写入加密字段，audit 日志脱敏。
-- 建议 Provisioner 内网可达；Onebase 可配置 IP  allowlist（后续）。
+- 建议 Provisioner 内网可达；PlaneOS 可配置 IP  allowlist（后续）。
 
 ---
 
@@ -272,7 +272,7 @@ provision_project():
 - [x] 删 Webhook 开通的项目时回调 deprovision（需配置 `PROVISION_WEBHOOK_DEPROVISION_URL`）
 - [x] 向导可勾选 Redis；响应 `redis.url` 写入 `REDIS_URL` 环境变量
 - [x] 超管 `/platform/provision-settings` 可查看配置状态并探活
-- [x] Provisioner 返回 202/pending 时 Onebase 自动 poll 直至成功或超时
+- [x] Provisioner 返回 202/pending 时 PlaneOS 自动 poll 直至成功或超时
 
 ---
 

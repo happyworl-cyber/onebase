@@ -34,7 +34,7 @@
 
 **Files:**
 - Modify: `src/permissions.rs`（`is_tenant_admin` ~133、`tenant_admin_ids` ~84、`resolve_database_id_by_slug_for_claims` ~486、`require_tenant_admin` 错误文案）
-- Test: 同文件 `#[cfg(test)]` 若已有则追加；否则加小单元测 SQL/helper 逻辑可用的纯函数，或 `cargo test --bin onebase` 已有 permissions 测试
+- Test: 同文件 `#[cfg(test)]` 若已有则追加；否则加小单元测 SQL/helper 逻辑可用的纯函数，或 `cargo test --bin planeos` 已有 permissions 测试
 
 **Interfaces:**
 - Produces: `is_tenant_admin` / `tenant_admin_ids` / `resolve_database_id_by_slug_for_claims` 行为扩展；新增 helper 可选：
@@ -148,7 +148,7 @@ ORDER BY td.id ASC LIMIT 2
 
 Run: `cargo check`  
 Expected: exit 0  
-若有 `permissions` 模块测试：`cargo test --bin onebase permissions -- --nocapture`
+若有 `permissions` 模块测试：`cargo test --bin planeos permissions -- --nocapture`
 
 ---
 

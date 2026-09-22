@@ -38,7 +38,7 @@
 | `src/workflow_handlers.rs` | Load store into exec ctx; mask with creds |
 | `src/lua_builtins.rs` / `src/lua_engine.rs` | `cred.get` |
 | `src/js_host_bridge.rs` / `js-runtime/.../index.js` | `cred.get` IPC + JS global |
-| `src/js_runner.rs` / `src/py_runner.rs` / `py-runtime/.../onebase_host.py` | Pass store; Python `cred.get` |
+| `src/js_runner.rs` / `src/py_runner.rs` / `py-runtime/.../planeos_host.py` | Pass store; Python `cred.get` |
 | `src/operation_log.rs` | `resource_type::CREDENTIAL` |
 | `src/mcp_tools.rs` | Document `{{cred.*}}` / `cred.get` / `credential_id` |
 | `frontend-nextjs/lib/api.ts` | Types + `/credentials` client (keep `/wf-credentials` wrappers) |
@@ -1030,8 +1030,8 @@ git commit -m "feat: expose cred.get to Lua code nodes."
 - Modify: `src/js_host_bridge.rs`
 - Modify: `src/js_runner.rs`
 - Modify: `src/py_runner.rs`
-- Modify: `js-runtime/onebase-runtime/index.js`
-- Modify: `py-runtime/onebase_runtime/onebase_host.py`
+- Modify: `js-runtime/planeos-runtime/index.js`
+- Modify: `py-runtime/planeos_runtime/planeos_host.py`
 - Modify: `src/workflow_engine.rs` (`JsExecRequest` / `PyExecRequest` construction)
 
 **Interfaces:**
@@ -1065,13 +1065,13 @@ Update every `HostBridgeConfig {` (js_host_bridge tests, js_runner, py_runner) w
 
 `JsExecRequest` / `PyExecRequest` add `pub credentials: CredentialStore`. Pass `ctx.credentials.clone()` from `workflow_engine.rs`. Existing tests that build these structs: add `credentials: Default::default()`.
 
-`js-runtime/onebase-runtime/index.js` after `env`:
+`js-runtime/planeos-runtime/index.js` after `env`:
 
 ```javascript
 installGlobal('cred', { get: (name, field) => call('cred.get', { name, field }) });
 ```
 
-`py-runtime/onebase_runtime/onebase_host.py` after `env`:
+`py-runtime/planeos_runtime/planeos_host.py` after `env`:
 
 ```python
 cred = SimpleNamespace(get=lambda name, field: _call("cred.get", {"name": name, "field": field}))
@@ -1108,14 +1108,14 @@ In `js_host_bridge.rs` tests, clone the existing node test:
         .await
         .expect("bridge starts");
         let runtime =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("js-runtime/onebase-runtime/index.js");
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("js-runtime/planeos-runtime/index.js");
         let output = tokio::task::spawn_blocking(move || {
             Command::new("node")
                 .arg("--require")
                 .arg(runtime)
                 .arg("-e")
                 .arg("process.stdout.write(String(cred.get('crm','token')))")
-                .env("ONEBASE_HOST_SOCK", &socket_path)
+                .env("PLANEOS_HOST_SOCK", &socket_path)
                 .output()
                 .expect("node starts")
         })
@@ -1143,7 +1143,7 @@ Expected: PASS (or skip if node/python missing).
 - [ ] **Step 4: Commit** (skip unless asked)
 
 ```bash
-git add src/js_host_bridge.rs src/js_runner.rs src/py_runner.rs src/workflow_engine.rs js-runtime/onebase-runtime/index.js py-runtime/onebase_runtime/onebase_host.py
+git add src/js_host_bridge.rs src/js_runner.rs src/py_runner.rs src/workflow_engine.rs js-runtime/planeos-runtime/index.js py-runtime/planeos_runtime/planeos_host.py
 git commit -m "feat: expose cred.get to JS and Python code nodes."
 ```
 

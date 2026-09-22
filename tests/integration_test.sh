@@ -4,7 +4,7 @@
 #
 # 跑法：
 #   ./tests/integration_test.sh
-#   API_BASE=http://onebase.example.com:3010 ./tests/integration_test.sh
+#   API_BASE=http://planeos.example.com:3010 ./tests/integration_test.sh
 #
 # 前置条件：
 #   - 服务已启动（默认 http://127.0.0.1:3010）；
@@ -87,7 +87,7 @@ extract_bool() {
 }
 
 # ============================================================
-log "=== Onebase 集成测试  base=$API_BASE ==="
+log "=== PlaneOS 集成测试  base=$API_BASE ==="
 
 # --- 0. 健康检查 ---
 status=$(http_status GET "$API_BASE/health/live")

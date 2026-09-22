@@ -17,18 +17,20 @@
  */
 
 import { useParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import ScheduledTasksManager from '@/components/ScheduledTasksManager'
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
 
 export default function ProjectScheduledTasksPage() {
+  const t = useTranslations('wsScheduled')
   const params = useParams<{ projectId: string }>()
   const projectId = parseInt(params.projectId, 10)
   const caps = useCurrentProjectCapabilities()
 
   if (!caps.canManageEvents) {
     return (
-      <ForbiddenPlaceholder reason="定时任务管理需要 admin+ 角色（owner / admin / 超管）" />
+      <ForbiddenPlaceholder reason={t('forbidden')} />
     )
   }
 

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { sseNotifyBridgeAPI, SseNotifyBridgeStats } from '@/lib/api'
 
 /**
@@ -10,6 +11,7 @@ import { sseNotifyBridgeAPI, SseNotifyBridgeStats } from '@/lib/api'
  * 非超管会收到 403，这里给出友好提示。配置走迁移 / 运维 SQL，无在线增删改。
  */
 export default function SseMonitorPanel() {
+  const t = useTranslations('sseMonitor')
   const [stats, setStats] = useState<SseNotifyBridgeStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -23,8 +25,8 @@ export default function SseMonitorPanel() {
       const status = err?.response?.status
       setError(
         status === 403
-          ? '仅平台超管可查看推送监控'
-          : '加载监控数据失败: ' + (err?.response?.data?.error || err?.message || '未知错误')
+          ? t('forbidden')
+          : t('loadFailed', { msg: err?.response?.data?.error || err?.message || t('unknownError') })
       )
     } finally {
       setLoading(false)
@@ -61,15 +63,15 @@ export default function SseMonitorPanel() {
   return (
     <div className="space-y-6">
       <p className="text-xs text-gray-400">
-        进程内实时指标，每 5 秒刷新；重启清零。监听桥配置由迁移 / 运维 SQL 维护（无在线增删改）。
+        {t('intro')}
       </p>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
-          { label: '在线连接', value: c.total },
-          { label: '对外端点连接', value: c.public },
-          { label: '通用 /sse 连接', value: c.generic },
-          { label: '累计推送', value: stats.pushes_total },
+          { label: t('statOnline'), value: c.total },
+          { label: t('statPublic'), value: c.public },
+          { label: t('statGeneric'), value: c.generic },
+          { label: t('statPushes'), value: stats.pushes_total },
         ].map((m) => (
           <div key={m.label} className="card p-4">
             <div className="text-2xl font-semibold text-gray-900">{m.value}</div>
@@ -79,28 +81,28 @@ export default function SseMonitorPanel() {
       </div>
 
       <div className="card p-5">
-        <h3 className="text-sm font-semibold text-gray-900 mb-3">监听桥（PG NOTIFY → SSE）</h3>
+        <h3 className="text-sm font-semibold text-gray-900 mb-3">{t('bridgeTitle')}</h3>
         {stats.listeners.length === 0 ? (
           <p className="text-sm text-gray-400">
-            暂无监听桥。在 <code className="font-mono">management.sse_notify_bridges</code> 配置后将自动启动。
+            {t.rich('bridgeEmpty', { code: (c) => <code className="font-mono">{c}</code> })}
           </p>
         ) : (
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs text-gray-400 border-b">
-                <th className="py-2">库 / channel</th>
-                <th className="py-2">状态</th>
-                <th className="py-2 text-right">收到</th>
-                <th className="py-2 text-right">推送</th>
-                <th className="py-2 text-right">解析错误</th>
-                <th className="py-2 text-right">重连</th>
+                <th className="py-2">{t('thDbChannel')}</th>
+                <th className="py-2">{t('thStatus')}</th>
+                <th className="py-2 text-right">{t('thReceived')}</th>
+                <th className="py-2 text-right">{t('thPushed')}</th>
+                <th className="py-2 text-right">{t('thParseErr')}</th>
+                <th className="py-2 text-right">{t('thReconnect')}</th>
               </tr>
             </thead>
             <tbody>
               {stats.listeners.map((l) => (
                 <tr key={`${l.database_id}:${l.channel}`} className="border-b last:border-0">
                   <td className="py-2">
-                    <span className="font-mono text-xs">库 #{l.database_id} · {l.channel}</span>
+                    <span className="font-mono text-xs">{t('dbChannel', { id: l.database_id, channel: l.channel })}</span>
                   </td>
                   <td className="py-2">
                     <span
@@ -108,7 +110,7 @@ export default function SseMonitorPanel() {
                         l.connected ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-700'
                       }`}
                     >
-                      {l.connected ? '已连接' : '断开'}
+                      {l.connected ? t('connected') : t('disconnected')}
                     </span>
                   </td>
                   <td className="py-2 text-right tabular-nums">{l.received}</td>
@@ -124,7 +126,7 @@ export default function SseMonitorPanel() {
 
       {c.by_endpoint.length > 0 && (
         <div className="card p-5">
-          <h3 className="text-sm font-semibold text-gray-900 mb-3">对外端点连接（按端点）</h3>
+          <h3 className="text-sm font-semibold text-gray-900 mb-3">{t('endpointTitle')}</h3>
           <div className="flex flex-wrap gap-2">
             {c.by_endpoint.map((p) => (
               <span

@@ -42,7 +42,7 @@ use crate::redis_manager::RedisManager;
 fn sql_with_session_user(sql: &str, user_id: i32) -> String {
     let trimmed = sql.trim_start();
     let sess = format!(
-        "__onebase_sess AS (SELECT set_config('app.current_user_id', '{}', true))",
+        "__planeos_sess AS (SELECT set_config('app.current_user_id', '{}', true))",
         user_id
     );
     if trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case("with") {
@@ -403,7 +403,7 @@ pub(crate) async fn get_write_pool(main_pool: &PgPool, database_id: i32) -> Resu
     ensure_pool_loaded(main_pool, database_id).await?;
     POOL_MANAGER
         .get_write_pool(database_id)
-        .ok_or_else(|| AppError::NotFound(format!("数据库连接 {} 不存在", database_id)))
+        .ok_or_else(|| AppError::not_found_coded("autoapi_db_connection_not_found", format!("数据库连接 {} 不存在", database_id), serde_json::json!({ "database_id": database_id })))
 }
 
 /// 加载租户库 `DatabaseConfig`（供 LISTEN 等建立独立连接，不经过业务池 checkout）。
@@ -421,7 +421,7 @@ pub(crate) async fn load_database_config(
     .bind(database_id)
     .fetch_optional(main_pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("数据库连接 {} 不存在或已禁用", database_id)))?;
+    .ok_or_else(|| AppError::not_found_coded("autoapi_db_connection_disabled", format!("数据库连接 {} 不存在或已禁用", database_id), serde_json::json!({ "database_id": database_id })))?;
 
     Ok(row_to_db_config(&row))
 }
@@ -431,7 +431,7 @@ async fn get_read_pool(main_pool: &PgPool, database_id: i32) -> Result<PgPool> {
     ensure_pool_loaded(main_pool, database_id).await?;
     POOL_MANAGER
         .get_read_pool(database_id)
-        .ok_or_else(|| AppError::NotFound(format!("数据库连接 {} 不存在", database_id)))
+        .ok_or_else(|| AppError::not_found_coded("autoapi_db_connection_not_found", format!("数据库连接 {} 不存在", database_id), serde_json::json!({ "database_id": database_id })))
 }
 
 /// 确保 primary + replica 已加载
@@ -451,7 +451,7 @@ pub(crate) async fn ensure_pool_loaded(main_pool: &PgPool, database_id: i32) -> 
     .bind(database_id)
     .fetch_optional(main_pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("数据库连接 {} 不存在或已禁用", database_id)))?;
+    .ok_or_else(|| AppError::not_found_coded("autoapi_db_connection_disabled", format!("数据库连接 {} 不存在或已禁用", database_id), serde_json::json!({ "database_id": database_id })))?;
 
     let config = row_to_db_config(&primary_row);
     POOL_MANAGER.get_or_create_pool(config).await?;
@@ -615,7 +615,7 @@ fn auth_from_api_key_context(
     path_database_id: i32,
 ) -> Result<(i32, AuthSource)> {
     if ctx.database_id != path_database_id {
-        return Err(AppError::Unauthorized("API Key 与数据库不匹配".to_string()));
+        return Err(AppError::unauthorized_coded("autoapi_api_key_database_mismatch", "API Key 与数据库不匹配".to_string(), serde_json::json!({})));
     }
     Ok((ctx.database_id, AuthSource::ApiKey))
 }
@@ -655,13 +655,13 @@ async fn validate_auth(
                     let db_id: i32 = record.get("database_id");
 
                     if db_id != path_database_id {
-                        return Err(AppError::Unauthorized("API Key 与数据库不匹配".to_string()));
+                        return Err(AppError::unauthorized_coded("autoapi_api_key_database_mismatch", "API Key 与数据库不匹配".to_string(), serde_json::json!({})));
                     }
 
                     return Ok((db_id, AuthSource::ApiKey));
                 }
 
-                return Err(AppError::Unauthorized("API Key 无效或已过期".to_string()));
+                return Err(AppError::unauthorized_coded("autoapi_api_key_invalid_or_expired", "API Key 无效或已过期".to_string(), serde_json::json!({})));
             }
         }
     }
@@ -671,8 +671,10 @@ async fn validate_auth(
         return Ok((path_database_id, AuthSource::Jwt));
     }
 
-    Err(AppError::Unauthorized(
+    Err(AppError::unauthorized_coded(
+        "autoapi_missing_credentials",
         "请提供有效的 API Key 或 JWT Token".to_string(),
+        serde_json::json!({}),
     ))
 }
 
@@ -691,16 +693,18 @@ fn is_valid_identifier(name: &str) -> bool {
 
 fn validate_path_identifiers(schema: &str, table: &str) -> Result<()> {
     if !is_valid_identifier(schema) {
-        return Err(AppError::InvalidQuery(format!(
-            "非法的 schema 名称: '{}'",
-            schema
-        )));
+        return Err(AppError::validation(
+            "autoapi_invalid_schema_name",
+            format!("非法的 schema 名称: '{}'", schema),
+            serde_json::json!({ "schema": schema }),
+        ));
     }
     if !is_valid_identifier(table) {
-        return Err(AppError::InvalidQuery(format!(
-            "非法的 table 名称: '{}'",
-            table
-        )));
+        return Err(AppError::validation(
+            "autoapi_invalid_table_name",
+            format!("非法的 table 名称: '{}'", table),
+            serde_json::json!({ "table": table }),
+        ));
     }
     Ok(())
 }
@@ -791,10 +795,18 @@ fn build_aggregate_select(select: &str, allowed: &Option<Vec<String>>) -> Result
         match t.split_once('.') {
             Some((col, func)) if agg_func(func).is_some() => {
                 if !is_valid_identifier(col) {
-                    return Err(AppError::InvalidQuery(format!("非法的聚合列: '{}'", col)));
+                    return Err(AppError::validation(
+                        "autoapi_invalid_aggregate_column",
+                        format!("非法的聚合列: '{}'", col),
+                        serde_json::json!({ "column": col }),
+                    ));
                 }
                 if !col_allowed(col) {
-                    return Err(AppError::Forbidden(format!("无权访问列: {}", col)));
+                    return Err(AppError::forbidden_coded(
+                        "autoapi_column_access_forbidden",
+                        format!("无权访问列: {}", col),
+                        serde_json::json!({ "column": col }),
+                    ));
                 }
                 let lf = func.to_ascii_lowercase();
                 let alias = format!("{}_{}", col, lf);
@@ -811,10 +823,18 @@ fn build_aggregate_select(select: &str, allowed: &Option<Vec<String>>) -> Result
             _ => {
                 // 纯列名 → 分组列
                 if !is_valid_identifier(t) {
-                    return Err(AppError::InvalidQuery(format!("非法的字段: '{}'", t)));
+                    return Err(AppError::validation(
+                        "autoapi_invalid_field_name",
+                        format!("非法的字段: '{}'", t),
+                        serde_json::json!({ "field": t }),
+                    ));
                 }
                 if !col_allowed(t) {
-                    return Err(AppError::Forbidden(format!("无权访问列: {}", t)));
+                    return Err(AppError::forbidden_coded(
+                        "autoapi_column_access_forbidden",
+                        format!("无权访问列: {}", t),
+                        serde_json::json!({ "column": t }),
+                    ));
                 }
                 group_cols.push(format!("\"{}\"", t));
             }
@@ -822,8 +842,10 @@ fn build_aggregate_select(select: &str, allowed: &Option<Vec<String>>) -> Result
     }
 
     if aggregates.is_empty() {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "autoapi_no_aggregate_in_select",
             "select 中未解析到聚合函数".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -968,9 +990,11 @@ fn database_id_from_headers(headers: &HeaderMap) -> Result<i32> {
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.trim().parse::<i32>().ok())
         .ok_or_else(|| {
-            AppError::InvalidQuery(
+            AppError::validation(
+                "autoapi_missing_database_id_header",
                 "无法解析 database_slug：缺少有效的 X-Database-Id（中间件未注入或 slug 解析失败）"
                     .to_string(),
+                serde_json::json!({}),
             )
         })
 }
@@ -1534,7 +1558,11 @@ pub async fn get_record(
     let result = row.map(|row| row_to_json(&row));
 
     if result.is_none() {
-        return Err(AppError::NotFound(format!("记录 {} 不存在", id)));
+        return Err(AppError::not_found_coded(
+            "autoapi_record_not_found",
+            format!("记录 {} 不存在", id),
+            serde_json::json!({ "id": id }),
+        ));
     }
 
     let response = ApiResponse {
@@ -1673,10 +1701,11 @@ fn parse_on_conflict_columns(raw: &Option<String>) -> Result<Vec<String>> {
             continue;
         }
         if !is_valid_identifier(c) {
-            return Err(AppError::InvalidQuery(format!(
-                "非法的 on_conflict 列名: '{}'",
-                c
-            )));
+            return Err(AppError::validation(
+                "autoapi_invalid_on_conflict_column",
+                format!("非法的 on_conflict 列名: '{}'", c),
+                serde_json::json!({ "column": c }),
+            ));
         }
         cols.push(c.to_string());
     }
@@ -1806,15 +1835,21 @@ pub async fn create_record(
             let mut v = Vec::with_capacity(arr.len());
             for item in arr {
                 let o = item.as_object().ok_or_else(|| {
-                    AppError::InvalidQuery("批量插入的数组元素必须是 JSON 对象".to_string())
+                    AppError::validation(
+                        "autoapi_bulk_insert_element_not_object",
+                        "批量插入的数组元素必须是 JSON 对象".to_string(),
+                        serde_json::json!({}),
+                    )
                 })?;
                 v.push(o);
             }
             v
         }
         _ => {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "autoapi_body_must_be_object_or_array",
                 "请求体必须是 JSON 对象或对象数组".to_string(),
+                serde_json::json!({}),
             ))
         }
     };
@@ -1831,19 +1866,27 @@ pub async fn create_record(
     );
 
     if rows.is_empty() {
-        return Err(AppError::InvalidQuery("请求体不能为空".to_string()));
+        return Err(AppError::validation("autoapi_body_empty", "请求体不能为空".to_string(), serde_json::json!({})));
     }
     // 上限保护：单请求过大既撑爆内存也超 PG 参数上限的多 chunk，仍建议客户端分批。
     const MAX_BULK_ROWS: usize = 50_000;
     if rows.len() > MAX_BULK_ROWS {
-        return Err(AppError::InvalidQuery(format!(
-            "单次批量插入行数不能超过 {}（当前 {}）",
-            MAX_BULK_ROWS,
-            rows.len()
-        )));
+        return Err(AppError::validation(
+            "autoapi_bulk_insert_too_many_rows",
+            format!(
+                "单次批量插入行数不能超过 {}（当前 {}）",
+                MAX_BULK_ROWS,
+                rows.len()
+            ),
+            serde_json::json!({ "max": MAX_BULK_ROWS, "count": rows.len() }),
+        ));
     }
     if rows.iter().any(|o| o.is_empty()) {
-        return Err(AppError::InvalidQuery("批量插入的对象不能为空".to_string()));
+        return Err(AppError::validation(
+            "autoapi_bulk_insert_object_empty",
+            "批量插入的对象不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     validate_auth(
@@ -1863,7 +1906,11 @@ pub async fn create_record(
     for row in &rows {
         for key in row.keys() {
             if !is_valid_identifier(key) {
-                return Err(AppError::InvalidQuery(format!("非法的列名: '{}'", key)));
+                return Err(AppError::validation(
+                    "autoapi_invalid_column_name",
+                    format!("非法的列名: '{}'", key),
+                    serde_json::json!({ "column": key }),
+                ));
             }
             if !columns.iter().any(|c| c == key) {
                 columns.push(key.clone());
@@ -1876,7 +1923,11 @@ pub async fn create_record(
         if let Some(ref allowed) = p.allowed_columns {
             for key in &columns {
                 if !allowed.iter().any(|c| c == key) {
-                    return Err(AppError::Forbidden(format!("无权写入列: {}", key)));
+                    return Err(AppError::forbidden_coded(
+                        "autoapi_column_write_forbidden",
+                        format!("无权写入列: {}", key),
+                        serde_json::json!({ "column": key }),
+                    ));
                 }
             }
         }
@@ -1887,10 +1938,11 @@ pub async fn create_record(
         for cond in &p.row_conditions {
             for row in &rows {
                 if let Err(e) = check_insert_satisfies_row_condition(row, cond) {
-                    return Err(AppError::Forbidden(format!(
-                        "INSERT 数据未满足行级权限约束: {}",
-                        e
-                    )));
+                    return Err(AppError::forbidden_coded(
+                        "autoapi_insert_row_condition_violation",
+                        format!("INSERT 数据未满足行级权限约束: {}", e),
+                        serde_json::json!({ "reason": e }),
+                    ));
                 }
             }
         }
@@ -1901,9 +1953,11 @@ pub async fn create_record(
     let conflict = match parse_prefer_resolution(&headers) {
         Some("merge") => {
             if on_conflict_cols.is_empty() {
-                return Err(AppError::InvalidQuery(
+                return Err(AppError::validation(
+                    "autoapi_merge_requires_on_conflict",
                     "resolution=merge-duplicates 需要通过 ?on_conflict=col1,col2 指定冲突键"
                         .to_string(),
+                    serde_json::json!({}),
                 ));
             }
             ConflictClause::DoUpdate {
@@ -1961,7 +2015,11 @@ pub async fn create_record(
             }
             Err(e) => {
                 cb_record_failure(&cb_mgr, database_id);
-                return Err(AppError::InvalidQuery(format!("创建记录失败: {}", e)));
+                return Err(AppError::validation(
+                    "autoapi_create_record_failed",
+                    format!("创建记录失败: {}", e),
+                    serde_json::json!({ "error": e.to_string() }),
+                ));
             }
         }
     }
@@ -2058,10 +2116,10 @@ pub async fn update_record(
 
     let obj = body
         .as_object()
-        .ok_or_else(|| AppError::InvalidQuery("请求体必须是 JSON 对象".to_string()))?;
+        .ok_or_else(|| AppError::validation("autoapi_body_must_be_object", "请求体必须是 JSON 对象".to_string(), serde_json::json!({})))?;
 
     if obj.is_empty() {
-        return Err(AppError::InvalidQuery("请求体不能为空".to_string()));
+        return Err(AppError::validation("autoapi_body_empty", "请求体不能为空".to_string(), serde_json::json!({})));
     }
 
     // 列级权限：禁止更新 allowed_columns 之外的列（若已配置）
@@ -2069,7 +2127,11 @@ pub async fn update_record(
         if let Some(ref allowed) = p.allowed_columns {
             for key in obj.keys() {
                 if !allowed.iter().any(|c| c == key) {
-                    return Err(AppError::Forbidden(format!("无权更新列: {}", key)));
+                    return Err(AppError::forbidden_coded(
+                        "autoapi_column_update_forbidden",
+                        format!("无权更新列: {}", key),
+                        serde_json::json!({ "column": key }),
+                    ));
                 }
             }
         }
@@ -2135,11 +2197,21 @@ pub async fn update_record(
         }
         Err(e) => {
             cb_record_failure(&cb_mgr, database_id);
-            return Err(AppError::InvalidQuery(format!("更新记录失败: {}", e)));
+            return Err(AppError::validation(
+                "autoapi_update_record_failed",
+                format!("更新记录失败: {}", e),
+                serde_json::json!({ "error": e.to_string() }),
+            ));
         }
     };
 
-    let row = row.ok_or_else(|| AppError::NotFound(format!("记录 {} 不存在或您无权访问", id)))?;
+    let row = row.ok_or_else(|| {
+        AppError::not_found_coded(
+            "autoapi_record_not_found_or_forbidden",
+            format!("记录 {} 不存在或您无权访问", id),
+            serde_json::json!({ "id": id }),
+        )
+    })?;
 
     let result = row_to_json(&row);
 
@@ -2252,11 +2324,21 @@ pub async fn delete_record(
         }
         Err(e) => {
             cb_record_failure(&cb_mgr, database_id);
-            return Err(AppError::InvalidQuery(format!("删除记录失败: {}", e)));
+            return Err(AppError::validation(
+                "autoapi_delete_record_failed",
+                format!("删除记录失败: {}", e),
+                serde_json::json!({ "error": e.to_string() }),
+            ));
         }
     };
 
-    let row = row.ok_or_else(|| AppError::NotFound(format!("记录 {} 不存在或您无权访问", id)))?;
+    let row = row.ok_or_else(|| {
+        AppError::not_found_coded(
+            "autoapi_record_not_found_or_forbidden",
+            format!("记录 {} 不存在或您无权访问", id),
+            serde_json::json!({ "id": id }),
+        )
+    })?;
 
     let result = row_to_json(&row);
 
@@ -2337,16 +2419,20 @@ pub async fn update_records(
     // body 必须是非空 JSON object
     let obj = body
         .as_object()
-        .ok_or_else(|| AppError::InvalidQuery("请求体必须是 JSON 对象".to_string()))?;
+        .ok_or_else(|| AppError::validation("autoapi_body_must_be_object", "请求体必须是 JSON 对象".to_string(), serde_json::json!({})))?;
     if obj.is_empty() {
-        return Err(AppError::InvalidQuery("请求体不能为空".to_string()));
+        return Err(AppError::validation("autoapi_body_empty", "请求体不能为空".to_string(), serde_json::json!({})));
     }
     // 列级权限：禁止更新 allowed_columns 之外的列（若已配置）
     if let Some(ref p) = perm {
         if let Some(ref allowed) = p.allowed_columns {
             for key in obj.keys() {
                 if !allowed.iter().any(|c| c == key) {
-                    return Err(AppError::Forbidden(format!("无权更新列: {}", key)));
+                    return Err(AppError::forbidden_coded(
+                        "autoapi_column_update_forbidden",
+                        format!("无权更新列: {}", key),
+                        serde_json::json!({ "column": key }),
+                    ));
                 }
             }
         }
@@ -2357,9 +2443,11 @@ pub async fn update_records(
     let query_string = raw_query.0.as_deref().unwrap_or("");
     let filters = parse_filters_from_query(query_string);
     if filters.is_empty() {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "autoapi_bulk_update_missing_filter",
             "批量更新必须提供至少一个过滤条件（如 ?id.eq=123 或 ?id.in=1,2,3），禁止裸 PATCH 整表"
                 .to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -2497,7 +2585,11 @@ pub async fn update_records(
         }
         Err(e) => {
             cb_record_failure(&cb_mgr, database_id);
-            return Err(AppError::InvalidQuery(format!("批量更新失败: {}", e)));
+            return Err(AppError::validation(
+                "autoapi_bulk_update_failed",
+                format!("批量更新失败: {}", e),
+                serde_json::json!({ "error": e.to_string() }),
+            ));
         }
     };
 
@@ -2575,9 +2667,11 @@ pub async fn delete_records(
     let query_string = raw_query.0.as_deref().unwrap_or("");
     let filters = parse_filters_from_query(query_string);
     if filters.is_empty() {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "autoapi_bulk_delete_missing_filter",
             "批量删除必须提供至少一个过滤条件（如 ?id.eq=123 或 ?id.in=1,2,3），禁止裸 DELETE 整表"
                 .to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -2701,7 +2795,11 @@ pub async fn delete_records(
         }
         Err(e) => {
             cb_record_failure(&cb_mgr, database_id);
-            return Err(AppError::InvalidQuery(format!("批量删除失败: {}", e)));
+            return Err(AppError::validation(
+                "autoapi_bulk_delete_failed",
+                format!("批量删除失败: {}", e),
+                serde_json::json!({ "error": e.to_string() }),
+            ));
         }
     };
 
@@ -3023,7 +3121,7 @@ pub async fn create_api_key(
 
     let name = req["name"]
         .as_str()
-        .ok_or_else(|| AppError::InvalidQuery("缺少 API Key 名称".to_string()))?;
+        .ok_or_else(|| AppError::validation("autoapi_missing_api_key_name", "缺少 API Key 名称".to_string(), serde_json::json!({})))?;
 
     let tenant_id: i32 =
         sqlx::query_scalar("SELECT tenant_id FROM management.tenant_databases WHERE id = $1")
@@ -3129,7 +3227,11 @@ pub async fn delete_api_key(
                 "message": format!("API Key '{}' 已删除", name)
             })))
         }
-        None => Err(AppError::NotFound(format!("API Key {} 不存在", key_id))),
+        None => Err(AppError::not_found_coded(
+            "autoapi_api_key_not_found",
+            format!("API Key {} 不存在", key_id),
+            serde_json::json!({ "id": key_id }),
+        )),
     }
 }
 
@@ -3313,7 +3415,7 @@ mod tests {
     fn sql_with_session_user_wraps_select() {
         let out = sql_with_session_user(r#"SELECT * FROM "public"."t" WHERE "id" = $1"#, 42);
         assert!(out.starts_with(
-            "WITH __onebase_sess AS (SELECT set_config('app.current_user_id', '42', true))"
+            "WITH __planeos_sess AS (SELECT set_config('app.current_user_id', '42', true))"
         ));
         assert!(out.contains(r#"SELECT * FROM "public"."t" WHERE "id" = $1"#));
     }
@@ -3321,7 +3423,7 @@ mod tests {
     #[test]
     fn sql_with_session_user_merges_existing_with() {
         let out = sql_with_session_user("WITH x AS (SELECT 1) SELECT * FROM x", 0);
-        assert!(out.starts_with("WITH __onebase_sess AS ("));
+        assert!(out.starts_with("WITH __planeos_sess AS ("));
         assert!(out.contains(", x AS (SELECT 1) SELECT * FROM x"));
     }
 
@@ -3447,6 +3549,10 @@ pub async fn update_api_key(
             "message": if active { "API Key 已启用" } else { "API Key 已禁用" }
         })))
     } else {
-        Err(AppError::InvalidQuery("请提供 is_active 参数".to_string()))
+        Err(AppError::validation(
+            "autoapi_missing_is_active_param",
+            "请提供 is_active 参数".to_string(),
+            serde_json::json!({}),
+        ))
     }
 }

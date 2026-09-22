@@ -71,8 +71,13 @@ pub async fn proxy(
         proxy_common::build_upstream_url(&token.connection.base_url, &path_normalized, uri.query());
 
     // axum http 1.x → reqwest http 0.2 桥接
-    let req_method = ReqMethod::from_bytes(method.as_str().as_bytes())
-        .map_err(|e| AppError::InvalidQuery(format!("非法 HTTP method `{}`: {}", method, e)))?;
+    let req_method = ReqMethod::from_bytes(method.as_str().as_bytes()).map_err(|e| {
+        AppError::validation(
+            "esproxy_invalid_http_method",
+            format!("非法 HTTP method `{}`: {}", method, e),
+            serde_json::json!({ "method": method.as_str(), "error": e.to_string() }),
+        )
+    })?;
     let mut upstream_req = client.request(req_method, &upstream_url).body(body);
     upstream_req = upstream_req.headers(filter_request_headers(&headers));
     if let Some(h) = auth_header {

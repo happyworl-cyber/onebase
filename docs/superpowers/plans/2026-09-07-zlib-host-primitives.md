@@ -4,7 +4,7 @@
 
 **Goal:** Give Lua and JS workflow code nodes `zlib.compress` / `zlib.decompress` (RFC 1950) so authors can self-sign Tencent IM UserSig and reuse compression elsewhere.
 
-**Architecture:** A stateless Rust module (`zlib_primitives`) implements RFC 1950 via `flate2` and is bound into the Lua sandbox as a global `zlib` table. JS does not go through the host IPC bridge: `onebase-runtime` injects the same API names on top of Node `deflateSync` / `inflateSync`. Both sides cap input and decompressed output at 8 MiB.
+**Architecture:** A stateless Rust module (`zlib_primitives`) implements RFC 1950 via `flate2` and is bound into the Lua sandbox as a global `zlib` table. JS does not go through the host IPC bridge: `planeos-runtime` injects the same API names on top of Node `deflateSync` / `inflateSync`. Both sides cap input and decompressed output at 8 MiB.
 
 **Tech Stack:** Rust `flate2` (default rust backend), mlua 0.11, Node built-in `zlib`, existing `crypto.hmac_sha256` / `crypto.base64_encode` (unchanged).
 
@@ -19,7 +19,7 @@
 - Do not add `tencent_im.*` or generate/verify UserSig in the engine
 - Do not change `crypto.hmac_sha256` (still returns hex)
 - Do not modify `src/js_host_bridge.rs`, `src/py_runner.rs`, or `src/crypto_primitives.rs`
-- JS `zlib` must work with `ONEBASE_HOST_SOCK` unset
+- JS `zlib` must work with `PLANEOS_HOST_SOCK` unset
 - JS input is `string | Buffer`; JS output is `Buffer`
 - Lua input/output are binary strings (`mlua::String`)
 - Do not commit unless the user asked; skip `git commit` steps if this session did not request commits, but still finish the code and verification
@@ -34,7 +34,7 @@
 | `src/main.rs` | `mod zlib_primitives` (bin crate also compiles `lua_builtins.rs`) |
 | `Cargo.toml` / `Cargo.lock` | `flate2 = "1"` |
 | `src/lua_builtins.rs` | `register_zlib_module`, Lua tests |
-| `js-runtime/onebase-runtime/index.js` | global `zlib` via Node `zlib` |
+| `js-runtime/planeos-runtime/index.js` | global `zlib` via Node `zlib` |
 | `src/mcp_tools.rs` | `node_spec` docs + UserSig recipe |
 
 ---
@@ -68,7 +68,7 @@ Create `src/zlib_primitives.rs`:
 ```rust
 //! RFC 1950 zlib 压缩 / 解压，供 Lua `zlib.*` builtins 使用。
 //!
-//! JS 工作流不走本模块：`onebase-runtime` 直接调 Node `zlib.deflateSync`。
+//! JS 工作流不走本模块：`planeos-runtime` 直接调 Node `zlib.deflateSync`。
 
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
@@ -316,7 +316,7 @@ Run: `cargo test --lib test_zlib -- --nocapture`
 
 Expected: FAIL. Typical message is a Lua error that `zlib` is nil / not a table (`attempt to index a nil value` or similar), because `register_builtins` never set the global.
 
-Also add `mod zlib_primitives;` to `src/main.rs` now (next to `mod crypto_primitives;`) so a later `cargo build --bin onebase` can compile `lua_builtins` against `crate::zlib_primitives`. If you skip this, Task 2 implementation will fail to compile the bin crate.
+Also add `mod zlib_primitives;` to `src/main.rs` now (next to `mod crypto_primitives;`) so a later `cargo build --bin planeos` can compile `lua_builtins` against `crate::zlib_primitives`. If you skip this, Task 2 implementation will fail to compile the bin crate.
 
 - [ ] **Step 3: Register the Lua module**
 
@@ -383,8 +383,8 @@ EOF
 ### Task 3: JS runtime `zlib` (no IPC)
 
 **Files:**
-- Modify: `js-runtime/onebase-runtime/index.js`
-- Modify: `src/zlib_primitives.rs` (add one more `#[test]` that `--require`s the runtime with `ONEBASE_HOST_SOCK` unset)
+- Modify: `js-runtime/planeos-runtime/index.js`
+- Modify: `src/zlib_primitives.rs` (add one more `#[test]` that `--require`s the runtime with `PLANEOS_HOST_SOCK` unset)
 
 **Interfaces:**
 - Consumes: Node built-in `require('zlib')` (`deflateSync` / `inflateSync`)
@@ -405,7 +405,7 @@ In `src/zlib_primitives.rs` `mod tests`, add (keep the existing `use std::proces
             return;
         }
         let runtime = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("js-runtime/onebase-runtime/index.js");
+            .join("js-runtime/planeos-runtime/index.js");
         let output = Command::new("node")
             .arg("--require")
             .arg(&runtime)
@@ -425,13 +425,13 @@ In `src/zlib_primitives.rs` `mod tests`, add (keep the existing `use std::proces
                   process.stderr.write('binary mismatch');
                   process.exit(1);
                 }
-                if (process.env.ONEBASE_HOST_SOCK) {
+                if (process.env.PLANEOS_HOST_SOCK) {
                   process.stderr.write('host sock should be unset');
                   process.exit(1);
                 }
                 "#,
             )
-            .env_remove("ONEBASE_HOST_SOCK")
+            .env_remove("PLANEOS_HOST_SOCK")
             .output()
             .expect("node starts");
         assert!(
@@ -450,9 +450,9 @@ Run: `cargo test --lib js_runtime_zlib_roundtrip_without_host_sock -- --nocaptur
 
 Expected: if `node` is missing, the test returns early and PASSes — install/use Node before treating this task done. If `node` is present, FAIL with `zlib global missing` on stderr.
 
-- [ ] **Step 3: Inject `zlib` in `onebase-runtime`**
+- [ ] **Step 3: Inject `zlib` in `planeos-runtime`**
 
-At the top of `js-runtime/onebase-runtime/index.js`, after `'use strict';` and the file comment, add:
+At the top of `js-runtime/planeos-runtime/index.js`, after `'use strict';` and the file comment, add:
 
 ```javascript
 const nodeZlib = require('zlib');
@@ -508,7 +508,7 @@ Expected: all PASS (Node-dependent tests skip only when `node` is absent).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add js-runtime/onebase-runtime/index.js src/zlib_primitives.rs
+git add js-runtime/planeos-runtime/index.js src/zlib_primitives.rs
 git commit -m "$(cat <<'EOF'
 feat(js): expose local zlib.compress/decompress in workflow runtime.
 
@@ -602,6 +602,6 @@ EOF
 | No `tencent_im.*`, HMAC stays hex | Task 4 recipe only |
 | No `js_host_bridge` / Python / `crypto_primitives` edits | File map + constraints |
 | Rust ↔ Node interop (not byte-identical compress) | Task 1 `rust_compress_node_inflate_interop` |
-| JS works without host socket | Task 3 test `env_remove("ONEBASE_HOST_SOCK")` |
+| JS works without host socket | Task 3 test `env_remove("PLANEOS_HOST_SOCK")` |
 | `node_spec` + UserSig recipe | Task 4 |
 | JS `Buffer` must not go through host `base64_encode` | Task 4 warning |

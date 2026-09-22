@@ -187,8 +187,8 @@ const MIGRATIONS: &[(&str, &str)] = &[
         include_str!("../migrations/031_project_env_vars.sql"),
     ),
     (
-        "032 sso mind provider",
-        include_str!("../migrations/032_sso_mind_provider.sql"),
+        "032 sso provider types",
+        include_str!("../migrations/032_sso_provider_types.sql"),
     ),
     (
         "033 sso provider auto role",
@@ -327,6 +327,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         include_str!("../migrations/063_add_max_accounts_per_tenant.sql"),
     ),
     (
+        "063.1 partner timestamps tz",
+        include_str!("../migrations/063_1_partner_timestamps_tz.sql"),
+    ),
+    (
         "064 maintenance fee support",
         include_str!("../migrations/064_add_maintenance_fee_support.sql"),
     ),
@@ -370,6 +374,14 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "074 workflow updated_at no blind trigger",
         include_str!("../migrations/074_workflow_updated_at_no_blind_trigger.sql"),
     ),
+    (
+        "075 demo seed naming",
+        include_str!("../migrations/075_demo_seed_naming.sql"),
+    ),
+    (
+        "076 sso drop mind provider",
+        include_str!("../migrations/076_sso_drop_mind_provider.sql"),
+    ),
 ];
 
 /// API Keys 表（内联 SQL，历史上由独立的 migrate_api_keys 维护，这里随主序列一起跑）。
@@ -400,7 +412,7 @@ const API_KEYS_SQL: &str = r#"
 "#;
 
 /// 跨实例互斥用的 advisory lock key（任意固定常量，只要全集群一致即可）。
-/// 取自 "onebase.migrate" 的语义化魔数，避免与业务可能用到的 advisory lock 撞键。
+/// 取自 "planeos.migrate" 的语义化魔数，避免与业务可能用到的 advisory lock 撞键。
 const MIGRATION_LOCK_KEY: i64 = 0x6372_6d67_7261_7465_u64 as i64;
 
 /// 执行完整的管理库迁移序列，**幂等**，可在每次进程启动时安全重复调用。
@@ -443,7 +455,7 @@ async fn run_all_inner(pool: &PgPool) -> MigrationStats {
     for (name, sql) in MIGRATIONS {
         let stats = run_sql_script(pool, name, sql).await;
         tracing::info!(
-            target: "onebase::migrate",
+            target: "planeos::migrate",
             step = name, ok = stats.ok, skipped = stats.skipped, errors = stats.errors,
             "迁移步骤完成"
         );
@@ -452,7 +464,7 @@ async fn run_all_inner(pool: &PgPool) -> MigrationStats {
 
     let api_keys = run_sql_script(pool, "API keys table", API_KEYS_SQL).await;
     tracing::info!(
-        target: "onebase::migrate",
+        target: "planeos::migrate",
         step = "API keys table", ok = api_keys.ok, skipped = api_keys.skipped, errors = api_keys.errors,
         "迁移步骤完成"
     );

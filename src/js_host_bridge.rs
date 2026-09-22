@@ -352,14 +352,14 @@ mod tests {
         .expect("bridge starts");
 
         let runtime =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("js-runtime/onebase-runtime/index.js");
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("js-runtime/planeos-runtime/index.js");
         let output = tokio::task::spawn_blocking(move || {
             Command::new("node")
                 .arg("--require")
                 .arg(runtime)
                 .arg("-e")
                 .arg("process.stdout.write(env.get('FOO'))")
-                .env("ONEBASE_HOST_SOCK", &socket_path)
+                .env("PLANEOS_HOST_SOCK", &socket_path)
                 .output()
                 .expect("node starts")
         })
@@ -406,14 +406,14 @@ mod tests {
             Err(error) => panic!("bridge starts: {error}"),
         };
         let runtime =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("js-runtime/onebase-runtime/index.js");
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("js-runtime/planeos-runtime/index.js");
         let output = tokio::task::spawn_blocking(move || {
             Command::new("node")
                 .arg("--require")
                 .arg(runtime)
                 .arg("-e")
                 .arg("process.stdout.write(String(cred.get('crm','token')))")
-                .env("ONEBASE_HOST_SOCK", &socket_path)
+                .env("PLANEOS_HOST_SOCK", &socket_path)
                 .output()
                 .expect("node starts")
         })
@@ -468,7 +468,7 @@ mod tests {
         .expect("bridge starts");
 
         let runtime =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("js-runtime/onebase-runtime/index.js");
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("js-runtime/planeos-runtime/index.js");
         // Node 25 wraps `node -e` as `(crypto => { ... })(require('node:crypto'))`,
         // which would shadow the host `crypto` global. Workflow files don't.
         let script = format!(
@@ -483,7 +483,7 @@ mod tests {
                 .arg(runtime)
                 .arg("-e")
                 .arg(script)
-                .env("ONEBASE_HOST_SOCK", &socket_path)
+                .env("PLANEOS_HOST_SOCK", &socket_path)
                 .output()
                 .expect("node starts")
         })

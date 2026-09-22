@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import {
   wfCredentialAPI,
   wfDatasourceAPI,
@@ -32,10 +33,10 @@ const DS_TYPE_LABELS: Record<WfDatasourceType, string> = {
   mysql: 'MySQL',
 }
 
-const STATUS_META: Record<WfDatasourceStatus, { label: string; cls: string; dot: string }> = {
-  connected: { label: '已连通', cls: 'bg-emerald-50 text-emerald-600', dot: 'bg-emerald-500' },
-  untested: { label: '未测试', cls: 'bg-gray-100 text-gray-500', dot: 'bg-gray-400' },
-  failed: { label: '连接失败', cls: 'bg-red-50 text-red-600', dot: 'bg-red-500' },
+const STATUS_META: Record<WfDatasourceStatus, { labelKey: string; cls: string; dot: string }> = {
+  connected: { labelKey: 'statusConnected', cls: 'bg-emerald-50 text-emerald-600', dot: 'bg-emerald-500' },
+  untested: { labelKey: 'statusUntested', cls: 'bg-gray-100 text-gray-500', dot: 'bg-gray-400' },
+  failed: { labelKey: 'statusFailed', cls: 'bg-red-50 text-red-600', dot: 'bg-red-500' },
 }
 
 interface DsForm {
@@ -64,6 +65,7 @@ export default function DatasourcesPage() {
   const params = useParams<{ projectId: string }>()
   const projectId = parseInt(params.projectId, 10)
   const caps = useCurrentProjectCapabilities()
+  const t = useTranslations('wsDatasources')
   const notify = useNotification()
 
   const [datasources, setDatasources] = useState<WfDatasource[] | null>(null)
@@ -96,13 +98,13 @@ export default function DatasourcesPage() {
   }, [projectId, caps.canManageEvents])
 
   if (!caps.canManageEvents) {
-    return <ForbiddenPlaceholder reason="数据源管理需要项目 admin 或 owner 角色（或平台超管）" />
+    return <ForbiddenPlaceholder reason={t('forbidden')} />
   }
 
   // ── 数据源：保存 ──
   const handleDsSave = async () => {
     if (!dsForm) return
-    if (!dsForm.name.trim()) return notify.warning('请填写数据源名称')
+    if (!dsForm.name.trim()) return notify.warning(t('errName'))
     setSaving(true)
     try {
       const body = {
@@ -117,11 +119,11 @@ export default function DatasourcesPage() {
       if (dsForm.editing) {
         const res = await wfDatasourceAPI.update(projectId, dsForm.editing.id, body)
         setDatasources((prev) => prev?.map((d) => (d.id === res.data.id ? res.data : d)) ?? null)
-        notify.success(`已更新数据源 ${res.data.name}`)
+        notify.success(t('updated', { name: res.data.name }))
       } else {
         const res = await wfDatasourceAPI.create(projectId, body)
         setDatasources((prev) => (prev ? [...prev, res.data] : [res.data]))
-        notify.success(`已新建数据源 ${res.data.name}`)
+        notify.success(t('created', { name: res.data.name }))
       }
       setDsForm(null)
     } catch (err: any) {
@@ -132,11 +134,11 @@ export default function DatasourcesPage() {
   }
 
   const handleDsDelete = async (d: WfDatasource) => {
-    if (!window.confirm(`确认删除数据源 ${d.name} 吗？`)) return
+    if (!window.confirm(t('confirmDelete', { name: d.name }))) return
     try {
       await wfDatasourceAPI.remove(projectId, d.id)
       setDatasources((prev) => prev?.filter((x) => x.id !== d.id) ?? null)
-      notify.success(`已删除 ${d.name}`)
+      notify.success(t('deleted', { name: d.name }))
     } catch (err: any) {
       notify.error(err)
     }
@@ -153,8 +155,8 @@ export default function DatasourcesPage() {
             : x,
         ) ?? null,
       )
-      if (res.data.ok) notify.success(`${d.name} 连接成功`)
-      else notify.warning(`${d.name} 连接失败：${res.data.error ?? '未知错误'}`)
+      if (res.data.ok) notify.success(t('testOk', { name: d.name }))
+      else notify.warning(t('testFail', { name: d.name, err: res.data.error ?? t('unknownErr') }))
     } catch (err: any) {
       notify.error(err)
     } finally {
@@ -171,11 +173,11 @@ export default function DatasourcesPage() {
     <div className="p-6 max-w-6xl space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold text-gray-900">数据源</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            配置工作流节点可引用的数据库连接与凭证。数据源在项目内共享；工作流的{' '}
-            <code className="px-1 bg-gray-100 rounded">数据库查询 / 写入</code> 节点选择数据源后，
-            执行时使用其连接，而非工作流绑定的默认库。
+            {t.rich('subtitle', {
+              code: (c) => <code className="px-1 bg-gray-100 rounded">{c}</code>,
+            })}
           </p>
         </div>
         <button
@@ -183,13 +185,13 @@ export default function DatasourcesPage() {
           className="btn-primary flex-shrink-0 whitespace-nowrap"
         >
           <i className="fas fa-plus mr-2" />
-          新增数据源
+          {t('addDs')}
         </button>
       </div>
 
       {loading && (
         <div className="py-16 text-center text-gray-400">
-          <i className="fas fa-spinner fa-spin mr-2" />加载中...
+          <i className="fas fa-spinner fa-spin mr-2" />{t('loading')}
         </div>
       )}
 
@@ -199,20 +201,20 @@ export default function DatasourcesPage() {
           <table className="min-w-full text-sm">
             <thead className="bg-gray-50 text-xs uppercase text-gray-500 tracking-wider">
               <tr>
-                <th className="px-5 py-3 text-left font-medium">名称</th>
-                <th className="px-5 py-3 text-left font-medium">类型</th>
-                <th className="px-5 py-3 text-left font-medium">连接信息</th>
-                <th className="px-5 py-3 text-left font-medium">凭证</th>
-                <th className="px-5 py-3 text-left font-medium">状态</th>
-                <th className="px-5 py-3 text-left font-medium">引用</th>
-                <th className="px-5 py-3 text-right font-medium">操作</th>
+                <th className="px-5 py-3 text-left font-medium">{t('thName')}</th>
+                <th className="px-5 py-3 text-left font-medium">{t('thType')}</th>
+                <th className="px-5 py-3 text-left font-medium">{t('thConn')}</th>
+                <th className="px-5 py-3 text-left font-medium">{t('thCred')}</th>
+                <th className="px-5 py-3 text-left font-medium">{t('thStatus')}</th>
+                <th className="px-5 py-3 text-left font-medium">{t('thRef')}</th>
+                <th className="px-5 py-3 text-right font-medium">{t('thActions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {(datasources?.length ?? 0) === 0 && (
                 <tr>
                   <td colSpan={7} className="px-5 py-12 text-center text-gray-400">
-                    暂无数据源，点击右上角「新增数据源」添加第一个。
+                    {t('emptyList')}
                   </td>
                 </tr>
               )}
@@ -246,11 +248,11 @@ export default function DatasourcesPage() {
                         title={d.status === 'failed' && d.last_test_error ? d.last_test_error : undefined}
                       >
                         <span className={`w-1.5 h-1.5 rounded-full ${st.dot}`} />
-                        {st.label}
+                        {t(st.labelKey)}
                       </span>
                     </td>
                     <td className="px-5 py-3 text-xs text-gray-600">
-                      {d.ref_count > 0 ? `${d.ref_count} 个工作流` : '0'}
+                      {d.ref_count > 0 ? t('refCount', { n: d.ref_count }) : '0'}
                     </td>
                     <td className="px-5 py-3 text-right whitespace-nowrap">
                       <button
@@ -268,20 +270,20 @@ export default function DatasourcesPage() {
                         }
                         className="text-blue-600 hover:text-blue-800 text-sm mr-3"
                       >
-                        编辑
+                        {t('edit')}
                       </button>
                       <button
                         onClick={() => handleDsTest(d)}
                         disabled={testingId === d.id}
                         className="text-gray-500 hover:text-gray-700 text-sm mr-3 disabled:opacity-40"
                       >
-                        {testingId === d.id ? <i className="fas fa-spinner fa-spin" /> : '测试'}
+                        {testingId === d.id ? <i className="fas fa-spinner fa-spin" /> : t('test')}
                       </button>
                       <button
                         onClick={() => handleDsDelete(d)}
                         className="text-red-600 hover:text-red-800 text-sm"
                       >
-                        删除
+                        {t('del')}
                       </button>
                     </td>
                   </tr>
@@ -291,16 +293,16 @@ export default function DatasourcesPage() {
           </table>
           <p className="px-5 py-3 text-xs text-gray-400 flex items-center gap-1.5 border-t border-gray-100">
             <i className="fas fa-info-circle" />
-            当前 PostgreSQL / MySQL 数据源可在 db 节点中执行 SQL；HTTP API 暂为元数据登记。
+            {t('footerNote')}
           </p>
         </div>
       )}
 
       {/* ── 数据源新建/编辑弹窗 ── */}
       {dsForm && (
-        <Modal title={dsForm.editing ? `编辑 ${dsForm.editing.name}` : '新增数据源'} onClose={() => !saving && setDsForm(null)}>
+        <Modal title={dsForm.editing ? t('modalEdit', { name: dsForm.editing.name }) : t('modalNew')} onClose={() => !saving && setDsForm(null)}>
           <div className="grid grid-cols-2 gap-4">
-            <Field label="名称" required>
+            <Field label={t('fName')} required>
               <input
                 value={dsForm.name}
                 onChange={(e) => setDsForm({ ...dsForm, name: e.target.value })}
@@ -309,15 +311,15 @@ export default function DatasourcesPage() {
                 autoFocus
               />
             </Field>
-            <Field label="描述">
+            <Field label={t('fDesc')}>
               <input
                 value={dsForm.description}
                 onChange={(e) => setDsForm({ ...dsForm, description: e.target.value })}
                 className="w-full input-base"
-                placeholder="HR 专用库"
+                placeholder={t('phDesc')}
               />
             </Field>
-            <Field label="类型" required>
+            <Field label={t('fType')} required>
               <select
                 value={dsForm.ds_type}
                 onChange={(e) => {
@@ -337,13 +339,13 @@ export default function DatasourcesPage() {
                 <option value="mysql">MySQL</option>
               </select>
             </Field>
-            <Field label="凭证">
+            <Field label={t('fCred')}>
               <select
                 value={dsForm.credential_id}
                 onChange={(e) => setDsForm({ ...dsForm, credential_id: e.target.value })}
                 className="w-full input-base"
               >
-                <option value="">— 免密 / 匿名 —</option>
+                <option value="">{t('credNone')}</option>
                 {credentials
                   ?.filter((c) => c.kind === 'basic')
                   .map((c) => (
@@ -353,16 +355,16 @@ export default function DatasourcesPage() {
                   ))}
               </select>
               <p className="text-[11px] text-gray-400 mt-1">
-                仅列出用户名/密码凭证。
+                {t('credHint')}
                 <a
                   className="text-blue-600 hover:underline ml-1"
                   href={`/workspace/${projectId}/settings/credentials`}
                 >
-                  去设置中管理
+                  {t('credManage')}
                 </a>
               </p>
             </Field>
-            <Field label="主机地址" required className="col-span-2">
+            <Field label={t('fHost')} required className="col-span-2">
               <input
                 value={dsForm.host}
                 onChange={(e) => setDsForm({ ...dsForm, host: e.target.value })}
@@ -370,7 +372,7 @@ export default function DatasourcesPage() {
                 placeholder="10.0.2.30"
               />
             </Field>
-            <Field label="端口">
+            <Field label={t('fPort')}>
               <input
                 value={dsForm.port}
                 onChange={(e) => setDsForm({ ...dsForm, port: e.target.value })}
@@ -378,7 +380,7 @@ export default function DatasourcesPage() {
                 placeholder={dsForm.ds_type === 'mysql' ? '3306' : '5432'}
               />
             </Field>
-            <Field label="库名">
+            <Field label={t('fDb')}>
               <input
                 value={dsForm.database}
                 onChange={(e) => setDsForm({ ...dsForm, database: e.target.value })}
@@ -433,6 +435,7 @@ function Field({
 }
 
 function ModalFooter({ onCancel, onSave, saving }: { onCancel: () => void; onSave: () => void; saving: boolean }) {
+  const t = useTranslations('wsDatasources')
   return (
     <div className="flex items-center justify-end gap-3 mt-6 pt-4 border-t border-gray-100">
       <button
@@ -440,10 +443,10 @@ function ModalFooter({ onCancel, onSave, saving }: { onCancel: () => void; onSav
         disabled={saving}
         className="px-4 py-2 text-sm text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
       >
-        取消
+        {t('cancel')}
       </button>
       <button onClick={onSave} disabled={saving} className="btn-primary disabled:opacity-50">
-        {saving ? '保存中...' : '保存'}
+        {saving ? t('saving') : t('save')}
       </button>
     </div>
   )

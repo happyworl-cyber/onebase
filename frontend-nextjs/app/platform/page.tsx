@@ -9,6 +9,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import api, { type ApiRequestConfig } from '@/lib/api'
 import type { Project } from '@/lib/store'
+import { useTranslations } from 'next-intl'
 
 type OrgGroup = {
   organization_id: number
@@ -17,6 +18,7 @@ type OrgGroup = {
 }
 
 export default function PlatformProjectsPage() {
+  const t = useTranslations('platformProjects')
   const router = useRouter()
   const [projects, setProjects] = useState<Project[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -28,7 +30,7 @@ export default function PlatformProjectsPage() {
       } as ApiRequestConfig)
       .then((res) => setProjects(res.data.projects || []))
       .catch((err) => {
-        setError(err?.response?.data?.error || err?.message || '加载失败')
+        setError(err?.response?.data?.error || err?.message || t('loadFailed'))
         setProjects([])
       })
   }, [])
@@ -38,7 +40,7 @@ export default function PlatformProjectsPage() {
     const map = new Map<number, OrgGroup>()
     for (const p of projects) {
       const oid = p.organization_id ?? 0
-      const oname = p.organization_name || (oid ? `组织 #${oid}` : '未归属')
+      const oname = p.organization_name || (oid ? t('orgFallback', { id: oid }) : t('noOrg'))
       let g = map.get(oid)
       if (!g) {
         g = { organization_id: oid, organization_name: oname, projects: [] }
@@ -55,9 +57,9 @@ export default function PlatformProjectsPage() {
     <div className="w-full space-y-6">
       <header className="mb-6 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">全部项目</h1>
+          <h1 className="text-xl font-semibold text-gray-900">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            按租户分组。新建租户请用「租户管理」；新建项目请进入对应租户控制台。
+            {t('subtitle')}
           </p>
         </div>
         <button
@@ -65,7 +67,7 @@ export default function PlatformProjectsPage() {
           className="btn-primary shrink-0"
           onClick={() => router.push('/platform/organizations')}
         >
-          租户管理
+          {t('tenantsBtn')}
         </button>
       </header>
 
@@ -77,11 +79,11 @@ export default function PlatformProjectsPage() {
 
       {projects === null ? (
         <div className="text-sm text-gray-400">
-          <i className="fas fa-spinner fa-spin mr-2"></i>加载中…
+          <i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}
         </div>
       ) : groups.length === 0 ? (
         <div className="bg-white border border-dashed border-gray-300 rounded-lg p-10 text-center text-sm text-gray-500">
-          暂无项目。请先在「租户管理」创建租户，再在租户控制台开通项目。
+          {t('empty')}
         </div>
       ) : (
         <div className="space-y-6">
@@ -97,7 +99,7 @@ export default function PlatformProjectsPage() {
                     {g.organization_name}
                   </div>
                   <div className="text-xs text-gray-500 mt-0.5">
-                    {g.projects.length} 个项目
+                    {t('projectCount', { count: g.projects.length })}
                     {g.organization_id ? ` · org #${g.organization_id}` : ''}
                   </div>
                 </div>
@@ -107,7 +109,7 @@ export default function PlatformProjectsPage() {
                     className="text-xs text-blue-600 hover:underline shrink-0"
                     onClick={() => router.push(`/org/${g.organization_id}`)}
                   >
-                    打开租户控制台 →
+                    {t('openConsole')}
                   </button>
                 )}
               </div>
@@ -128,7 +130,7 @@ export default function PlatformProjectsPage() {
                       className="text-xs text-blue-600 hover:underline shrink-0"
                       onClick={() => router.push(`/workspace/${p.id}`)}
                     >
-                      进入工作区
+                      {t('enterWorkspace')}
                     </button>
                   </div>
                 ))}

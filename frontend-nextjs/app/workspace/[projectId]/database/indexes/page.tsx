@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import { schemaAPI, indexAPI, IndexRow, IndexColumnInput } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
 import { useNotification } from '@/hooks/useNotification'
@@ -25,13 +26,13 @@ interface ColumnFormItem {
   nulls: '' | 'FIRST' | 'LAST'
 }
 
-const METHOD_OPTIONS: { value: IndexMethod; label: string; hint: string }[] = [
-  { value: 'btree', label: 'btree', hint: '默认；等值与范围查询' },
-  { value: 'hash', label: 'hash', hint: '只支持等值查询' },
-  { value: 'gin', label: 'gin', hint: '数组、jsonb、全文检索' },
-  { value: 'gist', label: 'gist', hint: '几何、范围、相似度' },
-  { value: 'brin', label: 'brin', hint: '超大表的稀疏索引' },
-  { value: 'spgist', label: 'spgist', hint: '空间分区树' },
+const METHOD_OPTIONS: { value: IndexMethod; label: string; hintKey: string }[] = [
+  { value: 'btree', label: 'btree', hintKey: 'hintBtree' },
+  { value: 'hash', label: 'hash', hintKey: 'hintHash' },
+  { value: 'gin', label: 'gin', hintKey: 'hintGin' },
+  { value: 'gist', label: 'gist', hintKey: 'hintGist' },
+  { value: 'brin', label: 'brin', hintKey: 'hintBrin' },
+  { value: 'spgist', label: 'spgist', hintKey: 'hintSpgist' },
 ]
 
 const emptyColumn = (): ColumnFormItem => ({
@@ -43,6 +44,7 @@ const emptyColumn = (): ColumnFormItem => ({
 })
 
 export default function IndexesPage() {
+  const tr = useTranslations('wsIndexes')
   const { currentSchema } = useAppStore()
   const notify = useNotification()
 
@@ -125,7 +127,7 @@ export default function IndexesPage() {
         setTableColumns(cols)
       })
       .catch((err) => {
-        if (!aborted) console.error('加载列失败', err)
+        if (!aborted) console.error(tr('loadColsFailed'), err)
       })
     return () => {
       aborted = true
@@ -199,35 +201,35 @@ export default function IndexesPage() {
 
   const handleCreate = async () => {
     if (!currentSchema) {
-      notify.warning('请先选择 Schema')
+      notify.warning(tr('selectSchemaFirst'))
       return
     }
     if (!form.table) {
-      notify.warning('请选择目标表')
+      notify.warning(tr('selectTargetTable'))
       return
     }
     const finalName = form.name.trim() || suggestedName
     if (!finalName) {
-      notify.warning('请填写索引名称')
+      notify.warning(tr('fillIndexName'))
       return
     }
     if (form.columns.length === 0) {
-      notify.warning('至少需要一列或一个表达式')
+      notify.warning(tr('needColOrExpr'))
       return
     }
     for (let i = 0; i < form.columns.length; i++) {
       const c = form.columns[i]
       if (c.mode === 'column' && !c.name) {
-        notify.warning(`第 ${i + 1} 列：请选择列名`)
+        notify.warning(tr('colNeedName', { i: i + 1 }))
         return
       }
       if (c.mode === 'expression' && !c.expression.trim()) {
-        notify.warning(`第 ${i + 1} 列：请填写表达式`)
+        notify.warning(tr('colNeedExpr', { i: i + 1 }))
         return
       }
     }
     if (form.method === 'hash' && form.unique) {
-      notify.warning('hash 索引不支持 UNIQUE')
+      notify.warning(tr('hashNoUnique'))
       return
     }
 
@@ -252,7 +254,7 @@ export default function IndexesPage() {
         include: form.include.length ? form.include : undefined,
         where_clause: form.whereClause.trim() || undefined,
       })
-      notify.success('索引已创建')
+      notify.success(tr('indexCreated'))
       setShowCreate(false)
       loadIndexes()
     } catch (err: any) {
@@ -270,7 +272,7 @@ export default function IndexesPage() {
         concurrent: deleteConcurrent,
         if_exists: true,
       })
-      notify.success(`索引 ${pendingDelete.name} 已删除`)
+      notify.success(tr('indexDeleted', { name: pendingDelete.name }))
       setPendingDelete(null)
       loadIndexes()
     } catch (err: any) {
@@ -284,8 +286,8 @@ export default function IndexesPage() {
     if (!text) return
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
       navigator.clipboard.writeText(text).then(
-        () => notify.success('已复制到剪贴板'),
-        () => notify.warning('复制失败'),
+        () => notify.success(tr('copied')),
+        () => notify.warning(tr('copyFail')),
       )
     }
   }
@@ -295,7 +297,7 @@ export default function IndexesPage() {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-gray-500">
         <i className="fas fa-layer-group text-3xl mb-3 text-gray-300"></i>
-        <p>请先选择 Schema</p>
+        <p>{tr('selectSchemaHint')}</p>
       </div>
     )
   }
@@ -305,27 +307,27 @@ export default function IndexesPage() {
       {/* 标题区 */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">索引管理</h2>
+          <h2 className="text-2xl font-bold text-gray-900">{tr('title')}</h2>
           <p className="text-sm text-gray-500 mt-1">
-            管理 <span className="font-mono text-gray-700">{currentSchema}</span> 下的索引
+            {tr('subtitlePre')}<span className="font-mono text-gray-700">{currentSchema}</span>{tr('subtitlePost')}
           </p>
         </div>
         <button onClick={openCreateDrawer} className="btn-primary">
           <i className="fas fa-plus mr-2"></i>
-          新建索引
+          {tr('newIndex')}
         </button>
       </div>
 
       {/* 工具条 */}
       <div className="card p-4 flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2">
-          <label className="text-sm text-gray-600">表：</label>
+          <label className="text-sm text-gray-600">{tr('tableLabel')}</label>
           <select
             value={filterTable}
             onChange={(e) => setFilterTable(e.target.value)}
             className="input-base h-9 min-w-[180px]"
           >
-            <option value="">全部表</option>
+            <option value="">{tr('allTables')}</option>
             {tables.map((t) => (
               <option key={t.table_name} value={t.table_name}>
                 {t.table_name}
@@ -337,7 +339,7 @@ export default function IndexesPage() {
           <i className="fas fa-search text-gray-400 text-sm"></i>
           <input
             type="text"
-            placeholder="按名称 / 表 / 列 过滤"
+            placeholder={tr('filterPlaceholder')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="input-base h-9 flex-1"
@@ -346,10 +348,10 @@ export default function IndexesPage() {
         <button
           onClick={loadIndexes}
           className="h-9 px-3 text-sm rounded-md border border-gray-200 hover:bg-gray-50 text-gray-600"
-          title="刷新"
+          title={tr('refresh')}
         >
           <i className="fas fa-sync-alt mr-1.5"></i>
-          刷新
+          {tr('refresh')}
         </button>
       </div>
 
@@ -362,7 +364,7 @@ export default function IndexesPage() {
         ) : filteredIndexes.length === 0 ? (
           <div className="py-16 text-center text-gray-500">
             <i className="fas fa-database text-3xl mb-3 text-gray-300"></i>
-            <p>{indexes.length === 0 ? '当前 Schema 暂无索引' : '没有匹配的索引'}</p>
+            <p>{indexes.length === 0 ? tr('emptySchema') : tr('noMatch')}</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -370,22 +372,22 @@ export default function IndexesPage() {
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    索引
+                    {tr('colIndex')}
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    表
+                    {tr('colTable')}
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    类型
+                    {tr('colType')}
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    列
+                    {tr('colCols')}
                   </th>
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    大小
+                    {tr('colSize')}
                   </th>
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    操作
+                    {tr('colActions')}
                   </th>
                 </tr>
               </thead>
@@ -434,10 +436,10 @@ export default function IndexesPage() {
                       <button
                         onClick={() => copyToClipboard(ix.definition)}
                         className="mt-1 text-[11px] text-gray-400 hover:text-blue-600"
-                        title="复制建索引 SQL"
+                        title={tr('copySqlTitle')}
                       >
                         <i className="fas fa-copy mr-1"></i>
-                        复制 SQL
+                        {tr('copySql')}
                       </button>
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-700 text-right align-top">
@@ -455,10 +457,10 @@ export default function IndexesPage() {
                             ? 'text-gray-300 cursor-not-allowed'
                             : 'text-red-600 hover:bg-red-50'
                         }`}
-                        title={ix.is_primary ? '主键索引不能从这里删除' : '删除索引'}
+                        title={ix.is_primary ? tr('pkCantDelete') : tr('deleteIndexTitle')}
                       >
                         <i className="fas fa-trash mr-1"></i>
-                        删除
+                        {tr('delete')}
                       </button>
                     </td>
                   </tr>
@@ -473,7 +475,7 @@ export default function IndexesPage() {
       <Drawer
         isOpen={showCreate}
         onClose={() => setShowCreate(false)}
-        title="新建索引"
+        title={tr('createTitle')}
         size="xl"
         footer={
           <div className="flex gap-3">
@@ -481,7 +483,7 @@ export default function IndexesPage() {
               onClick={() => setShowCreate(false)}
               className="flex-1 h-11 px-5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-all"
             >
-              取消
+              {tr('cancel')}
             </button>
             <button
               onClick={handleCreate}
@@ -491,12 +493,12 @@ export default function IndexesPage() {
               {creating ? (
                 <>
                   <i className="fas fa-spinner fa-spin mr-2"></i>
-                  创建中...
+                  {tr('creating')}
                 </>
               ) : (
                 <>
                   <i className="fas fa-plus mr-2"></i>
-                  创建索引
+                  {tr('createIndex')}
                 </>
               )}
             </button>
@@ -508,14 +510,14 @@ export default function IndexesPage() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                目标表 <span className="text-red-500">*</span>
+                {tr('targetTable')} <span className="text-red-500">*</span>
               </label>
               <select
                 value={form.table}
                 onChange={(e) => setForm({ ...form, table: e.target.value })}
                 className="w-full input-base"
               >
-                <option value="">选择表...</option>
+                <option value="">{tr('selectTable')}</option>
                 {tables.map((t) => (
                   <option key={t.table_name} value={t.table_name}>
                     {t.table_name}
@@ -525,7 +527,7 @@ export default function IndexesPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                索引名称
+                {tr('indexName')}
               </label>
               <input
                 type="text"
@@ -535,14 +537,14 @@ export default function IndexesPage() {
                 className="w-full input-base font-mono"
               />
               <p className="text-xs text-gray-500 mt-1">
-                留空将使用 <span className="font-mono">{suggestedName || 'idx_<table>_<col>'}</span>
+                {tr('leaveEmptyPre')}<span className="font-mono">{suggestedName || 'idx_<table>_<col>'}</span>
               </p>
             </div>
           </div>
 
           {/* 索引类型 */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">索引类型</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">{tr('indexType')}</label>
             <div className="grid grid-cols-3 gap-2">
               {METHOD_OPTIONS.map((m) => (
                 <button
@@ -556,7 +558,7 @@ export default function IndexesPage() {
                   }`}
                 >
                   <div className="text-sm font-mono font-semibold">{m.label}</div>
-                  <div className="text-[11px] text-gray-500 mt-0.5">{m.hint}</div>
+                  <div className="text-[11px] text-gray-500 mt-0.5">{tr(m.hintKey)}</div>
                 </button>
               ))}
             </div>
@@ -571,7 +573,7 @@ export default function IndexesPage() {
                 onChange={(e) => setForm({ ...form, unique: e.target.checked })}
                 disabled={form.method === 'hash'}
               />
-              <span>UNIQUE 唯一索引</span>
+              <span>{tr('uniqueIndex')}</span>
             </label>
             <label className="flex items-center gap-2 text-sm text-gray-700">
               <input
@@ -579,7 +581,7 @@ export default function IndexesPage() {
                 checked={form.concurrent}
                 onChange={(e) => setForm({ ...form, concurrent: e.target.checked })}
               />
-              <span>CONCURRENTLY 在线创建（不锁表，但耗时更长）</span>
+              <span>{tr('concurrentlyCreate')}</span>
             </label>
             <label className="flex items-center gap-2 text-sm text-gray-700">
               <input
@@ -595,7 +597,7 @@ export default function IndexesPage() {
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="block text-sm font-medium text-gray-700">
-                列 / 表达式 <span className="text-red-500">*</span>
+                {tr('colsExpr')} <span className="text-red-500">*</span>
               </label>
               <button
                 type="button"
@@ -603,7 +605,7 @@ export default function IndexesPage() {
                 className="text-xs text-blue-600 hover:text-blue-700"
               >
                 <i className="fas fa-plus mr-1"></i>
-                添加一列
+                {tr('addCol')}
               </button>
             </div>
             <div className="space-y-2">
@@ -624,7 +626,7 @@ export default function IndexesPage() {
                             : 'bg-white text-gray-600 hover:bg-gray-50'
                         }`}
                       >
-                        列名
+                        {tr('colName')}
                       </button>
                       <button
                         type="button"
@@ -635,7 +637,7 @@ export default function IndexesPage() {
                             : 'bg-white text-gray-600 hover:bg-gray-50'
                         }`}
                       >
-                        表达式
+                        {tr('expr')}
                       </button>
                     </div>
                     <div className="flex-1" />
@@ -644,7 +646,7 @@ export default function IndexesPage() {
                         type="button"
                         onClick={() => removeColumn(idx)}
                         className="text-gray-400 hover:text-red-500 text-sm"
-                        title="删除该列"
+                        title={tr('deleteCol')}
                       >
                         <i className="fas fa-times"></i>
                       </button>
@@ -658,7 +660,7 @@ export default function IndexesPage() {
                       disabled={!form.table}
                     >
                       <option value="">
-                        {form.table ? '选择列...' : '请先选择表'}
+                        {form.table ? tr('selectCol') : tr('selectTableFirst')}
                       </option>
                       {tableColumns.map((col) => (
                         <option key={col} value={col}>
@@ -673,7 +675,7 @@ export default function IndexesPage() {
                       onChange={(e) =>
                         updateColumn(idx, { expression: e.target.value })
                       }
-                      placeholder="例如：lower(email)"
+                      placeholder={tr('exprPlaceholder')}
                       className="w-full input-base h-9 font-mono"
                     />
                   )}
@@ -687,7 +689,7 @@ export default function IndexesPage() {
                       }
                       className="input-base h-8 text-sm"
                     >
-                      <option value="">排序：默认</option>
+                      <option value="">{tr('orderDefault')}</option>
                       <option value="ASC">ASC</option>
                       <option value="DESC">DESC</option>
                     </select>
@@ -700,7 +702,7 @@ export default function IndexesPage() {
                       }
                       className="input-base h-8 text-sm"
                     >
-                      <option value="">NULLS：默认</option>
+                      <option value="">{tr('nullsDefault')}</option>
                       <option value="FIRST">NULLS FIRST</option>
                       <option value="LAST">NULLS LAST</option>
                     </select>
@@ -714,9 +716,9 @@ export default function IndexesPage() {
           {form.method === 'btree' && tableColumns.length > 0 && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                INCLUDE 覆盖列
+                {tr('includeCols')}
                 <span className="text-xs text-gray-500 ml-2">
-                  非 key 列，仅 PostgreSQL 11+ 的 btree 支持
+                  {tr('includeHint')}
                 </span>
               </label>
               <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-2 border border-gray-200 rounded-md">
@@ -738,7 +740,7 @@ export default function IndexesPage() {
                           ? 'bg-blue-500 border-blue-500 text-white'
                           : 'bg-white border-gray-200 text-gray-700 hover:border-blue-300'
                       }`}
-                      title={isKey ? '已作为 key 列' : ''}
+                      title={isKey ? tr('alreadyKeyCol') : ''}
                     >
                       {col}
                     </button>
@@ -751,17 +753,17 @@ export default function IndexesPage() {
           {/* WHERE 部分索引 */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              WHERE 子句（部分索引，可选）
+              {tr('whereClause')}
             </label>
             <textarea
               value={form.whereClause}
               onChange={(e) => setForm({ ...form, whereClause: e.target.value })}
-              placeholder="例如：deleted_at IS NULL"
+              placeholder={tr('wherePlaceholder')}
               rows={2}
               className="w-full input-base font-mono"
             />
             <p className="text-xs text-gray-500 mt-1">
-              仅对满足该条件的行建索引，可显著降低索引大小
+              {tr('whereHint')}
             </p>
           </div>
         </div>
@@ -771,7 +773,7 @@ export default function IndexesPage() {
       <Drawer
         isOpen={!!pendingDelete}
         onClose={() => setPendingDelete(null)}
-        title="删除索引"
+        title={tr('deleteTitle')}
         size="md"
         footer={
           <div className="flex gap-3">
@@ -779,7 +781,7 @@ export default function IndexesPage() {
               onClick={() => setPendingDelete(null)}
               className="flex-1 h-11 px-5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-all"
             >
-              取消
+              {tr('cancel')}
             </button>
             <button
               onClick={handleDelete}
@@ -789,12 +791,12 @@ export default function IndexesPage() {
               {deleting ? (
                 <>
                   <i className="fas fa-spinner fa-spin mr-2"></i>
-                  删除中...
+                  {tr('deleting')}
                 </>
               ) : (
                 <>
                   <i className="fas fa-trash mr-2"></i>
-                  确认删除
+                  {tr('confirmDelete')}
                 </>
               )}
             </button>
@@ -806,16 +808,15 @@ export default function IndexesPage() {
             <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
               <p className="text-sm text-red-700">
                 <i className="fas fa-exclamation-triangle mr-2"></i>
-                即将删除索引 <span className="font-mono font-semibold">{pendingDelete.name}</span>，
-                此操作不可恢复。
+                {tr('aboutToDeletePre')}<span className="font-mono font-semibold">{pendingDelete.name}</span>{tr('aboutToDeletePost')}
               </p>
             </div>
             <div className="text-sm text-gray-600 space-y-1">
               <div>
-                表：<span className="font-mono">{pendingDelete.schema}.{pendingDelete.table}</span>
+                {tr('tablePrefix')}<span className="font-mono">{pendingDelete.schema}.{pendingDelete.table}</span>
               </div>
-              <div>类型：{pendingDelete.method}</div>
-              <div>大小：{pendingDelete.size}</div>
+              <div>{tr('typePrefix')}{pendingDelete.method}</div>
+              <div>{tr('sizePrefix')}{pendingDelete.size}</div>
             </div>
             <pre className="code-block text-xs whitespace-pre-wrap">
               {pendingDelete.definition}
@@ -826,7 +827,7 @@ export default function IndexesPage() {
                 checked={deleteConcurrent}
                 onChange={(e) => setDeleteConcurrent(e.target.checked)}
               />
-              <span>CONCURRENTLY 在线删除（不锁表）</span>
+              <span>{tr('concurrentlyDelete')}</span>
             </label>
           </div>
         )}

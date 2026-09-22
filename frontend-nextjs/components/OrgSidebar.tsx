@@ -1,9 +1,11 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { clearAuthToken } from '@/lib/auth'
+import InlineLocaleSwitcher from '@/components/InlineLocaleSwitcher'
 
 export type OrgNavId =
   | 'projects'
@@ -41,6 +43,7 @@ export default function OrgSidebar({
   showLogs,
   isSuperadmin,
 }: OrgSidebarProps) {
+  const t = useTranslations('orgSidebar')
   const router = useRouter()
   const [user, setUser] = useState<{ username?: string } | null>(null)
   const [showUserMenu, setShowUserMenu] = useState(false)
@@ -55,20 +58,28 @@ export default function OrgSidebar({
   }, [])
 
   const navItems: Array<{ id: OrgNavId; name: string; icon: string }> = [
-    { id: 'projects', name: '项目', icon: 'fa-cube' },
-    ...(showMembers ? [{ id: 'members' as const, name: '成员', icon: 'fa-users' }] : []),
+    { id: 'projects', name: t('navProjects'), icon: 'fa-cube' },
+    ...(showMembers ? [{ id: 'members' as const, name: t('navMembers'), icon: 'fa-users' }] : []),
     ...(showLogs
       ? [
-          { id: 'access' as const, name: '访问', icon: 'fa-th' },
-          { id: 'stats' as const, name: '统计', icon: 'fa-chart-pie' },
-          { id: 'monitor' as const, name: '监控', icon: 'fa-chart-line' },
-          { id: 'audit' as const, name: '审计', icon: 'fa-shield-alt' },
-          { id: 'operation-logs' as const, name: '操作日志', icon: 'fa-clipboard-list' },
-          { id: 'execution-logs' as const, name: '执行日志', icon: 'fa-stream' },
-          { id: 'security-overview' as const, name: '安全总览', icon: 'fa-lock' },
+          { id: 'access' as const, name: t('navAccess'), icon: 'fa-th' },
+          { id: 'stats' as const, name: t('navStats'), icon: 'fa-chart-pie' },
+          { id: 'monitor' as const, name: t('navMonitor'), icon: 'fa-chart-line' },
+          { id: 'audit' as const, name: t('navAudit'), icon: 'fa-shield-alt' },
+          {
+            id: 'operation-logs' as const,
+            name: t('navOperationLogs'),
+            icon: 'fa-clipboard-list',
+          },
+          { id: 'execution-logs' as const, name: t('navExecutionLogs'), icon: 'fa-stream' },
+          {
+            id: 'security-overview' as const,
+            name: t('navSecurityOverview'),
+            icon: 'fa-lock',
+          },
         ]
       : []),
-    ...(showSettings ? [{ id: 'settings' as const, name: '设置', icon: 'fa-cog' }] : []),
+    ...(showSettings ? [{ id: 'settings' as const, name: t('navSettings'), icon: 'fa-cog' }] : []),
   ]
 
   const handleLogout = () => {
@@ -88,7 +99,7 @@ export default function OrgSidebar({
           </div>
           <div className="min-w-0">
             <h1 className="text-sm font-semibold text-gray-900 truncate">PlaneOS</h1>
-            <p className="text-[11px] text-gray-500">租户控制台</p>
+            <p className="text-[11px] text-gray-500">{t('tenantConsole')}</p>
           </div>
         </div>
       </div>
@@ -145,7 +156,7 @@ export default function OrgSidebar({
           >
             <i className="fas fa-arrow-left text-sm w-4 flex-shrink-0 text-gray-400"></i>
             <span className="flex-1 text-left">
-              {isSuperadmin ? '平台租户管理' : '切换租户'}
+              {isSuperadmin ? t('platformTenantMgmt') : t('switchTenant')}
             </span>
           </button>
         </div>
@@ -164,7 +175,7 @@ export default function OrgSidebar({
           </div>
           <div className="flex-1 min-w-0 text-left">
             <p className="text-xs font-medium text-gray-900 truncate">
-              {user?.username || '用户'}
+              {user?.username || t('defaultUsername')}
             </p>
             <p className="text-[11px] text-gray-500 truncate">{userRole}</p>
           </div>
@@ -184,15 +195,18 @@ export default function OrgSidebar({
                 className="flex items-center space-x-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
               >
                 <i className="fas fa-user-cog text-xs w-4 text-gray-400"></i>
-                <span>账号设置</span>
+                <span>{t('accountSettings')}</span>
               </Link>
+              <div className="border-t border-gray-100 my-1"></div>
+              <InlineLocaleSwitcher onChosen={() => setShowUserMenu(false)} />
+              <div className="border-t border-gray-100 my-1"></div>
               <button
                 type="button"
                 onClick={handleLogout}
                 className="w-full flex items-center space-x-2.5 px-3 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
               >
                 <i className="fas fa-sign-out-alt text-xs w-4"></i>
-                <span>退出登录</span>
+                <span>{t('logout')}</span>
               </button>
             </div>
           </div>

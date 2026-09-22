@@ -15,7 +15,7 @@ export function auditWorkflowExport(ids: Array<number | null | undefined>) {
     .catch(() => {})
 }
 
-export const WORKFLOW_EXPORT_FORMAT = 'onebase.workflow'
+export const WORKFLOW_EXPORT_FORMAT = 'planeos.workflow'
 export const WORKFLOW_EXPORT_VERSION = 1
 
 type ExportableWorkflow = Pick<
@@ -109,7 +109,7 @@ export function parseImportedWorkflowFile(parsed: unknown): {
   const root = parsed as { workflow?: unknown; format?: string }
   const wf = (root?.workflow ?? parsed) as Record<string, unknown>
   if (!wf || typeof wf !== 'object' || !Array.isArray(wf.nodes)) {
-    throw new Error('文件内容不是有效的工作流定义（缺少 nodes）')
+    throw new Error('The file is not a valid workflow definition (missing nodes)')
   }
   const tax = resolveWorkflowTaxonomy({
     department: typeof wf.department === 'string' ? wf.department : null,

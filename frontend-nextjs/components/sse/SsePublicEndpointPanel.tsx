@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   ssePublicEndpointAPI,
   type SsePublicEndpoint,
@@ -48,6 +49,7 @@ interface Props {
 
 export default function SsePublicEndpointPanel({ tenantId }: Props) {
   const notify = useNotification()
+  const t = useTranslations('ssePublicEndpoint')
 
   const [endpoints, setEndpoints] = useState<SsePublicEndpoint[]>([])
   const [loading, setLoading] = useState(true)
@@ -102,18 +104,18 @@ export default function SsePublicEndpointPanel({ tenantId }: Props) {
   }
 
   const handleSave = async () => {
-    if (!form.slug.trim()) return notify.warning('请填写 slug')
-    if (!form.name.trim()) return notify.warning('请填写名称')
-    if (!form.identity_header.trim()) return notify.warning('请填写身份头')
-    if (!form.topic_template.trim()) return notify.warning('请填写 topic 模板')
-    if (!form.topic_template.includes('{identity}')) return notify.warning('topic 模板必须包含 {identity}')
-    if (!form.event_name.trim()) return notify.warning('请填写 event 名')
+    if (!form.slug.trim()) return notify.warning(t('fillSlug'))
+    if (!form.name.trim()) return notify.warning(t('fillName'))
+    if (!form.identity_header.trim()) return notify.warning(t('fillIdentityHeader'))
+    if (!form.topic_template.trim()) return notify.warning(t('fillTopicTemplate'))
+    if (!form.topic_template.includes('{identity}')) return notify.warning(t('topicMustContainIdentity'))
+    if (!form.event_name.trim()) return notify.warning(t('fillEventName'))
 
     setSaving(true)
     try {
       if (editingId == null) {
         if (tenantId == null) {
-          notify.warning('无法确定租户，无法创建')
+          notify.warning(t('cannotDetermineTenant'))
           setSaving(false)
           return
         }
@@ -126,7 +128,7 @@ export default function SsePublicEndpointPanel({ tenantId }: Props) {
           event_name: form.event_name.trim(),
         }
         await ssePublicEndpointAPI.create(payload)
-        notify.success('对外端点已创建')
+        notify.success(t('createSuccess'))
       } else {
         const payload: UpdateSsePublicEndpointInput = {
           name: form.name.trim(),
@@ -135,7 +137,7 @@ export default function SsePublicEndpointPanel({ tenantId }: Props) {
           event_name: form.event_name.trim(),
         }
         await ssePublicEndpointAPI.update(editingId, payload)
-        notify.success('对外端点已更新')
+        notify.success(t('updateSuccess'))
       }
       setDrawerOpen(false)
       load()
@@ -149,7 +151,7 @@ export default function SsePublicEndpointPanel({ tenantId }: Props) {
   const handleToggle = async (e: SsePublicEndpoint) => {
     try {
       await ssePublicEndpointAPI.update(e.id, { is_active: !e.is_active })
-      notify.success(e.is_active ? '已停用' : '已启用')
+      notify.success(e.is_active ? t('deactivateSuccess') : t('activateSuccess'))
       load()
     } catch (err) {
       notify.error(err as Error)
@@ -157,10 +159,10 @@ export default function SsePublicEndpointPanel({ tenantId }: Props) {
   }
 
   const handleDelete = async (e: SsePublicEndpoint) => {
-    if (!confirm(`确定删除对外端点 "${e.slug}"？`)) return
+    if (!confirm(t('deleteConfirm', { slug: e.slug }))) return
     try {
       await ssePublicEndpointAPI.delete(e.id)
-      notify.success('已删除')
+      notify.success(t('deleteSuccess'))
       load()
     } catch (err) {
       notify.error(err as Error)
@@ -171,13 +173,14 @@ export default function SsePublicEndpointPanel({ tenantId }: Props) {
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-4">
         <p className="text-sm text-gray-600">
-          对外订阅端点：业务前端用 <code className="font-mono text-xs">EventSource</code> 连{' '}
-          <code className="font-mono text-xs">{origin || '<平台域名>'}/events/&#123;slug&#125;</code>
-          ，身份头由网关注入；topic 必含 <code className="font-mono text-xs">{'{identity}'}</code> 保证只能订自己的。
+          {t.rich('description', {
+            code: (chunks) => <code className="font-mono text-xs">{chunks}</code>,
+            origin: origin || t('platformDomainPlaceholder'),
+          })}
         </p>
         <button onClick={openCreate} className="btn-primary whitespace-nowrap flex-shrink-0">
           <i className="fas fa-plus mr-2"></i>
-          新建对外端点
+          {t('createButton')}
         </button>
       </div>
 
@@ -189,10 +192,10 @@ export default function SsePublicEndpointPanel({ tenantId }: Props) {
         ) : visible.length === 0 ? (
           <div className="p-12 text-center text-gray-500">
             <i className="fas fa-rss text-4xl mb-4 text-gray-300"></i>
-            <p className="mb-4">暂无对外端点</p>
+            <p className="mb-4">{t('emptyState')}</p>
             <button onClick={openCreate} className="btn-primary">
               <i className="fas fa-plus mr-2"></i>
-              新建第一个端点
+              {t('createFirstButton')}
             </button>
           </div>
         ) : (
@@ -235,7 +238,7 @@ export default function SsePublicEndpointPanel({ tenantId }: Props) {
                       e.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
                     }`}
                   >
-                    {e.is_active ? '生效中' : '已停用'}
+                    {e.is_active ? t('statusActive') : t('statusInactive')}
                   </span>
                   <button
                     onClick={() => handleToggle(e)}
@@ -243,19 +246,19 @@ export default function SsePublicEndpointPanel({ tenantId }: Props) {
                       e.is_active ? 'text-yellow-700 hover:bg-yellow-50' : 'text-green-700 hover:bg-green-50'
                     }`}
                   >
-                    {e.is_active ? '停用' : '启用'}
+                    {e.is_active ? t('deactivateAction') : t('activateAction')}
                   </button>
                   <button
                     onClick={() => openEdit(e)}
                     className="px-3 py-1 text-sm text-blue-600 hover:bg-blue-50 rounded-lg"
                   >
-                    编辑
+                    {t('editAction')}
                   </button>
                   <button
                     onClick={() => handleDelete(e)}
                     className="px-3 py-1 text-sm text-red-600 hover:bg-red-50 rounded-lg"
                   >
-                    删除
+                    {t('deleteAction')}
                   </button>
                 </div>
               </div>
@@ -267,7 +270,7 @@ export default function SsePublicEndpointPanel({ tenantId }: Props) {
       <Drawer
         isOpen={drawerOpen}
         onClose={closeDrawer}
-        title={editingId == null ? '新建对外端点' : `编辑对外端点 #${editingId}`}
+        title={editingId == null ? t('createButton') : t('editTitle', { id: editingId })}
         size="lg"
         footer={
           <div className="flex gap-3">
@@ -276,10 +279,10 @@ export default function SsePublicEndpointPanel({ tenantId }: Props) {
               disabled={saving}
               className="flex-1 h-11 px-5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
             >
-              取消
+              {t('cancelAction')}
             </button>
             <button onClick={handleSave} disabled={saving} className="flex-1 btn-primary disabled:opacity-50">
-              {saving ? '保存中...' : editingId == null ? '创建' : '保存'}
+              {saving ? t('savingLabel') : editingId == null ? t('createSubmit') : t('saveSubmit')}
             </button>
           </div>
         }
@@ -287,7 +290,7 @@ export default function SsePublicEndpointPanel({ tenantId }: Props) {
         <div className="space-y-5">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              slug（URL 路径）<span className="text-red-500">*</span>
+              {t('fieldSlug')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
@@ -299,20 +302,23 @@ export default function SsePublicEndpointPanel({ tenantId }: Props) {
               disabled={editingId != null}
             />
             <p className="mt-1 text-xs text-gray-400 break-all">
-              订阅地址：{origin || '<平台域名>'}/events/{form.slug || '<slug>'}（仅小写字母/数字/连字符）
-              {editingId != null && '；slug 不可改'}
+              {t('subscribeUrlHint', {
+                origin: origin || t('platformDomainPlaceholder'),
+                slug: form.slug || '<slug>',
+              })}
+              {editingId != null && t('slugImmutableSuffix')}
             </p>
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              名称 <span className="text-red-500">*</span>
+              {t('fieldName')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
               value={form.name}
               onChange={(ev) => setForm({ ...form, name: ev.target.value })}
-              placeholder="成长动画"
+              placeholder={t('phNameExample')}
               className="w-full input-base"
               maxLength={100}
             />
@@ -320,7 +326,7 @@ export default function SsePublicEndpointPanel({ tenantId }: Props) {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              身份头 <span className="text-red-500">*</span>
+              {t('fieldIdentityHeader')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
@@ -330,30 +336,30 @@ export default function SsePublicEndpointPanel({ tenantId }: Props) {
               className="w-full input-base font-mono text-sm"
               maxLength={64}
             />
-            <p className="mt-1 text-xs text-gray-400">网关注入的可信请求头，作为连接身份。</p>
+            <p className="mt-1 text-xs text-gray-400">{t('identityHeaderHint')}</p>
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              topic 模板 <span className="text-red-500">*</span>
+              {t('fieldTopicTemplate')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
               value={form.topic_template}
               onChange={(ev) => setForm({ ...form, topic_template: ev.target.value })}
-              placeholder="way:{identity}:growth:{query.projectId}"
+              placeholder={t('phTopicTemplateExample')}
               className="w-full input-base font-mono text-xs"
             />
             <p className="mt-1 text-xs text-gray-400">
-              必含 <code className="font-mono">{'{identity}'}</code>（且排在所有{' '}
-              <code className="font-mono">{'{query.X}'}</code> 之前）；<code className="font-mono">{'{query.X}'}</code>{' '}
-              取 URL 参数，缺省时退化为末尾通配 <code className="font-mono">*</code>。
+              {t.rich('topicTemplateHint', {
+                code: (chunks) => <code className="font-mono">{chunks}</code>,
+              })}
             </p>
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              SSE event 名 <span className="text-red-500">*</span>
+              {t('fieldEventName')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"

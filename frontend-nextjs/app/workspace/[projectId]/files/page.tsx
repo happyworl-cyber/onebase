@@ -8,6 +8,7 @@
  */
 
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { AxiosError } from 'axios'
@@ -33,14 +34,14 @@ type ListedObject = {
   last_modified?: string
 }
 
-function apiErrorMessage(err: unknown): string {
+function apiErrorMessage(err: unknown, t: (k: string) => string): string {
   if (err instanceof AxiosError) {
     const data = err.response?.data as { error?: string } | undefined
     if (typeof data?.error === 'string' && data.error) return data.error
     if (err.message) return err.message
   }
   if (err instanceof Error && err.message) return err.message
-  return '请求失败'
+  return t('reqFailed')
 }
 
 function formatBytes(n: number | undefined): string {
@@ -83,6 +84,7 @@ function parseListResult(result: Record<string, unknown>): {
 }
 
 export default function FilesPage() {
+  const t = useTranslations('wsFiles')
   const params = useParams<{ projectId: string }>()
   const projectId = parseInt(params.projectId, 10)
   const caps = useCurrentProjectCapabilities()
@@ -145,7 +147,7 @@ export default function FilesPage() {
       .catch((err: unknown) => {
         if (cancelled) return
         setCatalog([])
-        setCatalogError(apiErrorMessage(err))
+        setCatalogError(apiErrorMessage(err, t))
       })
       .finally(() => {
         if (!cancelled) setCatalogLoading(false)
@@ -160,7 +162,7 @@ export default function FilesPage() {
   const connectionId = connectionInCatalog ? urlId : null
   const connectionError =
     !catalogLoading && Boolean(urlConnection) && !connectionInCatalog
-      ? '找不到该对象存储连接（已停用或不属于本项目）'
+      ? t('connNotFound')
       : ''
 
   useEffect(() => {
@@ -216,7 +218,7 @@ export default function FilesPage() {
         setIsTruncated(parsed.is_truncated)
       } catch (err: unknown) {
         if (token !== listTokenRef.current) return
-        setListError(apiErrorMessage(err))
+        setListError(apiErrorMessage(err, t))
         if (!opts?.append) {
           setObjects([])
           setFolders([])
@@ -258,10 +260,10 @@ export default function FilesPage() {
           setPreviewKind('binary')
           return
         }
-        setPreviewError('无法读取文件内容')
+        setPreviewError(t('cantReadFile'))
       } catch (err: unknown) {
         if (token !== getTokenRef.current) return
-        const msg = apiErrorMessage(err)
+        const msg = apiErrorMessage(err, t)
         if (isGetTooLargeError(msg)) {
           setPreviewKind('too_large')
           setPreviewError(msg)
@@ -300,12 +302,12 @@ export default function FilesPage() {
       })
       const url = res.data.result?.url
       if (typeof url !== 'string' || !url) {
-        setPreviewError('无法生成下载地址')
+        setPreviewError(t('cantGenDownload'))
         return
       }
       window.open(url, '_blank', 'noopener,noreferrer')
     } catch (err: unknown) {
-      setPreviewError(apiErrorMessage(err))
+      setPreviewError(apiErrorMessage(err, t))
     } finally {
       setDownloading(false)
     }
@@ -324,7 +326,7 @@ export default function FilesPage() {
     return (
       <div className="text-center py-12 text-gray-400">
         <i className="fas fa-spinner fa-spin text-2xl" />
-        <p className="text-sm mt-2">正在加载项目上下文…</p>
+        <p className="text-sm mt-2">{t('loadingCtx')}</p>
       </div>
     )
   }
@@ -333,7 +335,7 @@ export default function FilesPage() {
     <div className="h-full min-h-0 flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         <label className="text-sm text-gray-600">
-          连接
+          {t('connLabel')}
           <select
             className="ml-2 border border-gray-300 rounded px-2 py-1 text-sm bg-white"
             value={connectionId ?? ''}
@@ -347,7 +349,7 @@ export default function FilesPage() {
               })
             }}
           >
-            {catalog.length === 0 ? <option value="">无连接</option> : null}
+            {catalog.length === 0 ? <option value="">{t('noConn')}</option> : null}
             {catalog.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.connection_name}（{c.bucket}）
@@ -362,7 +364,7 @@ export default function FilesPage() {
             disabled={!prefix}
             onClick={() => goFolder('')}
           >
-            {selectedConn?.bucket || '根目录'}
+            {selectedConn?.bucket || t('rootDir')}
           </button>
           {crumbs.map((c) => (
             <span key={c.prefix} className="flex items-center gap-1 min-w-0">
@@ -383,7 +385,7 @@ export default function FilesPage() {
           onClick={onRefresh}
           disabled={connectionId == null || listLoading || previewLoading}
         >
-          刷新
+          {t('refresh')}
         </button>
       </div>
 
@@ -400,12 +402,12 @@ export default function FilesPage() {
 
       {!catalogLoading && catalog.length === 0 && !catalogError ? (
         <div className="text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded px-3 py-4">
-          请让项目管理员在「集成 → 对象存储」中配置连接。
+          {t('adminConfigHint')}
           {caps.canManageEvents ? (
             <>
               {' '}
               <Link href={objectStorageHref} className="text-blue-600 hover:underline">
-                打开对象存储
+                {t('openObjectStorage')}
               </Link>
             </>
           ) : null}
@@ -417,9 +419,9 @@ export default function FilesPage() {
           {listError ? (
             <div className="p-3 text-sm text-red-600">{listError}</div>
           ) : catalogLoading || (catalog.length > 0 && connectionId == null && !connectionError) || (listLoading && objects.length === 0 && folders.length === 0) ? (
-            <div className="p-6 text-center text-gray-400 text-sm">加载中…</div>
+            <div className="p-6 text-center text-gray-400 text-sm">{t('loading')}</div>
           ) : folders.length === 0 && objects.length === 0 ? (
-            <div className="p-6 text-center text-gray-400 text-sm">这个目录下没有文件</div>
+            <div className="p-6 text-center text-gray-400 text-sm">{t('emptyDir')}</div>
           ) : (
             <ul className="text-sm divide-y divide-gray-100">
               {prefix ? (
@@ -430,7 +432,7 @@ export default function FilesPage() {
                     onClick={() => goFolder(parentPrefix(prefix))}
                   >
                     <i className="fas fa-level-up-alt mr-2" />
-                    上级目录
+                    {t('parentDir')}
                   </button>
                 </li>
               ) : null}
@@ -480,7 +482,7 @@ export default function FilesPage() {
                 disabled={listLoading}
                 onClick={() => void loadList({ append: true, token: continuation })}
               >
-                加载更多
+                {t('loadMore')}
               </button>
             </div>
           ) : null}
@@ -489,7 +491,7 @@ export default function FilesPage() {
         <div className="border border-gray-200 rounded bg-white min-h-[240px] flex flex-col overflow-hidden">
           {!selectedKey ? (
             <div className="m-auto p-6 text-sm text-gray-400 text-center">
-              从左侧打开文件，查看对象存储里的最新内容。
+              {t('openFromLeft')}
             </div>
           ) : (
             <>
@@ -502,20 +504,20 @@ export default function FilesPage() {
                     disabled={downloading}
                     onClick={() => void downloadSelected()}
                   >
-                    {downloading ? '准备下载…' : '下载'}
+                    {downloading ? t('preparingDownload') : t('download')}
                   </button>
                 ) : null}
               </div>
               <div className="flex-1 min-h-0">
                 {previewLoading ? (
-                  <div className="p-6 text-center text-gray-400 text-sm">加载中…</div>
+                  <div className="p-6 text-center text-gray-400 text-sm">{t('loading')}</div>
                 ) : previewKind === 'too_large' ? (
                   <div className="p-4 text-sm text-gray-700 space-y-2">
-                    <p>文件超过 5 MiB，无法在页面里预览。</p>
+                    <p>{t('tooLarge')}</p>
                     {previewError ? <p className="text-gray-500">{previewError}</p> : null}
                   </div>
                 ) : previewKind === 'binary' ? (
-                  <div className="p-4 text-sm text-gray-700">不是文本，无法预览。</div>
+                  <div className="p-4 text-sm text-gray-700">{t('notText')}</div>
                 ) : previewError ? (
                   <div className="p-4 text-sm text-red-600">{previewError}</div>
                 ) : content != null ? (

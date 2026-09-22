@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useParams } from 'next/navigation'
 import api, {
   queryPerfAPI,
@@ -69,6 +70,7 @@ function fmtTime(iso: string): string {
 export default function SlowQueriesPage() {
   const params = useParams<{ projectId: string }>()
   const projectId = parseInt(params.projectId, 10)
+  const t = useTranslations('wsSlowQueries')
   const notify = useNotification()
   const currentConnection = useAppStore((s) => s.currentConnection)
   const databaseId = currentConnection?.database_id ?? null
@@ -222,11 +224,7 @@ export default function SlowQueriesPage() {
   const analyzeSlowWithAi = (sqlText: string) => {
     if (!sqlText?.trim()) return
     askAi({
-      prompt:
-        '下面这条 SQL 被判定为慢查询，请分析它慢在哪里、可能缺哪些索引，并给出优化方案：\n\n' +
-        '```sql\n' +
-        sqlText.trim() +
-        '\n```',
+      prompt: t('aiPrompt', { sql: sqlText.trim() }),
       requestId: genRequestId('slow-analyze'),
     })
   }
@@ -238,8 +236,8 @@ export default function SlowQueriesPage() {
       await queryPerfAPI.cancelActiveQuery(cancelTarget.pid, cancelTerminate)
       notify.success(
         cancelTerminate
-          ? `已请求终止后端进程 (pid=${cancelTarget.pid})`
-          : `已请求取消查询 (pid=${cancelTarget.pid})`,
+          ? t('terminatedProc', { pid: cancelTarget.pid })
+          : t('cancelledQuery', { pid: cancelTarget.pid }),
       )
       setCancelTarget(null)
       setCancelTerminate(false)
@@ -269,9 +267,9 @@ export default function SlowQueriesPage() {
       {/* 顶部 */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">慢查询日志</h1>
+          <h1 className="text-2xl font-semibold text-gray-900">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            从 pg_stat_statements、pg_stat_activity 和应用层日志三个角度看慢 SQL
+            {t('subtitle')}
           </p>
         </div>
         <div className="flex items-center space-x-3">
@@ -282,10 +280,10 @@ export default function SlowQueriesPage() {
               onChange={(e) => setAutoRefresh(e.target.checked)}
               className="w-4 h-4 text-blue-600 rounded"
             />
-            <span>每 5s 自动刷新</span>
+            <span>{t('autoRefresh')}</span>
           </label>
           <button onClick={reload} className="btn-default text-sm">
-            <i className="fas fa-sync-alt mr-1"></i>刷新
+            <i className="fas fa-sync-alt mr-1"></i>{t('refresh')}
           </button>
         </div>
       </div>
@@ -294,7 +292,7 @@ export default function SlowQueriesPage() {
       <div className="card p-4 flex items-end space-x-3">
         <div className="flex-1 max-w-xs">
           <label className="block text-xs text-gray-500 mb-1">
-            慢查询阈值 (ms) — 高于该值的查询才计入
+            {t('thresholdLabel')}
           </label>
           <input
             type="number"
@@ -310,7 +308,7 @@ export default function SlowQueriesPage() {
           />
         </div>
         <button onClick={handleApplyThreshold} className="btn-primary text-sm">
-          应用
+          {t('apply')}
         </button>
         {[200, 500, 1000, 3000].map((v) => (
           <button
@@ -334,25 +332,25 @@ export default function SlowQueriesPage() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <SummaryCard
           icon="fa-list-ol"
-          label="pg_stat_statements 命中"
+          label={t('sumPgHit')}
           value={String(stats.pgCount)}
           color="blue"
         />
         <SummaryCard
           icon="fa-bolt"
-          label="实时活跃慢查询"
+          label={t('sumLiveSlow')}
           value={String(stats.liveCount)}
           color={stats.liveCount > 0 ? 'red' : 'gray'}
         />
         <SummaryCard
           icon="fa-stopwatch"
-          label="最差平均耗时"
+          label={t('sumWorstMean')}
           value={fmtMs(stats.worstMean)}
           color="purple"
         />
         <SummaryCard
           icon="fa-history"
-          label="应用层记录"
+          label={t('sumAppRecords')}
           value={String(stats.appCount)}
           color="emerald"
         />
@@ -362,9 +360,9 @@ export default function SlowQueriesPage() {
       <div className="flex space-x-1 bg-gray-100 p-1 rounded-lg w-fit">
         {(
           [
-            ['pg_stats', 'pg_stat_statements 慢查询', 'fa-database'],
-            ['live', '实时活跃查询', 'fa-bolt'],
-            ['app', '应用层日志', 'fa-history'],
+            ['pg_stats', t('tabPgStats'), 'fa-database'],
+            ['live', t('tabLive'), 'fa-bolt'],
+            ['app', t('tabApp'), 'fa-history'],
           ] as [Tab, string, string][]
         ).map(([key, label, icon]) => (
           <button
@@ -389,7 +387,7 @@ export default function SlowQueriesPage() {
             <div className="card p-3 border-l-4 border-yellow-400 bg-yellow-50 text-sm text-yellow-800">
               <i className="fas fa-exclamation-triangle mr-2"></i>
               {extStatus.install_hint}
-              {' 你仍然可以使用 “实时活跃查询” 与 “应用层日志”。'}
+              {t('extHintSuffix')}
             </div>
           )}
           <div className="card overflow-hidden">
@@ -398,17 +396,17 @@ export default function SlowQueriesPage() {
                 <thead className="bg-gray-50">
                   <tr className="text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     <th className="px-4 py-3">SQL</th>
-                    <th className="px-4 py-3 text-right">调用</th>
-                    <th className="px-4 py-3 text-right">平均</th>
-                    <th className="px-4 py-3 text-right">最长</th>
-                    <th className="px-4 py-3 text-right">总耗时</th>
+                    <th className="px-4 py-3 text-right">{t('thCalls')}</th>
+                    <th className="px-4 py-3 text-right">{t('thAvg')}</th>
+                    <th className="px-4 py-3 text-right">{t('thMax')}</th>
+                    <th className="px-4 py-3 text-right">{t('thTotal')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
                   {pgLoading && pgStats.length === 0 && (
                     <tr>
                       <td colSpan={5} className="px-4 py-12 text-center text-gray-400">
-                        <i className="fas fa-spinner fa-spin mr-2"></i>加载中…
+                        <i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}
                       </td>
                     </tr>
                   )}
@@ -417,7 +415,7 @@ export default function SlowQueriesPage() {
                       <td colSpan={5} className="px-4 py-12 text-center text-gray-400">
                         {extStatus?.install_hint
                           ? extStatus.install_hint
-                          : `没有单次耗时超过 ${thresholdMs} ms 的语句（按 max_exec_time）`}
+                          : t('noStmtsOverThreshold', { ms: thresholdMs })}
                       </td>
                     </tr>
                   )}
@@ -475,26 +473,26 @@ export default function SlowQueriesPage() {
               <thead className="bg-gray-50">
                 <tr className="text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   <th className="px-4 py-3">PID</th>
-                  <th className="px-4 py-3">用户</th>
-                  <th className="px-4 py-3">客户端</th>
-                  <th className="px-4 py-3">状态</th>
-                  <th className="px-4 py-3 text-right">已运行</th>
+                  <th className="px-4 py-3">{t('thUser')}</th>
+                  <th className="px-4 py-3">{t('thClient')}</th>
+                  <th className="px-4 py-3">{t('thState')}</th>
+                  <th className="px-4 py-3 text-right">{t('thRunning')}</th>
                   <th className="px-4 py-3">SQL</th>
-                  <th className="px-4 py-3 text-right">操作</th>
+                  <th className="px-4 py-3 text-right">{t('thActions')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {activeLoading && activeQueries.length === 0 && (
                   <tr>
                     <td colSpan={7} className="px-4 py-12 text-center text-gray-400">
-                      <i className="fas fa-spinner fa-spin mr-2"></i>加载中…
+                      <i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}
                     </td>
                   </tr>
                 )}
                 {!activeLoading && activeQueries.length === 0 && (
                   <tr>
                     <td colSpan={7} className="px-4 py-12 text-center text-gray-400">
-                      当前没有运行超过 {thresholdMs} ms 的查询
+                      {t('noRunningOverThreshold', { ms: thresholdMs })}
                     </td>
                   </tr>
                 )}
@@ -537,7 +535,7 @@ export default function SlowQueriesPage() {
                           setCancelTerminate(false)
                         }}
                       >
-                        取消…
+                        {t('cancelBtn')}
                       </button>
                     </td>
                   </tr>
@@ -569,24 +567,24 @@ export default function SlowQueriesPage() {
             <table className="min-w-full divide-y divide-gray-200 text-sm">
               <thead className="bg-gray-50">
                 <tr className="text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  <th className="px-4 py-3">时间</th>
-                  <th className="px-4 py-3">数据库 / 表</th>
-                  <th className="px-4 py-3 text-right">耗时</th>
-                  <th className="px-4 py-3">SQL 预览</th>
+                  <th className="px-4 py-3">{t('thTime')}</th>
+                  <th className="px-4 py-3">{t('thDbTable')}</th>
+                  <th className="px-4 py-3 text-right">{t('thDuration')}</th>
+                  <th className="px-4 py-3">{t('thSqlPreview')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {appLoading && appRows.length === 0 && (
                   <tr>
                     <td colSpan={4} className="px-4 py-12 text-center text-gray-400">
-                      <i className="fas fa-spinner fa-spin mr-2"></i>加载中…
+                      <i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}
                     </td>
                   </tr>
                 )}
                 {!appLoading && appRows.length === 0 && (
                   <tr>
                     <td colSpan={4} className="px-4 py-12 text-center text-gray-400">
-                      应用层暂无超过 {thresholdMs} ms 的慢查询记录
+                      {t('noAppSlowRecords', { ms: thresholdMs })}
                     </td>
                   </tr>
                 )}
@@ -640,7 +638,7 @@ export default function SlowQueriesPage() {
       <Drawer
         isOpen={!!detailQuery}
         onClose={() => setDetailQuery(null)}
-        title="完整 SQL"
+        title={t('fullSql')}
         size="xl"
         footer={
           <div className="flex justify-end">
@@ -649,7 +647,7 @@ export default function SlowQueriesPage() {
               className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-gradient-to-br from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 transition-colors"
             >
               <i className="fas fa-robot mr-2"></i>
-              AI 分析优化
+              {t('aiAnalyze')}
             </button>
           </div>
         }
@@ -663,7 +661,7 @@ export default function SlowQueriesPage() {
       <Drawer
         isOpen={!!cancelTarget}
         onClose={() => !cancelling && setCancelTarget(null)}
-        title="取消正在运行的查询"
+        title={t('cancelRunning')}
         size="lg"
         footer={
           <div className="flex justify-end space-x-2">
@@ -672,7 +670,7 @@ export default function SlowQueriesPage() {
               onClick={() => setCancelTarget(null)}
               disabled={cancelling}
             >
-              不取消
+              {t('dontCancel')}
             </button>
             <button
               className="btn-primary bg-red-600 hover:bg-red-700"
@@ -680,10 +678,10 @@ export default function SlowQueriesPage() {
               disabled={cancelling}
             >
               {cancelling
-                ? '执行中…'
+                ? t('running')
                 : cancelTerminate
-                ? '终止后端进程'
-                : '取消该查询'}
+                ? t('terminateProc')
+                : t('cancelThisQuery')}
             </button>
           </div>
         }
@@ -693,7 +691,7 @@ export default function SlowQueriesPage() {
             <div className="bg-gray-50 rounded p-3">
               <div className="text-xs text-gray-500 mb-1">PID</div>
               <div className="font-mono">{cancelTarget.pid}</div>
-              <div className="text-xs text-gray-500 mt-2 mb-1">已运行</div>
+              <div className="text-xs text-gray-500 mt-2 mb-1">{t('runningLabel')}</div>
               <div>{fmtSeconds(cancelTarget.duration_seconds)}</div>
               <div className="text-xs text-gray-500 mt-2 mb-1">SQL</div>
               <pre className="bg-gray-900 text-green-300 text-xs font-mono p-2 rounded overflow-auto max-h-32 whitespace-pre-wrap">
@@ -708,15 +706,14 @@ export default function SlowQueriesPage() {
                 className="mt-0.5 w-4 h-4"
               />
               <div>
-                <div className="font-medium text-gray-900">同时终止后端进程</div>
+                <div className="font-medium text-gray-900">{t('alsoTerminate')}</div>
                 <div className="text-xs text-gray-500">
-                  勾选后调用 <code>pg_terminate_backend()</code>，会断开整条客户端连接；
-                  不勾选则只调用 <code>pg_cancel_backend()</code>，仅取消当前查询，连接保留。
+                  {t.rich('terminateHint', { code: (c) => <code>{c}</code> })}
                 </div>
               </div>
             </label>
             <p className="text-xs text-yellow-700 bg-yellow-50 p-2 rounded">
-              该操作仅平台超管可用。
+              {t('superAdminOnly')}
             </p>
           </div>
         )}

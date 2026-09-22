@@ -1,8 +1,8 @@
 [package]
-name = "onebase"
+name = "planeos"
 version = "0.1.0"
 edition = "2021"
-default-run = "onebase"
+default-run = "planeos"
 
 [dependencies]
 # Web 框架
@@ -106,7 +106,7 @@ lettre = { version = "0.11.22", default-features = false, features = ["tokio1-na
 rsa = { version = "0.9.10", features = ["pem"] }
 
 [[bin]]
-name = "onebase"
+name = "planeos"
 path = "src/main.rs"
 
 [[bin]]

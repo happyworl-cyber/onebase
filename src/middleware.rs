@@ -110,12 +110,16 @@ async fn authenticate_cr_api_key(
             .unwrap_or(false);
 
             if key_exists {
-                return Err(AppError::Forbidden(
-                    "API Key 有效，但其绑定的数据库已停用，无法调用管理端接口".to_string(),
+                return Err(AppError::forbidden_coded(
+                    "mw_apikey_database_disabled",
+                    "API Key 有效，但其绑定的数据库已停用，无法调用管理端接口",
+                    serde_json::json!({}),
                 ));
             }
-            return Err(AppError::Unauthorized(
-                "API Key 无效、已禁用或已过期".to_string(),
+            return Err(AppError::unauthorized_coded(
+                "mw_apikey_invalid",
+                "API Key 无效、已禁用或已过期",
+                serde_json::json!({}),
             ));
         }
     };
@@ -131,9 +135,10 @@ async fn authenticate_cr_api_key(
     let user_id: i32 = row
         .get::<Option<i32>, _>("user_id")
         .ok_or_else(|| {
-            AppError::Forbidden(
-                "API Key 有效，但找不到可归属的用户（创建者已不在租户且租户无 active 的 owner/admin），无法代表用户调用管理端接口"
-                    .to_string(),
+            AppError::forbidden_coded(
+                "mw_apikey_no_owner",
+                "API Key 有效，但找不到可归属的用户（创建者已不在租户且租户无 active 的 owner/admin），无法代表用户调用管理端接口",
+                serde_json::json!({}),
             )
         })?;
     let email: String = row.get("email");
@@ -141,8 +146,10 @@ async fn authenticate_cr_api_key(
     let is_superadmin: bool = row.try_get("is_superadmin").unwrap_or(false);
     let user_is_active: bool = row.try_get("user_is_active").unwrap_or(false);
     if !user_is_active {
-        return Err(AppError::Unauthorized(
-            "API Key 无效、已禁用或已过期".to_string(),
+        return Err(AppError::unauthorized_coded(
+            "mw_apikey_invalid",
+            "API Key 无效、已禁用或已过期",
+            serde_json::json!({}),
         ));
     }
 
@@ -198,10 +205,14 @@ async fn resolve_database_id_from_slug(
 ) -> Result<i32, AppError> {
     if let Some(ctx) = api_key_ctx {
         if ctx.bound_slug != slug {
-            return Err(AppError::Forbidden(format!(
-                "API Key 绑定的是项目 '{}'，与 URL 中的 '{}' 不匹配",
-                ctx.bound_slug, slug
-            )));
+            return Err(AppError::forbidden_coded(
+                "mw_apikey_project_mismatch",
+                format!(
+                    "API Key 绑定的是项目 '{}'，与 URL 中的 '{}' 不匹配",
+                    ctx.bound_slug, slug
+                ),
+                serde_json::json!({ "bound_slug": ctx.bound_slug, "slug": slug }),
+            ));
         }
         return Ok(ctx.database_id);
     }
@@ -237,24 +248,35 @@ async fn resolve_database_id_from_slug(
         .map_err(AppError::Database)?;
 
         let row = key_row.ok_or_else(|| {
-            AppError::Unauthorized(
-                "API Key 无效、已禁用或已过期（在本平台未找到匹配的密钥）".to_string(),
+            AppError::unauthorized_coded(
+                "mw_apikey_not_found",
+                "API Key 无效、已禁用或已过期（在本平台未找到匹配的密钥）",
+                serde_json::json!({}),
             )
         })?;
 
         let bound_slug: String = row.get("bound_slug");
         if bound_slug != slug {
-            return Err(AppError::Forbidden(format!(
-                "API Key 绑定的是项目 '{}'，与 URL 中的 '{}' 不匹配",
-                bound_slug, slug
-            )));
+            return Err(AppError::forbidden_coded(
+                "mw_apikey_project_mismatch",
+                format!(
+                    "API Key 绑定的是项目 '{}'，与 URL 中的 '{}' 不匹配",
+                    bound_slug, slug
+                ),
+                serde_json::json!({ "bound_slug": bound_slug, "slug": slug }),
+            ));
         }
         return Ok(row.get::<i32, _>("database_id"));
     }
 
     // JWT 调用：按用户租户成员关系解析
-    let claims =
-        claims.ok_or_else(|| AppError::Unauthorized("缺少有效的 JWT 或 API Key".to_string()))?;
+    let claims = claims.ok_or_else(|| {
+        AppError::unauthorized_coded(
+            "mw_missing_jwt_or_apikey",
+            "缺少有效的 JWT 或 API Key",
+            serde_json::json!({}),
+        )
+    })?;
     let rows = if claims.is_superadmin {
         sqlx::query(
             r#"
@@ -290,15 +312,20 @@ async fn resolve_database_id_from_slug(
         .map_err(AppError::Database)?
     };
     match rows.len() {
-        0 => Err(AppError::NotFound(format!(
-            "数据库 slug '{}' 不存在或无权访问",
-            slug
-        ))),
+        0 => Err(AppError::not_found_coded(
+            "mw_database_slug_not_found",
+            format!("数据库 slug '{}' 不存在或无权访问", slug),
+            serde_json::json!({ "slug": slug }),
+        )),
         1 => Ok(rows[0].get::<i32, _>("id")),
-        _ => Err(AppError::InvalidQuery(format!(
-            "database_slug '{}' 存在歧义，请改用 API Key 或确保当前租户唯一",
-            slug
-        ))),
+        _ => Err(AppError::validation(
+            "mw_database_slug_ambiguous",
+            format!(
+                "database_slug '{}' 存在歧义，请改用 API Key 或确保当前租户唯一",
+                slug
+            ),
+            serde_json::json!({ "slug": slug }),
+        )),
     }
 }
 
@@ -422,8 +449,10 @@ pub async fn auth_middleware(
                 ip = %client_ip,
                 "认证失败：缺少 Authorization header"
             );
-            return Err(AppError::Unauthorized(
-                "缺少 Authorization header".to_string(),
+            return Err(AppError::unauthorized_coded(
+                "mw_missing_authorization_header",
+                "缺少 Authorization header",
+                serde_json::json!({}),
             ));
         }
     };
@@ -500,8 +529,10 @@ pub async fn auth_middleware(
             ip = %client_ip,
             "认证失败：Token 缺少 jti"
         );
-        return Err(AppError::Unauthorized(
-            "Token 缺少 jti 字段，请重新登录".to_string(),
+        return Err(AppError::unauthorized_coded(
+            "mw_token_missing_jti",
+            "Token 缺少 jti 字段，请重新登录",
+            serde_json::json!({}),
         ));
     }
 
@@ -530,8 +561,10 @@ pub async fn auth_middleware(
                 ip = %client_ip,
                 "认证失败：会话不存在或已注销"
             );
-            return Err(AppError::Unauthorized(
-                "会话不存在或已注销，请重新登录".to_string(),
+            return Err(AppError::unauthorized_coded(
+                "mw_session_not_found",
+                "会话不存在或已注销，请重新登录",
+                serde_json::json!({}),
             ));
         }
     };
@@ -545,8 +578,10 @@ pub async fn auth_middleware(
             ip = %client_ip,
             "认证失败：会话已被吊销"
         );
-        return Err(AppError::Unauthorized(
-            "会话已被吊销，请重新登录".to_string(),
+        return Err(AppError::unauthorized_coded(
+            "mw_session_revoked",
+            "会话已被吊销，请重新登录",
+            serde_json::json!({}),
         ));
     }
 
@@ -561,12 +596,20 @@ pub async fn auth_middleware(
             ip = %client_ip,
             "认证失败：会话已过期"
         );
-        return Err(AppError::Unauthorized("会话已过期，请重新登录".to_string()));
+        return Err(AppError::unauthorized_coded(
+            "mw_session_expired",
+            "会话已过期，请重新登录",
+            serde_json::json!({}),
+        ));
     }
 
     let is_active: bool = row.try_get("is_active").unwrap_or(true);
     if !is_active {
-        return Err(AppError::Forbidden("账号已停用，请联系管理员".to_string()));
+        return Err(AppError::forbidden_coded(
+            "mw_account_disabled",
+            "账号已停用，请联系管理员",
+            serde_json::json!({}),
+        ));
     }
 
     // 强制改密网关：内置默认管理员首次登录后必须先改密，否则除“改密/登出/查询自身/刷新”
@@ -616,10 +659,11 @@ pub async fn enforce_platform_scope(
         .get::<crate::platform_token::PlatformTokenContext>()
     {
         if !ctx.allows(required) {
-            return Err(AppError::Forbidden(format!(
-                "平台令牌缺少所需 scope：{}",
-                required
-            )));
+            return Err(AppError::forbidden_coded(
+                "mw_platform_token_missing_scope",
+                format!("平台令牌缺少所需 scope：{}", required),
+                serde_json::json!({ "scope": required }),
+            ));
         }
     }
     Ok(next.run(req).await)
@@ -646,10 +690,11 @@ pub async fn enforce_workflow_token_scope(req: Request, next: Next) -> Result<Re
             crate::platform_token::SCOPE_WORKFLOW_WRITE
         };
         if !ctx.allows(required) {
-            return Err(AppError::Forbidden(format!(
-                "平台令牌缺少所需 scope：{}",
-                required
-            )));
+            return Err(AppError::forbidden_coded(
+                "mw_platform_token_missing_scope",
+                format!("平台令牌缺少所需 scope：{}", required),
+                serde_json::json!({ "scope": required }),
+            ));
         }
     }
     Ok(next.run(req).await)
@@ -908,7 +953,9 @@ pub async fn require_superadmin_middleware(req: Request, next: Next) -> Result<R
     let _claims = req
         .extensions()
         .get::<Claims>()
-        .ok_or_else(|| AppError::Unauthorized("未认证".to_string()))?;
+        .ok_or_else(|| {
+            AppError::unauthorized_coded("mw_unauthenticated", "未认证", serde_json::json!({}))
+        })?;
 
     Ok(next.run(req).await)
 }
@@ -974,10 +1021,11 @@ pub async fn legacy_crud_access_middleware(
     let path = req.uri().path();
     if let Some(schema) = extract_legacy_crud_schema(path) {
         if is_reserved_legacy_crud_schema(schema) {
-            return Err(AppError::NotFound(format!(
-                "路径 {} 不是旧版 CRUD 接口；请检查 API 路径是否正确",
-                path
-            )));
+            return Err(AppError::not_found_coded(
+                "mw_legacy_crud_path_not_found",
+                format!("路径 {} 不是旧版 CRUD 接口；请检查 API 路径是否正确", path),
+                serde_json::json!({ "path": path }),
+            ));
         }
     }
 
@@ -985,7 +1033,9 @@ pub async fn legacy_crud_access_middleware(
         .extensions()
         .get::<Claims>()
         .cloned()
-        .ok_or_else(|| AppError::Unauthorized("未认证".to_string()))?;
+        .ok_or_else(|| {
+            AppError::unauthorized_coded("mw_unauthenticated", "未认证", serde_json::json!({}))
+        })?;
 
     // 必须已切换到具体租户库，禁止回落管理库。
     let database_id = req
@@ -993,8 +1043,10 @@ pub async fn legacy_crud_access_middleware(
         .get::<CurrentDatabaseId>()
         .map(|d| d.0)
         .ok_or_else(|| {
-            AppError::Forbidden(
-                "该接口必须通过 X-Database-Id 指定项目数据库，禁止在平台管理库上执行".to_string(),
+            AppError::forbidden_coded(
+                "mw_legacy_crud_requires_database_id",
+                "该接口必须通过 X-Database-Id 指定项目数据库，禁止在平台管理库上执行",
+                serde_json::json!({}),
             )
         })?;
 
@@ -1011,8 +1063,10 @@ pub async fn legacy_crud_access_middleware(
             None => crate::permissions::lookup_tenant_for_database(&pool, database_id).await?,
         };
         if !crate::permissions::is_tenant_member(&pool, claims.sub, tenant_id).await? {
-            return Err(AppError::Forbidden(
-                "viewer 角色只读；写操作需要 owner/admin/member 角色".to_string(),
+            return Err(AppError::forbidden_coded(
+                "mw_legacy_crud_viewer_readonly",
+                "viewer 角色只读；写操作需要 owner/admin/member 角色",
+                serde_json::json!({}),
             ));
         }
     }
@@ -1037,13 +1091,16 @@ pub fn require_role(
             let claims = req
                 .extensions()
                 .get::<Claims>()
-                .ok_or_else(|| AppError::Unauthorized("未认证".to_string()))?;
+                .ok_or_else(|| {
+            AppError::unauthorized_coded("mw_unauthenticated", "未认证", serde_json::json!({}))
+        })?;
 
             if !has_role(claims, required_role) {
-                return Err(AppError::Forbidden(format!(
-                    "需要 {} 角色权限",
-                    required_role
-                )));
+                return Err(AppError::forbidden_coded(
+                    "mw_role_required",
+                    format!("需要 {} 角色权限", required_role),
+                    serde_json::json!({ "role": required_role }),
+                ));
             }
 
             Ok(next.run(req).await)

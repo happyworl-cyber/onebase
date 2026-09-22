@@ -16,6 +16,8 @@ export interface WorkspaceTab {
   /** 相对项目 base 的路径，'' 表示项目首页 */
   path: string
   title: string
+  /** i18n key（nav.*）；渲染时优先 t(labelKey)，title 作 fallback（旧持久化数据无此字段）*/
+  labelKey?: string
   icon: string
 }
 
@@ -24,7 +26,7 @@ interface PersistShape {
   activePath: string
 }
 
-const KEY_PREFIX = 'onebase_ws_tabs_'
+const KEY_PREFIX = 'planeos_ws_tabs_'
 
 function storageKey(projectId: string): string {
   return `${KEY_PREFIX}${projectId}`
@@ -106,7 +108,7 @@ export const useWorkspaceTabs = create<WorkspaceTabsState>((set, get) => ({
       const tabs =
         idx >= 0
           ? s.tabs.map((t, i) =>
-              i === idx ? { ...t, path: tab.path, title: tab.title, icon: tab.icon } : t,
+              i === idx ? { ...t, path: tab.path, title: tab.title, labelKey: tab.labelKey, icon: tab.icon } : t,
             )
           : [...s.tabs, tab]
       return commit(get, { tabs, activePath: tab.path })

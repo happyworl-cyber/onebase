@@ -113,7 +113,7 @@ Expected: `"total": 4`（当前已有 kop-pay、kop-callback 等 4 个）
 - [ ] **Step 0.3：确认服务使用 Stripe 密钥**
 
 ```bash
-grep STRIPE_SECRET_KEY E:/onebase/.env
+grep STRIPE_SECRET_KEY E:/planeos/.env
 ```
 
 Expected: `STRIPE_SECRET_KEY=sk_test_51R9G...`
@@ -1866,7 +1866,7 @@ Expected: 无输出（无外部引用）
 - [ ] **Step 15.2：删除目录**
 
 ```bash
-rm -rf E:/onebase/src/payment
+rm -rf E:/planeos/src/payment
 ```
 
 - [ ] **Step 15.3：从 `src/lib.rs` 移除模块声明**

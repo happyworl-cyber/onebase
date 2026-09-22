@@ -7,7 +7,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv::dotenv().ok();
 
     let database_url = env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/onebase".to_string());
+        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/planeos".to_string());
 
     println!("🔗 连接数据库: {}", database_url);
 

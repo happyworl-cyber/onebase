@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslations, useMessages } from 'next-intl'
 import { useParams } from 'next/navigation'
 import {
   operationLogAPI,
@@ -12,26 +13,26 @@ import {
 } from '@/lib/api'
 
 // ── 呈现映射（颜色/图标/文案在前端，后端只出语义）──────────────────
-const ACTION_META: Record<string, { label: string; cls: string }> = {
-  CREATE: { label: '创建', cls: 'bg-green-100 text-green-800' },
-  UPDATE: { label: '修改', cls: 'bg-blue-100 text-blue-800' },
-  DELETE: { label: '删除', cls: 'bg-red-100 text-red-800' },
-  READ: { label: '查询', cls: 'bg-gray-100 text-gray-800' },
-  EXPORT: { label: '导出', cls: 'bg-orange-100 text-orange-800' },
-  IMPORT: { label: '导入', cls: 'bg-purple-100 text-purple-800' },
-  LOGIN: { label: '登录', cls: 'bg-cyan-100 text-cyan-800' },
-  PERMISSION: { label: '权限变更', cls: 'bg-amber-100 text-amber-800' },
-  TRIGGER: { label: '触发', cls: 'bg-teal-100 text-teal-800' },
-  EXECUTE: { label: '执行', cls: 'bg-indigo-100 text-indigo-800' },
+const ACTION_META: Record<string, { labelKey: string; cls: string }> = {
+  CREATE: { labelKey: 'actCreate', cls: 'bg-green-100 text-green-800' },
+  UPDATE: { labelKey: 'actUpdate', cls: 'bg-blue-100 text-blue-800' },
+  DELETE: { labelKey: 'actDelete', cls: 'bg-red-100 text-red-800' },
+  READ: { labelKey: 'actRead', cls: 'bg-gray-100 text-gray-800' },
+  EXPORT: { labelKey: 'actExport', cls: 'bg-orange-100 text-orange-800' },
+  IMPORT: { labelKey: 'actImport', cls: 'bg-purple-100 text-purple-800' },
+  LOGIN: { labelKey: 'actLogin', cls: 'bg-cyan-100 text-cyan-800' },
+  PERMISSION: { labelKey: 'actPermission', cls: 'bg-amber-100 text-amber-800' },
+  TRIGGER: { labelKey: 'actTrigger', cls: 'bg-teal-100 text-teal-800' },
+  EXECUTE: { labelKey: 'actExecute', cls: 'bg-indigo-100 text-indigo-800' },
 }
-const actionMeta = (a: string) => ACTION_META[a] || { label: a, cls: 'bg-gray-100 text-gray-800' }
+const actionMeta = (a: string): { labelKey: string; raw?: string; cls: string } => ACTION_META[a] || { labelKey: '', raw: a, cls: 'bg-gray-100 text-gray-800' }
 
-const SOURCE_META: Record<string, { label: string; icon: string; cls: string }> = {
-  console: { label: '页面', icon: 'fa-desktop', cls: 'bg-slate-100 text-slate-700' },
-  api: { label: 'API', icon: 'fa-plug', cls: 'bg-sky-100 text-sky-700' },
-  mcp: { label: 'MCP', icon: 'fa-robot', cls: 'bg-violet-100 text-violet-700' },
-  cron: { label: '定时', icon: 'fa-clock', cls: 'bg-amber-100 text-amber-700' },
-  system: { label: '系统', icon: 'fa-gear', cls: 'bg-gray-200 text-gray-700' },
+const SOURCE_META: Record<string, { labelKey: string; icon: string; cls: string }> = {
+  console: { labelKey: 'srcConsole', icon: 'fa-desktop', cls: 'bg-slate-100 text-slate-700' },
+  api: { labelKey: 'srcApi', icon: 'fa-plug', cls: 'bg-sky-100 text-sky-700' },
+  mcp: { labelKey: 'srcMcp', icon: 'fa-robot', cls: 'bg-violet-100 text-violet-700' },
+  cron: { labelKey: 'srcCron', icon: 'fa-clock', cls: 'bg-amber-100 text-amber-700' },
+  system: { labelKey: 'srcSystem', icon: 'fa-gear', cls: 'bg-gray-200 text-gray-700' },
 }
 const sourceMeta = (s: string) => SOURCE_META[s] || SOURCE_META.console
 const MACHINE_SOURCES = new Set(['cron', 'system'])
@@ -47,7 +48,33 @@ const RESOURCE_ICON: Record<string, string> = {
 type Tab = 'all' | 'failed' | 'highRisk' | 'mine'
 const PAGE_SIZE = 20
 
+/** 可翻译摘要渲染 helper：`summary_code` 有对应字典项时优先渲染，否则回退到落库时的中文 `summary`。 */
+function renderOpSummary(
+  row: OperationLogRow,
+  msgs: any,
+  tSum: any,
+  tVerb: any,
+  tRes: any,
+): string {
+  const p = (row.summary_params ?? {}) as Record<string, any>
+  if (row.summary_code === 'oplog_generic') {
+    const verb = msgs?.opLogVerb?.[p.verb] ? tVerb(p.verb) : p.verb
+    const resource = msgs?.opLogResource?.[p.resource_type] ? tRes(p.resource_type) : p.resource_type
+    return `${verb} ${resource} ${p.resource_name}`.trim()
+  }
+  if (row.summary_code && msgs?.opLogSummary?.[row.summary_code]) {
+    return tSum(row.summary_code, p as any)
+  }
+  return row.summary
+}
+
 export default function OperationLogsPage() {
+  const t = useTranslations('wsOpLogs')
+  const tSum = useTranslations('opLogSummary')
+  const tVerb = useTranslations('opLogVerb')
+  const tRes = useTranslations('opLogResource')
+  const msgs = useMessages() as any
+  const renderSummary = (row: OperationLogRow) => renderOpSummary(row, msgs, tSum, tVerb, tRes)
   const params = useParams<{ projectId: string }>()
   const projectId = parseInt(params.projectId, 10)
 
@@ -187,7 +214,7 @@ export default function OperationLogsPage() {
       <div className="p-6">
         <div className="max-w-md mx-auto text-center py-16">
           <i className="fas fa-lock text-3xl text-amber-500 mb-3"></i>
-          <p className="text-sm text-gray-600">仅项目管理员（admin+）可查看操作日志。</p>
+          <p className="text-sm text-gray-600">{t('forbidden')}</p>
         </div>
       </div>
     )
@@ -197,47 +224,47 @@ export default function OperationLogsPage() {
     <div className="p-6 space-y-4">
       <div className="flex items-end justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">操作日志</h1>
+          <h1 className="text-xl font-semibold text-gray-900">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            记录本项目所有操作行为，支持按操作人、动作、资源对象、来源多维追溯
+            {t('subtitle')}
           </p>
         </div>
         <button className="btn-default text-sm flex items-center gap-2" onClick={doExport}>
-          <i className="fas fa-download text-xs"></i>导出
+          <i className="fas fa-download text-xs"></i>{t('export')}
         </button>
       </div>
 
       {/* 统计卡片 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <StatCard label="今日操作" value={stats?.today} icon="fa-mouse-pointer" tone="text-primary-500 bg-primary-50" />
-        <StatCard label="活跃操作人" value={stats?.active_users} icon="fa-users" tone="text-violet-500 bg-violet-50" />
-        <StatCard label="高危操作" value={stats?.high_risk} icon="fa-fire" tone="text-orange-500 bg-orange-50" valueCls="text-orange-600" />
+        <StatCard label={t('statToday')} value={stats?.today} icon="fa-mouse-pointer" tone="text-primary-500 bg-primary-50" />
+        <StatCard label={t('statActiveUsers')} value={stats?.active_users} icon="fa-users" tone="text-violet-500 bg-violet-50" />
+        <StatCard label={t('statHighRisk')} value={stats?.high_risk} icon="fa-fire" tone="text-orange-500 bg-orange-50" valueCls="text-orange-600" />
       </div>
 
       <div className="card overflow-hidden">
         {/* 筛选工具栏 */}
         <div className="px-5 py-3.5 border-b border-gray-100 bg-gray-50/50">
           <div className="flex flex-wrap items-center gap-2.5">
-            <Dropdown leadingIcon="fa-user" width="w-[168px]" placeholder="全部操作人" value={filters.actor_name}
+            <Dropdown leadingIcon="fa-user" width="w-[168px]" placeholder={t('allActors')} value={filters.actor_name}
               onChange={(v) => setFilters({ ...filters, actor_name: v })}
-              options={[{ value: '', label: '全部操作人' }, ...actors.map((a) => ({ value: a.actor_name || '', label: a.actor_name || '(未知)' }))]} />
-            <Dropdown leadingIcon="fa-bolt" width="w-[132px]" placeholder="全部动作" value={filters.action}
+              options={[{ value: '', label: t('allActors') }, ...actors.map((a) => ({ value: a.actor_name || '', label: a.actor_name || t('unknown') }))]} />
+            <Dropdown leadingIcon="fa-bolt" width="w-[132px]" placeholder={t('allActions')} value={filters.action}
               onChange={(v) => setFilters({ ...filters, action: v })}
-              options={[{ value: '', label: '全部动作' }, ...facets.actions.map((a) => ({ value: a, label: actionMeta(a).label, badgeCls: actionMeta(a).cls }))]} />
-            <Dropdown leadingIcon="fa-cube" width="w-[132px]" placeholder="全部资源" value={filters.resource_type}
+              options={[{ value: '', label: t('allActions') }, ...facets.actions.map((a) => { const m = actionMeta(a); return { value: a, label: m.labelKey ? t(m.labelKey) : (m.raw || a), badgeCls: m.cls } })]} />
+            <Dropdown leadingIcon="fa-cube" width="w-[132px]" placeholder={t('allResources')} value={filters.resource_type}
               onChange={(v) => setFilters({ ...filters, resource_type: v })}
-              options={[{ value: '', label: '全部资源' }, ...facets.resource_types.map((rt) => ({ value: rt, label: rt, icon: RESOURCE_ICON[rt] || 'fa-file' }))]} />
+              options={[{ value: '', label: t('allResources') }, ...facets.resource_types.map((rt) => ({ value: rt, label: rt, icon: RESOURCE_ICON[rt] || 'fa-file' }))]} />
             <div className="relative w-[180px]">
               <i className="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs pointer-events-none"></i>
               <input
                 className="h-9 w-full pl-8 pr-3 text-sm bg-white border border-gray-300 rounded-lg placeholder:text-gray-400 hover:border-primary-400 focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 transition"
-                placeholder="搜索资源对象"
+                placeholder={t('phSearchResource')}
                 value={filters.q_resource}
                 onChange={(e) => setFilters({ ...filters, q_resource: e.target.value })}
                 onKeyDown={(e) => { if (e.key === 'Enter') applyFilters() }} />
             </div>
             <div className="inline-flex items-center gap-2">
-              <input type="date" aria-label="开始日期"
+              <input type="date" aria-label={t('startDate')}
                 className="h-9 w-[150px] px-3 text-sm text-gray-700 bg-white border border-gray-300 rounded-lg hover:border-primary-400 focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 transition"
                 value={filters.start_date}
                 max={filters.end_date || undefined}
@@ -247,7 +274,7 @@ export default function OperationLogsPage() {
                   setFilters((f) => ({ ...f, start_date: v, end_date: f.end_date && v && f.end_date < v ? v : f.end_date }))
                 }} />
               <span className="text-gray-400 text-xs">~</span>
-              <input type="date" aria-label="结束日期"
+              <input type="date" aria-label={t('endDate')}
                 className="h-9 w-[150px] px-3 text-sm text-gray-700 bg-white border border-gray-300 rounded-lg hover:border-primary-400 focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 transition"
                 value={filters.end_date}
                 min={filters.start_date || undefined}
@@ -261,20 +288,20 @@ export default function OperationLogsPage() {
             <button
               className="inline-flex items-center gap-1.5 h-9 px-4 text-sm font-medium text-white bg-primary-500 rounded-lg hover:bg-primary-600 active:bg-primary-700 transition-colors"
               onClick={applyFilters}>
-              <i className="fas fa-search text-xs"></i>筛选
+              <i className="fas fa-search text-xs"></i>{t('filter')}
             </button>
             <button
               className="inline-flex items-center h-9 px-3 text-sm text-gray-500 rounded-lg hover:bg-gray-200/60 hover:text-gray-700 transition-colors"
-              onClick={resetFilters}>重置</button>
+              onClick={resetFilters}>{t('reset')}</button>
           </div>
         </div>
 
         {/* Tab */}
         <div className="px-5 pt-3 border-b border-gray-100 flex gap-1">
           {([
-            ['all', '全部', stats?.total],
-            ['highRisk', '高危', stats?.high_risk],
-            ['mine', '我的', stats?.mine],
+            ['all', t('tabAll'), stats?.total],
+            ['highRisk', t('tabHighRisk'), stats?.high_risk],
+            ['mine', t('tabMine'), stats?.mine],
           ] as [Tab, string, number | undefined][]).map(([key, label, count]) => (
             <button key={key} onClick={() => switchTab(key)}
               className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${
@@ -290,16 +317,16 @@ export default function OperationLogsPage() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50">
               <tr>
-                {['时间', '操作人', '动作', '资源类型', '资源对象', '操作内容', 'IP', ''].map((h, i) => (
+                {[t('thTime'), t('thActor'), t('thAction'), t('thResType'), t('thResObj'), t('thContent'), 'IP', ''].map((h, i) => (
                   <th key={i} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {loading ? (
-                <tr><td colSpan={8} className="text-center py-10 text-gray-400"><i className="fas fa-spinner fa-spin mr-2"></i>加载中...</td></tr>
+                <tr><td colSpan={8} className="text-center py-10 text-gray-400"><i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}</td></tr>
               ) : rows.length === 0 ? (
-                <tr><td colSpan={8} className="text-center py-12 text-gray-400"><i className="fas fa-inbox text-2xl mb-2 block opacity-60"></i>没有符合条件的操作日志</td></tr>
+                <tr><td colSpan={8} className="text-center py-12 text-gray-400"><i className="fas fa-inbox text-2xl mb-2 block opacity-60"></i>{t('emptyList')}</td></tr>
               ) : rows.map((log) => {
                 const am = actionMeta(log.action)
                 const sm = sourceMeta(log.source)
@@ -319,10 +346,10 @@ export default function OperationLogsPage() {
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <div className="flex items-center gap-1.5">
-                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${am.cls}`}>{am.label}</span>
+                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${am.cls}`}>{am.labelKey ? t(am.labelKey) : am.raw}</span>
                         {log.high_risk && (
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-100 text-orange-700 ring-1 ring-orange-300" title="高危操作">
-                            <i className="fas fa-fire text-[9px] mr-0.5"></i>高危
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-100 text-orange-700 ring-1 ring-orange-300" title={t('highRiskTitle')}>
+                            <i className="fas fa-fire text-[9px] mr-0.5"></i>{t('highRisk')}
                           </span>
                         )}
                       </div>
@@ -339,7 +366,7 @@ export default function OperationLogsPage() {
                       <span className="text-sm text-gray-700 truncate max-w-[180px] block" title={log.resource_name || ''}>{log.resource_name || '-'}</span>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="text-sm text-gray-700 truncate max-w-[280px] block" title={log.summary}>{log.summary}</span>
+                      <span className="text-sm text-gray-700 truncate max-w-[280px] block" title={renderSummary(log)}>{renderSummary(log)}</span>
                     </td>
                     <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap font-mono">{log.ip || '-'}</td>
                     <td className="px-4 py-3 text-center">
@@ -356,7 +383,7 @@ export default function OperationLogsPage() {
 
         {/* 分页 */}
         <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50">
-          <span className="text-xs text-gray-500">共 {total.toLocaleString()} 条 · 第 {page + 1} / {totalPages} 页</span>
+          <span className="text-xs text-gray-500">{t('pageInfo', { total: total.toLocaleString(), page: page + 1, pages: totalPages })}</span>
           <div className="flex items-center gap-2">
             <button className="btn-default text-xs px-3 py-1.5 disabled:opacity-50" disabled={page <= 0} onClick={() => setPage(page - 1)}>
               <i className="fas fa-chevron-left text-xs"></i>
@@ -374,7 +401,7 @@ export default function OperationLogsPage() {
           <div className="fixed inset-0 bg-black/25 z-40" onClick={closeDetail}></div>
           <div className="fixed right-0 top-0 h-screen w-[520px] bg-white shadow-2xl z-50 flex flex-col">
             <div className="h-14 border-b border-gray-100 flex items-center justify-between px-6 shrink-0">
-              <h2 className="text-base font-semibold text-gray-900">操作详情</h2>
+              <h2 className="text-base font-semibold text-gray-900">{t('detailTitle')}</h2>
               <button onClick={closeDetail} className="text-gray-400 hover:text-gray-600"><i className="fas fa-times"></i></button>
             </div>
             <div className="flex-1 overflow-y-auto">
@@ -486,6 +513,11 @@ function fmtTime(iso: string): string {
 }
 
 function OperationDetail({ detail }: { detail: OperationLogDetail }) {
+  const t = useTranslations('wsOpLogs')
+  const tSum = useTranslations('opLogSummary')
+  const tVerb = useTranslations('opLogVerb')
+  const tRes = useTranslations('opLogResource')
+  const msgs = useMessages() as any
   const am = actionMeta(detail.action)
   const cv = detail.change_view
   const d = (detail.detail || {}) as Record<string, any>
@@ -494,14 +526,14 @@ function OperationDetail({ detail }: { detail: OperationLogDetail }) {
     <div>
       <div className="px-6 py-5 border-b border-gray-100">
         <div className="flex items-center gap-2 flex-wrap mb-2">
-          <span className={`px-2 py-0.5 rounded text-xs font-medium ${am.cls}`}>{am.label}</span>
-          {detail.high_risk && <span className="px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700"><i className="fas fa-fire text-[10px] mr-1"></i>高危</span>}
+          <span className={`px-2 py-0.5 rounded text-xs font-medium ${am.cls}`}>{am.labelKey ? t(am.labelKey) : am.raw}</span>
+          {detail.high_risk && <span className="px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700"><i className="fas fa-fire text-[10px] mr-1"></i>{t('highRisk')}</span>}
         </div>
-        <p className="text-sm font-medium text-gray-900">{detail.summary}</p>
+        <p className="text-sm font-medium text-gray-900">{renderOpSummary(detail, msgs, tSum, tVerb, tRes)}</p>
         <p className="text-xs text-gray-400 mt-1 font-mono">{detail.id} · {fmtTime(detail.created_at)}</p>
       </div>
 
-      <Section title="操作人">
+      <Section title={t('actorSection')}>
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 bg-primary-50 rounded-full flex items-center justify-center"><span className="text-sm font-medium text-primary-600">{(detail.actor_name || '?').slice(0, 1)}</span></div>
           <div>
@@ -511,25 +543,25 @@ function OperationDetail({ detail }: { detail: OperationLogDetail }) {
         </div>
       </Section>
 
-      <Section title="请求信息">
+      <Section title={t('requestSection')}>
         <dl className="grid grid-cols-[80px_1fr] gap-y-2.5 gap-x-4 text-sm">
-          {typeof d.method === 'string' && <Field k="方法"><span className="font-mono">{d.method}</span></Field>}
-          {typeof d.endpoint === 'string' && <Field k="路径"><code className="text-xs break-all">{d.endpoint}</code></Field>}
-          <Field k="资源类型">{detail.resource_type || '-'}</Field>
-          <Field k="资源对象"><span className="font-mono text-xs break-all">{detail.resource_name || '-'}</span></Field>
-          <Field k="来源 IP"><span className="font-mono text-xs">{detail.ip || '-'}</span></Field>
-          {detail.session_id && <Field k="会话"><span className="font-mono text-xs text-gray-500">{detail.session_id}</span></Field>}
+          {typeof d.method === 'string' && <Field k={t('fMethod')}><span className="font-mono">{d.method}</span></Field>}
+          {typeof d.endpoint === 'string' && <Field k={t('fPath')}><code className="text-xs break-all">{d.endpoint}</code></Field>}
+          <Field k={t('fResType')}>{detail.resource_type || '-'}</Field>
+          <Field k={t('fResObj')}><span className="font-mono text-xs break-all">{detail.resource_name || '-'}</span></Field>
+          <Field k={t('fSourceIp')}><span className="font-mono text-xs">{detail.ip || '-'}</span></Field>
+          {detail.session_id && <Field k={t('fSession')}><span className="font-mono text-xs text-gray-500">{detail.session_id}</span></Field>}
         </dl>
       </Section>
 
       {typeof d.query === 'string' && (
-        <Section title="SQL 查询">
+        <Section title={t('sqlSection')}>
           <pre className="text-xs font-mono bg-gray-50 border border-gray-100 rounded-lg p-3 overflow-x-auto">{d.query}</pre>
         </Section>
       )}
 
       {detail.status === 'failed' && typeof d.error === 'string' && (
-        <Section title="错误信息" titleCls="text-red-500">
+        <Section title={t('errorSection')} titleCls="text-red-500">
           <pre className="text-xs font-mono bg-red-50 border border-red-100 text-red-700 rounded-lg p-3 overflow-x-auto">{d.error}</pre>
         </Section>
       )}
@@ -546,17 +578,18 @@ function OperationDetail({ detail }: { detail: OperationLogDetail }) {
   )
 }
 
-const IMPORT_ACTION_LABEL: Record<string, { label: string; cls: string }> = {
-  create: { label: '新建', cls: 'bg-green-100 text-green-700' },
-  overwrite: { label: '覆盖', cls: 'bg-amber-100 text-amber-700' },
-  rename: { label: '重命名', cls: 'bg-blue-100 text-blue-700' },
+const IMPORT_ACTION_LABEL: Record<string, { labelKey: string; cls: string }> = {
+  create: { labelKey: 'impCreate', cls: 'bg-green-100 text-green-700' },
+  overwrite: { labelKey: 'impOverwrite', cls: 'bg-amber-100 text-amber-700' },
+  rename: { labelKey: 'impRename', cls: 'bg-blue-100 text-blue-700' },
 }
 
 function ChangeViewBlock({ cv }: { cv: NonNullable<OperationLogDetail['change_view']> }) {
+  const t = useTranslations('wsOpLogs')
   if (cv.kind === 'imported') {
     const items = cv.items || []
     return (
-      <Section title={`导入内容（${items.length}）`} titleCls="text-green-600">
+      <Section title={t('importContent', { n: items.length })} titleCls="text-green-600">
         <div className="rounded-lg border border-green-200 bg-green-50/40 divide-y divide-green-100">
           {items.map((it, i) => {
             const am = IMPORT_ACTION_LABEL[it.action || 'create'] || IMPORT_ACTION_LABEL.create
@@ -569,7 +602,7 @@ function ChangeViewBlock({ cv }: { cv: NonNullable<OperationLogDetail['change_vi
                     <div className="text-[11px] text-gray-400 font-mono truncate">{it.slug}</div>
                   )}
                 </div>
-                <span className={`ml-auto shrink-0 text-[11px] px-1.5 py-0.5 rounded font-medium ${am.cls}`}>{am.label}</span>
+                <span className={`ml-auto shrink-0 text-[11px] px-1.5 py-0.5 rounded font-medium ${am.cls}`}>{t(am.labelKey)}</span>
               </div>
             )
           })}
@@ -580,12 +613,12 @@ function ChangeViewBlock({ cv }: { cv: NonNullable<OperationLogDetail['change_vi
   if (cv.kind === 'sql') {
     const stmts = cv.statements || []
     return (
-      <Section title="执行内容">
+      <Section title={t('execContent')}>
         {cv.sql ? (
           <div className="rounded-lg border border-gray-200 overflow-hidden">
             <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 border-b border-gray-100 text-[11px]">
               {cv.sql_type && <span className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 font-medium">{cv.sql_type}</span>}
-              {typeof cv.rows === 'number' && <span className="text-gray-500">影响 {cv.rows} 行</span>}
+              {typeof cv.rows === 'number' && <span className="text-gray-500">{t('affectedRows', { n: cv.rows })}</span>}
             </div>
             <pre className="px-3 py-2.5 text-xs font-mono text-gray-800 whitespace-pre-wrap break-all bg-gray-900/[0.02] max-h-64 overflow-auto">{cv.sql}</pre>
           </div>
@@ -606,7 +639,7 @@ function ChangeViewBlock({ cv }: { cv: NonNullable<OperationLogDetail['change_vi
   if (cv.kind === 'created' || cv.kind === 'deleted') {
     const isDel = cv.kind === 'deleted'
     return (
-      <Section title={isDel ? '被删除对象' : '创建内容'} titleCls={isDel ? 'text-red-500' : 'text-green-600'}>
+      <Section title={isDel ? t('deletedObj') : t('createdContent')} titleCls={isDel ? 'text-red-500' : 'text-green-600'}>
         <div className={`rounded-lg border p-3 ${isDel ? 'border-red-200 bg-red-50/50' : 'border-green-200 bg-green-50/50'}`}>
           <dl className="grid grid-cols-[90px_1fr] gap-y-2 gap-x-4 text-sm">
             {(cv.summary || []).map((s, i) => (
@@ -626,7 +659,7 @@ function ChangeViewBlock({ cv }: { cv: NonNullable<OperationLogDetail['change_vi
     delete: 'border-red-200 bg-red-50 text-red-700',
   }
   return (
-    <Section title="变更内容">
+    <Section title={t('changeContent')}>
       <div className="space-y-3">
         {(cv.groups || []).map((grp, gi) => (
           <div key={gi} className="rounded-lg border overflow-hidden border-gray-200">

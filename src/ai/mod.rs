@@ -42,11 +42,17 @@ fn require_interactive_credential(
     has_platform_token_context: bool,
 ) -> Result<()> {
     if !has_claims {
-        return Err(AppError::Unauthorized("未认证".to_string()));
+        return Err(AppError::unauthorized_coded(
+            "ai_unauthenticated",
+            "未认证".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if has_api_key_context || has_platform_token_context {
-        return Err(AppError::Forbidden(
+        return Err(AppError::forbidden_coded(
+            "ai_interactive_only",
             "AI 助手当前仅支持交互式用户会话".to_string(),
+            serde_json::json!({}),
         ));
     }
     Ok(())
@@ -116,9 +122,11 @@ impl std::str::FromStr for ProviderKind {
             "openai" => Ok(Self::Openai),
             "anthropic" | "claude" => Ok(Self::Anthropic),
             "qwen" | "tongyi" => Ok(Self::Qwen),
-            _ => Err(AppError::InvalidQuery(format!(
-                "不支持的 AI Provider：{value}"
-            ))),
+            _ => Err(AppError::validation(
+                "ai_provider_kind_unsupported",
+                format!("不支持的 AI Provider：{value}"),
+                serde_json::json!({ "value": value }),
+            )),
         }
     }
 }
@@ -210,8 +218,10 @@ fn desired_default_state(
 ) -> Result<bool> {
     if !is_active {
         if requested_default == Some(true) {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "ai_inactive_provider_cannot_default",
                 "停用的 AI Provider 不能设为默认".to_string(),
+                serde_json::json!({}),
             ));
         }
         return Ok(false);
@@ -245,12 +255,18 @@ pub struct ChatRequest {
 fn validate_text(label: &str, value: &str, max: usize) -> Result<String> {
     let value = value.trim();
     if value.is_empty() {
-        return Err(AppError::InvalidQuery(format!("{label}不能为空")));
+        return Err(AppError::validation(
+            "ai_field_required",
+            format!("{label}不能为空"),
+            serde_json::json!({ "label": label }),
+        ));
     }
     if value.len() > max {
-        return Err(AppError::InvalidQuery(format!(
-            "{label}过长，上限 {max} 字节"
-        )));
+        return Err(AppError::validation(
+            "ai_field_too_long",
+            format!("{label}过长，上限 {max} 字节"),
+            serde_json::json!({ "label": label, "max": max }),
+        ));
     }
     Ok(value.to_string())
 }
@@ -289,7 +305,10 @@ fn local_base_url_allowed(url: &Url) -> bool {
         .as_str()
     {
         "localhost" => true,
+        // host_str() 对 IPv6 字面量保留方括号（如 `[::1]`），需剥离后才能解析成 IpAddr
         host => host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
             .parse::<IpAddr>()
             .map(|ip| ip.is_loopback())
             .unwrap_or(false),
@@ -305,39 +324,70 @@ struct ValidatedTarget {
 /// URL 既做语法/协议校验，也解析 DNS 检查所有地址，防止域名指向内网。
 async fn validate_and_resolve_base_url(raw: &str) -> Result<ValidatedTarget> {
     let trimmed = raw.trim().trim_end_matches('/');
-    let url = Url::parse(trimmed)
-        .map_err(|_| AppError::InvalidQuery("base_url 不是有效 URL".to_string()))?;
+    let url = Url::parse(trimmed).map_err(|_| {
+        AppError::validation(
+            "ai_base_url_invalid",
+            "base_url 不是有效 URL".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
     if url.username() != ""
         || url.password().is_some()
         || url.query().is_some()
         || url.fragment().is_some()
     {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "ai_base_url_forbidden_parts",
             "base_url 不允许包含凭据、query 或 fragment".to_string(),
+            serde_json::json!({}),
         ));
     }
     let local_allowed = local_base_url_allowed(&url);
     if url.scheme() != "https" && !(url.scheme() == "http" && local_allowed) {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "ai_base_url_requires_https",
             "base_url 必须使用 HTTPS；开发/测试环境仅允许 HTTP localhost".to_string(),
+            serde_json::json!({}),
         ));
     }
-    let host = url
-        .host_str()
-        .ok_or_else(|| AppError::InvalidQuery("base_url 缺少主机名".to_string()))?;
-    let port = url
-        .port_or_known_default()
-        .ok_or_else(|| AppError::InvalidQuery("base_url 端口无效".to_string()))?;
-    let addresses: Vec<_> = tokio::net::lookup_host((host, port))
+    let host = url.host_str().ok_or_else(|| {
+        AppError::validation(
+            "ai_base_url_missing_host",
+            "base_url 缺少主机名".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
+    let port = url.port_or_known_default().ok_or_else(|| {
+        AppError::validation(
+            "ai_base_url_invalid_port",
+            "base_url 端口无效".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
+    // IPv6 字面量的 host_str() 带方括号，lookup_host 不接受，解析前先剥离
+    let lookup_name = host.trim_start_matches('[').trim_end_matches(']');
+    let addresses: Vec<_> = tokio::net::lookup_host((lookup_name, port))
         .await
-        .map_err(|_| AppError::InvalidQuery("base_url 主机无法解析".to_string()))?
+        .map_err(|_| {
+            AppError::validation(
+                "ai_base_url_host_unresolvable",
+                "base_url 主机无法解析".to_string(),
+                serde_json::json!({}),
+            )
+        })?
         .collect();
     if addresses.is_empty() {
-        return Err(AppError::InvalidQuery("base_url 主机无法解析".to_string()));
+        return Err(AppError::validation(
+            "ai_base_url_host_unresolvable",
+            "base_url 主机无法解析".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if !local_allowed && addresses.iter().any(|addr| is_non_public_ip(addr.ip())) {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "ai_base_url_forbidden_address",
             "base_url 不允许指向本机、内网、链路本地或保留地址".to_string(),
+            serde_json::json!({}),
         ));
     }
     Ok(ValidatedTarget {
@@ -378,6 +428,11 @@ fn record_provider_op(
     record: &ProviderRecord,
     summary: String,
 ) {
+    let summary_code = match action {
+        operation_log::action::CREATE => "oplog_ai_provider_create",
+        operation_log::action::DELETE => "oplog_ai_provider_delete",
+        _ => "oplog_ai_provider_update",
+    };
     let input = OperationLogInput::new(
         tenant_id,
         Actor::from_claims(claims),
@@ -398,7 +453,8 @@ fn record_provider_op(
         "is_active": record.is_active,
         "is_default": record.is_default,
         "api_key": "***"
-    }));
+    }))
+    .summary_code(summary_code, json!({ "name": record.name }));
     operation_log::record(pool, input);
 }
 
@@ -504,7 +560,13 @@ pub async fn update_provider(
     .bind(provider_id)
     .fetch_optional(&mut *tx)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("AI Provider {provider_id} 不存在")))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "ai_provider_not_found",
+            format!("AI Provider {provider_id} 不存在"),
+            serde_json::json!({ "id": provider_id }),
+        )
+    })?;
 
     let kind = req.provider.unwrap_or(old.kind()?);
     let name = match req.name.as_deref() {
@@ -569,9 +631,11 @@ pub async fn update_provider(
     .await?
     .rows_affected();
     if affected == 0 {
-        return Err(AppError::NotFound(format!(
-            "AI Provider {provider_id} 不存在"
-        )));
+        return Err(AppError::not_found_coded(
+            "ai_provider_not_found",
+            format!("AI Provider {provider_id} 不存在"),
+            serde_json::json!({ "id": provider_id }),
+        ));
     }
     // 停用/取消当前默认项后，优先把另一个 active Provider 提升为默认；
     // 若目标是唯一 active 项，则仍由目标维持默认，避免 active 集合没有默认项。
@@ -627,7 +691,13 @@ pub async fn delete_provider(
     .bind(provider_id)
     .fetch_optional(&mut *tx)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("AI Provider {provider_id} 不存在")))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "ai_provider_not_found",
+            format!("AI Provider {provider_id} 不存在"),
+            serde_json::json!({ "id": provider_id }),
+        )
+    })?;
     let deleted = sqlx::query("DELETE FROM management.ai_providers WHERE id=$1 AND tenant_id=$2")
         .bind(provider_id)
         .bind(project_id)
@@ -635,9 +705,11 @@ pub async fn delete_provider(
         .await?
         .rows_affected();
     if deleted == 0 {
-        return Err(AppError::NotFound(format!(
-            "AI Provider {provider_id} 不存在"
-        )));
+        return Err(AppError::not_found_coded(
+            "ai_provider_not_found",
+            format!("AI Provider {provider_id} 不存在"),
+            serde_json::json!({ "id": provider_id }),
+        ));
     }
     sqlx::query(
         "UPDATE management.ai_providers SET is_default=true \
@@ -671,7 +743,13 @@ async fn fetch_provider(pool: &PgPool, tenant_id: i32, id: i32) -> Result<Provid
     .bind(id)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("AI Provider {id} 不存在")))
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "ai_provider_not_found",
+            format!("AI Provider {id} 不存在"),
+            serde_json::json!({ "id": id }),
+        )
+    })
 }
 
 async fn resolve_provider(
@@ -682,10 +760,14 @@ async fn resolve_provider(
     let row = if let Some(id) = provider_id {
         let provider = fetch_provider(pool, tenant_id, id).await?;
         if !provider.is_active {
-            return Err(AppError::Forbidden(format!(
-                "AI Provider {}「{}」已停用，不能用于聊天",
-                provider.id, provider.name
-            )));
+            return Err(AppError::forbidden_coded(
+                "ai_provider_inactive_for_chat",
+                format!(
+                    "AI Provider {}「{}」已停用，不能用于聊天",
+                    provider.id, provider.name
+                ),
+                serde_json::json!({ "id": provider.id, "name": provider.name }),
+            ));
         }
         provider
     } else {
@@ -697,7 +779,13 @@ async fn resolve_provider(
         .bind(tenant_id)
         .fetch_optional(pool)
         .await?
-        .ok_or_else(|| AppError::NotFound("项目没有已启用的 AI Provider".to_string()))?
+        .ok_or_else(|| {
+            AppError::not_found_coded(
+                "ai_no_active_provider",
+                "项目没有已启用的 AI Provider".to_string(),
+                serde_json::json!({}),
+            )
+        })?
     };
     Ok(row)
 }
@@ -712,8 +800,10 @@ async fn client_for_provider(provider: &ProviderRecord) -> Result<Client> {
             .ok()
             .and_then(|url| url.host_str().map(str::to_string));
         if expected.as_deref() != Some(target.host.as_str()) {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "ai_default_provider_host_mismatch",
                 "默认 Provider 域名与内置配置不一致".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -731,22 +821,27 @@ async fn client_for_provider(provider: &ProviderRecord) -> Result<Client> {
 
 fn validate_messages(messages: &[ChatMessage]) -> Result<()> {
     if messages.is_empty() || messages.len() > MAX_MESSAGES {
-        return Err(AppError::InvalidQuery(format!(
-            "messages 数量必须为 1..={MAX_MESSAGES}"
-        )));
+        return Err(AppError::validation(
+            "ai_messages_count_out_of_range",
+            format!("messages 数量必须为 1..={MAX_MESSAGES}"),
+            serde_json::json!({ "max": MAX_MESSAGES }),
+        ));
     }
     let total: usize = messages.iter().map(|m| m.content.len()).sum();
     if total > MAX_MESSAGE_BYTES {
-        return Err(AppError::InvalidQuery(format!(
-            "消息总大小超过 {}KB",
-            MAX_MESSAGE_BYTES / 1024
-        )));
+        return Err(AppError::validation(
+            "ai_messages_too_large",
+            format!("消息总大小超过 {}KB", MAX_MESSAGE_BYTES / 1024),
+            serde_json::json!({ "limit_kb": MAX_MESSAGE_BYTES / 1024 }),
+        ));
     }
     if messages.iter().any(|m| {
         !matches!(m.role.as_str(), "system" | "user" | "assistant") || m.content.trim().is_empty()
     }) {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "ai_message_role_or_content_invalid",
             "消息 role 仅支持 system/user/assistant，且 content 不能为空".to_string(),
+            serde_json::json!({}),
         ));
     }
     Ok(())
@@ -918,9 +1013,11 @@ async fn execute_readonly_tool(
     args: &Value,
 ) -> Result<Value> {
     if !tool_allowed(name) {
-        return Err(AppError::Forbidden(format!(
-            "AI 工具不在只读白名单中：{name}"
-        )));
+        return Err(AppError::forbidden_coded(
+            "ai_tool_not_allowlisted",
+            format!("AI 工具不在只读白名单中：{name}"),
+            serde_json::json!({ "name": name }),
+        ));
     }
     match name {
         "list_workflows" => {
@@ -956,7 +1053,13 @@ async fn execute_readonly_tool(
                 .get("id")
                 .and_then(Value::as_i64)
                 .and_then(|v| i32::try_from(v).ok())
-                .ok_or_else(|| AppError::InvalidQuery("get_workflow 缺少有效 id".to_string()))?;
+                .ok_or_else(|| {
+                    AppError::validation(
+                        "ai_get_workflow_missing_id",
+                        "get_workflow 缺少有效 id".to_string(),
+                        serde_json::json!({}),
+                    )
+                })?;
             let row = sqlx::query(
                 "SELECT id, name, slug, description, trigger_type, trigger_config, nodes, edges, \
                  is_enabled, timeout_ms, max_retries, updated_at \
@@ -966,7 +1069,13 @@ async fn execute_readonly_tool(
             .bind(id)
             .fetch_optional(pool)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("工作流 {id} 不存在")))?;
+            .ok_or_else(|| {
+                AppError::not_found_coded(
+                    "ai_workflow_not_found",
+                    format!("工作流 {id} 不存在"),
+                    serde_json::json!({ "id": id }),
+                )
+            })?;
             Ok(json!({
                 "id": row.get::<i32,_>("id"),
                 "name": row.get::<String,_>("name"),
@@ -1428,10 +1537,10 @@ fn extract_text(provider: &ProviderRecord, response: &Value) -> Option<String> {
 /// 不接受调用方传入 Provider 或密钥，避免跨项目使用配置。
 pub(crate) async fn review_workflow_with_project_provider(
     pool: &PgPool,
-    workflow: &onebase::workflow_qa::WorkflowSnapshot,
-    rules: &[onebase::workflow_qa::Finding],
-) -> onebase::workflow_qa::AiResult {
-    use onebase::workflow_qa::{AiResult, AiStatus};
+    workflow: &planeos::workflow_qa::WorkflowSnapshot,
+    rules: &[planeos::workflow_qa::Finding],
+) -> planeos::workflow_qa::AiResult {
+    use planeos::workflow_qa::{AiResult, AiStatus};
 
     let failed = |message: &'static str| AiResult {
         status: AiStatus::Error,
@@ -1457,9 +1566,12 @@ pub(crate) async fn review_workflow_with_project_provider(
         }
     };
 
-    let provider = match select_provider(pool, tenant_id, None).await {
+    let provider = match resolve_provider(pool, tenant_id, None).await {
         Ok(provider) => provider,
-        Err(AppError::NotFound(_)) => {
+        Err(AppError::Coded {
+            code: "ai_no_active_provider",
+            ..
+        }) => {
             return AiResult {
                 status: AiStatus::Skipped,
                 findings: vec![],
@@ -1488,7 +1600,7 @@ pub(crate) async fn review_workflow_with_project_provider(
     };
     let messages = vec![ChatMessage {
         role: "user".to_string(),
-        content: onebase::workflow_qa::build_query(workflow, rules),
+        content: planeos::workflow_qa::build_query(workflow, rules),
     }];
     let body = match request_body(&provider, &messages, false, false, Some(4096), Some(0.1)) {
         Ok(body) => body,
@@ -1507,7 +1619,7 @@ pub(crate) async fn review_workflow_with_project_provider(
     let Some(text) = extract_text(&provider, &response) else {
         return failed("AI Provider 响应中没有文本");
     };
-    match onebase::workflow_qa::parse_findings_json(&text) {
+    match planeos::workflow_qa::parse_findings_json(&text) {
         Ok(findings) => AiResult {
             status: AiStatus::Ok,
             findings,
@@ -1716,8 +1828,10 @@ pub async fn chat(
     validate_messages(&req.messages)?;
     if let Some(t) = req.temperature {
         if !(0.0..=2.0).contains(&t) {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "ai_temperature_out_of_range",
                 "temperature 必须在 0..=2 之间".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -1778,15 +1892,15 @@ mod tests {
         assert!(require_interactive_credential(true, false, false).is_ok());
         assert!(matches!(
             require_interactive_credential(true, true, false),
-            Err(AppError::Forbidden(_))
+            Err(AppError::Coded { .. })
         ));
         assert!(matches!(
             require_interactive_credential(true, false, true),
-            Err(AppError::Forbidden(_))
+            Err(AppError::Coded { .. })
         ));
         assert!(matches!(
             require_interactive_credential(false, false, false),
-            Err(AppError::Unauthorized(_))
+            Err(AppError::Coded { .. })
         ));
     }
 
@@ -1804,7 +1918,7 @@ mod tests {
             &main[chat_start..routes_end],
         ] {
             // Axum 的后添加 layer 先执行，因此源码必须是 license -> guard -> auth。
-            let license = block.find("onebase::license::require_module").unwrap();
+            let license = block.find("planeos::license::require_module").unwrap();
             let guard = block.find("ai::interactive_jwt_guard").unwrap();
             let auth = block.find("middleware::auth_middleware").unwrap();
             assert!(license < guard && guard < auth);

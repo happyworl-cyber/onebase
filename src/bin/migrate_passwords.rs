@@ -6,7 +6,7 @@
 //!
 //! 用法：
 //!     # 容器里：
-//!     /app/onebase-migrate-passwords
+//!     /app/planeos-migrate-passwords
 //!
 //!     # 本地：
 //!     DATABASE_URL=... ENCRYPTION_KEY=... cargo run --bin migrate_passwords
@@ -31,7 +31,7 @@ const GCM_TAG_LEN: usize = 16;
 fn load_key() -> [u8; 32] {
     let raw = std::env::var("ENCRYPTION_KEY").unwrap_or_default();
     if raw.is_empty() {
-        panic!("ENCRYPTION_KEY 未设置（必须与运行中的 onebase 进程使用同一密钥）");
+        panic!("ENCRYPTION_KEY 未设置（必须与运行中的 planeos 进程使用同一密钥）");
     }
     let key = base64::engine::general_purpose::STANDARD
         .decode(&raw)
@@ -108,7 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect(&database_url)
         .await?;
 
-    println!("=== Onebase 密码迁移到 v2 格式 ===");
+    println!("=== PlaneOS 密码迁移到 v2 格式 ===");
 
     let rows = sqlx::query(
         "SELECT id, connection_name, db_password_encrypted \

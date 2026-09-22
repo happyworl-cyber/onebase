@@ -160,7 +160,7 @@ Create `src/bin/migrate_scheduled_tasks.rs`:
 //! 迁移脚本：定时任务表
 //! 运行方式: `cargo run --bin migrate_scheduled_tasks`
 
-use onebase::migrate::run_sql_script;
+use planeos::migrate::run_sql_script;
 use sqlx::postgres::PgPoolOptions;
 use std::env;
 
@@ -291,7 +291,7 @@ pub struct SchedulerRunner;
 mod scheduler;
 ```
 
-按字母序就近插入。如果 `src/lib.rs` 也有同样的 mod 块（仓库里 lib.rs 是 re-export 给 `onebase::migrate` 等用），在那里也追加：
+按字母序就近插入。如果 `src/lib.rs` 也有同样的 mod 块（仓库里 lib.rs 是 re-export 给 `planeos::migrate` 等用），在那里也追加：
 
 ```rust
 pub mod scheduler;
@@ -553,7 +553,7 @@ mod tests {
 - [ ] **Step 2: 运行测试确认失败**
 
 ```bash
-cargo test --bin onebase scheduler::cron_parser:: 2>&1 | tail -20
+cargo test --bin planeos scheduler::cron_parser:: 2>&1 | tail -20
 ```
 
 Expected: 5 个 test FAIL with `not yet implemented`（即 `todo!()` panic），或编译错误。要看到 5 个测试名出现且都 fail。
@@ -658,7 +658,7 @@ let times = preview("0 */6 * * *", "UTC", after, 4).unwrap();
 - [ ] **Step 5: 运行测试确认通过**
 
 ```bash
-cargo test --bin onebase scheduler::cron_parser:: 2>&1 | tail -15
+cargo test --bin planeos scheduler::cron_parser:: 2>&1 | tail -15
 ```
 
 Expected: `test result: ok. 6 passed; 0 failed`.
@@ -699,7 +699,7 @@ Expected: 空（没有 error 行）。
 - [ ] **Step 1: 全量测试**
 
 ```bash
-cargo test --bin onebase scheduler:: 2>&1 | tail -20
+cargo test --bin planeos scheduler:: 2>&1 | tail -20
 ```
 
 Expected: cron_parser 的 6 个测试通过，无其他失败。
@@ -869,7 +869,7 @@ pub async fn execute_rpc_inner(
 - [ ] **Step 5: 编译确认**
 
 ```bash
-cargo check --bin onebase 2>&1 | grep -E "^error" | head -20
+cargo check --bin planeos 2>&1 | grep -E "^error" | head -20
 ```
 
 Expected: 没有 error。
@@ -877,7 +877,7 @@ Expected: 没有 error。
 - [ ] **Step 6: 跑现有 rpc 相关测试**
 
 ```bash
-cargo test --bin onebase rpc:: 2>&1 | tail -20
+cargo test --bin planeos rpc:: 2>&1 | tail -20
 ```
 
 Expected: 全部 PASS（这是回归保护，确保重构没改变行为）。
@@ -914,7 +914,7 @@ fn execute_rpc_inner_signature_compiles() {
 - [ ] **Step 8: 跑该测试**
 
 ```bash
-cargo test --bin onebase rpc::tests::execute_rpc_inner_signature_compiles 2>&1 | tail -5
+cargo test --bin planeos rpc::tests::execute_rpc_inner_signature_compiles 2>&1 | tail -5
 ```
 
 Expected: PASS。
@@ -1118,7 +1118,7 @@ rg "fn get_pool_for_database|pub.*get_pool_for_database" src/pool_manager.rs
 - [ ] **Step 3: 跑测试**
 
 ```bash
-cargo test --bin onebase scheduler::executors::tests::rpc_execute_rejects_missing_database_id 2>&1 | tail -10
+cargo test --bin planeos scheduler::executors::tests::rpc_execute_rejects_missing_database_id 2>&1 | tail -10
 ```
 
 Expected: PASS（即使错误是因为 PG 连接失败而不是参数缺失，只要返回 Err 而不 panic 就过）。
@@ -1192,7 +1192,7 @@ impl HttpExecutor {
                 hasher.update(secret.as_bytes());
                 hasher.update(&body_bytes);
                 let sig = hex::encode(hasher.finalize());
-                req = req.header("X-Onebase-Signature", sig);
+                req = req.header("X-PlaneOS-Signature", sig);
             }
         }
 
@@ -1261,7 +1261,7 @@ async fn http_execute_rejects_unknown_method() {
 - [ ] **Step 2: 跑测试**
 
 ```bash
-cargo test --bin onebase scheduler::executors::tests:: 2>&1 | tail -10
+cargo test --bin planeos scheduler::executors::tests:: 2>&1 | tail -10
 ```
 
 Expected: 3 个测试都 PASS。
@@ -1720,7 +1720,7 @@ mod tests {
 - [ ] **Step 2: 跑这部分的单测**
 
 ```bash
-cargo test --bin onebase scheduler::runner::tests:: 2>&1 | tail -10
+cargo test --bin planeos scheduler::runner::tests:: 2>&1 | tail -10
 ```
 
 Expected: 3 个测试 PASS。
@@ -1728,7 +1728,7 @@ Expected: 3 个测试 PASS。
 - [ ] **Step 3: 整体编译**
 
 ```bash
-cargo check --bin onebase 2>&1 | grep "^error" | head -10
+cargo check --bin planeos 2>&1 | grep "^error" | head -10
 ```
 
 Expected: 空。
@@ -1749,8 +1749,8 @@ Expected: 空。
 //! 没设这个变量时测试自动 skip（不 fail）。
 
 use chrono::Utc;
-use onebase::scheduler::executors::{HttpExecutor, RpcExecutor};
-use onebase::scheduler::runner::{SchedulerConfig, SchedulerRunner};
+use planeos::scheduler::executors::{HttpExecutor, RpcExecutor};
+use planeos::scheduler::runner::{SchedulerConfig, SchedulerRunner};
 use sqlx::PgPool;
 use std::sync::Arc;
 
@@ -1913,7 +1913,7 @@ EOF
 - [ ] **Step 3: 验证**
 
 ```bash
-cargo check --bin onebase 2>&1 | grep "^error" | head -5
+cargo check --bin planeos 2>&1 | grep "^error" | head -5
 ```
 
 Expected: 空。
@@ -2496,7 +2496,7 @@ rg "pub (async )?fn admin_tenant_ids" src/audit_handlers.rs
 - [ ] **Step 4: 编译**
 
 ```bash
-cargo check --bin onebase 2>&1 | grep "^error" | head -20
+cargo check --bin planeos 2>&1 | grep "^error" | head -20
 ```
 
 Expected: 0 个 error。修复后继续。
@@ -2691,7 +2691,7 @@ Expected: 0 个 error。修复后继续。
 - [ ] **Step 6: 编译**
 
 ```bash
-cargo check --bin onebase 2>&1 | grep "^error" | head -20
+cargo check --bin planeos 2>&1 | grep "^error" | head -20
 ```
 
 Expected: 0 个 error。
@@ -2709,7 +2709,7 @@ Expected: 0 个 error。
 //! 手动构造 Claims 调 handler 验证 validate_can_manage 决策。
 //! 需要 DATABASE_URL_TEST 指向带 management 表的 PG。
 
-use onebase::auth::Claims;
+use planeos::auth::Claims;
 use sqlx::PgPool;
 
 async fn setup() -> Option<PgPool> {
@@ -2753,7 +2753,7 @@ Expected: 1 个测试 PASS（或 skip）。
 - [ ] **Step 1: 启服务**
 
 ```bash
-cargo run --bin onebase 2>&1 | tee /tmp/onebase-smoke.log &
+cargo run --bin planeos 2>&1 | tee /tmp/planeos-smoke.log &
 SERVICE_PID=$!
 sleep 5
 ```
@@ -2974,7 +2974,7 @@ EOF
 - [ ] **完整 cargo test**
 
 ```bash
-cargo test --bin onebase 2>&1 | tail -20
+cargo test --bin planeos 2>&1 | tail -20
 ```
 
 Expected: 全部 PASS。

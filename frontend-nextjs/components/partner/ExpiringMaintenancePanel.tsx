@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useTranslations } from 'next-intl';
 import {
   Alert,
   AlertDescription,
@@ -31,6 +32,7 @@ interface ExpiringMaintenance {
 }
 
 export function ExpiringMaintenancePanel() {
+  const t = useTranslations('partnerExpiringMaint');
   const [expiring, setExpiring] = useState<ExpiringMaintenance[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +52,7 @@ export function ExpiringMaintenancePanel() {
 
       setExpiring(response.data.expiring_maintenance);
     } catch (err: any) {
-      setError(err.message || '加载失败');
+      setError(err.message || t('loadFailed'));
     } finally {
       setIsLoading(false);
     }
@@ -63,9 +65,9 @@ export function ExpiringMaintenancePanel() {
   };
 
   const getUrgencyBadge = (days: number) => {
-    if (days <= 7) return <Badge variant="destructive">紧急</Badge>;
-    if (days <= 15) return <Badge variant="outline" className="border-orange-500 text-orange-700">注意</Badge>;
-    return <Badge variant="secondary">提醒</Badge>;
+    if (days <= 7) return <Badge variant="destructive">{t('urgent')}</Badge>;
+    if (days <= 15) return <Badge variant="outline" className="border-orange-500 text-orange-700">{t('attention')}</Badge>;
+    return <Badge variant="secondary">{t('reminder')}</Badge>;
   };
 
   if (isLoading) {
@@ -96,13 +98,13 @@ export function ExpiringMaintenancePanel() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Clock className="h-5 w-5" />
-            即将到期的维护服务
+            {t('title')}
           </CardTitle>
-          <CardDescription>30 天内到期的维护服务</CardDescription>
+          <CardDescription>{t('subtitle')}</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="text-center py-8 text-muted-foreground">
-            暂无即将到期的维护服务
+            {t('noExpiringMaintenance')}
           </div>
         </CardContent>
       </Card>
@@ -116,12 +118,12 @@ export function ExpiringMaintenancePanel() {
           <div>
             <CardTitle className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-orange-600" />
-              即将到期的维护服务
+              {t('title')}
             </CardTitle>
-            <CardDescription>30 天内到期的维护服务（{expiring.length} 个）</CardDescription>
+            <CardDescription>{t('subtitleWithCount', { count: expiring.length })}</CardDescription>
           </div>
           <Button size="sm" variant="outline" onClick={loadExpiringMaintenance}>
-            刷新
+            {t('refresh')}
           </Button>
         </div>
       </CardHeader>
@@ -138,7 +140,7 @@ export function ExpiringMaintenancePanel() {
                       <Badge variant="outline">{item.edition}</Badge>
                       {item.auto_renew_maintenance && (
                         <Badge variant="secondary" className="text-xs">
-                          自动续费
+                          {t('autoRenew')}
                         </Badge>
                       )}
                     </div>
@@ -151,7 +153,7 @@ export function ExpiringMaintenancePanel() {
 
                     <div className="grid grid-cols-2 gap-4 text-sm">
                       <div>
-                        <span className="text-muted-foreground">到期时间：</span>
+                        <span className="text-muted-foreground">{t('expiresAt')}</span>
                         <span className="font-medium">
                           {new Intl.DateTimeFormat('zh-CN').format(
                             new Date(item.maintenance_expires_at)
@@ -159,19 +161,19 @@ export function ExpiringMaintenancePanel() {
                         </span>
                       </div>
                       <div>
-                        <span className="text-muted-foreground">剩余天数：</span>
+                        <span className="text-muted-foreground">{t('daysRemaining')}</span>
                         <span className={`font-bold ${getUrgencyColor(item.days_remaining)}`}>
-                          {item.days_remaining} 天
+                          {t('daysCount', { n: item.days_remaining })}
                         </span>
                       </div>
                       <div>
-                        <span className="text-muted-foreground">年度维护费：</span>
+                        <span className="text-muted-foreground">{t('annualMaintenanceFee')}</span>
                         <span className="font-medium">
                           ¥{(item.maintenance_price / 100).toLocaleString()}
                         </span>
                       </div>
                       <div>
-                        <span className="text-muted-foreground">您的佣金（10%）：</span>
+                        <span className="text-muted-foreground">{t('yourCommissionRate')}</span>
                         <span className="font-medium text-primary">
                           ¥{(item.maintenance_price * 0.1 / 100).toLocaleString()}
                         </span>
@@ -181,12 +183,12 @@ export function ExpiringMaintenancePanel() {
 
                   <div className="flex flex-col gap-2 ml-4">
                     <Button size="sm" variant="default">
-                      立即续费
+                      {t('renewNow')}
                     </Button>
                     {item.customer_email && (
                       <Button size="sm" variant="outline">
                         <Mail className="h-4 w-4 mr-1" />
-                        提醒客户
+                        {t('remindCustomer')}
                       </Button>
                     )}
                   </div>

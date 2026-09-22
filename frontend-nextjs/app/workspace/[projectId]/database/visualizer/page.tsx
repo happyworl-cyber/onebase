@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { useParams, useRouter } from 'next/navigation'
 import { schemaAPI } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
@@ -15,7 +16,7 @@ const ERDiagram = dynamic(
       <div className="h-[calc(100vh-200px)] w-full border border-gray-200 rounded-lg bg-gray-50 flex items-center justify-center">
         <div className="text-center">
           <i className="fas fa-spinner fa-spin text-3xl text-blue-500 mb-3"></i>
-          <p className="text-sm text-gray-500">加载 ER 图...</p>
+          <p className="text-sm text-gray-500">Loading…</p>
         </div>
       </div>
     ),
@@ -50,6 +51,7 @@ interface ForeignKey {
 }
 
 export default function SchemaVisualizerPage() {
+  const t = useTranslations('wsVisualizer')
   const { currentSchema } = useAppStore()
   const router = useRouter()
   const params = useParams<{ projectId: string }>()
@@ -117,7 +119,7 @@ export default function SchemaVisualizerPage() {
             foreign_keys: data.foreign_keys || [],
           }
         } catch (err) {
-          console.error(`加载表 ${table.table_name} 失败:`, err)
+          console.error(t('loadTableFailed', { name: table.table_name }), err)
           return {
             table_name: table.table_name,
             columns: [],
@@ -150,8 +152,8 @@ export default function SchemaVisualizerPage() {
       setTableNodes(nodes)
       setForeignKeys(fks)
     } catch (err: any) {
-      console.error('加载 ER 数据失败:', err)
-      setError(err.response?.data?.error || '加载失败')
+      console.error(t('loadErFailed'), err)
+      setError(err.response?.data?.error || t('loadFailed'))
       setTableNodes([])
       setForeignKeys([])
     } finally {
@@ -164,15 +166,15 @@ export default function SchemaVisualizerPage() {
       {/* 顶部工具栏 */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Schema 可视化 (ER 图)</h1>
+          <h1 className="text-2xl font-semibold text-gray-900">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            当前 Schema: <span className="font-mono font-medium text-gray-900">{currentSchema}</span>
+            {t('currentSchema')} <span className="font-mono font-medium text-gray-900">{currentSchema}</span>
             {tables.length > 0 && (
               <span className="ml-3">
                 <i className="fas fa-table text-blue-500 mr-1"></i>
-                {tables.length} 张表
+                {t('tableCount', { n: tables.length })}
                 <i className="fas fa-link text-green-500 ml-3 mr-1"></i>
-                {foreignKeys.length} 个关系
+                {t('relCount', { n: foreignKeys.length })}
               </span>
             )}
           </p>
@@ -184,7 +186,7 @@ export default function SchemaVisualizerPage() {
             className="btn-default text-sm disabled:opacity-50"
           >
             <i className={`fas ${loadingER ? 'fa-spinner fa-spin' : 'fa-sync-alt'} text-xs mr-2`}></i>
-            刷新
+            {t('refresh')}
           </button>
         </div>
       </div>
@@ -201,16 +203,16 @@ export default function SchemaVisualizerPage() {
         <div className="h-[calc(100vh-200px)] w-full border border-gray-200 rounded-lg bg-gray-50 flex items-center justify-center">
           <div className="text-center">
             <i className="fas fa-spinner fa-spin text-3xl text-blue-500 mb-3"></i>
-            <p className="text-sm text-gray-500">加载数据中...</p>
+            <p className="text-sm text-gray-500">{t('loadingData')}</p>
           </div>
         </div>
       ) : tableNodes.length === 0 ? (
         <div className="h-[calc(100vh-200px)] w-full border border-gray-200 rounded-lg bg-gray-50 flex items-center justify-center">
           <div className="text-center max-w-md">
             <i className="fas fa-project-diagram text-5xl text-gray-300 mb-4"></i>
-            <h3 className="text-base font-medium text-gray-800 mb-2">还没有数据表可以画</h3>
+            <h3 className="text-base font-medium text-gray-800 mb-2">{t('emptyTitle')}</h3>
             <p className="text-sm text-gray-500 mb-5">
-              ER 图会自动展现表之间的外键关系——先建几张表，这里就会动起来。
+              {t('emptyDesc')}
             </p>
             {/* M3：空 ER 图也能直跳建表器，避免用户被"请先创建表"卡住找不到入口。 */}
             <button
@@ -220,7 +222,7 @@ export default function SchemaVisualizerPage() {
               className="btn-primary"
             >
               <i className="fas fa-plus mr-2"></i>
-              去建一张表
+              {t('goCreate')}
             </button>
           </div>
         </div>

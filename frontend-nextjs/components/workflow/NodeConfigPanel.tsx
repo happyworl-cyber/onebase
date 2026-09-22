@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useParams } from 'next/navigation'
 import { NODE_TYPE_META } from './NodeTypes'
 import CodeSnippetEditor from './CodeSnippetEditor'
@@ -43,31 +44,31 @@ const MAX_WIDTH = 900
 const DEFAULT_WIDTH = 280
 
 interface JsonFieldRule {
-  label: string
+  labelKey: string
   requireObject?: boolean
 }
 
 const JSON_FIELD_RULES: Record<string, Record<string, JsonFieldRule>> = {
   call_workflow: {
-    input: { label: '入参 input', requireObject: true },
+    input: { labelKey: 'ruleInput', requireObject: true },
   },
   transform: {
     // output 可为对象/数组/标量的 JSON 模板，不强制对象；仅校验合法 JSON（整段 {{模板}} 放行）。
-    output: { label: '转换映射' },
+    output: { labelKey: 'ruleTransform' },
   },
   http_call: {
-    headers: { label: 'Headers', requireObject: true },
-    body: { label: 'Body' },
+    headers: { labelKey: 'Headers', requireObject: true },
+    body: { labelKey: 'Body' },
   },
   llm: {
-    messages: { label: 'messages' },
+    messages: { labelKey: 'messages' },
   },
   response: {
-    headers: { label: '响应 Headers', requireObject: true },
-    body: { label: '响应 Body' },
+    headers: { labelKey: 'ruleRespHeaders', requireObject: true },
+    body: { labelKey: 'ruleRespBody' },
   },
   sse_publish: {
-    data: { label: '推送数据' },
+    data: { labelKey: 'rulePushData' },
   },
 }
 
@@ -95,7 +96,12 @@ function codeLanguage(config: any): CodeLanguage {
   return 'lua'
 }
 
-function validateJsonFieldValue(value: string, rule: JsonFieldRule): string | null {
+function labelText(rule: JsonFieldRule, t: (k: string) => string): string {
+  // built-in labels use i18n keys; plain English labels (Headers/Body/messages) pass through
+  const known = new Set(['ruleInput','ruleTransform','ruleRespHeaders','ruleRespBody','rulePushData'])
+  return known.has(rule.labelKey) ? t(rule.labelKey) : rule.labelKey
+}
+function validateJsonFieldValue(value: string, rule: JsonFieldRule, t: (k: string, p?: any) => string): string | null {
   const text = value.trim()
   if (!text) return null
   if (isWholeTemplateExpr(text)) return null
@@ -103,10 +109,10 @@ function validateJsonFieldValue(value: string, rule: JsonFieldRule): string | nu
   try {
     parsed = JSON.parse(text)
   } catch {
-    return `${rule.label} 不是合法 JSON`
+    return t('invalidJson', { label: labelText(rule, t) })
   }
   if (rule.requireObject && (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object')) {
-    return `${rule.label} 必须是 JSON 对象`
+    return t('mustBeObject', { label: labelText(rule, t) })
   }
   return null
 }
@@ -123,6 +129,7 @@ export default function NodeConfigPanel({
   readOnly = false,
 }: Props) {
   // 面板宽度（受控 + localStorage 持久化），用户可拖拽左边缘调整。
+  const t = useTranslations('wfNode')
   const [width, setWidth] = useState(DEFAULT_WIDTH)
   const [ideFullscreen, setIdeFullscreen] = useState(false)
   const [isResizing, setIsResizing] = useState(false)
@@ -363,7 +370,7 @@ export default function NodeConfigPanel({
   const validateJsonField = (key: string, raw: string) => {
     const rule = JSON_FIELD_RULES[node.type]?.[key]
     if (!rule) return
-    const err = validateJsonFieldValue(raw, rule)
+    const err = validateJsonFieldValue(raw, rule, t)
     setJsonFieldErrors((prev) => {
       if (!err && !prev[key]) return prev
       const next = { ...prev }
@@ -403,7 +410,7 @@ export default function NodeConfigPanel({
           setWidth(DEFAULT_WIDTH)
           localStorage.setItem(STORAGE_WIDTH_KEY, String(DEFAULT_WIDTH))
         }}
-        title="拖拽调整宽度（双击复位）"
+        title={t('resizeHint')}
         className={`absolute left-0 top-0 z-20 h-full w-1.5 cursor-col-resize transition-colors hover:bg-indigo-400/40 ${
           isResizing ? 'bg-indigo-400/60' : 'bg-transparent'
         }`}
@@ -420,11 +427,11 @@ export default function NodeConfigPanel({
           <button
             type="button"
             onClick={() => setIdeFullscreen((v) => !v)}
-            title={ideFullscreen ? '退出全屏' : '右侧 IDE 全屏'}
+            title={ideFullscreen ? t('exitFullscreen') : t('ideFullscreen')}
             className="h-6 px-2 rounded-md text-[11px] font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700"
           >
             <i className={`fas ${ideFullscreen ? 'fa-compress' : 'fa-expand'} mr-1 text-[10px]`} />
-            {ideFullscreen ? '退出全屏' : '全屏'}
+            {ideFullscreen ? t('exitFullscreen') : t('fullscreen')}
           </button>
           <button onClick={onClose} className="w-6 h-6 rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600 text-lg leading-none flex items-center justify-center">&times;</button>
         </div>
@@ -437,7 +444,7 @@ export default function NodeConfigPanel({
         }`}
       >
         <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">节点 ID</label>
+          <label className="block text-xs font-medium text-gray-500 mb-1">{t('nodeId')}</label>
           <input
             value={idDraft}
             onChange={(e) => {
@@ -454,17 +461,17 @@ export default function NodeConfigPanel({
             className={`w-full px-3 py-2 border rounded-lg text-sm font-mono ${
               idError ? 'border-red-300' : ''
             }`}
-            placeholder="如 output、resp_ok"
+            placeholder={t('phNodeId')}
           />
           {idError ? (
             <p className="mt-1 text-[11px] text-red-500">{idError}</p>
           ) : (
-            <p className="mt-1 text-[11px] text-slate-400">失焦或回车生效。下游模板 {'{{'}id.字段{'}}'} 会一并改掉。</p>
+            <p className="mt-1 text-[11px] text-slate-400">{t('nodeIdHint', { tpl: '{{id.field}}' })}</p>
           )}
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">标签名称</label>
+          <label className="block text-xs font-medium text-gray-500 mb-1">{t('labelName')}</label>
           <input
             value={node.label || ''}
             onChange={(e) => {
@@ -472,7 +479,7 @@ export default function NodeConfigPanel({
               onChange({ ...node, label: e.target.value })
             }}
             className="w-full px-3 py-2 border rounded-lg text-sm"
-            placeholder="给节点起个名字"
+            placeholder={t('phLabelName')}
           />
         </div>
 
@@ -494,7 +501,7 @@ export default function NodeConfigPanel({
           return (
             <>
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">语言</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">{t('language')}</label>
                 <select
                   value={lang}
                   onChange={(e) => switchCodeLanguage(e.target.value as CodeLanguage)}
@@ -506,13 +513,13 @@ export default function NodeConfigPanel({
                 </select>
               </div>
               <div className={fillCodeEditor ? 'flex-1 min-h-0 flex flex-col' : undefined}>
-                <label className="block text-xs font-medium text-gray-500 mb-1 shrink-0">代码</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1 shrink-0">{t('code')}</label>
                 <div className={fillCodeEditor ? 'flex-1 min-h-0' : undefined}>
                   <CodeSnippetEditor
                     value={node.config.code || ''}
                     onChange={readOnly ? undefined : (next) => updateConfig('code', next)}
                     language={lang}
-                    label="代码"
+                    label={t('code')}
                     minRows={12}
                     fill={fillCodeEditor}
                     readOnly={readOnly}
@@ -520,13 +527,13 @@ export default function NodeConfigPanel({
                       lang === 'javascript'
                         ? 'async function execute(ctx) {\n  // ctx.body: trigger payload\n  // ctx.nodes.nodeId: upstream output\n  ctx.body = { ok: true };\n}'
                         : lang === 'python'
-                        ? 'def execute(ctx):\n    # ctx.body: 触发 payload\n    # ctx.nodes["nodeId"]: 上游输出\n    return { "ok": True }'
-                        : 'function execute(ctx)\n  -- ctx.body: 触发 payload\n  -- ctx.nodes.xxx: 上游输出\n  ctx.body = { ok = true }\nend'
+                        ? 'def execute(ctx):\n    # ctx.body: trigger payload\n    # ctx.nodes["nodeId"]: upstream output\n    return { "ok": True }'
+                        : 'function execute(ctx)\n  -- ctx.body: trigger payload\n  -- ctx.nodes.xxx: upstream output\n  ctx.body = { ok = true }\nend'
                     }
                   />
                 </div>
                 <p className="text-xs text-gray-400 mt-1 shrink-0">
-                  可用变量: ctx.body（触发 payload）、ctx.nodes.nodeId（上游输出）
+                  {t('codeVars')}
                 </p>
               </div>
             </>
@@ -539,8 +546,8 @@ export default function NodeConfigPanel({
           node.type === 'foreach') && (
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">
-              数据源
-              <span className="ml-1 text-[10px] text-gray-400">（不选则用工作流绑定的默认库）</span>
+              {t('datasource')}
+              <span className="ml-1 text-[10px] text-gray-400">{t('datasourceHint')}</span>
             </label>
             <select
               value={node.config.datasource_id != null && node.config.datasource_id !== '' ? String(node.config.datasource_id) : ''}
@@ -557,7 +564,7 @@ export default function NodeConfigPanel({
               }}
               className="w-full px-3 py-2 border rounded-lg text-sm bg-white focus:border-blue-400 focus:ring-1 focus:ring-blue-100 outline-none"
             >
-              <option value="">默认（工作流绑定库）</option>
+              <option value="">{t('datasourceDefault')}</option>
               {datasources.map((d) => (
                 <option key={d.id} value={d.id}>
                   {d.name}
@@ -570,7 +577,7 @@ export default function NodeConfigPanel({
               node.config.datasource_id !== '' &&
               !selectedDatasource && (
                 <p className="mt-1 text-[11px] text-amber-600">
-                  已选数据源 #{String(node.config.datasource_id)} 当前不可见（可能已删除或无权限），执行时若解析失败会报错。
+                  {t('datasourceGone', { id: String(node.config.datasource_id) })}
                 </p>
               )}
             {selectedDatasource && (
@@ -585,7 +592,7 @@ export default function NodeConfigPanel({
                       {`${selectedDatasource.host}${selectedDatasource.port ? ':' + selectedDatasource.port : ''}${
                         selectedDatasource.database ? '/' + selectedDatasource.database : ''
                       }`}
-                      {selectedDatasource.credential_name ? ` · 凭证: ${selectedDatasource.credential_name}` : ''}
+                      {selectedDatasource.credential_name ? t('credLabel', { name: selectedDatasource.credential_name }) : ''}
                     </div>
                   </div>
                 </div>
@@ -599,7 +606,7 @@ export default function NodeConfigPanel({
                   rel="noreferrer"
                   className="text-blue-600 hover:text-blue-700 hover:underline inline-flex items-center gap-1"
                 >
-                  <i className="fas fa-cog text-[9px]" />管理数据源
+                  <i className="fas fa-cog text-[9px]" />{t('manageDatasource')}
                 </a>
               </div>
             )}
@@ -615,10 +622,10 @@ export default function NodeConfigPanel({
               onChange={(e) => updateConfig('dynamic_sql', e.target.checked)}
             />
             <span>
-              <span className="block text-sm font-medium text-gray-700">动态 SQL（整条来自上游/模板）</span>
+              <span className="block text-sm font-medium text-gray-700">{t('dynamicSql')}</span>
               <span className="block text-xs text-gray-400 mt-0.5">
-                开启后 SQL 会被整条解析成文本后原样执行（跳过参数化），用于表名/字段随上游变化的场景。
-                <span className="text-amber-600">此模式下参数不再自动绑定，请在上游自行转义用户输入以防注入。</span>
+                {t('dynamicSqlHint')}
+                <span className="text-amber-600">{t('dynamicSqlWarn')}</span>
               </span>
             </span>
           </label>
@@ -627,26 +634,26 @@ export default function NodeConfigPanel({
         {node.type === 'db_query' && (
           <>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">SQL 查询</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('sqlQuery')}</label>
               <CodeSnippetEditor
                 value={node.config.sql || ''}
                 onChange={readOnly ? undefined : (next) => updateConfig('sql', next)}
                 language="sql"
-                label="SQL 查询"
+                label={t('sqlQuery')}
                 minRows={5}
                 readOnly={readOnly}
                 placeholder="SELECT * FROM users WHERE id = $1"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">参数 (JSON 数组)</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('paramsJsonArray')}</label>
               <input
                 value={node.config.params || ''}
                 onChange={e => updateConfig('params', e.target.value)}
                 className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
                 placeholder='["{{trigger.id}}"]'
               />
-              <p className="text-xs text-gray-400 mt-1">支持模板: {'{{trigger.x}}'}, {'{{nodeId.field}}'}</p>
+              <p className="text-xs text-gray-400 mt-1">{t('tplSupport', { a: '{{trigger.x}}', b: '{{nodeId.field}}' })}</p>
             </div>
           </>
         )}
@@ -654,19 +661,19 @@ export default function NodeConfigPanel({
         {node.type === 'db_execute' && (
           <>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">SQL 语句</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('sqlStatement')}</label>
               <CodeSnippetEditor
                 value={node.config.sql || ''}
                 onChange={readOnly ? undefined : (next) => updateConfig('sql', next)}
                 language="sql"
-                label="SQL 语句"
+                label={t('sqlStatement')}
                 minRows={5}
                 readOnly={readOnly}
                 placeholder="INSERT INTO logs(msg) VALUES($1)"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">参数 (JSON 数组)</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('paramsJsonArray')}</label>
               <input
                 value={node.config.params || ''}
                 onChange={e => updateConfig('params', e.target.value)}
@@ -680,7 +687,7 @@ export default function NodeConfigPanel({
         {node.type === 'db_transaction' && (
           <>
             <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-2.5 text-xs text-emerald-700 leading-5">
-              <strong>数据库事务</strong>：下列语句在<strong>同一个事务</strong>内按顺序执行，全部成功才提交，任一失败整体回滚。仅支持 PostgreSQL。
+              {t('dbTxnHint')}
             </div>
             <StatementsEditor node={node} updateConfig={updateConfig} readOnly={readOnly} />
           </>
@@ -689,10 +696,10 @@ export default function NodeConfigPanel({
         {node.type === 'foreach' && (
           <>
             <div className="rounded-lg bg-green-50 border border-green-100 p-2.5 text-xs text-green-700 leading-5">
-              <strong>批量遍历</strong>：遍历数组每个元素，<strong>每个元素在独立事务</strong>内执行下列语句；语句中用 <code className="font-mono">{'{{'}{node.config.item_var || 'item'}.字段{'}}'}</code> 引用当前元素。仅支持 PostgreSQL。
+              {t('foreachHint', { tpl: `{{${node.config.item_var || 'item'}.field}}` })}
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">遍历数组来源 *</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('arraySource')}</label>
               <input
                 value={node.config.items || ''}
                 onChange={e => updateConfig('items', e.target.value)}
@@ -700,18 +707,18 @@ export default function NodeConfigPanel({
                 placeholder="q.rows"
               />
               <p className="text-xs text-gray-400 mt-1">
-                上游数据路径，<strong>不含花括号</strong>（如 <code className="font-mono">q.rows</code>）；必须解析为数组。
+                {t.rich('arraySourceHint', { tpl: 'q.rows', code: (c) => <code className="font-mono">{c}</code> })}
               </p>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">元素变量名 item_var</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('itemVar')}</label>
               <input
                 value={node.config.item_var ?? ''}
                 onChange={e => updateConfig('item_var', e.target.value)}
                 className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
                 placeholder="item"
               />
-              <p className="text-xs text-gray-400 mt-1">留空默认 <code className="font-mono">item</code>，语句内以 <code className="font-mono">{'{{'}变量名.字段{'}}'}</code> 引用当前元素。</p>
+              <p className="text-xs text-gray-400 mt-1">{t.rich('itemVarHint', { a: 'item', b: '{{var.field}}', code: (c) => <code className="font-mono">{c}</code> })}</p>
             </div>
             <StatementsEditor node={node} updateConfig={updateConfig} readOnly={readOnly} />
           </>
@@ -721,7 +728,7 @@ export default function NodeConfigPanel({
           <>
             <div className="grid grid-cols-4 gap-2">
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">方法</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">{t('method')}</label>
                 <select
                   value={node.config.method || 'GET'}
                   onChange={e => updateConfig('method', e.target.value)}
@@ -743,7 +750,7 @@ export default function NodeConfigPanel({
               </div>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">凭证</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('credential')}</label>
               <select
                 value={node.config.credential_id ?? ''}
                 onChange={e =>
@@ -755,17 +762,17 @@ export default function NodeConfigPanel({
                 disabled={readOnly}
                 className="w-full px-2 py-2 border rounded-lg text-sm"
               >
-                <option value="">不使用凭证</option>
+                <option value="">{t('noCred')}</option>
                 {httpCredentials
                   .filter((c) => c.kind !== 'aliyun_ak')
                   .map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name}（{c.kind === 'basic' ? '用户名/密码' : c.kind === 'bearer' ? 'Bearer' : 'API Key'}）
+                    {c.name}（{c.kind === 'basic' ? t('credKindBasic') : c.kind === 'bearer' ? 'Bearer' : 'API Key'}）
                   </option>
                 ))}
               </select>
               <p className="text-xs text-gray-400 mt-1">
-                选中后按类型自动加认证头，并覆盖 Headers 里的同名头。也可用 {'{{cred.名称.token}}'} 等模板。
+                {t('credHint', { tpl: '{{cred.name.token}}' })}
               </p>
             </div>
             <div>
@@ -821,16 +828,16 @@ export default function NodeConfigPanel({
               )}
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">超时时间（秒）</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('timeoutSec')}</label>
               <input
                 type="number"
                 min={0}
                 value={node.config.timeout_secs ?? ''}
                 onChange={e => updateConfig('timeout_secs', e.target.value === '' ? undefined : Number(e.target.value))}
                 className="w-full px-3 py-2 border rounded-lg text-sm"
-                placeholder="默认 120，填 0 表示不限制（适合 AI 等长耗时接口）"
+                placeholder={t('phTimeout120')}
               />
-              <p className="text-xs text-gray-400 mt-1">单次 HTTP 请求超时；异步轮询时每次请求都受此限制。</p>
+              <p className="text-xs text-gray-400 mt-1">{t('timeoutHint')}</p>
             </div>
 
             <label className="flex items-start gap-2 cursor-pointer">
@@ -853,9 +860,9 @@ export default function NodeConfigPanel({
                 }}
               />
               <span>
-                <span className="block text-sm font-medium text-gray-700">流式输出</span>
+                <span className="block text-sm font-medium text-gray-700">{t('streamOutput')}</span>
                 <span className="block text-xs text-gray-400 mt-0.5">
-                  把上游 HTTP 响应当成这次工作流请求的响应流（适合 LLM）。全图只能有一个。不可与异步轮询同时开。
+                  {t('streamHint')}
                 </span>
               </span>
             </label>
@@ -870,10 +877,9 @@ export default function NodeConfigPanel({
                     onChange={e => updateConfig('async_poll', e.target.checked)}
                   />
                   <span>
-                    <span className="block text-sm font-medium text-gray-700">启用异步轮询</span>
+                    <span className="block text-sm font-medium text-gray-700">{t('enableAsyncPoll')}</span>
                     <span className="block text-xs text-gray-400 mt-0.5">
-                      开启后，收到 HTTP 202 或 body.status=pending 时自动轮询直至完成（协议对齐 Provisioner）。
-                      总等待仍受工作流超时（timeout_ms）限制，长任务请一并调大。
+                      {t('asyncPollHint')}
                     </span>
                   </span>
                 </label>
@@ -881,7 +887,7 @@ export default function NodeConfigPanel({
                 {!!node.config.async_poll && (
                   <div className="grid grid-cols-2 gap-2 p-3 bg-gray-50 border rounded-lg">
                     <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1">轮询间隔（秒）</label>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">{t('pollInterval')}</label>
                       <input
                         type="number"
                         min={1}
@@ -891,7 +897,7 @@ export default function NodeConfigPanel({
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1">最长等待（秒）</label>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">{t('maxWait')}</label>
                       <input
                         type="number"
                         min={1}
@@ -910,17 +916,17 @@ export default function NodeConfigPanel({
         {node.type === 'email_send' && (
           <>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">发件人 From *</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('fromLabel')}</label>
               <input
                 value={node.config.from || ''}
                 onChange={e => updateConfig('from', e.target.value)}
                 className="w-full px-3 py-2 border rounded-lg text-sm font-mono"
                 placeholder="HR <hr@example.com>"
               />
-              <p className="text-xs text-gray-400 mt-1">也可通过 SMTP_FROM 环境变量提供。</p>
+              <p className="text-xs text-gray-400 mt-1">{t('fromHint')}</p>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">收件人 To *</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('toLabel')}</label>
               <textarea
                 value={node.config.to || ''}
                 onChange={e => updateConfig('to', e.target.value)}
@@ -928,11 +934,11 @@ export default function NodeConfigPanel({
                 rows={2}
                 placeholder="{{trigger.candidate_email}}"
               />
-              <p className="text-xs text-gray-400 mt-1">多个地址可用逗号、分号或换行分隔；支持模板变量。</p>
+              <p className="text-xs text-gray-400 mt-1">{t('toHint')}</p>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">抄送 Cc</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">{t('ccLabel')}</label>
                 <input
                   value={node.config.cc || ''}
                   onChange={e => updateConfig('cc', e.target.value)}
@@ -941,7 +947,7 @@ export default function NodeConfigPanel({
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">密送 Bcc</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">{t('bccLabel')}</label>
                 <input
                   value={node.config.bcc || ''}
                   onChange={e => updateConfig('bcc', e.target.value)}
@@ -951,7 +957,7 @@ export default function NodeConfigPanel({
               </div>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">主题 Subject *</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('subjectLabel')}</label>
               <input
                 value={node.config.subject || ''}
                 onChange={e => updateConfig('subject', e.target.value)}
@@ -960,7 +966,7 @@ export default function NodeConfigPanel({
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">纯文本正文</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('textBody')}</label>
               <textarea
                 value={node.config.text_body || ''}
                 onChange={e => updateConfig('text_body', e.target.value)}
@@ -970,7 +976,7 @@ export default function NodeConfigPanel({
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">HTML 正文</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('htmlBody')}</label>
               <textarea
                 value={node.config.html_body || ''}
                 onChange={e => updateConfig('html_body', e.target.value)}
@@ -978,10 +984,10 @@ export default function NodeConfigPanel({
                 rows={4}
                 placeholder={'<p>Hello {{trigger.candidate_name}}</p>'}
               />
-              <p className="text-xs text-gray-400 mt-1">纯文本和 HTML 至少填写一个；两者都填时发送 multipart/alternative。</p>
+              <p className="text-xs text-gray-400 mt-1">{t('bodyHint')}</p>
             </div>
             <div className="rounded-lg border border-sky-100 bg-sky-50 p-3 space-y-3">
-              <div className="text-xs font-medium text-sky-700">SMTP 设置</div>
+              <div className="text-xs font-medium text-sky-700">{t('smtpSettings')}</div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">SMTP Host *</label>
                 <input
@@ -990,11 +996,11 @@ export default function NodeConfigPanel({
                   className="w-full px-3 py-2 border rounded-lg text-sm font-mono"
                   placeholder="smtp.example.com"
                 />
-                <p className="text-xs text-sky-600 mt-1">留空时读取 SMTP_HOST。</p>
+                <p className="text-xs text-sky-600 mt-1">{t('smtpHostHint')}</p>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">端口</label>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">{t('port')}</label>
                   <input
                     type="number"
                     value={node.config.smtp_port || 587}
@@ -1008,11 +1014,11 @@ export default function NodeConfigPanel({
                     checked={node.config.smtp_starttls !== false}
                     onChange={e => updateConfig('smtp_starttls', e.target.checked)}
                   />
-                  使用 STARTTLS
+                  {t('useStartTls')}
                 </label>
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">SMTP 用户名</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">{t('smtpUser')}</label>
                 <input
                   value={node.config.smtp_username || ''}
                   onChange={e => updateConfig('smtp_username', e.target.value)}
@@ -1021,16 +1027,16 @@ export default function NodeConfigPanel({
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">SMTP 密码</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">{t('smtpPass')}</label>
                 <input
                   type="password"
                   value={node.config.smtp_password || ''}
                   onChange={e => updateConfig('smtp_password', e.target.value)}
                   className="w-full px-3 py-2 border rounded-lg text-sm font-mono"
-                  placeholder="留空时读取环境变量"
+                  placeholder={t('phReadEnv')}
                 />
                 <p className="text-xs text-sky-600 mt-1">
-                  生产环境建议留空，改用 SMTP_USERNAME / SMTP_PASSWORD。
+                  {t('smtpProdHint')}
                 </p>
               </div>
             </div>
@@ -1041,12 +1047,12 @@ export default function NodeConfigPanel({
           Array.isArray(node.config.conditions) ? (
             <div className="space-y-3">
               <label className="block text-xs font-medium text-gray-500">
-                条件分支（按顺序匹配，命中即走对应分支）
+                {t('conditionBranches')}
               </label>
               {node.config.conditions.map((cond: any, idx: number) => (
                 <div key={idx} className="rounded-lg border border-gray-200 p-2.5 space-y-2 bg-gray-50/40">
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 shrink-0">分支</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 shrink-0">{t('branch')}</span>
                     <input
                       value={cond?.branch || ''}
                       onFocus={() => beginBranchEdit(cond?.branch || '')}
@@ -1058,7 +1064,7 @@ export default function NodeConfigPanel({
                     <button
                       onClick={() => removeCondition(idx)}
                       className="w-6 h-6 rounded-md text-gray-400 hover:bg-red-50 hover:text-red-500 text-base leading-none flex items-center justify-center shrink-0"
-                      title="删除该分支"
+                      title={t('delBranch')}
                     >
                       &times;
                     </button>
@@ -1075,10 +1081,10 @@ export default function NodeConfigPanel({
                 onClick={addCondition}
                 className="w-full px-3 py-1.5 text-xs font-medium text-indigo-600 border border-dashed border-indigo-300 rounded-lg hover:bg-indigo-50"
               >
-                + 添加条件分支
+                {t('addBranch')}
               </button>
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">默认分支 default_branch（都不命中时）</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">{t('defaultBranch')}</label>
                 <input
                   value={node.config.default_branch || ''}
                   onFocus={() => beginBranchEdit(node.config.default_branch || '')}
@@ -1089,18 +1095,18 @@ export default function NodeConfigPanel({
                 />
               </div>
               <p className="text-xs text-gray-400">
-                支持: ==, !=, &gt;, &lt;, &gt;=, &lt;=, contains, starts_with。每个分支对应节点底部一个出口，连线标签即分支名。
+                {t('branchOps')}
               </p>
               <button
                 onClick={switchToSingleExpression}
                 className="w-full px-3 py-1.5 text-xs font-medium text-gray-500 border border-dashed border-gray-300 rounded-lg hover:bg-gray-50"
               >
-                切换回单表达式模式
+                {t('switchToSingle')}
               </button>
             </div>
           ) : (
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">条件表达式</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('conditionExpr')}</label>
               <input
                 value={node.config.expression || ''}
                 onChange={e => updateConfig('expression', e.target.value)}
@@ -1108,19 +1114,19 @@ export default function NodeConfigPanel({
                 placeholder="{{trigger.age}} > 18"
               />
               <p className="text-xs text-gray-400 mt-1">
-                支持: ==, !=, &gt;, &lt;, &gt;=, &lt;=, contains, starts_with
+                {t('condOps')}
               </p>
               <p className="text-xs text-gray-400">
-                true 分支从右侧出口连接，false 分支从左侧出口连接
+                {t('condTrueFalse')}
               </p>
               <button
                 onClick={switchToMultiBranch}
                 className="mt-3 w-full px-3 py-1.5 text-xs font-medium text-indigo-600 border border-dashed border-indigo-300 rounded-lg hover:bg-indigo-50"
               >
-                切换为多分支模式
+                {t('switchToMulti')}
               </button>
               <p className="text-xs text-gray-400 mt-1">
-                切换后当前表达式命中走 <code className="font-mono">true</code> 分支、否则走 <code className="font-mono">false</code> 分支，可继续增删自定义分支。
+                {t.rich('switchMultiHint', { a: 'true', b: 'false', code: (c) => <code className="font-mono">{c}</code> })}
               </p>
             </div>
           )
@@ -1130,7 +1136,7 @@ export default function NodeConfigPanel({
           <div className="space-y-4">
             {/* 模式切换 */}
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1.5">循环模式</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5">{t('loopMode')}</label>
               <div className="grid grid-cols-4 gap-1 p-1 bg-gray-100 rounded-lg">
                 {[
                   { v: 'while', label: 'While' },
@@ -1159,14 +1165,14 @@ export default function NodeConfigPanel({
               <>
                 <div className="rounded-lg bg-fuchsia-50 border border-fuchsia-100 p-2.5 text-xs text-fuchsia-700 leading-5">
                   {(node.config.loop_mode || 'while') === 'while' ? (
-                    <><strong>While 模式</strong>：每次进入循环体 <strong>之前</strong> 评估条件，为真则循环、为假则退出。</>
+                    <>{t('whileModeHint')}</>
                   ) : (
-                    <><strong>Until 模式</strong>：每次循环体执行 <strong>之后</strong> 评估条件，为真则退出（至少执行一次）。</>
+                    <>{t('untilModeHint')}</>
                   )}
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">
-                    {(node.config.loop_mode || 'while') === 'while' ? '循环条件表达式 *' : '退出条件表达式 *'}
+                    {(node.config.loop_mode || 'while') === 'while' ? t('loopCondExpr') : t('exitCondExpr')}
                   </label>
                   <input
                     value={node.config.expression || ''}
@@ -1175,11 +1181,11 @@ export default function NodeConfigPanel({
                     placeholder={'{{db_query.rows.0.status}} != "done"'}
                   />
                   <p className="text-xs text-gray-400 mt-1">
-                    支持 ==, !=, &gt;, &gt;=, &lt;, &lt;=；可引用上游 / 循环体节点输出与 <code className="font-mono">{'{{loop.*}}'}</code>。
+                    {t('loopCondHint', { tpl: '{{loop.*}}' })}
                   </p>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">最大迭代次数（安全上限）*</label>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">{t('maxIter')}</label>
                   <input
                     type="number"
                     min={1}
@@ -1189,7 +1195,7 @@ export default function NodeConfigPanel({
                     className="w-full px-3 py-2 border rounded-lg text-sm"
                   />
                   <p className="text-xs text-gray-400 mt-1">
-                    防死循环；达上限强制走完成出口，<code className="font-mono">{'{{loop.reached_max}}'}</code> 置为 true。
+                    {t('maxIterHint', { tpl: '{{loop.reached_max}}' })}
                   </p>
                 </div>
               </>
@@ -1199,17 +1205,17 @@ export default function NodeConfigPanel({
             {node.config.loop_mode === 'count' && (
               <>
                 <div className="rounded-lg bg-blue-50 border border-blue-100 p-2.5 text-xs text-blue-700 leading-5">
-                  <strong>Count 模式</strong>：执行固定次数后自动退出，适合批处理 / 定次重试。
+                  {t('countModeHint')}
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">执行次数 *</label>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">{t('execCount')}</label>
                   <input
                     value={node.config.count ?? ''}
                     onChange={e => updateConfig('count', e.target.value)}
                     className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
-                    placeholder="3 或 {{trigger.retry_count}}"
+                    placeholder={t('phCount')}
                   />
-                  <p className="text-xs text-gray-400 mt-1">支持数字或模板引用。</p>
+                  <p className="text-xs text-gray-400 mt-1">{t('execCountHint')}</p>
                 </div>
               </>
             )}
@@ -1218,20 +1224,20 @@ export default function NodeConfigPanel({
             {node.config.loop_mode === 'for_each' && (
               <>
                 <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-2.5 text-xs text-emerald-700 leading-5">
-                  <strong>ForEach 模式</strong>：遍历数组每个元素依次执行循环体；当前元素用 <code className="font-mono">{'{{loop.item}}'}</code> 引用。
+                  {t('forEachModeHint', { tpl: '{{loop.item}}' })}
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">遍历数组来源 *</label>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">{t('forEachArraySrc')}</label>
                   <input
                     value={node.config.items || ''}
                     onChange={e => updateConfig('items', e.target.value)}
                     className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
                     placeholder="{{trigger.items}}"
                   />
-                  <p className="text-xs text-gray-400 mt-1">必须解析为数组类型。</p>
+                  <p className="text-xs text-gray-400 mt-1">{t('forEachArrayHint')}</p>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">并发数（可选，默认串行）</label>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">{t('concurrency')}</label>
                   <input
                     type="number"
                     min={1}
@@ -1244,34 +1250,34 @@ export default function NodeConfigPanel({
                     }}
                     className="w-full px-3 py-2 border rounded-lg text-sm"
                   />
-                  <p className="text-xs text-gray-400 mt-1">1=串行；&gt;1 并发执行各元素（上限 8）。并发模式下循环体不可引用 <code className="font-mono">{'{{loop.results}}'}</code>，迭代间延迟被忽略。</p>
+                  <p className="text-xs text-gray-400 mt-1">{t('concurrencyHint', { tpl: '{{loop.results}}' })}</p>
                 </div>
               </>
             )}
 
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">每次迭代间延迟（毫秒，可选）</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('iterDelay')}</label>
               <input
                 type="number"
                 min={0}
                 value={node.config.delay_ms ?? 0}
                 onChange={e => updateConfig('delay_ms', e.target.value === '' ? 0 : Number(e.target.value))}
                 className="w-full px-3 py-2 border rounded-lg text-sm"
-                placeholder="0（不延迟）"
+                placeholder={t('phNoDelay')}
               />
-              <p className="text-xs text-gray-400 mt-1">仅在两轮之间等待；适合轮询或限速场景。</p>
+              <p className="text-xs text-gray-400 mt-1">{t('iterDelayHint')}</p>
             </div>
 
             {/* 内置变量说明 */}
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1.5">循环内置变量（在循环体节点中引用）</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5">{t('loopBuiltins')}</label>
               <div className="rounded-lg border border-slate-200 overflow-hidden text-xs">
                 {([
-                  ['{{loop.index}}', '当前迭代索引（从 0 开始）'],
-                  ['{{loop.count}}', '已执行次数（从 1 开始）'],
-                  ['{{loop.item}}', '当前遍历元素（ForEach 专用）'],
-                  ['{{loop.reached_max}}', '是否因超出最大次数而退出'],
-                  ['{{loop.results}}', '每轮循环末节点的输出数组（串行模式；并发 for_each 不可用）'],
+                  ['{{loop.index}}', t('loopIdxDesc')],
+                  ['{{loop.count}}', t('loopCountDesc')],
+                  ['{{loop.item}}', t('loopItemDesc')],
+                  ['{{loop.reached_max}}', t('loopReachedMaxDesc')],
+                  ['{{loop.results}}', t('loopResultsDesc')],
                 ] as [string, string][]).map(([k, d]) => (
                   <div key={k} className="flex gap-2 px-2.5 py-1.5 border-b border-slate-100 last:border-0">
                     <code className="font-mono text-fuchsia-700 shrink-0">{k}</code>
@@ -1290,22 +1296,22 @@ export default function NodeConfigPanel({
                 onChange={e => updateConfig('allow_failure', e.target.checked)}
               />
               <span>
-                <span className="block text-sm font-medium text-gray-700">失败时继续（allow_failure）</span>
+                <span className="block text-sm font-medium text-gray-700">{t('allowFailure')}</span>
                 <span className="block text-xs text-gray-400 mt-0.5">
-                  开启后循环体节点报错不中断工作流，循环继续执行下一轮。
+                  {t('loopAllowFailHint')}
                 </span>
               </span>
             </label>
 
             <p className="text-xs text-gray-400 leading-5">
-              连线：底部左出口 <span className="text-fuchsia-600 font-medium">循环体(body)</span> 进入循环，右出口 <span className="text-green-600 font-medium">完成(done)</span> 走后续节点；循环体末节点连回本节点左侧 <span className="text-fuchsia-600 font-medium">回边</span>。
+              {t('loopEdgeHint')}
             </p>
           </div>
         )}
 
         {node.type === 'transform' && (
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">转换映射 (JSON)</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('transformMap')}</label>
             <CodeSnippetEditor
               value={(() => {
                 const rawOut = node.config.output
@@ -1334,7 +1340,7 @@ export default function NodeConfigPanel({
                 validateJsonField('output', text)
               }}
               language="json"
-              label="转换映射"
+              label={t('transformMap')}
               minRows={6}
               readOnly={readOnly}
               invalid={!!jsonFieldErrors.output}
@@ -1343,14 +1349,14 @@ export default function NodeConfigPanel({
             {jsonFieldErrors.output && (
               <p className="text-xs text-red-600 mt-1">{jsonFieldErrors.output}</p>
             )}
-            <p className="text-xs text-gray-400 mt-1">键值对映射，值支持模板变量</p>
+            <p className="text-xs text-gray-400 mt-1">{t('transformMapHint')}</p>
           </div>
         )}
 
         {node.type === 'response' && (
           <>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">HTTP 状态码</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('httpStatus')}</label>
               <input
                 type="number"
                 value={node.config.status_code || 200}
@@ -1359,7 +1365,7 @@ export default function NodeConfigPanel({
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">响应 Body</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('respBody')}</label>
               <CodeSnippetEditor
                 value={node.config.body ? (typeof node.config.body === 'string' ? node.config.body : JSON.stringify(node.config.body, null, 2)) : ''}
                 onChange={readOnly ? undefined : (next) => updateConfig('body', next)}
@@ -1374,7 +1380,7 @@ export default function NodeConfigPanel({
                   )
                 }
                 language="json"
-                label="响应 Body"
+                label={t('respBody')}
                 minRows={5}
                 readOnly={readOnly}
                 invalid={!!jsonFieldErrors.body}
@@ -1384,11 +1390,11 @@ export default function NodeConfigPanel({
                 <p className="text-xs text-red-600 mt-1">{jsonFieldErrors.body}</p>
               )}
               <p className="text-xs text-gray-400 mt-1">
-                JSON 模板，或整段 {'{{node.field}}'}。返回图片时 Body 填 base64 字符串，并在 Headers 设 Content-Type（如 image/png）。
+                {t('respBodyHint', { tpl: '{{node.field}}' })}
               </p>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">响应 Headers (JSON)</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('respHeaders')}</label>
               <CodeSnippetEditor
                 value={node.config.headers ? (typeof node.config.headers === 'string' ? node.config.headers : JSON.stringify(node.config.headers, null, 2)) : ''}
                 onChange={readOnly ? undefined : (next) => updateConfig('headers', next)}
@@ -1403,7 +1409,7 @@ export default function NodeConfigPanel({
                   )
                 }
                 language="json"
-                label="响应 Headers"
+                label={t('respHeaders')}
                 minRows={2}
                 readOnly={readOnly}
                 invalid={!!jsonFieldErrors.headers}
@@ -1419,7 +1425,7 @@ export default function NodeConfigPanel({
           <>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">
-                订阅 slug（工作流内设置，直接拼到 /events/:slug）*
+                {t('subscribeSlug')}
               </label>
               <input
                 value={node.config.subscription_slug || node.config.public_endpoint_slug || ''}
@@ -1428,12 +1434,12 @@ export default function NodeConfigPanel({
                 placeholder="growth-animation"
               />
               <p className="text-xs text-gray-400 mt-1">
-                这里填什么，客户端地址就是 /events/什么。例：填 growth-animation，地址就是 /events/growth-animation。
+                {t('subscribeSlugHint')}
               </p>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">
-                示例 wayUid（用于生成可复制访问链接）
+                {t('exampleWayUid')}
               </label>
               <input
                 value={node.config.sample_identity || 'adosp9duiiysjbwzetodwomnie'}
@@ -1445,7 +1451,7 @@ export default function NodeConfigPanel({
             {includeProjectId && (
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">
-                  示例 projectId（用于生成可复制访问链接）
+                  {t('exampleProjectId')}
                 </label>
                 <input
                   value={node.config.sample_project_id || '1'}
@@ -1456,7 +1462,7 @@ export default function NodeConfigPanel({
               </div>
             )}
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">目标 topic *</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('targetTopic')}</label>
               <input
                 value={node.config.topic || ''}
                 onChange={e => updateConfig('topic', e.target.value)}
@@ -1464,12 +1470,12 @@ export default function NodeConfigPanel({
                 placeholder="db:{database_id}:workflow:{workflow_id}"
               />
               <p className="text-xs text-gray-400 mt-1">
-                占位符: {'{database_id}'} {'{tenant_id}'} {'{workflow_id}'} {'{run_id}'}
+                {t('topicPlaceholders', { a: '{database_id}', b: '{tenant_id}', c: '{workflow_id}', d: '{run_id}' })}
               </p>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">
-                接收者 user_ids（可选，按用户批量推送）
+                {t('recipientUserIds')}
               </label>
               <input
                 value={node.config.user_ids ?? ''}
@@ -1477,17 +1483,14 @@ export default function NodeConfigPanel({
                   updateConfig('user_ids', e.target.value.trim() === '' ? undefined : e.target.value)
                 }
                 className="w-full px-3 py-2 border rounded-lg text-sm font-mono"
-                placeholder="{{trigger.recipient_ids}} 或 5,6,7"
+                placeholder={t('phRecipientIds')}
               />
               <p className="text-xs text-gray-400 mt-1">
-                填模板或列表（如 <code className="font-mono">{'{{trigger.recipient_ids}}'}</code>、
-                <code className="font-mono">5,6,7</code> 或 JSON 数组），会对每个 id 单独推送。
-                此时上面的 topic 需含 <code className="font-mono">{'{uid}'}</code>（推荐 <code className="font-mono">user:{'{uid}'}:notify</code>）
-                或为 <code className="font-mono">user:...:后缀</code> 格式。留空 = 只按 topic 单条广播。
+                {t('recipientHint', { a: '{{trigger.recipient_ids}}', b: '5,6,7', c: '{uid}', d: 'user:{uid}:notify', e: 'user:...:suffix' })}
               </p>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">SSE event 名</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('sseEventName')}</label>
               <input
                 value={node.config.event || ''}
                 onChange={e => updateConfig('event', e.target.value)}
@@ -1496,7 +1499,7 @@ export default function NodeConfigPanel({
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">推送数据 (JSON)</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('pushData')}</label>
               <CodeSnippetEditor
                 value={
                   typeof node.config.data === 'string'
@@ -1517,16 +1520,16 @@ export default function NodeConfigPanel({
                   )
                 }
                 language="json"
-                label="推送数据"
+                label={t('pushData')}
                 minRows={5}
                 readOnly={readOnly}
                 invalid={!!jsonFieldErrors.data}
-                placeholder={'留空则推送本次触发数据，或填:\n{\n  "pct": 50,\n  "msg": "处理中"\n}'}
+                placeholder={t('phPushData') + ':\n{\n  "pct": 50,\n  "msg": "..."\n}'}
               />
               {jsonFieldErrors.data && (
                 <p className="text-xs text-red-600 mt-1">{jsonFieldErrors.data}</p>
               )}
-              <p className="text-xs text-gray-400 mt-1">留空 = 推送触发数据；填 JSON 则推送该内容</p>
+              <p className="text-xs text-gray-400 mt-1">{t('pushDataHint')}</p>
             </div>
             <div>
               <label className="flex items-center gap-2 cursor-pointer">
@@ -1543,11 +1546,11 @@ export default function NodeConfigPanel({
                     patch({ ...node, config: cfg })
                   }}
                 />
-                <span className="text-xs font-medium text-gray-500">启用超时自动断开（不勾选 = 一直保持连接）</span>
+                <span className="text-xs font-medium text-gray-500">{t('enableTimeoutDisconnect')}</span>
               </label>
               {node.config.graceful_close_enabled === true && (
                 <div className="mt-2">
-                  <label className="block text-xs font-medium text-gray-500 mb-1">超时时长（秒）</label>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">{t('timeoutDuration')}</label>
                   <input
                     type="number"
                     min={1}
@@ -1556,17 +1559,17 @@ export default function NodeConfigPanel({
                     className="w-full px-3 py-2 border rounded-lg text-sm"
                     placeholder="1500"
                   />
-                  <p className="text-xs text-gray-400 mt-1">到时先发 <code className="font-mono">event: exit</code> 再断开。例：1500 = 25 分钟；600 = 10 分钟。</p>
+                  <p className="text-xs text-gray-400 mt-1">{t('timeoutDisconnectHint', { tpl: 'event: exit' })}</p>
                 </div>
               )}
             </div>
             <p className="text-xs text-gray-400">
-              客户端优先使用下方公开订阅地址；通用鉴权通道也可用 <code className="font-mono">/sse?topics=...</code>。
+              {t('sseClientHint', { tpl: '/sse?topics=...' })}
             </p>
             <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 space-y-2">
-              <div className="text-xs font-medium text-blue-700">客户端订阅地址（复制即可使用）</div>
+              <div className="text-xs font-medium text-blue-700">{t('clientSubAddr')}</div>
               <div className="text-xs text-blue-600">
-                拼接规则：当前域名 + <span className="font-mono">/events/{publicEndpointSlug}</span> + 身份参数。
+                {t.rich('subAddrRule', { a: `/events/${publicEndpointSlug}`, mono: (c) => <span className="font-mono">{c}</span> })}
               </div>
               <div className="rounded bg-white border border-blue-100 px-2 py-1.5 text-xs font-mono text-blue-800 break-all">
                 {sseUrl}
@@ -1575,7 +1578,7 @@ export default function NodeConfigPanel({
                 new EventSource(&apos;{ssePath}&apos;)
               </div>
               <p className="text-xs text-blue-600">
-                这个地址由当前工作流的 SSE 推送节点承接；保存并启用工作流后即可订阅。客户端 EventSource 无法带 Header，所以固定用 URL 参数 wayUid 传身份。
+                {t('subAddrDesc')}
               </p>
             </div>
           </>
@@ -1584,7 +1587,7 @@ export default function NodeConfigPanel({
         {node.type === 'call_workflow' && (
           <>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">子工作流 slug *</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('subWorkflowSlug')}</label>
               <input
                 value={node.config.workflow || ''}
                 onChange={e => updateConfig('workflow', e.target.value)}
@@ -1592,11 +1595,11 @@ export default function NodeConfigPanel({
                 placeholder="get-official-detail"
               />
               <p className="text-xs text-gray-400 mt-1">
-                只能调用<strong>同项目</strong>内已启用的工作流（按 slug 匹配，优先同库）。
+                {t('subWorkflowHint')}
               </p>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">入参 input (JSON)</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('inputJson')}</label>
               <CodeSnippetEditor
                 value={node.config.input ? (typeof node.config.input === 'string' ? node.config.input : JSON.stringify(node.config.input, null, 2)) : ''}
                 onChange={readOnly ? undefined : (next) => updateConfig('input', next)}
@@ -1611,7 +1614,7 @@ export default function NodeConfigPanel({
                   )
                 }
                 language="json"
-                label="入参 input"
+                label={t('inputJson')}
                 minRows={6}
                 readOnly={readOnly}
                 invalid={!!jsonFieldErrors.input}
@@ -1621,11 +1624,11 @@ export default function NodeConfigPanel({
                 <p className="text-xs text-red-600 mt-1">{jsonFieldErrors.input}</p>
               )}
               <p className="text-xs text-gray-400 mt-1">
-                作为子工作流的 trigger_data，子工作流用 <code className="bg-gray-100 px-1 rounded">{'{{trigger.字段}}'}</code> 读取。支持模板：<code className="bg-gray-100 px-1 rounded">{'{{trigger.x}}'}</code>、<code className="bg-gray-100 px-1 rounded">{'{{nodeId.field}}'}</code>。
+                {t('inputJsonHint', { a: '{{trigger.field}}', b: '{{trigger.x}}', c: '{{nodeId.field}}' })}
               </p>
             </div>
             <p className="text-xs text-gray-400">
-              返回值取子工作流 <strong>response 节点</strong>的输出，本节点后续可用 <code className="bg-gray-100 px-1 rounded">{'{{本节点id.字段}}'}</code> 引用。检测到递归调用或层级超过 5 层会报错。
+              {t('callWfReturnHint', { tpl: '{{thisNodeId.field}}' })}
             </p>
           </>
         )}
@@ -1664,9 +1667,9 @@ export default function NodeConfigPanel({
                 className="mt-0.5"
               />
               <span>
-                <span className="block text-sm font-medium text-gray-700">失败时继续（allow_failure）</span>
+                <span className="block text-sm font-medium text-gray-700">{t('allowFailure')}</span>
                 <span className="block text-xs text-gray-400 mt-0.5">
-                  开启后，本节点的任何错误（超时、连接失败、URL 构建失败、HTTP 4xx/5xx、参数缺失等）都不会中断工作流，后续节点继续执行。下游可用 <code className="font-mono">{'{{'}{node.id}.error{'}}'}</code> 引用错误信息。
+                  {t('allowFailureHttpHint', { tpl: `{{${node.id}.error}}` })}
                 </span>
               </span>
             </label>
@@ -1681,7 +1684,7 @@ export default function NodeConfigPanel({
             onClick={() => onDelete?.()}
             className="px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 rounded-lg transition-colors"
           >
-            删除节点
+            {t('deleteNode')}
           </button>
         )}
         <button
@@ -1689,7 +1692,7 @@ export default function NodeConfigPanel({
           onClick={onClose}
           className="px-4 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
         >
-          {readOnly ? '关闭' : '完成'}
+          {readOnly ? t('close') : t('done')}
         </button>
       </div>
     </div>
@@ -1728,6 +1731,7 @@ function StatementsEditor({
   updateConfig: (key: string, value: any) => void
   readOnly?: boolean
 }) {
+  const t = useTranslations('wfNode')
   const buildInitial = (): StatementDraft[] => {
     const arr = Array.isArray(node.config.statements) ? node.config.statements : []
     return arr.length ? arr.map(statementToDraft) : [{ sql: '', paramsText: '' }]
@@ -1760,16 +1764,16 @@ function StatementsEditor({
 
   return (
     <div className="space-y-3">
-      <label className="block text-xs font-medium text-gray-500">SQL 语句（按顺序执行）</label>
+      <label className="block text-xs font-medium text-gray-500">{t('sqlStmtsOrdered')}</label>
       {drafts.map((d, idx) => (
         <div key={idx} className="rounded-lg border border-gray-200 p-2.5 space-y-2 bg-gray-50/40">
           <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">语句 {idx + 1}</span>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{t('stmtN', { n: idx + 1 })}</span>
             <button
               onClick={() => removeStmt(idx)}
               disabled={drafts.length <= 1}
               className="w-6 h-6 rounded-md text-gray-400 hover:bg-red-50 hover:text-red-500 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 text-base leading-none flex items-center justify-center shrink-0"
-              title={drafts.length <= 1 ? '至少保留一条语句' : '删除该语句'}
+              title={drafts.length <= 1 ? t('atLeastOneStmt') : t('delStmt')}
             >
               &times;
             </button>
@@ -1778,13 +1782,13 @@ function StatementsEditor({
             value={d.sql}
             onChange={readOnly ? undefined : (next) => updateDraft(idx, 'sql', next)}
             language="sql"
-            label={`SQL 语句 ${idx + 1}`}
+            label={t('sqlStmtN', { n: idx + 1 })}
             minRows={4}
             readOnly={readOnly}
             placeholder="UPDATE t SET x=$1 WHERE id=($2)::int"
           />
           <div>
-            <label className="block text-[11px] font-medium text-gray-500 mb-1">参数（每行一个，依次对应 $1、$2…）</label>
+            <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('stmtParams')}</label>
             <textarea
               value={d.paramsText}
               onChange={(e) => updateDraft(idx, 'paramsText', e.target.value)}
@@ -1793,7 +1797,7 @@ function StatementsEditor({
               placeholder={'{{trigger.id}}\n{{trigger.hide_status}}'}
             />
             <p className="text-[11px] text-gray-400 mt-1">
-              支持模板 <code className="font-mono">{'{{trigger.x}}'}</code>、<code className="font-mono">{'{{nodeId.field}}'}</code>；空行忽略。
+              {t('stmtParamsHint', { a: '{{trigger.x}}', b: '{{nodeId.field}}' })}
             </p>
           </div>
         </div>
@@ -1802,10 +1806,10 @@ function StatementsEditor({
         onClick={addStmt}
         className="w-full px-3 py-1.5 text-xs font-medium text-emerald-600 border border-dashed border-emerald-300 rounded-lg hover:bg-emerald-50"
       >
-        + 添加 SQL 语句
+        {t('addSqlStmt')}
       </button>
       <p className="text-xs text-gray-400">
-        禁止 DROP / TRUNCATE。SQL 里也可直接写 <code className="font-mono">{'{{...}}'}</code> 模板（会自动参数化防注入）。
+        {t('noDropTruncate', { tpl: '{{...}}' })}
       </p>
     </div>
   )
@@ -1820,6 +1824,7 @@ function LlmNodeConfig({
   updateConfig: (key: string, value: unknown) => void
   patchConfig: (partial: Record<string, unknown>) => void
 }) {
+  const t = useTranslations('wfNode')
   const params = useParams<{ projectId: string }>()
   const tenantId = parseInt(params?.projectId ?? '', 10)
   const [connections, setConnections] = useState<LlmConnection[]>([])
@@ -1870,33 +1875,33 @@ function LlmNodeConfig({
   return (
     <>
       <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1">LLM 连接 *</label>
+        <label className="block text-xs font-medium text-gray-500 mb-1">{t('llmConn')}</label>
         <select
           value={connId || ''}
           onChange={(e) => setConnection(Number(e.target.value))}
           className="w-full px-3 py-2 border rounded-lg text-sm"
         >
-          <option value="">{loading ? '加载中…' : '选择连接'}</option>
+          <option value="">{loading ? t('loading') : t('selectConn')}</option>
           {connections.map((c) => (
             <option key={c.id} value={c.id}>
               {c.connection_name}
-              {!c.is_active ? '（已停用）' : ''}
+              {!c.is_active ? t('disabledSuffix') : ''}
             </option>
           ))}
         </select>
         <p className="text-xs text-gray-400 mt-1">
-          在「集成 → LLM」登记连接。没有可选模型时请先补模型列表。
+          {t('llmConnHint')}
         </p>
       </div>
       <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1">模型 *</label>
+        <label className="block text-xs font-medium text-gray-500 mb-1">{t('model')}</label>
         <select
           value={node.config.model || ''}
           onChange={(e) => updateConfig('model', e.target.value)}
           disabled={!models.length}
           className="w-full px-3 py-2 border rounded-lg text-sm font-mono"
         >
-          <option value="">{models.length ? '选择模型' : '当前连接没有模型'}</option>
+          <option value="">{models.length ? t('selectModel') : t('noModel')}</option>
           {models.map((m) => (
             <option key={m} value={m}>
               {m}
@@ -1911,7 +1916,7 @@ function LlmNodeConfig({
           onChange={(e) => updateConfig('system_prompt', e.target.value)}
           className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
           rows={3}
-          placeholder="你是客服。用户等级={{trigger.level}}"
+          placeholder={t('phSystemPrompt')}
         />
       </div>
       <div>
@@ -1921,11 +1926,11 @@ function LlmNodeConfig({
           onChange={(e) => updateConfig('user_prompt', e.target.value)}
           className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
           rows={3}
-          placeholder="问题：{{trigger.question}}"
+          placeholder={t('phUserPrompt')}
         />
       </div>
       <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1">messages（可选 JSON 数组）</label>
+        <label className="block text-xs font-medium text-gray-500 mb-1">{t('messagesJson')}</label>
         <textarea
           value={messagesRaw}
           onChange={(e) => {
@@ -1942,7 +1947,7 @@ function LlmNodeConfig({
           }}
           className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
           rows={4}
-          placeholder='{{trigger.messages}} 或 [{"role":"user","content":"..."}]'
+          placeholder={t('phMessages')}
         />
       </div>
       <div className="grid grid-cols-2 gap-2">
@@ -1970,7 +1975,7 @@ function LlmNodeConfig({
               updateConfig('max_tokens', e.target.value === '' ? undefined : Number(e.target.value))
             }
             className="w-full px-3 py-2 border rounded-lg text-sm"
-            placeholder="默认"
+            placeholder={t('phDefault')}
           />
         </label>
       </div>
@@ -1984,7 +1989,7 @@ function LlmNodeConfig({
             updateConfig('timeout_secs', e.target.value === '' ? undefined : Number(e.target.value))
           }
           className="w-full px-3 py-2 border rounded-lg text-sm"
-          placeholder="120（0 = 不限制）"
+          placeholder={t('phTimeout0')}
         />
       </label>
       <label className="flex items-start gap-2 cursor-pointer">
@@ -1995,8 +2000,8 @@ function LlmNodeConfig({
           onChange={(e) => updateConfig('json_mode', e.target.checked)}
         />
         <span>
-          <span className="block text-sm font-medium text-gray-700">JSON 模式</span>
-          <span className="block text-xs text-gray-400">成功时下游可用 {'{{'}节点id.json.字段{'}}'}</span>
+          <span className="block text-sm font-medium text-gray-700">{t('jsonMode')}</span>
+          <span className="block text-xs text-gray-400">{t('jsonModeHint', { tpl: '{{nodeId.json.field}}' })}</span>
         </span>
       </label>
       <label className="flex items-start gap-2 cursor-pointer">
@@ -2007,8 +2012,8 @@ function LlmNodeConfig({
           onChange={(e) => updateConfig('stream', e.target.checked)}
         />
         <span>
-          <span className="block text-sm font-medium text-gray-700">流式输出（适合 endpoint 打字机）</span>
-          <span className="block text-xs text-gray-400">与 http_call.stream 合计全图最多一个</span>
+          <span className="block text-sm font-medium text-gray-700">{t('llmStream')}</span>
+          <span className="block text-xs text-gray-400">{t('llmStreamHint')}</span>
         </span>
       </label>
       <label className="flex items-start gap-2 cursor-pointer">
@@ -2019,7 +2024,7 @@ function LlmNodeConfig({
           onChange={(e) => updateConfig('skip_llm', e.target.checked)}
         />
         <span>
-          <span className="block text-sm font-medium text-gray-700">跳过真实调用（debug mock）</span>
+          <span className="block text-sm font-medium text-gray-700">{t('skipRealCall')}</span>
         </span>
       </label>
     </>
@@ -2058,6 +2063,7 @@ function RedisNodeConfig({
   node: WorkflowNodeData
   updateConfig: (key: string, value: any) => void
 }) {
+  const t = useTranslations('wfNode')
   const params = useParams<{ projectId: string }>()
   const tenantId = parseInt(params?.projectId ?? '', 10)
   const [connections, setConnections] = useState<RedisConnection[]>([])
@@ -2134,13 +2140,13 @@ function RedisNodeConfig({
   return (
     <>
       <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1">Redis 连接 *</label>
+        <label className="block text-xs font-medium text-gray-500 mb-1">{t('redisConn')}</label>
         <select
           value={connId}
           onChange={(e) => updateConfig('connection_id', Number(e.target.value))}
           className="w-full px-3 py-2 border rounded-lg text-sm"
         >
-          <option value={0}>{loading ? '加载中…' : '请选择连接'}</option>
+          <option value={0}>{loading ? t('loading') : t('selectConnReq')}</option>
           {connections.map((c) => (
             <option key={c.id} value={c.id}>
               {c.connection_name}（{c.host}:{c.port}/db{c.db_index}）
@@ -2149,13 +2155,13 @@ function RedisNodeConfig({
         </select>
         {!loading && connections.length === 0 && (
           <p className="text-xs text-amber-600 mt-1">
-            当前项目还没有 Redis 连接，请先到「集成 → Redis」创建。
+            {t('noRedisConn')}
           </p>
         )}
       </div>
 
       <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1">操作 *</label>
+        <label className="block text-xs font-medium text-gray-500 mb-1">{t('operation')}</label>
         <select
           value={op}
           onChange={(e) => updateConfig('op', e.target.value)}
@@ -2172,11 +2178,11 @@ function RedisNodeConfig({
       {fields.includes('key') && textField('key', 'key', 'user:{{trigger.id}}')}
       {fields.includes('field') && textField('field', 'field', 'name')}
       {fields.includes('value') && textField('value', 'value', '{{trigger.value}}')}
-      {fields.includes('ttl') && numField('ttl', 'TTL（秒）', op === 'set' ? '留空 = 不过期' : '过期秒数')}
+      {fields.includes('ttl') && numField('ttl', t('ttlSec'), op === 'set' ? t('ttlSetHint') : t('ttlExpireHint'))}
       {fields.includes('pattern') && textField('pattern', 'pattern', 'user:*')}
-      {fields.includes('count') && numField('count', '上限', '最多返回条数（≤10000）')}
+      {fields.includes('count') && numField('count', t('limit'), t('limitHint'))}
       {fields.includes('start') && numField('start', 'start', '0')}
-      {fields.includes('stop') && numField('stop', 'stop', '-1（末尾）')}
+      {fields.includes('stop') && numField('stop', 'stop', t('stopHint'))}
       {fields.includes('members') && textField('members', 'members', 'a, b, c', true)}
       {fields.includes('values') && textField('values', 'values', 'a, b, c', true)}
 
@@ -2187,14 +2193,12 @@ function RedisNodeConfig({
             checked={node.config.nx === true}
             onChange={(e) => updateConfig('nx', e.target.checked)}
           />
-          <span className="text-xs font-medium text-gray-500">NX（仅当 key 不存在时写入）</span>
+          <span className="text-xs font-medium text-gray-500">{t('nxHint')}</span>
         </label>
       )}
 
       <p className="text-xs text-gray-400">
-        文本字段支持模板：<code className="bg-gray-100 px-1 rounded">{'{{trigger.x}}'}</code>、
-        <code className="bg-gray-100 px-1 rounded">{'{{nodeId.field}}'}</code>。写操作在
-        dry_run / 生产只读调试下返回 mock，不落库。
+        {t('redisTplHint', { a: '{{trigger.x}}', b: '{{nodeId.field}}' })}
       </p>
     </>
   )
@@ -2211,6 +2215,7 @@ function KafkaNodeConfig({
   updateConfig: (key: string, value: any) => void
   readOnly?: boolean
 }) {
+  const t = useTranslations('wfNode')
   const params = useParams<{ projectId: string }>()
   const tenantId = parseInt(params?.projectId ?? '', 10)
   const [connections, setConnections] = useState<KafkaConnection[]>([])
@@ -2242,13 +2247,13 @@ function KafkaNodeConfig({
   return (
     <>
       <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1">Kafka 连接 *</label>
+        <label className="block text-xs font-medium text-gray-500 mb-1">{t('kafkaConn')}</label>
         <select
           value={connId}
           onChange={(e) => updateConfig('connection_id', Number(e.target.value))}
           className="w-full px-3 py-2 border rounded-lg text-sm"
         >
-          <option value={0}>{loading ? '加载中…' : '请选择连接'}</option>
+          <option value={0}>{loading ? t('loading') : t('selectConnReq')}</option>
           {connections.map((connection) => (
             <option key={connection.id} value={connection.id}>
               {connection.connection_name}（{connection.brokers}）
@@ -2257,13 +2262,13 @@ function KafkaNodeConfig({
         </select>
         {!loading && connections.length === 0 && (
           <p className="text-xs text-amber-600 mt-1">
-            当前项目还没有 Kafka 连接，请先到「集成 → Kafka」创建。
+            {t('noKafkaConn')}
           </p>
         )}
       </div>
 
       <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1">操作 *</label>
+        <label className="block text-xs font-medium text-gray-500 mb-1">{t('operation')}</label>
         <select
           value={node.config.op || 'produce'}
           onChange={(e) => updateConfig('op', e.target.value)}
@@ -2284,7 +2289,7 @@ function KafkaNodeConfig({
       </div>
 
       <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1">Key（可选）</label>
+        <label className="block text-xs font-medium text-gray-500 mb-1">{t('keyOptional')}</label>
         <input
           value={node.config.key || ''}
           onChange={(e) => updateConfig('key', e.target.value)}
@@ -2307,7 +2312,7 @@ function KafkaNodeConfig({
       </div>
 
       <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1">Headers（可选 JSON 对象）</label>
+        <label className="block text-xs font-medium text-gray-500 mb-1">{t('headersOptionalJson')}</label>
         <CodeSnippetEditor
           value={
             typeof node.config.headers === 'string'
@@ -2333,7 +2338,7 @@ function KafkaNodeConfig({
       </div>
 
       <p className="text-xs text-gray-400">
-        Topic、Key、Value、Headers 支持模板：<code className="bg-gray-100 px-1 rounded">{'{{trigger.x}}'}</code>、
+        {t('kafkaTplHint', { a: '{{trigger.x}}', b: '{{nodeId.field}}' })} {/* templates */}
         <code className="bg-gray-100 px-1 rounded">{'{{nodeId.field}}'}</code>。
       </p>
     </>
@@ -2362,6 +2367,7 @@ function ObjectStorageNodeConfig({
   updateConfig: (key: string, value: any) => void
   readOnly?: boolean
 }) {
+  const t = useTranslations('wfNode')
   const params = useParams<{ projectId: string }>()
   const tenantId = parseInt(params?.projectId ?? '', 10)
   const [connections, setConnections] = useState<ObjectStorageConnection[]>([])
@@ -2390,13 +2396,13 @@ function ObjectStorageNodeConfig({
   return (
     <>
       <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1">对象存储连接 *</label>
+        <label className="block text-xs font-medium text-gray-500 mb-1">{t('osConn')}</label>
         <select
           value={connId}
           onChange={(e) => updateConfig('connection_id', Number(e.target.value))}
           className="w-full px-3 py-2 border rounded-lg text-sm"
         >
-          <option value={0}>{loading ? '加载中…' : '请选择连接'}</option>
+          <option value={0}>{loading ? t('loading') : t('selectConnReq')}</option>
           {connections.map((c) => (
             <option key={c.id} value={c.id}>
               {c.connection_name}（{c.bucket}）
@@ -2405,13 +2411,13 @@ function ObjectStorageNodeConfig({
         </select>
         {!loading && connections.length === 0 && (
           <p className="text-xs text-amber-600 mt-1">
-            当前项目还没有对象存储连接，请先到「集成 → 对象存储」创建。
+            {t('noOsConn')}
           </p>
         )}
       </div>
 
       <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1">操作 *</label>
+        <label className="block text-xs font-medium text-gray-500 mb-1">{t('operation')}</label>
         <select
           value={op}
           onChange={(e) => updateConfig('op', e.target.value)}
@@ -2453,7 +2459,7 @@ function ObjectStorageNodeConfig({
       {fields.includes('keys') && (
         <div>
           <label className="block text-xs font-medium text-gray-500 mb-1">
-            keys（可选，JSON 数组；优先于单个 key）
+            {t('keysOptional')}
           </label>
           <CodeSnippetEditor
             value={
@@ -2502,7 +2508,7 @@ function ObjectStorageNodeConfig({
               updateConfig('max_keys', e.target.value === '' ? undefined : Number(e.target.value))
             }
             className="w-full px-3 py-2 border rounded-lg text-sm"
-            placeholder="默认 100，上限 1000"
+            placeholder={t('phMax100')}
           />
         </div>
       )}
@@ -2534,15 +2540,13 @@ function ObjectStorageNodeConfig({
               )
             }
             className="w-full px-3 py-2 border rounded-lg text-sm"
-            placeholder="默认 3600，上限 86400"
+            placeholder={t('phExpire3600')}
           />
         </div>
       )}
 
       <p className="text-xs text-gray-400">
-        文本字段支持模板：<code className="bg-gray-100 px-1 rounded">{'{{trigger.x}}'}</code>、
-        <code className="bg-gray-100 px-1 rounded">{'{{nodeId.field}}'}</code>。写操作在
-        dry_run / 生产只读调试下返回 mock，不落桶。
+        {t('osTplHint', { a: '{{trigger.x}}', b: '{{nodeId.field}}' })}
       </p>
     </>
   )

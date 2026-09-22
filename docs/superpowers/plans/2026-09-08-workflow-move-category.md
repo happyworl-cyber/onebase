@@ -83,7 +83,7 @@ fn same_taxonomy_treats_null_shared_uncategorized_as_equal() {
 
 - [x] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p onebase --lib workflow_taxonomy::tests::batch_move -- --nocapture`
+Run: `cargo test -p planeos --lib workflow_taxonomy::tests::batch_move -- --nocapture`
 
 Expected: compile error (`resolve_batch_move_target` / `same_taxonomy` missing).
 
@@ -111,7 +111,7 @@ pub fn same_taxonomy(
 
 - [x] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p onebase --lib workflow_taxonomy::tests -- --nocapture`
+Run: `cargo test -p planeos --lib workflow_taxonomy::tests -- --nocapture`
 
 Expected: PASS (existing + new).
 
@@ -177,7 +177,7 @@ Do **not** add a live-DB integration test in this task. Handler wiring is verifi
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test --bin onebase parse_batch_action_accepts_move -- --nocapture`
+Run: `cargo test --bin planeos parse_batch_action_accepts_move -- --nocapture`
 
 Expected: FAIL or compile error until `parse_batch_action` exists; if you stub it with the old three actions, `move` returns Err.
 
@@ -266,11 +266,11 @@ let target = crate::workflow_taxonomy::resolve_batch_move_target(
 Run:
 
 ```
-cargo test --bin onebase parse_batch_action -- --nocapture
-cargo test -p onebase --lib workflow_taxonomy::tests -- --nocapture
+cargo test --bin planeos parse_batch_action -- --nocapture
+cargo test -p planeos --lib workflow_taxonomy::tests -- --nocapture
 ```
 
-Expected: PASS. `cargo check --bin onebase` succeeds.
+Expected: PASS. `cargo check --bin planeos` succeeds.
 
 - [ ] **Step 5: Commit (skip unless the user asked)**
 

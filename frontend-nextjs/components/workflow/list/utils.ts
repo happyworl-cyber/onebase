@@ -150,14 +150,14 @@ export function validateFolderRename(
   siblingNames: string[],
   currentName: string,
 ): string | null {
-  if (!trimmed) return '文件夹名称不能为空'
-  if (trimmed.includes('/')) return "文件夹名称不能包含 '/'"
-  if (unicodeCharCount(trimmed) > 64) return '文件夹名称不能超过 64 个字符'
+  if (!trimmed) return 'Folder name cannot be empty'
+  if (trimmed.includes('/')) return "Folder name cannot contain '/'"
+  if (unicodeCharCount(trimmed) > 64) return 'Folder name cannot exceed 64 characters'
   if (trimmed === SHARED_DEPARTMENT_NAME || trimmed === UNCATEGORIZED_FOLDER_NAME) {
-    return `不能使用保留名称「${trimmed}」`
+    return `"${trimmed}" is a reserved name`
   }
   if (trimmed !== currentName && siblingNames.includes(trimmed)) {
-    return `文件夹「${trimmed}」已存在`
+    return `Folder "${trimmed}" already exists`
   }
   return null
 }
@@ -310,21 +310,21 @@ export function resolveCreateFolderAction(folderId: string): {
   visible: boolean
 } {
   if (folderId === ROOT_FOLDER_ID) {
-    return { kind: 'department', label: '新建服务', parentId: null, visible: true }
+    return { kind: 'department', label: 'New service', parentId: null, visible: true }
   }
   if (folderId.startsWith(DEPT_PREFIX)) {
-    return { kind: 'category', label: '新建分类', parentId: folderId, visible: true }
+    return { kind: 'category', label: 'New category', parentId: folderId, visible: true }
   }
   const cat = catNamesFromId(folderId)
   if (cat) {
     return {
       kind: 'category',
-      label: '新建分类',
+      label: 'New category',
       parentId: deptIdFromName(cat.dept),
       visible: true,
     }
   }
-  return { kind: 'department', label: '新建服务', parentId: null, visible: false }
+  return { kind: 'department', label: 'New service', parentId: null, visible: false }
 }
 
 /** @deprecated 仅兼容旧版 localStorage 自定义文件夹 */
@@ -376,7 +376,7 @@ export function buildFolderTree(
     {
       id: ROOT_FOLDER_ID,
       parent_id: null,
-      name: '全部工作流',
+      name: 'All workflows',
       icon: 'fa-layer-group',
       color: 'text-slate-500',
     },
@@ -538,9 +538,9 @@ export function formatRelativeTime(iso: string, nowMs: number = Date.now()): str
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return '—'
   const days = Math.round((startOfLocalDay(nowMs) - startOfLocalDay(d.getTime())) / (1000 * 60 * 60 * 24))
-  if (days <= 0) return '今天'
-  if (days === 1) return '昨天'
-  if (days === 2) return '2天前'
+  if (days <= 0) return 'Today'
+  if (days === 1) return 'Yesterday'
+  if (days === 2) return '2 days ago'
   return d.toLocaleDateString('zh-CN', {
     year: 'numeric',
     month: '2-digit',
@@ -566,7 +566,7 @@ export function filterAndSortWorkflows(
   if (state.status === 'off') data = data.filter((w) => !w.is_enabled)
   if (state.trigs.size) data = data.filter((w) => state.trigs.has(w.trigger_type))
   if (state.author) {
-    data = data.filter((w) => (w.created_by_name || '未知') === state.author)
+    data = data.filter((w) => (w.created_by_name || 'Unknown') === state.author)
   }
   if (state.search.trim()) {
     const q = state.search.toLowerCase()
@@ -598,7 +598,7 @@ export function uniqueAuthors(
     : folderId === ROOT_FOLDER_ID
       ? workflows
       : workflowsInFolder(workflows, folders, folderId, true)
-  return Array.from(new Set(scope.map((w) => w.created_by_name || '未知'))).sort((a, b) =>
+  return Array.from(new Set(scope.map((w) => w.created_by_name || 'Unknown'))).sort((a, b) =>
     a.localeCompare(b, 'zh-Hans-CN'),
   )
 }
@@ -643,7 +643,7 @@ export function listSubcategories(workflows: WorkflowListItem[], department: str
 
 /** 列表当前选中的文件夹（进入编辑器再返回时恢复） */
 export function folderNavStorageKey(databaseId?: number | null) {
-  return `onebase:workflow-list-folder:${databaseId ?? 'all'}`
+  return `planeos:workflow-list-folder:${databaseId ?? 'all'}`
 }
 
 export function loadSavedFolderId(key: string): string | null {

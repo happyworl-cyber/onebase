@@ -10,7 +10,7 @@
 
 - `src/events.rs` — `EventBus`，基于 `tokio::sync::broadcast`，承载 `DataChangeEvent`（`tenant_id` / `database_id` / `schema` / `table` / `action` / `old_data` / `new_data` / `user_id` / `timestamp` / `request_id`）。
 - `src/realtime.rs` — WebSocket 端点 `GET /realtime/ws?token=xxx`，用 query token 鉴权（`verify_token`），按 `schema.table` channel 订阅，从 `start_broadcaster()` 派生的 broadcast 推送数据变更。
-- `src/redis_pubsub.rs` — `RedisPubSubBridge`，把本地 `EventBus` 的事件经 Redis channel `onebase:events` 跨实例广播。
+- `src/redis_pubsub.rs` — `RedisPubSubBridge`，把本地 `EventBus` 的事件经 Redis channel `planeos:events` 跨实例广播。
 
 `DataChangeEvent` 是写死的结构，无法承载任意业务消息，因此 SSE 不直接复用 `EventBus`，而是新建一条通用总线 `SseHub`，并把 `DataChangeEvent` 桥接进来。
 
@@ -108,7 +108,7 @@ pub struct SseEnvelope {
 
 ### 5.2 SSE Redis 桥接（仅当配置了 Redis）
 
-仿 `redis_pubsub.rs`，channel `onebase:sse`：
+仿 `redis_pubsub.rs`，channel `planeos:sse`：
 
 - 发布端：订阅 `hub` broadcast，仅对 `replicate == true` 的 envelope `PUBLISH` JSON（即内部 `publish` + HTTP publish 的通用消息）。
 - 订阅端：收到后 `hub.publish_local(env)`（`replicate = false`），故不会被发布端再次 `PUBLISH`，**无回环**。

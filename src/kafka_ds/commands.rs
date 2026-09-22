@@ -29,15 +29,21 @@ pub async fn execute(producer: &FutureProducer, op: &str, args: &Value) -> Resul
             // Template `{{loop.item.article_id}}` often resolves to a JSON number;
             // Kafka record keys are bytes/strings — coerce numbers (and bools).
             let key = optional_kafka_key(args)?;
-            let value = args
-                .get("value")
-                .ok_or_else(|| AppError::InvalidQuery("缺少参数 `value`".into()))?;
+            let value = args.get("value").ok_or_else(|| {
+                AppError::validation(
+                    "kafkacmd_produce_value_missing",
+                    "缺少参数 `value`",
+                    serde_json::json!({}),
+                )
+            })?;
             let value = match value {
                 Value::String(value) => value.clone(),
                 Value::Object(_) | Value::Array(_) => value.to_string(),
                 _ => {
-                    return Err(AppError::InvalidQuery(
-                        "参数 `value` 必须是字符串、对象或数组".into(),
+                    return Err(AppError::validation(
+                        "kafkacmd_produce_value_invalid_type",
+                        "参数 `value` 必须是字符串、对象或数组",
+                        serde_json::json!({}),
                     ));
                 }
             };
@@ -53,10 +59,14 @@ pub async fn execute(producer: &FutureProducer, op: &str, args: &Value) -> Resul
                 })?;
             Ok(metadata_json(&metadata))
         }
-        other => Err(AppError::InvalidQuery(format!(
-            "不支持的 Kafka 操作 `{other}`（支持：{}）",
-            SUPPORTED_OPS.join(", ")
-        ))),
+        other => Err(AppError::validation(
+            "kafkacmd_op_unsupported",
+            format!(
+                "不支持的 Kafka 操作 `{other}`（支持：{}）",
+                SUPPORTED_OPS.join(", ")
+            ),
+            serde_json::json!({ "op": other, "supported": SUPPORTED_OPS.join(", ") }),
+        )),
     }
 }
 
@@ -72,13 +82,21 @@ pub async fn produce(
         record = record.key(key);
     }
     if !headers.is_null() {
-        let object = headers
-            .as_object()
-            .ok_or_else(|| AppError::InvalidQuery("参数 `headers` 必须是对象".into()))?;
+        let object = headers.as_object().ok_or_else(|| {
+            AppError::validation(
+                "kafkacmd_headers_not_object",
+                "参数 `headers` 必须是对象",
+                serde_json::json!({}),
+            )
+        })?;
         let mut owned = OwnedHeaders::new_with_capacity(object.len());
         for (name, value) in object {
             let value = value.as_str().ok_or_else(|| {
-                AppError::InvalidQuery(format!("Kafka header `{name}` 的值必须是字符串"))
+                AppError::validation(
+                    "kafkacmd_header_value_not_string",
+                    format!("Kafka header `{name}` 的值必须是字符串"),
+                    serde_json::json!({ "name": name }),
+                )
             })?;
             owned = owned.insert(Header {
                 key: name,
@@ -128,30 +146,48 @@ pub fn validate_new_topic(
 ) -> Result<String> {
     let name = name.trim();
     if name.is_empty() {
-        return Err(AppError::InvalidQuery("topic 名称不能为空".into()));
+        return Err(AppError::validation(
+            "kafkacmd_topic_name_required",
+            "topic 名称不能为空",
+            serde_json::json!({}),
+        ));
     }
     if name == "." || name == ".." {
-        return Err(AppError::InvalidQuery("topic 名称非法".into()));
+        return Err(AppError::validation(
+            "kafkacmd_topic_name_invalid",
+            "topic 名称非法",
+            serde_json::json!({}),
+        ));
     }
     if name.len() > 249 {
-        return Err(AppError::InvalidQuery(
-            "topic 名称过长（最多 249 字符）".into(),
+        return Err(AppError::validation(
+            "kafkacmd_topic_name_too_long",
+            "topic 名称过长（最多 249 字符）",
+            serde_json::json!({}),
         ));
     }
     if !name
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
     {
-        return Err(AppError::InvalidQuery(
-            "topic 名称仅允许字母、数字、点、下划线、连字符".into(),
+        return Err(AppError::validation(
+            "kafkacmd_topic_name_charset",
+            "topic 名称仅允许字母、数字、点、下划线、连字符",
+            serde_json::json!({}),
         ));
     }
     if !(1..=100).contains(&num_partitions) {
-        return Err(AppError::InvalidQuery("num_partitions 须在 1..=100".into()));
+        return Err(AppError::validation(
+            "kafkacmd_num_partitions_range",
+            "num_partitions 须在 1..=100",
+            serde_json::json!({}),
+        ));
     }
     if !(1..=10).contains(&replication_factor) {
-        return Err(AppError::InvalidQuery(
-            "replication_factor 须在 1..=10".into(),
+        return Err(AppError::validation(
+            "kafkacmd_replication_factor_range",
+            "replication_factor 须在 1..=10",
+            serde_json::json!({}),
         ));
     }
     Ok(name.to_string())
@@ -196,9 +232,11 @@ pub async fn create_topic(
             "num_partitions": num_partitions,
             "replication_factor": replication_factor,
         })),
-        Err((_, RDKafkaErrorCode::TopicAlreadyExists)) => {
-            Err(AppError::InvalidQuery(format!("topic 已存在: {name}")))
-        }
+        Err((_, RDKafkaErrorCode::TopicAlreadyExists)) => Err(AppError::validation(
+            "kafkacmd_topic_already_exists",
+            format!("topic 已存在: {name}"),
+            serde_json::json!({ "name": name }),
+        )),
         Err((_, code)) => Err(AppError::ServiceUnavailable(format!(
             "Kafka 创建 topic 失败: {code}"
         ))),
@@ -292,9 +330,13 @@ fn metadata_json(metadata: &rdkafka::metadata::Metadata) -> Value {
 }
 
 fn required_string<'a>(args: &'a Value, name: &str) -> Result<&'a str> {
-    args.get(name)
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::InvalidQuery(format!("缺少字符串参数 `{name}`")))
+    args.get(name).and_then(Value::as_str).ok_or_else(|| {
+        AppError::validation(
+            "kafkacmd_string_param_missing",
+            format!("缺少字符串参数 `{name}`"),
+            serde_json::json!({ "name": name }),
+        )
+    })
 }
 
 /// Kafka produce `key`: string, or number/bool coerced to string. Empty string → None.
@@ -310,8 +352,10 @@ fn optional_kafka_key(args: &Value) -> Result<Option<String>> {
         }
         Some(Value::Number(n)) => Ok(Some(n.to_string())),
         Some(Value::Bool(b)) => Ok(Some(b.to_string())),
-        Some(_) => Err(AppError::InvalidQuery(
-            "参数 `key` 必须是字符串或数字".into(),
+        Some(_) => Err(AppError::validation(
+            "kafkacmd_key_invalid_type",
+            "参数 `key` 必须是字符串或数字",
+            serde_json::json!({}),
         )),
     }
 }
@@ -329,8 +373,8 @@ mod tests {
     #[test]
     fn validate_new_topic_accepts_common_names() {
         assert_eq!(
-            validate_new_topic("onebase.ai-close-ticket", 3, 1).unwrap(),
-            "onebase.ai-close-ticket"
+            validate_new_topic("planeos.ai-close-ticket", 3, 1).unwrap(),
+            "planeos.ai-close-ticket"
         );
         assert_eq!(
             validate_new_topic("  orders_v1  ", 1, 1).unwrap(),

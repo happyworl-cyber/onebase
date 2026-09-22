@@ -1,6 +1,6 @@
 # Provisioner Webhook Mock
 
-本地联调 Onebase P3「运维自动开通」用的最小 HTTP mock。
+本地联调 PlaneOS P3「运维自动开通」用的最小 HTTP mock。
 
 ## 启动
 
@@ -10,7 +10,7 @@ python3 examples/provisioner-webhook/mock_server.py
 
 默认监听 `http://127.0.0.1:9090`。
 
-## Onebase 配置
+## PlaneOS 配置
 
 在 `.env` 中加入：
 
@@ -25,7 +25,7 @@ PROVISION_WEBHOOK_TIMEOUT_SECS=120
 
 ## 测试流程
 
-1. 启动 mock + Onebase 后端
+1. 启动 mock + PlaneOS 后端
 2. 打开 `/workspace/provision`
 3. 选择「运维自动开通」→ 完成创建
 4. 检查 `tenant_databases` 与项目 `workspace_config.provisioned_via_webhook`
@@ -40,7 +40,7 @@ MOCK_ASYNC=1 PROVISION_WEBHOOK_POLL_INTERVAL_SECS=2 python3 examples/provisioner
 
 或在 slug 使用 `async-` 前缀（如 `async-my-blog`），无需 `MOCK_ASYNC`。
 
-Provisioner 先返回 `202 pending`，Onebase 自动 `action=poll` 直至 mock 返回 `postgresql`。
+Provisioner 先返回 `202 pending`，PlaneOS 自动 `action=poll` 直至 mock 返回 `postgresql`。
 
 ## 探活
 

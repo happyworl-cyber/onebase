@@ -25,15 +25,15 @@ CREATE TABLE IF NOT EXISTS management.partners (
     payment_terms INTEGER NOT NULL DEFAULT 30, -- 账期天数
     license_quota INTEGER NOT NULL DEFAULT 0 CHECK (license_quota >= 0),
     used_quota INTEGER NOT NULL DEFAULT 0 CHECK (used_quota >= 0),
-    quota_expires_at TIMESTAMP,
+    quota_expires_at TIMESTAMPTZ,
 
     -- 授权范围限制
     allowed_editions JSONB NOT NULL DEFAULT '[]'::jsonb, -- ["standard", "enterprise"]
     allowed_modules JSONB NOT NULL DEFAULT '[]'::jsonb,  -- ["ai", "ha", "backup"]
     max_license_days INTEGER, -- 最长签发天数限制，NULL 表示不限制
 
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT partners_status_check CHECK (status IN ('active', 'suspended', 'inactive')),
     CONSTRAINT partners_quota_check CHECK (used_quota <= license_quota)
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS management.partner_users (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     role VARCHAR(50) NOT NULL DEFAULT 'member', -- admin | member
     is_active BOOLEAN NOT NULL DEFAULT true,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     UNIQUE(partner_id, user_id),
     CONSTRAINT partner_users_role_check CHECK (role IN ('admin', 'member'))
@@ -87,8 +87,8 @@ CREATE TABLE IF NOT EXISTS management.customer_licenses (
     fingerprint_encrypted TEXT, -- 客户硬件指纹（加密存储，可选）
 
     -- 时间配置
-    issued_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NOT NULL,
+    issued_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMPTZ NOT NULL,
     grace_days INTEGER NOT NULL DEFAULT 0, -- 宽限期天数
 
     -- License 类型与价格
@@ -104,8 +104,8 @@ CREATE TABLE IF NOT EXISTS management.customer_licenses (
     parent_license_id INTEGER REFERENCES management.customer_licenses(id), -- 续费的原 License
     renewed_to_license_id INTEGER REFERENCES management.customer_licenses(id), -- 被续费后的新 License
 
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT customer_licenses_status_check
         CHECK (status IN ('active', 'grace', 'expired', 'revoked')),
@@ -138,11 +138,11 @@ CREATE TABLE IF NOT EXISTS management.partner_commissions (
 
     -- 结算状态
     status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending | approved | paid | settled
-    settlement_date TIMESTAMP, -- 结算日期
-    statement_id INTEGER REFERENCES management.partner_statements(id), -- 关联对账单
+    settlement_date TIMESTAMPTZ, -- 结算日期
+    statement_id INTEGER, -- 关联对账单（外键在 partner_statements 建表后补加，见下方 ALTER）
 
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT partner_commissions_status_check
         CHECK (status IN ('pending', 'approved', 'paid', 'settled'))
@@ -162,8 +162,8 @@ CREATE TABLE IF NOT EXISTS management.partner_statements (
     partner_id INTEGER NOT NULL REFERENCES management.partners(id) ON DELETE RESTRICT,
 
     -- 账期
-    period_start TIMESTAMP NOT NULL,
-    period_end TIMESTAMP NOT NULL,
+    period_start TIMESTAMPTZ NOT NULL,
+    period_end TIMESTAMPTZ NOT NULL,
 
     -- 统计汇总
     total_licenses INTEGER NOT NULL DEFAULT 0,
@@ -174,11 +174,11 @@ CREATE TABLE IF NOT EXISTS management.partner_statements (
     -- 状态与支付
     status VARCHAR(20) NOT NULL DEFAULT 'draft', -- draft | pending | paid | settled
     statement_file_url TEXT, -- 对账单文件 URL（PDF/Excel）
-    paid_at TIMESTAMP,
+    paid_at TIMESTAMPTZ,
     payment_reference VARCHAR(200), -- 支付凭证号
 
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT partner_statements_status_check
         CHECK (status IN ('draft', 'pending', 'paid', 'settled'))
@@ -191,8 +191,27 @@ CREATE INDEX IF NOT EXISTS idx_partner_statements_status ON management.partner_s
 COMMENT ON TABLE management.partner_statements IS '对账单：月度自动生成，汇总佣金';
 COMMENT ON COLUMN management.partner_statements.statement_file_url IS '对账单文件 URL（PDF/Excel）';
 
+-- partner_commissions.statement_id 的外键：必须等 partner_statements 建表后才能加。
+-- 直接写在 partner_commissions 的 CREATE TABLE 里会形成前向引用，导致建表失败。
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'partner_commissions_statement_id_fkey'
+          AND conrelid = 'management.partner_commissions'::regclass
+    ) THEN
+        ALTER TABLE management.partner_commissions
+            ADD CONSTRAINT partner_commissions_statement_id_fkey
+            FOREIGN KEY (statement_id) REFERENCES management.partner_statements(id);
+    END IF;
+END $$;
+
 -- 6. 视图：v_partner_stats - 代理商统计
-CREATE OR REPLACE VIEW management.v_partner_stats AS
+-- 注意：064 会用不同的列集重建本视图。CREATE OR REPLACE 在列名/顺序变化时报错，
+-- 所以先 DROP 再 CREATE，保证每次启动重跑迁移都幂等。
+DROP VIEW IF EXISTS management.v_partner_stats;
+
+CREATE VIEW management.v_partner_stats AS
 SELECT
     p.id AS partner_id,
     p.name,

@@ -25,6 +25,7 @@ import { usePublicApiConfig } from '@/lib/apiBase'
 import { useAppStore } from '@/lib/store'
 import { pgFunctionIdentity } from '@/lib/utils'
 import { useNotification } from '@/hooks/useNotification'
+import { useTranslations } from 'next-intl'
 
 interface FunctionInfo {
   schema_name: string
@@ -151,6 +152,7 @@ export default function RpcPlaygroundPage() {
   const params = useParams<{ projectId: string }>()
   const projectId = parseInt(params?.projectId ?? '', 10)
   const { currentSchema, currentTenant, currentConnection } = useAppStore()
+  const t = useTranslations('wsRpc')
   const notify = useNotification()
 
   // RPC 路径段优先取当前连接标识；缺失时回退到当前项目 slug。
@@ -271,11 +273,11 @@ export default function RpcPlaygroundPage() {
     try {
       const v = JSON.parse(trimmed)
       if (v === null || typeof v !== 'object' || Array.isArray(v)) {
-        return { ok: false, error: '参数必须是 JSON 对象（{}）' }
+        return { ok: false, error: t('errArgsObj') }
       }
       return { ok: true, value: v as Record<string, unknown> }
     } catch (e: any) {
-      return { ok: false, error: `JSON 解析失败：${e.message}` }
+      return { ok: false, error: t('jsonParseFailed', { msg: e.message }) }
     }
   }, [argsJson])
 
@@ -300,11 +302,11 @@ export default function RpcPlaygroundPage() {
 
   const runRpc = async () => {
     if (!fnName.trim()) {
-      notify.warning('请填入函数名')
+      notify.warning(t('errFnName'))
       return
     }
     if (!databaseSlug) {
-      notify.warning('请先选择项目（项目标识缺失，无法拼接 RPC 路径）')
+      notify.warning(t('errProject'))
       return
     }
     if (!parsedArgs.ok) {
@@ -335,7 +337,7 @@ export default function RpcPlaygroundPage() {
         status: err?.response?.status ?? 0,
         elapsedMs: Math.round(performance.now() - startedAt),
         data: err?.response?.data ?? null,
-        error: err?.response?.data?.error || err?.message || '请求失败',
+        error: err?.response?.data?.error || err?.message || t('reqFailed'),
       })
     } finally {
       setRunning(false)
@@ -346,9 +348,9 @@ export default function RpcPlaygroundPage() {
     if (!curl) return
     try {
       await navigator.clipboard.writeText(curl)
-      notify.success('cURL 已复制到剪贴板')
+      notify.success(t('curlCopied'))
     } catch {
-      notify.warning('当前环境不支持剪贴板写入')
+      notify.warning(t('clipboardUnsupported'))
     }
   }
 
@@ -356,18 +358,18 @@ export default function RpcPlaygroundPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-800">RPC 调用器</h1>
+          <h1 className="text-2xl font-semibold text-gray-800">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            PostgREST 风格的图形化测试面板，调用路径
+            {t('subtitlePre')}
             <code className="px-1.5 py-0.5 bg-gray-100 rounded text-xs ml-1">
               /api/v1/{databaseSlug ?? '{databaseSlug}'}/rpc/&lt;fn&gt;
             </code>
-            ，与表 CRUD 同款 URL 形态。
+            {t('subtitlePost')}
           </p>
         </div>
         <button onClick={loadFunctions} className="btn-secondary" disabled={loadingList}>
           <i className={`fas fa-sync mr-2 ${loadingList ? 'fa-spin' : ''}`}></i>
-          刷新函数列表
+          {t('refreshFns')}
         </button>
       </div>
 
@@ -382,7 +384,7 @@ export default function RpcPlaygroundPage() {
                   type="text"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder={`搜索 ${currentSchema || 'public'} schema 内的函数...`}
+                  placeholder={t('phSearch', { schema: currentSchema || 'public' })}
                   className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />
               </div>
@@ -395,12 +397,12 @@ export default function RpcPlaygroundPage() {
                       onChange={(e) => setShowExtensionFunctions(e.target.checked)}
                       className="rounded border-gray-300 text-blue-600"
                     />
-                    <span>显示扩展函数</span>
+                    <span>{t('showExtFns')}</span>
                   </span>
                   <span className="text-gray-400">
                     {showExtensionFunctions
-                      ? `共 ${hiddenExtensionCount} 个`
-                      : `已隐藏 ${hiddenExtensionCount} 个`}
+                      ? t('countTotal', { n: hiddenExtensionCount })
+                      : t('countHidden', { n: hiddenExtensionCount })}
                   </span>
                 </label>
               )}
@@ -408,11 +410,11 @@ export default function RpcPlaygroundPage() {
             <div className="max-h-[600px] overflow-y-auto">
               {loadingList && functions.length === 0 ? (
                 <div className="p-6 text-center text-gray-500 text-sm">
-                  <i className="fas fa-spinner fa-spin mr-2"></i> 加载中…
+                  <i className="fas fa-spinner fa-spin mr-2"></i> {t('loading')}
                 </div>
               ) : filtered.length === 0 ? (
                 <div className="p-6 text-center text-gray-500 text-sm">
-                  当前 schema 下没有可调用的函数
+                  {t('empty')}
                 </div>
               ) : (
                 filtered.map((fn) => {
@@ -436,7 +438,7 @@ export default function RpcPlaygroundPage() {
                           {fn.extension_name && (
                             <span
                               className="text-[10px] px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded font-mono shrink-0"
-                              title={`来自 PostgreSQL 扩展 ${fn.extension_name}`}
+                              title={t('fromExtension', { name: fn.extension_name })}
                             >
                               ext: {fn.extension_name}
                             </span>
@@ -455,7 +457,7 @@ export default function RpcPlaygroundPage() {
                         </span>
                       </div>
                       <div className="mt-1 text-xs text-gray-500 truncate">
-                        ({fn.argument_types || '无参'}) → {fn.return_type}
+                        ({fn.argument_types || t('noArgs')}) → {fn.return_type}
                       </div>
                     </button>
                   )
@@ -471,7 +473,7 @@ export default function RpcPlaygroundPage() {
           <div className="card p-4 space-y-3">
             <div className="grid grid-cols-12 gap-3 items-end">
               <div className="col-span-2">
-                <label className="block text-xs font-medium text-gray-700 mb-1">方法</label>
+                <label className="block text-xs font-medium text-gray-700 mb-1">{t('methodLabel')}</label>
                 <div className="flex border border-gray-300 rounded-lg overflow-hidden text-sm">
                   {(['POST', 'GET'] as RpcMethod[]).map((m) => (
                     <button
@@ -499,7 +501,7 @@ export default function RpcPlaygroundPage() {
                 />
               </div>
               <div className="col-span-7">
-                <label className="block text-xs font-medium text-gray-700 mb-1">函数名</label>
+                <label className="block text-xs font-medium text-gray-700 mb-1">{t('fnNameLabel')}</label>
                 <input
                   type="text"
                   value={fnName}
@@ -520,7 +522,7 @@ export default function RpcPlaygroundPage() {
                 <span>
                   <span className="font-mono">Prefer: params=single-object</span>
                   <span className="text-gray-500 ml-1">
-                    （函数签名是 <span className="font-mono">fn(payload jsonb)</span> 时勾选）
+                    {t.rich('singleObjHint', { c: (c) => <span className="font-mono">{c}</span> })}
                   </span>
                 </span>
               </label>
@@ -528,7 +530,7 @@ export default function RpcPlaygroundPage() {
 
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-medium text-gray-700">参数（JSON 对象）</label>
+                <label className="block text-xs font-medium text-gray-700">{t('paramsLabel')}</label>
                 {!parsedArgs.ok && (
                   <span className="text-xs text-red-600">{parsedArgs.error}</span>
                 )}
@@ -555,11 +557,11 @@ export default function RpcPlaygroundPage() {
               >
                 {running ? (
                   <>
-                    <i className="fas fa-spinner fa-spin mr-2"></i>调用中…
+                    <i className="fas fa-spinner fa-spin mr-2"></i>{t('calling')}
                   </>
                 ) : (
                   <>
-                    <i className="fas fa-play mr-2"></i>调用
+                    <i className="fas fa-play mr-2"></i>{t('call')}
                   </>
                 )}
               </button>
@@ -570,12 +572,12 @@ export default function RpcPlaygroundPage() {
           {curl && (
             <div className="card">
               <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-gray-50">
-                <span className="text-xs font-semibold text-gray-700">cURL 预览</span>
+                <span className="text-xs font-semibold text-gray-700">{t('curlPreview')}</span>
                 <button
                   onClick={copyCurl}
                   className="text-xs text-blue-600 hover:text-blue-700 transition-colors"
                 >
-                  <i className="fas fa-copy mr-1"></i>复制
+                  <i className="fas fa-copy mr-1"></i>{t('copy')}
                 </button>
               </div>
               <pre className="px-4 py-3 text-xs bg-gray-900 text-gray-100 overflow-x-auto whitespace-pre">

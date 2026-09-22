@@ -51,31 +51,31 @@ count_objects() {
 }
 
 need_docker_psql() {
-    if ! docker ps --format '{{.Names}}' | grep -q '^onebase$'; then
-        log "FATAL: 容器 onebase 未运行（本测试通过 docker exec 操作业务库）"
+    if ! docker ps --format '{{.Names}}' | grep -q '^planeos$'; then
+        log "FATAL: 容器 planeos 未运行（本测试通过 docker exec 操作业务库）"
         exit 2
     fi
 }
 
 run_sql() {
-    docker exec onebase su - postgres -c "psql -d onebase -v ON_ERROR_STOP=1 -tA -c \"$1\"" 2>&1
+    docker exec planeos su - postgres -c "psql -d planeos -v ON_ERROR_STOP=1 -tA -c \"$1\"" 2>&1
 }
 run_sql_silent() {
-    docker exec onebase su - postgres -c "psql -d onebase -v ON_ERROR_STOP=1 -q -c \"$1\"" >/dev/null 2>&1
+    docker exec planeos su - postgres -c "psql -d planeos -v ON_ERROR_STOP=1 -q -c \"$1\"" >/dev/null 2>&1
 }
 
 # ============================================================
-log "=== Onebase RLS 集成测试  base=$API_BASE ==="
+log "=== PlaneOS RLS 集成测试  base=$API_BASE ==="
 need_docker_psql
 
 # 0. 健康检查 + 清 Redis（防上轮残留缓存影响断言）
 status=$(curl -sS -o /dev/null -w "%{http_code}" "$API_BASE/health/ready")
 [[ "$status" == "200" ]] || { log "FATAL: 服务未就绪"; exit 2; }
-docker exec onebase redis-cli FLUSHDB >/dev/null 2>&1 || true
+docker exec planeos redis-cli FLUSHDB >/dev/null 2>&1 || true
 
 # 1. 安装 app schema 辅助函数（幂等）
 log "[1/9] 安装 app.current_user_id() 辅助函数"
-docker exec onebase bash -c "psql -U postgres -d onebase -f /app/migrations/013_rls_helpers.sql" >/dev/null 2>&1
+docker exec planeos bash -c "psql -U postgres -d planeos -f /app/migrations/013_rls_helpers.sql" >/dev/null 2>&1
 got=$(run_sql "SELECT app.current_user_id() IS NULL")
 assert_eq "app.current_user_id() 默认返回 NULL" "t" "$got"
 
@@ -83,7 +83,7 @@ assert_eq "app.current_user_id() 默认返回 NULL" "t" "$got"
 log "[2/9] 创建非 super 应用角色 rls_app_user"
 run_sql_silent "DROP ROLE IF EXISTS rls_app_user"
 run_sql_silent "CREATE ROLE rls_app_user LOGIN PASSWORD 'rls_app_secret_pwd' NOSUPERUSER NOBYPASSRLS"
-run_sql_silent "GRANT CONNECT ON DATABASE onebase TO rls_app_user"
+run_sql_silent "GRANT CONNECT ON DATABASE planeos TO rls_app_user"
 run_sql_silent "GRANT USAGE ON SCHEMA app TO rls_app_user"
 run_sql_silent "GRANT EXECUTE ON FUNCTION app.current_user_id() TO rls_app_user"
 
@@ -138,7 +138,7 @@ log "  tenant_id=$TENANT_ID"
 create_resp=$(curl -sS -X POST "$API_BASE/api/tenants/connections" \
     -H "Authorization: Bearer $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"tenant_id\":$TENANT_ID,\"connection_name\":\"rls_test_conn_$$\",\"db_host\":\"localhost\",\"db_port\":5432,\"db_name\":\"onebase\",\"db_user\":\"rls_app_user\",\"db_password\":\"rls_app_secret_pwd\",\"is_primary\":false}")
+    -d "{\"tenant_id\":$TENANT_ID,\"connection_name\":\"rls_test_conn_$$\",\"db_host\":\"localhost\",\"db_port\":5432,\"db_name\":\"planeos\",\"db_user\":\"rls_app_user\",\"db_password\":\"rls_app_secret_pwd\",\"is_primary\":false}")
 DB_ID=$(echo "$create_resp" | extract_int "id")
 [[ -n "$DB_ID" ]] || { log "FATAL: 创建连接失败 resp=$create_resp"; exit 2; }
 log "  rls_test database_id=$DB_ID"
@@ -209,7 +209,7 @@ run_sql_silent "DELETE FROM management.user_tenants WHERE user_id=$CATHY_ID"
 run_sql_silent "DROP SCHEMA rls_test CASCADE"
 run_sql_silent "REVOKE ALL ON FUNCTION app.current_user_id() FROM rls_app_user"
 run_sql_silent "REVOKE ALL ON SCHEMA app FROM rls_app_user"
-run_sql_silent "REVOKE ALL ON DATABASE onebase FROM rls_app_user"
+run_sql_silent "REVOKE ALL ON DATABASE planeos FROM rls_app_user"
 run_sql_silent "DROP ROLE IF EXISTS rls_app_user"
 
 # ===== 总结 =====

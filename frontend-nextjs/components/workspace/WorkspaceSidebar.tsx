@@ -4,8 +4,11 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useParams } from 'next/navigation'
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
+import { useAppStore } from '@/lib/store'
+import { useTranslations } from 'next-intl'
 import SchemaSelector from '@/components/SchemaSelector'
 import { NAV_GROUPS, isHelpPath } from '@/components/workspace/workspaceNav'
+import WorkspaceSidebarFooter from '@/components/workspace/WorkspaceSidebarFooter'
 
 /**
  * 工作空间左侧栏（W1 spec §3.2.6，W4 落地后实际可访问页面集）。
@@ -99,8 +102,26 @@ export default function WorkspaceSidebar() {
     setExpandedGroup((prev) => (prev === label ? null : label))
   }
 
+  // 工作区 layout 会把项目所属组织铺进 currentOrganization；老会话或直接
+  // 深链进来时可能还没铺上，回退到项目自带的 organization_name。
+  const tNav = useTranslations('nav')
+  const tc = useTranslations('common')
+  const currentOrganization = useAppStore((s) => s.currentOrganization)
+  const currentProject = useAppStore((s) => s.currentProject)
+  const orgName =
+    currentOrganization?.name ?? currentProject?.organization_name ?? tc('loading')
+
   return (
     <aside className="w-[200px] flex-shrink-0 min-h-0 bg-white border-r border-gray-200 flex flex-col">
+      {/* 租户标识：一眼确认当前激活的是哪个租户。这里只做展示，切换入口在
+          侧栏底部（WorkspaceSidebarFooter）—— 读和写分开，避免误点。 */}
+      <div className="px-3 pt-3 pb-2">
+        <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400">{tc('tenant')}</div>
+        <div className="mt-0.5 flex items-center gap-1.5" title={orgName}>
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+          <span className="truncate text-[13px] font-semibold text-gray-900">{orgName}</span>
+        </div>
+      </div>
       {/* Schema 选择器 —— 几乎所有"数据库 / 自动化"页面都隐含一个 currentSchema
           上下文（表 / 函数 / 触发器 / 索引 / 关系图等）。放在主栏顶部常驻：
           1) 切到本工作区就能立刻看到当前 schema；
@@ -134,7 +155,7 @@ export default function WorkspaceSidebar() {
                     groupActive ? 'text-blue-600' : 'text-gray-400'
                   }`}
                 />
-                <span className="truncate">{group.label}</span>
+                <span className="truncate">{group.labelKey ? tNav(group.labelKey) : group.label}</span>
               </Link>
             )
           }
@@ -155,7 +176,7 @@ export default function WorkspaceSidebar() {
                     groupActive ? 'text-blue-600' : 'text-gray-400'
                   }`}
                 />
-                <span className="flex-1 text-left truncate">{group.label}</span>
+                <span className="flex-1 text-left truncate">{group.labelKey ? tNav(group.labelKey) : group.label}</span>
                 <i
                   className={`fas fa-chevron-right text-[9px] flex-shrink-0 transition-transform duration-200 ease-out ${
                     expanded ? 'rotate-90 text-blue-400' : 'text-gray-300'
@@ -193,7 +214,7 @@ export default function WorkspaceSidebar() {
                               active ? 'text-blue-600' : 'text-gray-400'
                             }`}
                           />
-                          <span className="truncate">{sub.label}</span>
+                          <span className="truncate">{sub.labelKey ? tNav(sub.labelKey) : sub.label}</span>
                         </Link>
                       )
                     })}
@@ -218,9 +239,11 @@ export default function WorkspaceSidebar() {
               helpActive ? 'text-blue-600' : 'text-gray-400'
             }`}
           />
-          <span className="truncate">使用帮助</span>
+          <span className="truncate">{tNav('help')}</span>
         </Link>
       </div>
+      {/* 项目/租户切换 + 用户菜单：原在通栏顶栏左右两端，现统一沉到左下角 */}
+      <WorkspaceSidebarFooter />
     </aside>
   )
 }

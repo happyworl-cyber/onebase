@@ -60,8 +60,10 @@ async fn require_tenant_admin(
     if admins.contains(&tenant_id) {
         Ok(())
     } else {
-        Err(AppError::Forbidden(
-            "仅超管或该租户 owner/admin 可管理对象存储连接".to_string(),
+        Err(AppError::forbidden_coded(
+            "objstore_admin_forbidden",
+            "仅超管或该租户 owner/admin 可管理对象存储连接",
+            serde_json::json!({}),
         ))
     }
 }
@@ -79,7 +81,13 @@ async fn fetch_connection_authorized(
     .fetch_optional(pool)
     .await
     .map_err(|e| AppError::Internal(format!("查询对象存储连接失败: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("对象存储连接 {id} 不存在")))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "objstore_connection_missing",
+            format!("对象存储连接 {id} 不存在"),
+            serde_json::json!({ "id": id }),
+        )
+    })?;
     require_tenant_admin(pool, claims, conn.tenant_id).await?;
     Ok(conn)
 }
@@ -204,7 +212,11 @@ pub async fn create_connection(
     require_tenant_admin(&pool, &claims, req.tenant_id).await?;
 
     if req.connection_name.trim().is_empty() {
-        return Err(AppError::InvalidQuery("connection_name 不能为空".into()));
+        return Err(AppError::validation(
+            "objstore_connection_name_empty",
+            "connection_name 不能为空",
+            serde_json::json!({}),
+        ));
     }
     validate_provider(&req.provider)?;
     validate_endpoint(&req.endpoint)?;
@@ -217,7 +229,11 @@ pub async fn create_connection(
     validate_access_key_id(&req.access_key_id)?;
 
     if req.secret_key.trim().is_empty() {
-        return Err(AppError::InvalidQuery("secret_key 不能为空".into()));
+        return Err(AppError::validation(
+            "objstore_secret_key_empty",
+            "secret_key 不能为空",
+            serde_json::json!({}),
+        ));
     }
     let secret_key_enc = crypto::encrypt_secret(req.secret_key.trim())?;
     let force_path_style = req
@@ -259,7 +275,11 @@ pub async fn update_connection(
 
     if let Some(name) = req.connection_name.as_deref() {
         if name.trim().is_empty() {
-            return Err(AppError::InvalidQuery("connection_name 不能为空".into()));
+            return Err(AppError::validation(
+                "objstore_connection_name_empty",
+                "connection_name 不能为空",
+                serde_json::json!({}),
+            ));
         }
     }
     if let Some(p) = req.provider.as_deref() {
@@ -282,7 +302,11 @@ pub async fn update_connection(
     let (touch_secret, new_secret_enc): (bool, Option<String>) = match req.secret_key.as_deref() {
         None => (false, None),
         Some(s) if s.trim().is_empty() => {
-            return Err(AppError::InvalidQuery("secret_key 不能置空".into()));
+            return Err(AppError::validation(
+                "objstore_secret_key_cannot_clear",
+                "secret_key 不能置空",
+                serde_json::json!({}),
+            ));
         }
         Some(s) => (true, Some(crypto::encrypt_secret(s.trim())?)),
     };
@@ -449,7 +473,11 @@ pub async fn create_token(
 ) -> Result<Json<Value>, AppError> {
     let _ = fetch_connection_authorized(&pool, &claims, connection_id).await?;
     if req.name.trim().is_empty() {
-        return Err(AppError::InvalidQuery("token name 不能为空".to_string()));
+        return Err(AppError::validation(
+            "objstore_token_name_empty",
+            "token name 不能为空",
+            serde_json::json!({}),
+        ));
     }
     let ops = req
         .allowed_ops
@@ -524,7 +552,13 @@ pub async fn update_token(
     .fetch_optional(&pool)
     .await
     .map_err(|e| AppError::Internal(format!("更新对象存储 token 失败: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("token {token_id} 不存在")))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "objstore_token_not_found",
+            format!("token {token_id} 不存在"),
+            serde_json::json!({ "token_id": token_id }),
+        )
+    })?;
     Ok(Json(row))
 }
 
@@ -550,7 +584,11 @@ pub async fn delete_token(
 fn map_unique_violation(e: sqlx::Error, msg: &str) -> AppError {
     if let sqlx::Error::Database(ref db_err) = e {
         if db_err.code().as_deref() == Some("23505") {
-            return AppError::InvalidQuery(msg.to_string());
+            return AppError::validation(
+                "objstore_connection_name_conflict",
+                msg.to_string(),
+                serde_json::json!({}),
+            );
         }
     }
     AppError::Internal(format!("DB 错误: {e}"))

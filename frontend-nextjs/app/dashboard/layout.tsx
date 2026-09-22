@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import SidebarV3 from '@/components/SidebarV3'
 import Header from '@/components/Header'
@@ -11,6 +12,7 @@ export default function DashboardLayout({
 }: {
   children: React.ReactNode
 }) {
+  const t = useTranslations('dashboardRedirect')
   const router = useRouter()
   const [mounted, setMounted] = useState(false)
   const [authorized, setAuthorized] = useState(false)
@@ -59,7 +61,7 @@ export default function DashboardLayout({
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
           <i className="fas fa-spinner fa-spin text-2xl text-gray-400 mb-2"></i>
-          <p className="text-sm text-gray-500">加载中...</p>
+          <p className="text-sm text-gray-500">{t('loading')}</p>
         </div>
       </div>
     )

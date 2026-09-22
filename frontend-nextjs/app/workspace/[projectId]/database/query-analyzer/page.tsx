@@ -18,6 +18,7 @@ import {
   QueryPerfExtensionStatus,
 } from '@/lib/api'
 import { useNotification } from '@/hooks/useNotification'
+import { useTranslations } from 'next-intl'
 import Drawer from '@/components/Drawer'
 import { askAi, genRequestId } from '@/lib/aiAssistant'
 
@@ -30,12 +31,12 @@ type OrderBy =
 
 const PAGE_SIZE = 50
 
-const ORDER_OPTIONS: { value: OrderBy; label: string }[] = [
-  { value: 'mean_exec_time', label: '平均耗时' },
-  { value: 'total_exec_time', label: '总耗时' },
-  { value: 'calls', label: '调用次数' },
-  { value: 'max_exec_time', label: '最长耗时' },
-  { value: 'rows', label: '返回行数' },
+const ORDER_OPTIONS: { value: OrderBy; labelKey: string }[] = [
+  { value: 'mean_exec_time', labelKey: 'optMeanTime' },
+  { value: 'total_exec_time', labelKey: 'optTotalTime' },
+  { value: 'calls', labelKey: 'optCalls' },
+  { value: 'max_exec_time', labelKey: 'optMaxTime' },
+  { value: 'rows', labelKey: 'optRows' },
 ]
 
 function fmtMs(ms: number): string {
@@ -59,9 +60,33 @@ function fmtRatio(r: number): string {
   return `${(r * 100).toFixed(1)}%`
 }
 
+/**
+ * pg_stat_statements 扩展状态提示——把后端 `pg_stat::extension_hint` 的分支逻辑
+ * 搬到前端，用结构化字段（installed/available/loaded/readable/track/row_count）
+ * 经 i18n 组装，后端不再回传中文文案。返回 null 表示一切正常、无需提示。
+ */
+function computeInstallHint(
+  s: QueryPerfExtensionStatus,
+  t: (key: string, params?: Record<string, any>) => string,
+): string | null {
+  const loaded = s.loaded ?? false
+  const readable = s.readable ?? false
+  const trackIsNone = !s.track || s.track === 'none'
+  if (s.installed && !loaded) {
+    return t('hintNotLoaded', { preload: s.shared_preload || t('preloadEmpty') })
+  }
+  if (s.installed && !readable) return t('hintNotReadable')
+  if (s.installed && loaded && readable && trackIsNone) return t('hintTrackNone')
+  if (s.installed && loaded && readable && s.row_count === 0) return t('hintNoRows')
+  if (s.installed && readable && loaded) return null
+  if (s.available) return t('hintAvailableNotEnabled')
+  return t('hintUnavailable')
+}
+
 export default function QueryAnalyzerPage() {
   const params = useParams<{ projectId: string }>()
   const projectId = parseInt(params.projectId, 10)
+  const t = useTranslations('wsQueryAnalyzer')
   const notify = useNotification()
 
   const [extStatus, setExtStatus] = useState<QueryPerfExtensionStatus | null>(null)
@@ -135,18 +160,15 @@ export default function QueryAnalyzerPage() {
   // 把某条 pg_stat_statements 记录（SQL + 关键统计）交给 AI 分析优化
   const analyzeStatementWithAi = (s: StatementStat) => {
     askAi({
-      prompt:
-        '下面这条 SQL 的 pg_stat_statements 统计如下，请分析性能瓶颈并给出优化建议' +
-        '（索引、改写、缓存命中等角度）：\n\n' +
-        '```sql\n' +
-        s.query +
-        '\n```\n\n' +
-        `- 调用次数：${fmtNum(s.calls)}\n` +
-        `- 平均耗时：${fmtMs(s.mean_exec_time)}\n` +
-        `- 最长耗时：${fmtMs(s.max_exec_time)}\n` +
-        `- 总耗时：${fmtMs(s.total_exec_time)}\n` +
-        `- 累计返回行数：${fmtNum(s.rows)}\n` +
-        `- 缓存命中率：${fmtRatio(s.hit_ratio)}`,
+      prompt: t('aiPrompt', {
+        query: s.query,
+        calls: fmtNum(s.calls),
+        mean: fmtMs(s.mean_exec_time),
+        max: fmtMs(s.max_exec_time),
+        total: fmtMs(s.total_exec_time),
+        rows: fmtNum(s.rows),
+        hit: fmtRatio(s.hit_ratio),
+      }),
       requestId: genRequestId('stmt-analyze'),
     })
   }
@@ -155,7 +177,7 @@ export default function QueryAnalyzerPage() {
     setResetting(true)
     try {
       await queryPerfAPI.resetStatements()
-      notify.success('已重置 pg_stat_statements 统计')
+      notify.success(t('resetOk'))
       setConfirmReset(false)
       setPage(0)
       await load()
@@ -182,15 +204,16 @@ export default function QueryAnalyzerPage() {
 
   const extInstalled =
     (extStatus?.installed ?? true) && (extStatus?.readable ?? true)
+  const extHint = extStatus ? computeInstallHint(extStatus, t) : null
 
   return (
     <div className="space-y-6">
       {/* 顶部 */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">查询性能</h1>
+          <h1 className="text-2xl font-semibold text-gray-900">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            基于 pg_stat_statements，按耗时 / 调用次数 / 命中率剖析当前数据库的 SQL
+            {t('subtitle')}
           </p>
         </div>
         <div className="flex items-center space-x-3">
@@ -201,39 +224,39 @@ export default function QueryAnalyzerPage() {
               onChange={(e) => setAutoRefresh(e.target.checked)}
               className="w-4 h-4 text-blue-600 rounded"
             />
-            <span>每 5s 自动刷新</span>
+            <span>{t('autoRefresh')}</span>
           </label>
           <button onClick={load} className="btn-default text-sm" disabled={loading}>
             <i className={`fas fa-sync-alt mr-1 ${loading ? 'fa-spin' : ''}`}></i>
-            刷新
+            {t('refresh')}
           </button>
           <button
             onClick={() => setConfirmReset(true)}
             className="btn-default text-sm text-red-600 hover:bg-red-50"
             disabled={!extInstalled}
-            title={extInstalled ? '清空统计计数（仅超管）' : '扩展未启用'}
+            title={extInstalled ? t('resetTitleEnabled') : t('resetTitleDisabled')}
           >
-            <i className="fas fa-eraser mr-1"></i>重置统计
+            <i className="fas fa-eraser mr-1"></i>{t('resetStats')}
           </button>
         </div>
       </div>
 
       {/* 扩展未启用提示 */}
-      {extStatus && extStatus.install_hint && (
+      {extStatus && extHint && (
         <div className="card p-4 border-l-4 border-yellow-400 bg-yellow-50">
           <div className="flex items-start space-x-3">
             <i className="fas fa-exclamation-triangle text-yellow-500 mt-0.5"></i>
             <div className="flex-1">
               <h3 className="font-medium text-yellow-900">
-                {extStatus.installed ? 'pg_stat_statements 无法读取统计' : 'pg_stat_statements 未启用'}
+                {extStatus.installed ? t('extCannotRead') : t('extNotEnabled')}
               </h3>
-              <p className="text-sm text-yellow-800 mt-1">{extStatus.install_hint}</p>
+              <p className="text-sm text-yellow-800 mt-1">{extHint}</p>
               <div className="text-xs text-yellow-700 mt-2 space-y-1">
                 {extStatus.shared_preload != null && (
                   <p>
                     shared_preload_libraries：
                     <code className="ml-1 px-1 bg-white/50 rounded break-all">
-                      {extStatus.shared_preload || '(空)'}
+                      {extStatus.shared_preload || t('empty')}
                     </code>
                   </p>
                 )}
@@ -245,7 +268,7 @@ export default function QueryAnalyzerPage() {
                 )}
                 {extStatus.current_user && (
                   <p>
-                    当前连接用户：
+                    {t('currentUser')}
                     <code className="ml-1 px-1 bg-white/50 rounded">{extStatus.current_user}</code>
                     {extStatus.is_superuser ? '（superuser）' : ''}
                     {extStatus.has_pg_read_all_stats ? ' · pg_read_all_stats' : ''}
@@ -256,8 +279,8 @@ export default function QueryAnalyzerPage() {
                 {extStatus.track === 'none'
                   ? 'ALTER SYSTEM SET pg_stat_statements.track = top;'
                   : extStatus.installed
-                    ? "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements';\n-- 然后重启 PostgreSQL"
-                    : "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements';\n-- 重启 PostgreSQL，然后：\nCREATE EXTENSION pg_stat_statements;"}
+                    ? "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements';\n-- then restart PostgreSQL"
+                    : "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements';\n-- restart PostgreSQL, then:\nCREATE EXTENSION pg_stat_statements;"}
               </div>
             </div>
           </div>
@@ -267,7 +290,7 @@ export default function QueryAnalyzerPage() {
       {/* 过滤栏 */}
       <div className="card p-4 grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
         <div className="md:col-span-4">
-          <label className="block text-xs text-gray-500 mb-1">搜索 SQL（ILIKE）</label>
+          <label className="block text-xs text-gray-500 mb-1">{t('searchLabel')}</label>
           <input
             type="text"
             value={search}
@@ -275,12 +298,12 @@ export default function QueryAnalyzerPage() {
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleApplyFilters()
             }}
-            placeholder="例如 SELECT 或 users"
+            placeholder={t('phSearch')}
             className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
         <div className="md:col-span-2">
-          <label className="block text-xs text-gray-500 mb-1">最小调用次数</label>
+          <label className="block text-xs text-gray-500 mb-1">{t('minCalls')}</label>
           <input
             type="number"
             min={0}
@@ -290,7 +313,7 @@ export default function QueryAnalyzerPage() {
           />
         </div>
         <div className="md:col-span-2">
-          <label className="block text-xs text-gray-500 mb-1">最小平均耗时 (ms)</label>
+          <label className="block text-xs text-gray-500 mb-1">{t('minMeanTime')}</label>
           <input
             type="number"
             min={0}
@@ -300,7 +323,7 @@ export default function QueryAnalyzerPage() {
           />
         </div>
         <div className="md:col-span-2">
-          <label className="block text-xs text-gray-500 mb-1">排序</label>
+          <label className="block text-xs text-gray-500 mb-1">{t('sortLabel')}</label>
           <select
             value={orderBy}
             onChange={(e) => {
@@ -311,7 +334,7 @@ export default function QueryAnalyzerPage() {
           >
             {ORDER_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
-                {o.label} 降序
+                {t(o.labelKey)} {t('descLabel')}
               </option>
             ))}
           </select>
@@ -322,17 +345,17 @@ export default function QueryAnalyzerPage() {
             className="btn-primary w-full text-sm"
             disabled={loading}
           >
-            <i className="fas fa-filter mr-1"></i>应用筛选
+            <i className="fas fa-filter mr-1"></i>{t('applyFilter')}
           </button>
         </div>
       </div>
 
       {/* 概览卡片 —— 当前结果集的合计 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <SummaryCard label="结果条数" value={String(statements.length)} icon="fa-list" />
-        <SummaryCard label="累计调用" value={fmtNum(totalAggregate.calls)} icon="fa-bolt" />
-        <SummaryCard label="累计耗时" value={fmtMs(totalAggregate.totalMs)} icon="fa-stopwatch" />
-        <SummaryCard label="累计行数" value={fmtNum(totalAggregate.rows)} icon="fa-table" />
+        <SummaryCard label={t('summaryCount')} value={String(statements.length)} icon="fa-list" />
+        <SummaryCard label={t('summaryCalls')} value={fmtNum(totalAggregate.calls)} icon="fa-bolt" />
+        <SummaryCard label={t('summaryTime')} value={fmtMs(totalAggregate.totalMs)} icon="fa-stopwatch" />
+        <SummaryCard label={t('summaryRows')} value={fmtNum(totalAggregate.rows)} icon="fa-table" />
       </div>
 
       {/* 列表 */}
@@ -342,26 +365,26 @@ export default function QueryAnalyzerPage() {
             <thead className="bg-gray-50">
               <tr className="text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 <th className="px-4 py-3">SQL</th>
-                <th className="px-4 py-3 whitespace-nowrap text-right">调用</th>
-                <th className="px-4 py-3 whitespace-nowrap text-right">总耗时</th>
-                <th className="px-4 py-3 whitespace-nowrap text-right">平均</th>
-                <th className="px-4 py-3 whitespace-nowrap text-right">最长</th>
-                <th className="px-4 py-3 whitespace-nowrap text-right">行数</th>
-                <th className="px-4 py-3 whitespace-nowrap text-right">缓存命中</th>
+                <th className="px-4 py-3 whitespace-nowrap text-right">{t('thCalls')}</th>
+                <th className="px-4 py-3 whitespace-nowrap text-right">{t('thTotal')}</th>
+                <th className="px-4 py-3 whitespace-nowrap text-right">{t('thAvg')}</th>
+                <th className="px-4 py-3 whitespace-nowrap text-right">{t('thMax')}</th>
+                <th className="px-4 py-3 whitespace-nowrap text-right">{t('thRows')}</th>
+                <th className="px-4 py-3 whitespace-nowrap text-right">{t('thCacheHit')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
               {loading && statements.length === 0 && (
                 <tr>
                   <td colSpan={7} className="px-4 py-12 text-center text-gray-400">
-                    <i className="fas fa-spinner fa-spin mr-2"></i>加载中…
+                    <i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}
                   </td>
                 </tr>
               )}
               {!loading && statements.length === 0 && (
                 <tr>
                   <td colSpan={7} className="px-4 py-12 text-center text-gray-400">
-                    暂无符合条件的查询统计
+                    {t('emptyList')}
                   </td>
                 </tr>
               )}
@@ -395,7 +418,7 @@ export default function QueryAnalyzerPage() {
         {/* 分页 */}
         <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 bg-gray-50 text-sm text-gray-600">
           <div>
-            第 {page + 1} 页 · 每页 {PAGE_SIZE} 条
+            {t('pageInfo', { page: page + 1, size: PAGE_SIZE })}
           </div>
           <div className="flex items-center space-x-2">
             <button
@@ -403,14 +426,14 @@ export default function QueryAnalyzerPage() {
               disabled={page === 0 || loading}
               onClick={() => setPage((p) => Math.max(0, p - 1))}
             >
-              <i className="fas fa-chevron-left mr-1"></i>上一页
+              <i className="fas fa-chevron-left mr-1"></i>{t('prevPage')}
             </button>
             <button
               className="btn-default text-xs disabled:opacity-50"
               disabled={statements.length < PAGE_SIZE || loading}
               onClick={() => setPage((p) => p + 1)}
             >
-              下一页<i className="fas fa-chevron-right ml-1"></i>
+              {t('nextPage')}<i className="fas fa-chevron-right ml-1"></i>
             </button>
           </div>
         </div>
@@ -420,7 +443,7 @@ export default function QueryAnalyzerPage() {
       <Drawer
         isOpen={!!detail}
         onClose={() => setDetail(null)}
-        title="查询详情"
+        title={t('detailTitle')}
         size="xl"
         footer={
           detail ? (
@@ -430,7 +453,7 @@ export default function QueryAnalyzerPage() {
                 className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-gradient-to-br from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 transition-colors"
               >
                 <i className="fas fa-robot mr-2"></i>
-                AI 分析优化
+                {t('aiAnalyze')}
               </button>
             </div>
           ) : undefined
@@ -446,27 +469,27 @@ export default function QueryAnalyzerPage() {
             </div>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
               <DetailField label="Query ID" value={detail.queryid?.toString() ?? '-'} />
-              <DetailField label="调用次数" value={fmtNum(detail.calls)} />
-              <DetailField label="返回行数（累计）" value={fmtNum(detail.rows)} />
-              <DetailField label="总耗时" value={fmtMs(detail.total_exec_time)} />
-              <DetailField label="平均耗时" value={fmtMs(detail.mean_exec_time)} highlight />
-              <DetailField label="最短耗时" value={fmtMs(detail.min_exec_time)} />
-              <DetailField label="最长耗时" value={fmtMs(detail.max_exec_time)} />
+              <DetailField label={t('dCalls')} value={fmtNum(detail.calls)} />
+              <DetailField label={t('dRowsCumulative')} value={fmtNum(detail.rows)} />
+              <DetailField label={t('dTotal')} value={fmtMs(detail.total_exec_time)} />
+              <DetailField label={t('dAvg')} value={fmtMs(detail.mean_exec_time)} highlight />
+              <DetailField label={t('dMin')} value={fmtMs(detail.min_exec_time)} />
+              <DetailField label={t('dMax')} value={fmtMs(detail.max_exec_time)} />
               <DetailField
-                label="标准差"
+                label={t('dStddev')}
                 value={fmtMs(detail.stddev_exec_time)}
               />
               <DetailField
-                label="缓存命中率"
+                label={t('dCacheHit')}
                 value={fmtRatio(detail.hit_ratio)}
                 highlight
               />
               <DetailField
-                label="shared 命中块"
+                label={t('dSharedHit')}
                 value={fmtNum(detail.shared_blks_hit)}
               />
               <DetailField
-                label="shared 读取块"
+                label={t('dSharedRead')}
                 value={fmtNum(detail.shared_blks_read)}
               />
             </div>
@@ -478,7 +501,7 @@ export default function QueryAnalyzerPage() {
       <Drawer
         isOpen={confirmReset}
         onClose={() => !resetting && setConfirmReset(false)}
-        title="重置查询统计"
+        title={t('resetModalTitle')}
         size="md"
         footer={
           <div className="flex justify-end space-x-2">
@@ -487,21 +510,21 @@ export default function QueryAnalyzerPage() {
               onClick={() => setConfirmReset(false)}
               disabled={resetting}
             >
-              取消
+              {t('cancel')}
             </button>
             <button className="btn-primary bg-red-600 hover:bg-red-700" onClick={handleReset} disabled={resetting}>
-              {resetting ? '执行中…' : '确认重置'}
+              {resetting ? t('resetting') : t('confirmReset')}
             </button>
           </div>
         }
       >
         <div className="space-y-3 text-sm text-gray-700">
           <p>
-            将调用 <code>pg_stat_statements_reset()</code>，把当前数据库的所有查询统计计数清零。
+            {t.rich('resetDesc', { code: (c) => <code>{c}</code> })}
           </p>
           <p className="text-yellow-700 bg-yellow-50 p-3 rounded">
             <i className="fas fa-exclamation-triangle mr-1"></i>
-            操作不可逆。所有用户都会丢失既有的统计样本，新的样本要等查询再次发生才会出现。
+            {t('resetWarn')}
           </p>
         </div>
       </Drawer>

@@ -181,10 +181,14 @@ pub async fn require_tenant_admin(pool: &PgPool, claims: &Claims, tenant_id: i32
     if is_tenant_admin(pool, claims.sub, tenant_id).await? {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "需要项目 owner/admin、所属组织 owner/admin，或平台超管才能管理项目 {} 的资源",
-            tenant_id
-        )))
+        Err(AppError::forbidden_coded(
+            "perm_tenant_admin_required",
+            format!(
+                "需要项目 owner/admin、所属组织 owner/admin，或平台超管才能管理项目 {} 的资源",
+                tenant_id
+            ),
+            serde_json::json!({ "tenant_id": tenant_id }),
+        ))
     }
 }
 
@@ -250,10 +254,14 @@ pub async fn require_tenant_membership_any(
     if is_tenant_membership_any(pool, claims.sub, tenant_id).await? {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "需要租户 {} 的任意角色（owner/admin/member/viewer）或平台超管才能查看其只读视图",
-            tenant_id
-        )))
+        Err(AppError::forbidden_coded(
+            "perm_tenant_membership_required",
+            format!(
+                "需要租户 {} 的任意角色（owner/admin/member/viewer）或平台超管才能查看其只读视图",
+                tenant_id
+            ),
+            serde_json::json!({ "tenant_id": tenant_id }),
+        ))
     }
 }
 
@@ -268,10 +276,14 @@ pub async fn require_tenant_member(pool: &PgPool, claims: &Claims, tenant_id: i3
     if is_tenant_member(pool, claims.sub, tenant_id).await? {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "需要租户 owner/admin/member 角色或平台超管才能在租户 {} 内执行业务级写操作（viewer 仅可读）",
-            tenant_id
-        )))
+        Err(AppError::forbidden_coded(
+            "perm_tenant_member_required",
+            format!(
+                "需要租户 owner/admin/member 角色或平台超管才能在租户 {} 内执行业务级写操作（viewer 仅可读）",
+                tenant_id
+            ),
+            serde_json::json!({ "tenant_id": tenant_id }),
+        ))
     }
 }
 
@@ -392,19 +404,22 @@ fn reject_unusable_organization(
     organization_id: i32,
 ) -> Result<()> {
     match status {
-        "deleted" => Err(AppError::NotFound(format!(
-            "组织 {} 不存在",
-            organization_id
-        ))),
-        "suspended" if !is_superadmin => Err(AppError::Forbidden(format!(
-            "租户 {} 已停用，请联系平台管理员",
-            organization_id
-        ))),
+        "deleted" => Err(AppError::not_found_coded(
+            "perm_organization_not_found",
+            format!("组织 {} 不存在", organization_id),
+            serde_json::json!({ "organization_id": organization_id }),
+        )),
+        "suspended" if !is_superadmin => Err(AppError::forbidden_coded(
+            "perm_organization_suspended",
+            format!("租户 {} 已停用，请联系平台管理员", organization_id),
+            serde_json::json!({ "organization_id": organization_id }),
+        )),
         "active" | "suspended" => Ok(()),
-        _ => Err(AppError::NotFound(format!(
-            "组织 {} 不存在",
-            organization_id
-        ))),
+        _ => Err(AppError::not_found_coded(
+            "perm_organization_not_found",
+            format!("组织 {} 不存在", organization_id),
+            serde_json::json!({ "organization_id": organization_id }),
+        )),
     }
 }
 
@@ -419,7 +434,13 @@ async fn require_live_organization(
             .fetch_optional(pool)
             .await?;
     let status =
-        status.ok_or_else(|| AppError::NotFound(format!("组织 {} 不存在", organization_id)))?;
+        status.ok_or_else(|| {
+            AppError::not_found_coded(
+                "perm_organization_not_found",
+                format!("组织 {} 不存在", organization_id),
+                serde_json::json!({ "organization_id": organization_id }),
+            )
+        })?;
     reject_unusable_organization(&status, claims.is_superadmin, organization_id)
 }
 
@@ -435,10 +456,11 @@ pub async fn require_organization_admin(
     if is_organization_admin(pool, claims.sub, organization_id).await? {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "需要组织 owner/admin 角色或平台超管才能管理组织 {}",
-            organization_id
-        )))
+        Err(AppError::forbidden_coded(
+            "perm_organization_admin_required",
+            format!("需要组织 owner/admin 角色或平台超管才能管理组织 {}", organization_id),
+            serde_json::json!({ "organization_id": organization_id }),
+        ))
     }
 }
 
@@ -454,10 +476,11 @@ pub async fn require_organization_member(
     if is_organization_member(pool, claims.sub, organization_id).await? {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "需要组织 {} 的成员身份或平台超管",
-            organization_id
-        )))
+        Err(AppError::forbidden_coded(
+            "perm_organization_member_required",
+            format!("需要组织 {} 的成员身份或平台超管", organization_id),
+            serde_json::json!({ "organization_id": organization_id }),
+        ))
     }
 }
 
@@ -473,10 +496,11 @@ pub async fn require_organization_owner(
     if is_organization_owner(pool, claims.sub, organization_id).await? {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "需要组织 owner 角色或平台超管才能修改组织 {}",
-            organization_id
-        )))
+        Err(AppError::forbidden_coded(
+            "perm_organization_owner_required",
+            format!("需要组织 owner 角色或平台超管才能修改组织 {}", organization_id),
+            serde_json::json!({ "organization_id": organization_id }),
+        ))
     }
 }
 
@@ -504,7 +528,13 @@ pub async fn lookup_organization_for_project(pool: &PgPool, project_id: i32) -> 
     .bind(project_id)
     .fetch_optional(pool)
     .await?;
-    row.ok_or_else(|| AppError::NotFound(format!("项目 {} 不存在或已停用", project_id)))
+    row.ok_or_else(|| {
+        AppError::not_found_coded(
+            "perm_project_not_found",
+            format!("项目 {} 不存在或已停用", project_id),
+            serde_json::json!({ "project_id": project_id }),
+        )
+    })
 }
 
 /// 把用户加入项目前：必须已是该项目所属组织的 active 成员。
@@ -517,10 +547,14 @@ pub async fn require_user_is_org_member_of_project(
     if is_organization_member(pool, user_id, org_id).await? {
         Ok(())
     } else {
-        Err(AppError::InvalidQuery(format!(
-            "用户 {} 还不是该项目所属组织（id={}）的成员，请先加入组织再加入项目",
-            user_id, org_id
-        )))
+        Err(AppError::validation(
+            "perm_user_not_org_member",
+            format!(
+                "用户 {} 还不是该项目所属组织（id={}）的成员，请先加入组织再加入项目",
+                user_id, org_id
+            ),
+            serde_json::json!({ "user_id": user_id, "org_id": org_id }),
+        ))
     }
 }
 
@@ -535,10 +569,11 @@ pub async fn require_tenant_owner(pool: &PgPool, claims: &Claims, tenant_id: i32
     if is_tenant_owner(pool, claims.sub, tenant_id).await? {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "需要 owner 角色或平台超管才能管理项目 {} 的元信息",
-            tenant_id
-        )))
+        Err(AppError::forbidden_coded(
+            "perm_tenant_owner_required",
+            format!("需要 owner 角色或平台超管才能管理项目 {} 的元信息", tenant_id),
+            serde_json::json!({ "tenant_id": tenant_id }),
+        ))
     }
 }
 
@@ -570,10 +605,14 @@ pub async fn require_project_owner_grant(
     if can_grant_project_owner(false, false, is_org_owner) {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "只有项目 owner、项目所属组织的 owner 或平台超管才能授予项目 {} 的 owner 角色",
-            project_id
-        )))
+        Err(AppError::forbidden_coded(
+            "perm_project_owner_grant_required",
+            format!(
+                "只有项目 owner、项目所属组织的 owner 或平台超管才能授予项目 {} 的 owner 角色",
+                project_id
+            ),
+            serde_json::json!({ "project_id": project_id }),
+        ))
     }
 }
 
@@ -610,7 +649,13 @@ pub async fn lookup_tenant_for_database(pool: &PgPool, database_id: i32) -> Resu
     .bind(database_id)
     .fetch_optional(pool)
     .await?;
-    row.ok_or_else(|| AppError::NotFound(format!("数据库连接 {} 不存在或已停用", database_id)))
+    row.ok_or_else(|| {
+        AppError::not_found_coded(
+            "perm_database_not_found",
+            format!("数据库连接 {} 不存在或已停用", database_id),
+            serde_json::json!({ "database_id": database_id }),
+        )
+    })
 }
 
 /// 由对外 `database_slug` 解析内部 `database_id`（仅 active 连接）。
@@ -676,15 +721,20 @@ pub async fn resolve_database_id_by_slug_for_claims(
     }
 
     match ids.len() {
-        0 => Err(AppError::NotFound(format!(
-            "数据库 slug '{}' 不存在或无权访问",
-            database_slug
-        ))),
+        0 => Err(AppError::not_found_coded(
+            "perm_database_slug_not_found",
+            format!("数据库 slug '{}' 不存在或无权访问", database_slug),
+            serde_json::json!({ "database_slug": database_slug }),
+        )),
         1 => Ok(ids[0]),
-        _ => Err(AppError::InvalidQuery(format!(
-            "database_slug '{}' 存在歧义，请切换到更精确上下文或使用 API Key",
-            database_slug
-        ))),
+        _ => Err(AppError::validation(
+            "perm_database_slug_ambiguous",
+            format!(
+                "database_slug '{}' 存在歧义，请切换到更精确上下文或使用 API Key",
+                database_slug
+            ),
+            serde_json::json!({ "database_slug": database_slug }),
+        )),
     }
 }
 
@@ -857,8 +907,10 @@ pub fn resolve_tenant_list_filter(
             if is_superadmin || admin_tenant_ids.contains(&tid) {
                 Ok(TenantListFilter::One(tid))
             } else {
-                Err(AppError::Forbidden(
+                Err(AppError::forbidden_coded(
+                    "perm_tenant_connection_view_forbidden",
                     "仅超管或该租户 owner/admin 可查看此项目的连接".to_string(),
+                    serde_json::json!({}),
                 ))
             }
         }
@@ -915,7 +967,11 @@ pub async fn resolve_tenant_context(
                     .fetch_one(pool)
                     .await?;
             if !exists {
-                return Err(AppError::NotFound(format!("租户 {} 不存在", tid)));
+                return Err(AppError::not_found_coded(
+                    "perm_tenant_not_found",
+                    format!("租户 {} 不存在", tid),
+                    serde_json::json!({ "tenant_id": tid }),
+                ));
             }
             return Ok(tid);
         }
@@ -934,18 +990,24 @@ pub async fn resolve_tenant_context(
             is_org_admin_for_project(pool, claims.sub, tid).await?
         };
         if !explicit_tenant_access_allowed(member, org_admin) {
-            return Err(AppError::Forbidden(format!(
-                "您不是项目 {} 的 active 成员，也不是其所属组织的 owner/admin，无权操作",
-                tid
-            )));
+            return Err(AppError::forbidden_coded(
+                "perm_tenant_access_denied",
+                format!(
+                    "您不是项目 {} 的 active 成员，也不是其所属组织的 owner/admin，无权操作",
+                    tid
+                ),
+                serde_json::json!({ "tenant_id": tid }),
+            ));
         }
         return Ok(tid);
     }
 
     // 调用方没显式选——
     if claims.is_superadmin {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "perm_superadmin_tenant_required",
             "超管必须通过 X-Tenant-Id 请求头或 ?tenant_id=N 显式指定要操作的租户".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -959,14 +1021,20 @@ pub async fn resolve_tenant_context(
     .await?;
 
     match ids.len() {
-        0 => Err(AppError::Forbidden(
+        0 => Err(AppError::forbidden_coded(
+            "perm_no_tenant_membership",
             "您未关联任何租户，无权执行此操作".to_string(),
+            serde_json::json!({}),
         )),
         1 => Ok(ids[0]),
-        _ => Err(AppError::InvalidQuery(format!(
-            "您同时属于 {} 个租户，请通过 X-Tenant-Id 显式指定要操作的租户",
-            ids.len()
-        ))),
+        _ => Err(AppError::validation(
+            "perm_tenant_ambiguous",
+            format!(
+                "您同时属于 {} 个租户，请通过 X-Tenant-Id 显式指定要操作的租户",
+                ids.len()
+            ),
+            serde_json::json!({ "count": ids.len() }),
+        )),
     }
 }
 
@@ -1160,7 +1228,13 @@ where
             .extensions
             .get::<Claims>()
             .cloned()
-            .ok_or_else(|| AppError::Unauthorized("未认证".to_string()))?;
+            .ok_or_else(|| {
+                AppError::unauthorized_coded(
+                    "perm_unauthenticated",
+                    "未认证".to_string(),
+                    serde_json::json!({}),
+                )
+            })?;
         let explicit = parse_explicit_tenant_id(&parts.headers, parts.uri.query());
         let pool = PgPool::from_ref(state);
         let tid = resolve_tenant_context(&pool, &claims, explicit).await?;
@@ -1463,7 +1537,13 @@ pub async fn require_partner(pool: &PgPool, claims: &Claims) -> Result<i32> {
     .fetch_optional(pool)
     .await?;
 
-    partner_id.ok_or_else(|| AppError::Forbidden("当前用户不是任何活跃代理商的成员".to_string()))
+    partner_id.ok_or_else(|| {
+        AppError::forbidden_coded(
+            "perm_not_partner_member",
+            "当前用户不是任何活跃代理商的成员".to_string(),
+            serde_json::json!({}),
+        )
+    })
 }
 
 /// 检查用户是否是指定代理商的管理员

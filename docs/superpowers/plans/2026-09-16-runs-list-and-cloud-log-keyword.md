@@ -18,7 +18,7 @@
 - Do not add client-side filtering of already-fetched cloud log rows.
 - Do not modify `ExecutionLogsView` or split `workflow_runs`.
 - Repo frontend tests are standalone `node:assert` files; run with `npx tsx <file>` from repo root unless a step says otherwise.
-- Rust handler tests: `cargo test --bin onebase <filter>`. `cloud_log` lives in the lib crate: `cargo test --lib <filter>`.
+- Rust handler tests: `cargo test --bin planeos <filter>`. `cloud_log` lives in the lib crate: `cargo test --lib <filter>`.
 
 ---
 
@@ -73,7 +73,7 @@
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test --bin onebase workflow_runs_list_sql_is_summary_without_node_results_blob -- --nocapture`
+Run: `cargo test --bin planeos workflow_runs_list_sql_is_summary_without_node_results_blob -- --nocapture`
 
 Expected: FAIL（`workflow_runs_list_sql` 未定义，或现有内联 SQL 不含 `AS node_count`）
 
@@ -129,7 +129,7 @@ fn workflow_runs_list_sql() -> &'static str {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cargo test --bin onebase workflow_runs_list_sql_is_summary_without_node_results_blob -- --nocapture`
+Run: `cargo test --bin planeos workflow_runs_list_sql_is_summary_without_node_results_blob -- --nocapture`
 
 Expected: PASS
 

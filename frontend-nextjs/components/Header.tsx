@@ -1,30 +1,32 @@
 'use client'
 
 import { useCallback, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { usePathname } from 'next/navigation'
 import { healthAPI } from '@/lib/api'
 import { showToast } from '@/components/Toast'
 
 function fmtHealthStatus(s: string): string {
-  if (s === 'healthy') return '正常'
-  if (s === 'unhealthy') return '异常'
-  if (s === 'not_configured') return '未配置'
+  if (s === 'healthy') return 'statusNormal'
+  if (s === 'unhealthy') return 'statusAbnormal'
+  if (s === 'not_configured') return 'statusNotConfigured'
   return s
 }
 
 const pageTitles: Record<string, string> = {
-  '/dashboard': '仪表盘',
-  '/dashboard/schema': 'Schema 浏览器',
-  '/dashboard/tables': '数据表管理',
-  '/dashboard/query': 'SQL 查询器',
-  '/dashboard/transaction': '批量 SQL 事务',
-  '/dashboard/rpc': 'RPC 调用器',
-  '/dashboard/rpc-acl': 'RPC 授权',
+  '/dashboard': 'titleDashboard',
+  '/dashboard/schema': 'titleSchema',
+  '/dashboard/tables': 'titleTables',
+  '/dashboard/query': 'titleQuery',
+  '/dashboard/transaction': 'titleTransaction',
+  '/dashboard/rpc': 'titleRpc',
+  '/dashboard/rpc-acl': 'titleRpcAcl',
 }
 
 export default function Header() {
   const pathname = usePathname()
-  const title = pageTitles[pathname] || '管理后台'
+  const t = useTranslations('header')
+  const title = pageTitles[pathname] ? t(pageTitles[pathname]) : t('adminConsole')
   const [checking, setChecking] = useState(false)
 
   const handleHealthCheck = useCallback(async () => {
@@ -32,19 +34,19 @@ export default function Header() {
     setChecking(true)
     try {
       const { data } = await healthAPI.getDetail()
-      const db = fmtHealthStatus(data.database?.status ?? '')
-      const redis = fmtHealthStatus(data.redis?.status ?? '')
+      const db = t(fmtHealthStatus(data.database?.status ?? ''))
+      const redis = t(fmtHealthStatus(data.redis?.status ?? ''))
       const ver = data.version ? ` · v${data.version}` : ''
       const ok = data.status === 'healthy'
-      const msg = `整体：${ok ? '正常' : '异常'} · 数据库：${db} · Redis：${redis}${ver}`
+      const msg = t('healthMsg', { overall: ok ? t('statusNormal') : t('statusAbnormal'), db, redis, ver })
       showToast(ok ? 'success' : 'warning', msg, 5500)
     } catch (err: unknown) {
       const e = err as { message?: string; response?: { data?: { error?: string } } }
       const detail =
         (typeof e.response?.data?.error === 'string' && e.response.data.error) ||
         e.message ||
-        '请求失败'
-      showToast('error', `健康检查失败：${detail}`, 6000)
+        t('reqFailed')
+      showToast('error', t('healthCheckFailed', { detail }), 6000)
     } finally {
       setChecking(false)
     }
@@ -74,7 +76,7 @@ export default function Header() {
             className="btn-success shadow-sm hover:shadow-md transform transition-all duration-200 hover:-translate-y-0.5 disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:translate-y-0"
           >
             <i className={`fas mr-1.5 ${checking ? 'fa-spinner fa-spin' : 'fa-heart-pulse'}`}></i>
-            {checking ? '检查中…' : '健康检查'}
+            {checking ? t('checking') : t('healthCheck')}
           </button>
         </div>
       </div>

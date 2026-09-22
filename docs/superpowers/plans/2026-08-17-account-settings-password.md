@@ -77,7 +77,7 @@
 
 - [ ] **Step 2: 跑测试（函数已存在，预期通过）**
 
-Run: `cargo test -p onebase --lib auth::tests::test_validate_password -- --nocapture`
+Run: `cargo test -p planeos --lib auth::tests::test_validate_password -- --nocapture`
 
 Expected: 3 passed。这是给已有函数补文档化测试，不是先红后绿。
 
@@ -118,7 +118,7 @@ use crate::auth::{
 
 - [ ] **Step 4: 再跑认证相关测试**
 
-Run: `cargo test -p onebase --lib auth::tests -- --nocapture`
+Run: `cargo test -p planeos --lib auth::tests -- --nocapture`
 
 Expected: PASS。
 
@@ -479,7 +479,7 @@ git commit -m "feat: add account settings entry to user menus"
 
 - [ ] **Step 2: 再跑后端测试**
 
-Run: `cargo test -p onebase --lib auth::tests -- --nocapture`
+Run: `cargo test -p planeos --lib auth::tests -- --nocapture`
 
 Expected: PASS。
 

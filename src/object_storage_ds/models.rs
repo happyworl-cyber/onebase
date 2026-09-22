@@ -52,7 +52,13 @@ impl From<&ObjectStorageConnection> for ObjectStorageConnectionPublic {
 
 /// 文件页连接目录必须带本项目 `tenant_id`，禁止无参扫全表。
 pub fn require_catalog_tenant_id(tenant_id: Option<i32>) -> Result<i32> {
-    tenant_id.ok_or_else(|| AppError::InvalidQuery("缺少 tenant_id".into()))
+    tenant_id.ok_or_else(|| {
+        AppError::validation(
+            "objstore_tenant_id_missing",
+            "缺少 tenant_id",
+            serde_json::json!({}),
+        )
+    })
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -83,8 +89,10 @@ pub fn default_force_path_style(provider: &str) -> bool {
 pub fn validate_provider(provider: &str) -> Result<()> {
     match provider {
         "minio" | "cos" | "oss" | "gcs" => Ok(()),
-        _ => Err(AppError::InvalidQuery(
-            "provider 必须是 minio / cos / oss / gcs".into(),
+        _ => Err(AppError::validation(
+            "objstore_provider_invalid",
+            "provider 必须是 minio / cos / oss / gcs",
+            serde_json::json!({}),
         )),
     }
 }
@@ -92,15 +100,25 @@ pub fn validate_provider(provider: &str) -> Result<()> {
 pub fn validate_endpoint(endpoint: &str) -> Result<()> {
     let t = endpoint.trim();
     if !(t.starts_with("http://") || t.starts_with("https://")) {
-        return Err(AppError::InvalidQuery(
-            "endpoint 必须以 http:// 或 https:// 开头".into(),
+        return Err(AppError::validation(
+            "objstore_endpoint_scheme_invalid",
+            "endpoint 必须以 http:// 或 https:// 开头",
+            serde_json::json!({}),
         ));
     }
     if t.chars().any(|c| c.is_whitespace()) {
-        return Err(AppError::InvalidQuery("endpoint 含非法空白字符".into()));
+        return Err(AppError::validation(
+            "objstore_endpoint_whitespace",
+            "endpoint 含非法空白字符",
+            serde_json::json!({}),
+        ));
     }
     if t.len() <= "https://".len() {
-        return Err(AppError::InvalidQuery("endpoint 无效".into()));
+        return Err(AppError::validation(
+            "objstore_endpoint_invalid",
+            "endpoint 无效",
+            serde_json::json!({}),
+        ));
     }
     Ok(())
 }
@@ -108,10 +126,18 @@ pub fn validate_endpoint(endpoint: &str) -> Result<()> {
 pub fn validate_bucket(bucket: &str) -> Result<()> {
     let t = bucket.trim();
     if t.is_empty() {
-        return Err(AppError::InvalidQuery("bucket 不能为空".into()));
+        return Err(AppError::validation(
+            "objstore_bucket_empty",
+            "bucket 不能为空",
+            serde_json::json!({}),
+        ));
     }
     if t.chars().any(|c| c.is_whitespace()) {
-        return Err(AppError::InvalidQuery("bucket 含非法空白字符".into()));
+        return Err(AppError::validation(
+            "objstore_bucket_whitespace",
+            "bucket 含非法空白字符",
+            serde_json::json!({}),
+        ));
     }
     Ok(())
 }
@@ -119,17 +145,29 @@ pub fn validate_bucket(bucket: &str) -> Result<()> {
 pub fn validate_region(region: &str) -> Result<()> {
     let t = region.trim();
     if t.is_empty() {
-        return Err(AppError::InvalidQuery("region 不能为空".into()));
+        return Err(AppError::validation(
+            "objstore_region_empty",
+            "region 不能为空",
+            serde_json::json!({}),
+        ));
     }
     if t.chars().any(|c| c.is_whitespace()) {
-        return Err(AppError::InvalidQuery("region 含非法空白字符".into()));
+        return Err(AppError::validation(
+            "objstore_region_whitespace",
+            "region 含非法空白字符",
+            serde_json::json!({}),
+        ));
     }
     Ok(())
 }
 
 pub fn validate_access_key_id(ak: &str) -> Result<()> {
     if ak.trim().is_empty() {
-        return Err(AppError::InvalidQuery("access_key_id 不能为空".into()));
+        return Err(AppError::validation(
+            "objstore_access_key_empty",
+            "access_key_id 不能为空",
+            serde_json::json!({}),
+        ));
     }
     Ok(())
 }

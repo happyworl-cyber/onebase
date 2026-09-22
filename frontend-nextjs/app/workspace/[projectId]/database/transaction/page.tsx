@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { schemaAPI, transactionAPI } from '@/lib/api'
 import { useNotification } from '@/hooks/useNotification'
 import Drawer from '@/components/Drawer'
@@ -34,10 +35,10 @@ interface ExecResult {
   results: any[]
 }
 
-const METHOD_OPTIONS: { value: Method; label: string; color: string; desc: string }[] = [
-  { value: 'POST', label: 'INSERT', color: 'bg-green-100 text-green-700', desc: '新增一条记录' },
-  { value: 'PATCH', label: 'UPDATE', color: 'bg-amber-100 text-amber-700', desc: '按 WHERE 更新' },
-  { value: 'DELETE', label: 'DELETE', color: 'bg-red-100 text-red-700', desc: '按 WHERE 删除' },
+const METHOD_OPTIONS: { value: Method; label: string; color: string; descKey: string }[] = [
+  { value: 'POST', label: 'INSERT', color: 'bg-green-100 text-green-700', descKey: 'descInsert' },
+  { value: 'PATCH', label: 'UPDATE', color: 'bg-amber-100 text-amber-700', descKey: 'descUpdate' },
+  { value: 'DELETE', label: 'DELETE', color: 'bg-red-100 text-red-700', descKey: 'descDelete' },
 ]
 
 const newId = () => Math.random().toString(36).slice(2, 10)
@@ -113,21 +114,21 @@ function buildPayload(ops: Operation[]) {
   }
 }
 
-function validate(ops: Operation[]): string | null {
-  if (ops.length === 0) return '请至少添加一个操作'
-  if (ops.length > 100) return `单个事务最多 100 个操作（当前 ${ops.length} 个）`
+function validate(ops: Operation[]): { key: string; params?: Record<string, unknown> } | null {
+  if (ops.length === 0) return { key: 'vNeedOp' }
+  if (ops.length > 100) return { key: 'vMaxOps', params: { n: ops.length } }
   for (let i = 0; i < ops.length; i++) {
     const op = ops[i]
-    const tag = `第 ${i + 1} 步 ${op.method}`
-    if (!op.schema.trim()) return `${tag}：未选择 Schema`
-    if (!op.table.trim()) return `${tag}：未选择表`
+    const tag = { i: i + 1, method: op.method }
+    if (!op.schema.trim()) return { key: 'vNoSchema', params: { tag: `Step ${i + 1} ${op.method}` } }
+    if (!op.table.trim()) return { key: 'vNoTable', params: { tag: `Step ${i + 1} ${op.method}` } }
     const dataMissing = op.data.length === 0 || op.data.every((kv) => !kv.key.trim())
     const whereMissing = op.where.length === 0 || op.where.every((kv) => !kv.key.trim())
     if ((op.method === 'POST' || op.method === 'PATCH') && dataMissing) {
-      return `${tag}：data 不能为空`
+      return { key: 'vNoData', params: { tag: `Step ${i + 1} ${op.method}` } }
     }
     if ((op.method === 'PATCH' || op.method === 'DELETE') && whereMissing) {
-      return `${tag}：where 条件不能为空（避免误改 / 误删全表）`
+      return { key: 'vNoWhere', params: { tag: `Step ${i + 1} ${op.method}` } }
     }
   }
   return null
@@ -138,6 +139,7 @@ function validate(ops: Operation[]): string | null {
 // ──────────────────────────────────────────────────────────────────────────────
 
 export default function TransactionPage() {
+  const t = useTranslations('wsTransaction')
   const notify = useNotification()
   const [ops, setOps] = useState<Operation[]>([newOp()])
   const [executing, setExecuting] = useState(false)
@@ -249,7 +251,7 @@ export default function TransactionPage() {
 
   const clearAll = () => {
     if (ops.length === 1 && !ops[0].table && ops[0].where.length === 0 && ops[0].data.length === 0) return
-    if (!window.confirm('确定要清空所有操作吗？')) return
+    if (!window.confirm(t('confirmClear'))) return
     setOps([newOp()])
     setLastResult(null)
   }
@@ -262,14 +264,14 @@ export default function TransactionPage() {
   const execute = async () => {
     const err = validate(ops)
     if (err) {
-      notify.warning(err)
+      notify.warning(t(err.key, err.params as any))
       return
     }
     setExecuting(true)
     try {
       const res = await transactionAPI.execute(payload.operations)
       setLastResult(res.data as ExecResult)
-      notify.success(`事务执行成功：${res.data.success_count} 个操作，耗时 ${res.data.elapsed_ms}ms`)
+      notify.success(t('execOk', { n: res.data.success_count, ms: res.data.elapsed_ms }))
     } catch (e: any) {
       // 失败时清掉上次结果，避免与新错误混淆
       setLastResult(null)
@@ -287,9 +289,9 @@ export default function TransactionPage() {
       {/* 标题与工具栏 */}
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">批量 SQL 事务</h1>
+          <h1 className="text-2xl font-semibold text-gray-900">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            把多条 INSERT / UPDATE / DELETE 串成一个原子事务：要么全部成功提交，要么任一步失败都回滚。
+            {t('subtitle')}
           </p>
         </div>
         <div className="flex flex-shrink-0 gap-2">
@@ -297,19 +299,19 @@ export default function TransactionPage() {
             onClick={() => setPreviewOpen(true)}
             className="h-9 px-4 text-sm text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
           >
-            <i className="fas fa-code mr-2"></i>预览 JSON
+            <i className="fas fa-code mr-2"></i>{t('previewJson')}
           </button>
           <button
             onClick={clearAll}
             className="h-9 px-4 text-sm text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
           >
-            <i className="fas fa-broom mr-2"></i>清空
+            <i className="fas fa-broom mr-2"></i>{t('clear')}
           </button>
           <button
             onClick={addOp}
             className="h-9 px-4 text-sm text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
           >
-            <i className="fas fa-plus mr-2"></i>新增操作
+            <i className="fas fa-plus mr-2"></i>{t('addOp')}
           </button>
           <button
             onClick={execute}
@@ -318,11 +320,11 @@ export default function TransactionPage() {
           >
             {executing ? (
               <>
-                <i className="fas fa-spinner fa-spin mr-2"></i>执行中...
+                <i className="fas fa-spinner fa-spin mr-2"></i>{t('executing')}
               </>
             ) : (
               <>
-                <i className="fas fa-play mr-2"></i>执行事务（{ops.length}）
+                <i className="fas fa-play mr-2"></i>{t('execTxn', { n: ops.length })}
               </>
             )}
           </button>
@@ -351,7 +353,7 @@ export default function TransactionPage() {
           onClick={addOp}
           className="w-full border-2 border-dashed border-gray-300 rounded-xl py-6 text-sm text-gray-600 hover:border-blue-300 hover:bg-blue-50/30 hover:text-blue-600 transition-colors"
         >
-          <i className="fas fa-plus mr-2"></i>新增一步操作
+          <i className="fas fa-plus mr-2"></i>{t('addFirstOp')}
         </button>
       </div>
 
@@ -362,13 +364,12 @@ export default function TransactionPage() {
       <Drawer
         isOpen={previewOpen}
         onClose={() => setPreviewOpen(false)}
-        title="事务请求预览"
+        title={t('previewTitle')}
         size="lg"
       >
         <div className="space-y-3">
           <p className="text-xs text-gray-500">
-            这是点击"执行事务"时实际发给 <code className="bg-gray-100 px-1 rounded">POST /transaction</code> 的 JSON。
-            后端会按数组顺序在同一个事务里依次执行。
+            {t('previewDescPre')}<code className="bg-gray-100 px-1 rounded">POST /transaction</code>{t('previewDescPost')}
           </p>
           <pre className="bg-gray-900 text-gray-100 text-xs p-4 rounded-lg overflow-auto max-h-[60vh] font-mono leading-relaxed">
             {JSON.stringify(payload, null, 2)}
@@ -412,6 +413,7 @@ function OperationCard({
 }: OperationCardProps) {
   const showWhere = op.method === 'PATCH' || op.method === 'DELETE'
   const showData = op.method === 'POST' || op.method === 'PATCH'
+  const t = useTranslations('wsTransaction')
   const methodMeta = METHOD_OPTIONS.find((m) => m.value === op.method)!
 
   return (
@@ -419,19 +421,19 @@ function OperationCard({
       <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-100 bg-gray-50/60">
         <span className="text-sm font-mono text-gray-400 w-7">#{index + 1}</span>
         <span className={`text-xs px-2 py-1 rounded font-semibold ${methodMeta.color}`}>{methodMeta.label}</span>
-        <span className="text-xs text-gray-500">{methodMeta.desc}</span>
+        <span className="text-xs text-gray-500">{t(methodMeta.descKey)}</span>
         <div className="flex-1"></div>
-        <IconButton title="上移" disabled={index === 0} onClick={onMoveUp} icon="fa-arrow-up" />
-        <IconButton title="下移" disabled={index === total - 1} onClick={onMoveDown} icon="fa-arrow-down" />
-        <IconButton title="复制" onClick={onDuplicate} icon="fa-clone" />
-        <IconButton title="删除" onClick={onRemove} icon="fa-trash" danger disabled={total === 1} />
+        <IconButton title={t('moveUp')} disabled={index === 0} onClick={onMoveUp} icon="fa-arrow-up" />
+        <IconButton title={t('moveDown')} disabled={index === total - 1} onClick={onMoveDown} icon="fa-arrow-down" />
+        <IconButton title={t('duplicate')} onClick={onDuplicate} icon="fa-clone" />
+        <IconButton title={t('delete')} onClick={onRemove} icon="fa-trash" danger disabled={total === 1} />
       </div>
 
       <div className="p-5 space-y-4">
         {/* method / schema / table */}
         <div className="grid grid-cols-12 gap-3">
           <div className="col-span-3">
-            <label className="block text-xs font-medium text-gray-600 mb-1.5">操作类型</label>
+            <label className="block text-xs font-medium text-gray-600 mb-1.5">{t('opType')}</label>
             <select
               value={op.method}
               onChange={(e) => onChange({ method: e.target.value as Method })}
@@ -453,16 +455,16 @@ function OperationCard({
             />
           </div>
           <div className="col-span-5">
-            <label className="block text-xs font-medium text-gray-600 mb-1.5">表名</label>
-            <SchemaInput value={op.table} options={tables} onChange={(v) => onChange({ table: v })} placeholder="选择或输入表名" />
+            <label className="block text-xs font-medium text-gray-600 mb-1.5">{t('tableName')}</label>
+            <SchemaInput value={op.table} options={tables} onChange={(v) => onChange({ table: v })} placeholder={t('selectOrInputTable')} />
           </div>
         </div>
 
         {/* WHERE */}
         {showWhere && (
           <KVSection
-            title="WHERE 条件"
-            hint="多个条件之间是 AND 关系。值会按字符串发送，PostgreSQL 会做隐式类型转换。"
+            title={t('whereTitle')}
+            hint={t('whereHint')}
             entries={op.where}
             columns={columns}
             onChange={(where) => onChange({ where })}
@@ -472,8 +474,8 @@ function OperationCard({
         {/* DATA */}
         {showData && (
           <KVSection
-            title={op.method === 'POST' ? 'INSERT 数据' : 'SET 字段'}
-            hint='值会自动识别类型："true/false" 当布尔，纯数字当数字，"null" 当 NULL，"{...}" / "[...]" 按 JSON 解析，其余按字符串。'
+            title={op.method === 'POST' ? t('insertData') : t('setFields')}
+            hint={t('dataHint')}
             entries={op.data}
             columns={columns}
             onChange={(data) => onChange({ data })}
@@ -525,6 +527,7 @@ interface KVSectionProps {
 }
 
 function KVSection({ title, hint, entries, columns, onChange }: KVSectionProps) {
+  const t = useTranslations('wsTransaction')
   const updateEntry = (id: string, patch: Partial<KVEntry>) => {
     onChange(entries.map((e) => (e.id === id ? { ...e, ...patch } : e)))
   }
@@ -536,7 +539,7 @@ function KVSection({ title, hint, entries, columns, onChange }: KVSectionProps) 
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-semibold text-gray-700 uppercase tracking-wider">{title}</span>
         <button onClick={addEntry} className="text-xs text-blue-600 hover:text-blue-700">
-          <i className="fas fa-plus mr-1"></i>添加字段
+          <i className="fas fa-plus mr-1"></i>{t('addField')}
         </button>
       </div>
       <p className="text-[11px] text-gray-500 mb-2 leading-relaxed">{hint}</p>
@@ -545,7 +548,7 @@ function KVSection({ title, hint, entries, columns, onChange }: KVSectionProps) 
           onClick={addEntry}
           className="w-full border border-dashed border-gray-300 rounded-lg py-3 text-xs text-gray-500 hover:border-gray-400 hover:bg-gray-50 transition-colors"
         >
-          <i className="fas fa-plus mr-1.5"></i>添加第一个字段
+          <i className="fas fa-plus mr-1.5"></i>{t('addFirstField')}
         </button>
       ) : (
         <div className="space-y-2">
@@ -555,19 +558,19 @@ function KVSection({ title, hint, entries, columns, onChange }: KVSectionProps) 
                 value={kv.key}
                 options={columns}
                 onChange={(v) => updateEntry(kv.id, { key: v })}
-                placeholder="字段名"
+                placeholder={t('fieldName')}
               />
               <input
                 type="text"
                 value={kv.value}
-                placeholder="值（留空表示空字符串；输入 null 表示 NULL）"
+                placeholder={t('fieldValueHint')}
                 onChange={(e) => updateEntry(kv.id, { value: e.target.value })}
                 className="flex-1 h-9 px-3 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
               />
               <button
                 onClick={() => removeEntry(kv.id)}
                 className="w-9 h-9 flex items-center justify-center text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0"
-                title="删除字段"
+                title={t('deleteField')}
               >
                 <i className="fas fa-times"></i>
               </button>
@@ -612,13 +615,14 @@ interface ResultPanelProps {
 }
 
 function ResultPanel({ result, ops }: ResultPanelProps) {
+  const t = useTranslations('wsTransaction')
   return (
     <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
       <div className="px-5 py-3 border-b border-gray-100 bg-green-50/60 flex items-center gap-3">
         <i className="fas fa-check-circle text-green-500"></i>
-        <span className="text-sm font-semibold text-gray-900">事务执行成功</span>
+        <span className="text-sm font-semibold text-gray-900">{t('execOkTitle')}</span>
         <span className="text-xs text-gray-500">
-          共 {result.success_count} 个操作 · 耗时 {result.elapsed_ms}ms
+          {t('execOkSummary', { n: result.success_count, ms: result.elapsed_ms })}
         </span>
       </div>
       <div className="divide-y divide-gray-100">
@@ -639,14 +643,14 @@ function ResultPanel({ result, ops }: ResultPanelProps) {
                   {op.schema}.{op.table}
                 </span>
               )}
-              <span className="text-xs text-gray-500 ml-auto">影响 {arr.length} 行</span>
+              <span className="text-xs text-gray-500 ml-auto">{t('affectedRows', { n: arr.length })}</span>
             </div>
           )
         })}
       </div>
       {result.results.some((r) => Array.isArray(r) && r.length > 0) && (
         <details className="px-5 py-3 border-t border-gray-100 bg-gray-50/60">
-          <summary className="text-xs text-gray-600 cursor-pointer select-none">查看完整 RETURNING 数据</summary>
+          <summary className="text-xs text-gray-600 cursor-pointer select-none">{t('viewReturning')}</summary>
           <pre className="mt-2 bg-gray-900 text-gray-100 text-[11px] p-3 rounded-lg overflow-auto max-h-72 font-mono">
             {JSON.stringify(result.results, null, 2)}
           </pre>

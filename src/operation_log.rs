@@ -139,6 +139,10 @@ pub struct OperationLogInput {
     pub resource_id: Option<String>,
     /// 人类可读「操作内容」，列表主展示（写入时给）。
     pub summary: String,
+    /// 稳定 i18n 键（`oplog_xxx`），前端据此查字典渲染；`None` 时前端回退到 `summary`。
+    pub summary_code: Option<String>,
+    /// 配合 `summary_code` 的插值参数（ICU MessageFormat 占位符）。
+    pub summary_params: serde_json::Value,
     pub status: Status,
     /// `None` → 由 [`derive_high_risk`] 规则推导；`Some(_)` → 打点方覆盖。
     pub high_risk: Option<bool>,
@@ -172,6 +176,8 @@ impl OperationLogInput {
             resource_name: None,
             resource_id: None,
             summary: summary.into(),
+            summary_code: None,
+            summary_params: serde_json::json!({}),
             status,
             high_risk: None,
             ip: None,
@@ -193,6 +199,13 @@ impl OperationLogInput {
         self.resource_type = Some(rtype.into());
         self.resource_name = Some(name.into());
         self.resource_id = id;
+        self
+    }
+
+    /// 附加稳定 i18n 码 + 插值参数（前端优先用它渲染，`summary` 仅作兜底）。
+    pub fn summary_code(mut self, code: impl Into<String>, params: Value) -> Self {
+        self.summary_code = Some(code.into());
+        self.summary_params = params;
         self
     }
 
@@ -262,8 +275,8 @@ async fn write_log(pool: &PgPool, input: OperationLogInput) {
         "INSERT INTO management.operation_logs \
          (tenant_id, actor_type, actor_id, actor_name, actor_role, source, action, \
           resource_type, resource_name, resource_id, summary, status, high_risk, \
-          ip, user_agent, session_id, trace_id, duration_ms, detail) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)",
+          ip, user_agent, session_id, trace_id, duration_ms, detail, summary_code, summary_params) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)",
     )
     .bind(input.tenant_id)
     .bind(actor_type)
@@ -284,6 +297,8 @@ async fn write_log(pool: &PgPool, input: OperationLogInput) {
     .bind(input.trace_id)
     .bind(input.duration_ms)
     .bind(detail)
+    .bind(input.summary_code)
+    .bind(input.summary_params)
     .execute(pool)
     .await;
 
@@ -323,10 +338,13 @@ pub fn record_db_op(
     high_risk: Option<bool>,
     change: Option<Value>,
     detail: Option<Value>,
+    summary_code: Option<&str>,
+    summary_params: Value,
 ) {
     let pool = pool.clone();
     let action = action.to_string();
     let resource_type = resource_type.to_string();
+    let summary_code = summary_code.map(|s| s.to_string());
     tokio::spawn(async move {
         let row = sqlx::query_as::<_, (i32, Option<String>)>(
             "SELECT tenant_id, connection_name FROM management.tenant_databases \
@@ -346,6 +364,8 @@ pub fn record_db_op(
         let mut input = OperationLogInput::new(tenant_id, actor, source, action, summary, status)
             .resource(resource_type, rname, resource_id);
         input.high_risk = high_risk;
+        input.summary_code = summary_code;
+        input.summary_params = summary_params;
         if let Some(c) = change {
             input = input.change(c);
         }

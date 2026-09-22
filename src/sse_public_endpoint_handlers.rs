@@ -42,7 +42,13 @@ async fn require_admin_for_existing(pool: &PgPool, claims: &Claims, id: i32) -> 
             .bind(id)
             .fetch_optional(pool)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("对外端点 {} 不存在", id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_coded(
+                    "ssepublic_endpoint_not_found",
+                    format!("对外端点 {} 不存在", id),
+                    serde_json::json!({ "id": id }),
+                )
+            })?;
     permissions::require_tenant_admin(pool, claims, tenant_id).await?;
     Ok(tenant_id)
 }
@@ -50,14 +56,20 @@ async fn require_admin_for_existing(pool: &PgPool, claims: &Claims, id: i32) -> 
 /// slug 仅允许 [a-z0-9-]，长度 1..=64。
 fn validate_slug(slug: &str) -> Result<()> {
     if slug.is_empty() || slug.len() > 64 {
-        return Err(AppError::InvalidQuery("slug 长度需为 1..=64".to_string()));
+        return Err(AppError::validation(
+            "ssepublic_slug_length",
+            "slug 长度需为 1..=64".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if !slug
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
     {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "ssepublic_slug_charset",
             "slug 仅允许小写字母、数字、连字符".to_string(),
+            serde_json::json!({}),
         ));
     }
     Ok(())
@@ -140,11 +152,13 @@ pub async fn create_endpoint(
     let event_name = body.event_name.trim();
     validate_slug(slug)?;
     if name.is_empty() || identity_header.is_empty() || event_name.is_empty() {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "ssepublic_required_fields_empty",
             "名称/身份头/event 名不能为空".to_string(),
+            serde_json::json!({}),
         ));
     }
-    validate_topic_template(topic_template).map_err(AppError::InvalidQuery)?;
+    validate_topic_template(topic_template)?;
 
     let row = sqlx::query(
         "INSERT INTO management.sse_public_endpoints \
@@ -176,7 +190,7 @@ pub async fn update_endpoint(
     require_admin_for_existing(&pool, &claims, id).await?;
 
     if let Some(t) = body.topic_template.as_deref().map(str::trim) {
-        validate_topic_template(t).map_err(AppError::InvalidQuery)?;
+        validate_topic_template(t)?;
     }
 
     let result = sqlx::query(
@@ -198,7 +212,11 @@ pub async fn update_endpoint(
     .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("对外端点 {} 不存在", id)));
+        return Err(AppError::not_found_coded(
+            "ssepublic_endpoint_not_found",
+            format!("对外端点 {} 不存在", id),
+            serde_json::json!({ "id": id }),
+        ));
     }
     Ok(Json(json!({ "message": "更新成功" })))
 }
@@ -216,7 +234,11 @@ pub async fn delete_endpoint(
         .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("对外端点 {} 不存在", id)));
+        return Err(AppError::not_found_coded(
+            "ssepublic_endpoint_not_found",
+            format!("对外端点 {} 不存在", id),
+            serde_json::json!({ "id": id }),
+        ));
     }
     Ok(Json(json!({ "message": "删除成功" })))
 }

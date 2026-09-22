@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useTranslations } from 'next-intl'
 import { queryAPI } from '@/lib/api'
 import { useNotification } from '@/hooks/useNotification'
 
@@ -13,85 +14,86 @@ interface Extension {
 }
 
 // 常用扩展描述
-const EXTENSION_DESCRIPTIONS: Record<string, { icon: string, description: string, category: string }> = {
+const EXTENSION_DESCRIPTIONS: Record<string, { icon: string, descKey: string, categoryKey: string }> = {
   'uuid-ossp': {
     icon: 'fa-fingerprint',
-    description: '生成通用唯一标识符 (UUID)',
-    category: '数据类型',
+    descKey: 'descUuidOssp',
+    categoryKey: 'catDataType',
   },
   'pgcrypto': {
     icon: 'fa-lock',
-    description: '加密函数，包括密码哈希',
-    category: '安全',
+    descKey: 'descPgcrypto',
+    categoryKey: 'catSecurity',
   },
   'pg_trgm': {
     icon: 'fa-search',
-    description: '模糊搜索和相似度匹配',
-    category: '搜索',
+    descKey: 'descPgTrgm',
+    categoryKey: 'catSearch',
   },
   'btree_gin': {
     icon: 'fa-tree',
-    description: '为 GIN 索引添加 B-tree 操作符支持',
-    category: '索引',
+    descKey: 'descBtreeGin',
+    categoryKey: 'catIndex',
   },
   'btree_gist': {
     icon: 'fa-tree',
-    description: '为 GiST 索引添加 B-tree 操作符支持',
-    category: '索引',
+    descKey: 'descBtreeGist',
+    categoryKey: 'catIndex',
   },
   'hstore': {
     icon: 'fa-database',
-    description: '键值对存储',
-    category: '数据类型',
+    descKey: 'descHstore',
+    categoryKey: 'catDataType',
   },
   'citext': {
     icon: 'fa-font',
-    description: '不区分大小写的文本类型',
-    category: '数据类型',
+    descKey: 'descCitext',
+    categoryKey: 'catDataType',
   },
   'pg_stat_statements': {
     icon: 'fa-chart-bar',
-    description: '跟踪 SQL 执行统计',
-    category: '监控',
+    descKey: 'descPgStat',
+    categoryKey: 'catMonitor',
   },
   'postgis': {
     icon: 'fa-globe',
-    description: '地理空间数据支持',
-    category: '地理',
+    descKey: 'descPostgis',
+    categoryKey: 'catGeo',
   },
   'vector': {
     icon: 'fa-brain',
-    description: '向量存储和相似度搜索 (AI/ML)',
-    category: 'AI',
+    descKey: 'descVector',
+    categoryKey: 'catAI',
   },
   'timescaledb': {
     icon: 'fa-clock',
-    description: '时序数据优化',
-    category: '时序',
+    descKey: 'descTimescale',
+    categoryKey: 'catTimeseries',
   },
   'plpgsql': {
     icon: 'fa-code',
-    description: 'PL/pgSQL 过程语言',
-    category: '语言',
+    descKey: 'descPlpgsql',
+    categoryKey: 'catLanguage',
   },
   'ltree': {
     icon: 'fa-sitemap',
-    description: '层次树状数据类型',
-    category: '数据类型',
+    descKey: 'descLtree',
+    categoryKey: 'catDataType',
   },
   'fuzzystrmatch': {
     icon: 'fa-spell-check',
-    description: '模糊字符串匹配',
-    category: '搜索',
+    descKey: 'descFuzzy',
+    categoryKey: 'catSearch',
   },
   'unaccent': {
     icon: 'fa-language',
-    description: '删除重音符号的文本搜索',
-    category: '搜索',
+    descKey: 'descUnaccent',
+    categoryKey: 'catSearch',
   },
 }
 
 export default function ExtensionsPage() {
+  const t = useTranslations('wsExtensions')
   const notify = useNotification()
   const [extensions, setExtensions] = useState<Extension[]>([])
   const [loading, setLoading] = useState(false)
@@ -130,7 +132,7 @@ export default function ExtensionsPage() {
     try {
       // 受管按钮 = 明确意图；用 executeManaged 自动带 ack
       await queryAPI.executeManaged(`CREATE EXTENSION IF NOT EXISTS "${name}";`)
-      notify.success(`扩展 "${name}" 安装成功`)
+      notify.success(t('installOk', { name }))
       loadExtensions()
     } catch (err: any) {
       notify.error(err)
@@ -139,12 +141,12 @@ export default function ExtensionsPage() {
 
   // 卸载扩展
   const uninstallExtension = async (name: string) => {
-    const confirmed = window.confirm(`确定要卸载扩展 "${name}" 吗？\n\n警告：这可能会删除依赖此扩展的对象。`)
+    const confirmed = window.confirm(t('confirmUninstall', { name }))
     if (!confirmed) return
     
     try {
       await queryAPI.executeManaged(`DROP EXTENSION IF EXISTS "${name}" CASCADE;`)
-      notify.success(`扩展 "${name}" 已卸载`)
+      notify.success(t('uninstallOk', { name }))
       loadExtensions()
     } catch (err: any) {
       notify.error(err)
@@ -155,7 +157,7 @@ export default function ExtensionsPage() {
   const updateExtension = async (name: string) => {
     try {
       await queryAPI.executeManaged(`ALTER EXTENSION "${name}" UPDATE;`)
-      notify.success(`扩展 "${name}" 已更新`)
+      notify.success(t('updateOk', { name }))
       loadExtensions()
     } catch (err: any) {
       notify.error(err)
@@ -176,15 +178,15 @@ export default function ExtensionsPage() {
   const getExtensionInfo = (name: string) => {
     return EXTENSION_DESCRIPTIONS[name] || {
       icon: 'fa-puzzle-piece',
-      description: '',
-      category: '其他',
+      descKey: '',
+      categoryKey: 'catOther',
     }
   }
 
   // 按类别分组
   const groupedExtensions = filteredExtensions.reduce((acc, ext) => {
     const info = getExtensionInfo(ext.name)
-    const category = info.category
+    const category = info.categoryKey
     if (!acc[category]) acc[category] = []
     acc[category].push(ext)
     return acc
@@ -197,9 +199,9 @@ export default function ExtensionsPage() {
       {/* 页面头部 */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-800">扩展管理</h1>
+          <h1 className="text-2xl font-semibold text-gray-800">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            已安装 {installedCount} 个扩展 / 共 {extensions.length} 个可用
+            {t('summary', { installed: installedCount, total: extensions.length })}
           </p>
         </div>
       </div>
@@ -214,7 +216,7 @@ export default function ExtensionsPage() {
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="搜索扩展..."
+              placeholder={t('searchPlaceholder')}
               className="w-full pl-10 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -226,7 +228,7 @@ export default function ExtensionsPage() {
                 filterInstalled === 'all' ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'
               }`}
             >
-              全部 ({extensions.length})
+              {t('tabAll', { n: extensions.length })}
             </button>
             <button
               onClick={() => setFilterInstalled('installed')}
@@ -234,7 +236,7 @@ export default function ExtensionsPage() {
                 filterInstalled === 'installed' ? 'bg-green-100 text-green-700' : 'text-gray-600 hover:bg-gray-100'
               }`}
             >
-              已安装 ({installedCount})
+              {t('tabInstalled', { n: installedCount })}
             </button>
             <button
               onClick={() => setFilterInstalled('available')}
@@ -242,7 +244,7 @@ export default function ExtensionsPage() {
                 filterInstalled === 'available' ? 'bg-gray-200 text-gray-700' : 'text-gray-600 hover:bg-gray-100'
               }`}
             >
-              可安装 ({extensions.length - installedCount})
+              {t('tabAvailable', { n: extensions.length - installedCount })}
             </button>
           </div>
           
@@ -252,7 +254,7 @@ export default function ExtensionsPage() {
             className="btn-default text-sm"
           >
             <i className={`fas ${loading ? 'fa-spinner fa-spin' : 'fa-sync-alt'} mr-2`}></i>
-            刷新
+            {t('refresh')}
           </button>
         </div>
       </div>
@@ -261,13 +263,13 @@ export default function ExtensionsPage() {
       {loading && extensions.length === 0 ? (
         <div className="card p-12 text-center">
           <i className="fas fa-spinner fa-spin text-3xl text-blue-500 mb-3"></i>
-          <p className="text-gray-500">加载扩展列表...</p>
+          <p className="text-gray-500">{t('loading')}</p>
         </div>
       ) : filteredExtensions.length === 0 ? (
         <div className="card p-12 text-center">
           <i className="fas fa-puzzle-piece text-5xl text-gray-300 mb-4"></i>
           <p className="text-gray-500">
-            {searchTerm ? '未找到匹配的扩展' : '暂无可用扩展'}
+            {searchTerm ? t('noMatch') : t('empty')}
           </p>
         </div>
       ) : (
@@ -292,12 +294,12 @@ export default function ExtensionsPage() {
                         <h3 className="font-medium text-gray-900">{ext.name}</h3>
                         {ext.is_installed && (
                           <span className="text-xs px-1.5 py-0.5 bg-green-100 text-green-700 rounded">
-                            已安装
+                            {t('installed')}
                           </span>
                         )}
                       </div>
                       <p className="text-xs text-gray-500 mt-1 line-clamp-2">
-                        {info.description || ext.comment || '无描述'}
+                        {(info.descKey ? t(info.descKey) : '') || ext.comment || t('noDesc')}
                       </p>
                       <div className="flex items-center space-x-2 mt-2">
                         <span className="text-xs text-gray-400">
@@ -309,7 +311,7 @@ export default function ExtensionsPage() {
                           </span>
                         )}
                         <span className="text-xs px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded">
-                          {info.category}
+                          {t(info.categoryKey)}
                         </span>
                       </div>
                     </div>
@@ -325,7 +327,7 @@ export default function ExtensionsPage() {
                           className="flex-1 px-3 py-1.5 text-xs bg-yellow-100 text-yellow-700 rounded-lg hover:bg-yellow-200 transition-colors"
                         >
                           <i className="fas fa-arrow-up mr-1"></i>
-                          更新
+                          {t('update')}
                         </button>
                       )}
                       <button
@@ -333,7 +335,7 @@ export default function ExtensionsPage() {
                         className="flex-1 px-3 py-1.5 text-xs bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors"
                       >
                         <i className="fas fa-trash mr-1"></i>
-                        卸载
+                        {t('uninstall')}
                       </button>
                     </>
                   ) : (
@@ -342,7 +344,7 @@ export default function ExtensionsPage() {
                       className="w-full px-3 py-1.5 text-xs bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors"
                     >
                       <i className="fas fa-download mr-1"></i>
-                      安装
+                      {t('install')}
                     </button>
                   )}
                 </div>

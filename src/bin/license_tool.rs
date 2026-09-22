@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 use std::process::exit;
 
-use onebase::license::{
+use planeos::license::{
     self, current_fingerprint, generate_keypair, sign_license, verify_license_file, LicenseClaims,
 };
 
@@ -88,7 +88,7 @@ fn cmd_keygen(opts: &HashMap<String, String>) -> Result<(), String> {
     println!("  公钥（随镜像 / 交付包分发）: {pub_path}");
     println!();
     println!("服务端用公钥验签，可通过以下任一方式提供：");
-    println!("  - 环境变量 ONEBASE_LICENSE_PUBLIC_KEY_PATH={pub_path}");
+    println!("  - 环境变量 PLANEOS_LICENSE_PUBLIC_KEY_PATH={pub_path}");
     println!("  - 或把 PEM 内容内嵌进 src/license.rs 的 EMBEDDED_PUBLIC_KEY（防替换更硬）");
     Ok(())
 }
@@ -173,11 +173,21 @@ fn cmd_issue(opts: &HashMap<String, String>) -> Result<(), String> {
         .get("max-team-members")
         .and_then(|s| s.parse::<u32>().ok());
 
+    // 执法模式写进签名：客户在自己服务器上改 PLANEOS_LICENSE_ENFORCE 只能收紧、
+    // 不能放松。默认 enforce —— 原厂签发的正式授权就该带约束；需要宽松交付时
+    // 显式 `--enforce warn`（或 off）。
+    let enforce = Some(
+        opts.get("enforce")
+            .cloned()
+            .unwrap_or_else(|| "enforce".to_string()),
+    );
+
     let claims = LicenseClaims {
         license_id,
         customer,
         edition,
         modules,
+        enforce,
         max_nodes,
         max_tenants,
         max_accounts_per_tenant,
@@ -325,7 +335,8 @@ fn print_usage() {
          [--max-projects N] [--max-workflows N] [--max-executions-per-month N]\n              \
          [--max-api-endpoints N] [--max-scheduled-jobs N]\n              \
          [--max-database-connections N] [--max-team-members N]\n              \
-         [--fingerprint <fp>] [--id <编号>] [--notes <备注>] [--out license.lic]\n  \
+         [--fingerprint <fp>] [--id <编号>] [--notes <备注>] [--out license.lic]\n              \
+         [--enforce enforce|warn|off]  执法模式，写入签名，默认 enforce\n  \
          license_tool verify --pub <公钥.pem> --file license.lic\n\n\
          配额参数说明:\n  \
          --max-projects              项目/租户数量上限\n  \

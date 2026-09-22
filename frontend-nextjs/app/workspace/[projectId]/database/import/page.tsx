@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useTranslations } from 'next-intl'
 import { schemaAPI, queryAPI, tableAPI } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
 import { useNotification } from '@/hooks/useNotification'
@@ -23,6 +24,7 @@ interface ImportPreview {
 }
 
 export default function ImportPage() {
+  const t = useTranslations('wsImport')
   const { currentSchema } = useAppStore()
   const notify = useNotification()
   const [tables, setTables] = useState<TableInfo[]>([])
@@ -70,7 +72,7 @@ export default function ImportPage() {
       const columns = response.data.columns.map((c: any) => c.column_name)
       setTableColumns(columns)
     } catch (err: any) {
-      console.error('加载表结构失败:', err)
+      console.error(t('loadStructFailed'), err)
     }
   }, [currentSchema, selectedTable])
 
@@ -177,7 +179,7 @@ export default function ImportPage() {
         const allRows = parseCSV(text, delimiter, options.quoteChar)
         
         if (allRows.length === 0) {
-          notify.error('文件为空或格式不正确')
+          notify.error(t('fileEmpty'))
           return
         }
         
@@ -209,7 +211,7 @@ export default function ImportPage() {
       })
       setColumnMappings(mappings)
     } catch (err: any) {
-      notify.error('解析文件失败: ' + err.message)
+      notify.error(t('parseFailed', { err: err.message }))
     }
   }
 
@@ -226,7 +228,7 @@ export default function ImportPage() {
     
     const validMappings = columnMappings.filter(m => m.dbColumn)
     if (validMappings.length === 0) {
-      notify.warning('请至少映射一列')
+      notify.warning(t('mapAtLeastOne'))
       return
     }
     
@@ -292,7 +294,7 @@ export default function ImportPage() {
         setImportProgress({ current: Math.min(i + options.batchSize, allRows.length), total: allRows.length })
       }
       
-      notify.success(`导入完成！成功: ${successCount} 条，失败: ${errorCount} 条`)
+      notify.success(t('importDone', { ok: successCount, fail: errorCount }))
     } catch (err: any) {
       notify.error(err)
     } finally {
@@ -305,9 +307,9 @@ export default function ImportPage() {
       {/* 页面头部 */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-800">数据导入</h1>
+          <h1 className="text-2xl font-semibold text-gray-800">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            从 CSV、JSON 文件导入数据到数据库表
+            {t('subtitle')}
           </p>
         </div>
       </div>
@@ -321,7 +323,7 @@ export default function ImportPage() {
           }`}>
             {selectedTable ? <i className="fas fa-check"></i> : '1'}
           </div>
-          <span className="text-sm font-medium">选择目标表</span>
+          <span className="text-sm font-medium">{t('stepSelectTable')}</span>
         </div>
         <div className="flex-1 h-px bg-gray-300"></div>
         <div className={`flex items-center space-x-2 ${preview ? 'text-green-600' : file ? 'text-blue-600' : 'text-gray-400'}`}>
@@ -330,7 +332,7 @@ export default function ImportPage() {
           }`}>
             {preview ? <i className="fas fa-check"></i> : '2'}
           </div>
-          <span className="text-sm font-medium">上传文件</span>
+          <span className="text-sm font-medium">{t('stepUpload')}</span>
         </div>
         <div className="flex-1 h-px bg-gray-300"></div>
         <div className={`flex items-center space-x-2 ${columnMappings.some(m => m.dbColumn) ? 'text-blue-600' : 'text-gray-400'}`}>
@@ -339,14 +341,14 @@ export default function ImportPage() {
           }`}>
             3
           </div>
-          <span className="text-sm font-medium">映射列</span>
+          <span className="text-sm font-medium">{t('stepMap')}</span>
         </div>
         <div className="flex-1 h-px bg-gray-300"></div>
         <div className="flex items-center space-x-2 text-gray-400">
           <div className="w-8 h-8 rounded-full flex items-center justify-center bg-gray-100">
             4
           </div>
-          <span className="text-sm font-medium">导入</span>
+          <span className="text-sm font-medium">{t('stepImport')}</span>
         </div>
       </div>
 
@@ -355,13 +357,13 @@ export default function ImportPage() {
         <div className="col-span-4 space-y-4">
           {/* 选择表 */}
           <div className="card p-4">
-            <h3 className="text-sm font-semibold text-gray-700 mb-3">1. 选择目标表</h3>
+            <h3 className="text-sm font-semibold text-gray-700 mb-3">{t('s1')}</h3>
             <select
               value={selectedTable}
               onChange={(e) => setSelectedTable(e.target.value)}
               className="w-full input-base"
             >
-              <option value="">选择表...</option>
+              <option value="">{t('selectTable')}</option>
               {tables.map(table => (
                 <option key={table.table_name} value={table.table_name}>
                   {table.table_name}
@@ -370,14 +372,14 @@ export default function ImportPage() {
             </select>
             {selectedTable && tableColumns.length > 0 && (
               <p className="text-xs text-gray-500 mt-2">
-                表列: {tableColumns.join(', ')}
+                {t('tableCols', { cols: tableColumns.join(', ') })}
               </p>
             )}
           </div>
 
           {/* 上传文件 */}
           <div className="card p-4">
-            <h3 className="text-sm font-semibold text-gray-700 mb-3">2. 上传数据文件</h3>
+            <h3 className="text-sm font-semibold text-gray-700 mb-3">{t('s2')}</h3>
             <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 transition-colors">
               <input
                 type="file"
@@ -397,8 +399,8 @@ export default function ImportPage() {
                 ) : (
                   <>
                     <i className="fas fa-cloud-upload-alt text-3xl text-gray-400 mb-2"></i>
-                    <p className="text-gray-600">点击或拖拽文件到此处</p>
-                    <p className="text-xs text-gray-400 mt-1">支持 CSV, TSV, JSON</p>
+                    <p className="text-gray-600">{t('dropHint')}</p>
+                    <p className="text-xs text-gray-400 mt-1">{t('supportFmt')}</p>
                   </>
                 )}
               </label>
@@ -407,7 +409,7 @@ export default function ImportPage() {
 
           {/* 导入选项 */}
           <div className="card p-4">
-            <h3 className="text-sm font-semibold text-gray-700 mb-3">导入选项</h3>
+            <h3 className="text-sm font-semibold text-gray-700 mb-3">{t('importOptions')}</h3>
             <div className="space-y-3">
               <label className="flex items-center space-x-2">
                 <input
@@ -416,25 +418,25 @@ export default function ImportPage() {
                   onChange={(e) => setOptions({ ...options, skipHeader: e.target.checked })}
                   className="rounded border-gray-300 text-blue-600"
                 />
-                <span className="text-sm text-gray-700">首行为表头</span>
+                <span className="text-sm text-gray-700">{t('firstRowHeader')}</span>
               </label>
               
               <div>
-                <label className="block text-xs text-gray-600 mb-1">分隔符</label>
+                <label className="block text-xs text-gray-600 mb-1">{t('delimiter')}</label>
                 <select
                   value={options.delimiter}
                   onChange={(e) => setOptions({ ...options, delimiter: e.target.value })}
                   className="w-full input-base text-sm"
                 >
-                  <option value=",">逗号 (,)</option>
-                  <option value=";">分号 (;)</option>
-                  <option value="\t">制表符 (Tab)</option>
-                  <option value="|">竖线 (|)</option>
+                  <option value=",">{t('comma')}</option>
+                  <option value=";">{t('semicolon')}</option>
+                  <option value="\t">{t('tab')}</option>
+                  <option value="|">{t('pipe')}</option>
                 </select>
               </div>
               
               <div>
-                <label className="block text-xs text-gray-600 mb-1">批量大小</label>
+                <label className="block text-xs text-gray-600 mb-1">{t('batchSize')}</label>
                 <input
                   type="number"
                   value={options.batchSize}
@@ -454,17 +456,17 @@ export default function ImportPage() {
           {preview && (
             <div className="card">
               <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
-                <h3 className="text-sm font-semibold text-gray-700">3. 列映射</h3>
+                <h3 className="text-sm font-semibold text-gray-700">{t('s3')}</h3>
               </div>
               <div className="p-4">
                 <div className="overflow-auto max-h-[300px]">
                   <table className="w-full text-sm">
                     <thead className="bg-gray-50 sticky top-0">
                       <tr>
-                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">文件列</th>
-                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">数据库列</th>
-                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">转换</th>
-                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">预览值</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">{t('colFile')}</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">{t('colDb')}</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">{t('colTransform')}</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">{t('colPreview')}</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -477,7 +479,7 @@ export default function ImportPage() {
                               onChange={(e) => updateMapping(idx, { dbColumn: e.target.value })}
                               className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
                             >
-                              <option value="">-- 跳过 --</option>
+                              <option value="">{t('skip')}</option>
                               {tableColumns.map(col => (
                                 <option key={col} value={col}>{col}</option>
                               ))}
@@ -489,11 +491,11 @@ export default function ImportPage() {
                               onChange={(e) => updateMapping(idx, { transform: e.target.value as any })}
                               className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
                             >
-                              <option value="none">无</option>
-                              <option value="trim">去空格</option>
-                              <option value="uppercase">大写</option>
-                              <option value="lowercase">小写</option>
-                              <option value="nullify_empty">空值转NULL</option>
+                              <option value="none">{t('tNone')}</option>
+                              <option value="trim">{t('tTrim')}</option>
+                              <option value="uppercase">{t('tUpper')}</option>
+                              <option value="lowercase">{t('tLower')}</option>
+                              <option value="nullify_empty">{t('tNullify')}</option>
                             </select>
                           </td>
                           <td className="px-3 py-2 text-gray-500 font-mono text-xs max-w-[150px] truncate">
@@ -512,9 +514,9 @@ export default function ImportPage() {
           {preview && (
             <div className="card">
               <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-gray-700">数据预览</h3>
+                <h3 className="text-sm font-semibold text-gray-700">{t('dataPreview')}</h3>
                 <span className="text-xs text-gray-500">
-                  共 {preview.totalRows} 行，预览前 {preview.rows.length} 行
+                  {t('previewSummary', { total: preview.totalRows, shown: preview.rows.length })}
                 </span>
               </div>
               <div className="overflow-auto max-h-[300px]">
@@ -535,7 +537,7 @@ export default function ImportPage() {
                         <td className="px-3 py-2 text-gray-400">{rowIdx + 1}</td>
                         {row.map((cell, cellIdx) => (
                           <td key={cellIdx} className="px-3 py-2 max-w-[150px] truncate" title={cell}>
-                            {cell || <span className="text-gray-300 italic">空</span>}
+                            {cell || <span className="text-gray-300 italic">{t('empty')}</span>}
                           </td>
                         ))}
                       </tr>
@@ -552,11 +554,11 @@ export default function ImportPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-gray-700">
-                    准备导入 <span className="font-semibold">{preview.totalRows}</span> 条记录到 
+                    {t('readyImportPre')}<span className="font-semibold">{preview.totalRows}</span>{t('readyImportPost')}
                     <span className="font-mono text-blue-600 ml-1">{currentSchema}.{selectedTable}</span>
                   </p>
                   <p className="text-xs text-gray-500 mt-1">
-                    已映射 {columnMappings.filter(m => m.dbColumn).length} / {columnMappings.length} 列
+                    {t('mapped', { n: columnMappings.filter(m => m.dbColumn).length, total: columnMappings.length })}
                   </p>
                 </div>
                 
@@ -568,12 +570,12 @@ export default function ImportPage() {
                   {importing ? (
                     <>
                       <i className="fas fa-spinner fa-spin mr-2"></i>
-                      导入中 ({importProgress.current}/{importProgress.total})
+                      {t('importing', { cur: importProgress.current, total: importProgress.total })}
                     </>
                   ) : (
                     <>
                       <i className="fas fa-upload mr-2"></i>
-                      开始导入
+                      {t('startImport')}
                     </>
                   )}
                 </button>

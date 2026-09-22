@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { useAppStore } from '@/lib/store'
 import {
   dashboardAPI,
@@ -27,6 +28,7 @@ import { useCurrentProjectCapabilities } from '@/lib/permissions'
  * 切项目时立即重新拉，避免看到上一个项目的残留数据。
  */
 export default function WorkspaceHome() {
+  const t = useTranslations('wsHome')
   const params = useParams<{ projectId: string }>()
   const currentProject = useAppStore((s) => s.currentProject)
 
@@ -59,7 +61,7 @@ export default function WorkspaceHome() {
           // 大盘指标拉失败：极有可能是 audit_logs 还没产生（新项目刚开通），
           // 用空数据兜底比红条更优雅；保留 error 给下方区块作为兜底说明。
           setOverview(null)
-          setOverviewError(ov.reason?.response?.data?.error ?? '加载大盘失败')
+          setOverviewError(ov.reason?.response?.data?.error ?? t('loadFailed'))
         }
         if (act.status === 'fulfilled') setActivity(act.value.data)
         else setActivity([])
@@ -106,12 +108,12 @@ export default function WorkspaceHome() {
               )}
               {currentProject?.status && (
                 <span className="ml-3">
-                  状态: <span className="text-green-600">{currentProject.status}</span>
+                  {t('statusLabel')} <span className="text-green-600">{currentProject.status}</span>
                 </span>
               )}
               {currentProject?.user_role && (
                 <span className="ml-3">
-                  你的角色:{' '}
+                  {t('yourRole')}{' '}
                   <span className="px-1.5 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded text-xs font-mono">
                     {currentProject.user_role}
                   </span>
@@ -126,42 +128,42 @@ export default function WorkspaceHome() {
       <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <MetricCard
           icon="fa-bolt"
-          label="QPS（5min）"
+          label={t('kpiQps')}
           value={overview ? overview.qps_5min.toFixed(2) : '—'}
           color="blue"
           href={`${base}/monitor`}
         />
         <MetricCard
           icon="fa-stopwatch"
-          label="P95（5min）"
+          label={t('kpiP95')}
           value={overview?.p95_ms_5min != null ? `${Math.round(overview.p95_ms_5min)} ms` : '—'}
           color="indigo"
           href={`${base}/monitor`}
         />
         <MetricCard
           icon="fa-exclamation-triangle"
-          label="错误率（24h）"
+          label={t('kpiErrRate')}
           value={overview?.error_rate_24h != null ? `${(overview.error_rate_24h * 100).toFixed(2)}%` : '—'}
           color={overview?.error_rate_24h != null && overview.error_rate_24h > 0.05 ? 'red' : 'green'}
           href={`${base}/database/slow-queries`}
         />
         <MetricCard
           icon="fa-hourglass-half"
-          label="慢查询（24h）"
+          label={t('kpiSlow')}
           value={overview ? String(overview.slow_queries_24h) : '—'}
           color={overview && overview.slow_queries_24h > 0 ? 'yellow' : 'gray'}
           href={`${base}/database/slow-queries`}
         />
         <MetricCard
           icon="fa-key"
-          label="活跃 API Key"
+          label={t('kpiActiveKey')}
           value={overview ? String(overview.active_api_keys) : '—'}
           color="emerald"
           href={`${base}/security/api-keys`}
         />
         <MetricCard
           icon="fa-chart-bar"
-          label="调用量（24h）"
+          label={t('kpiCalls')}
           value={overview ? formatCalls(overview.calls_24h) : '—'}
           color="purple"
           href={`${base}/api`}
@@ -181,9 +183,9 @@ export default function WorkspaceHome() {
       {/* 24h sparkline */}
       <section className="bg-white border border-gray-200 rounded-lg p-4">
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-sm font-medium text-gray-900">24 小时调用趋势</h2>
+          <h2 className="text-sm font-medium text-gray-900">{t('callTrend')}</h2>
           <span className="text-xs text-gray-400">
-            每小时一个点 · 最右 = 最近一小时
+            {t('trendHint')}
           </span>
         </div>
         {hasAnyData && sparklineData.some((v) => v > 0) ? (
@@ -191,9 +193,9 @@ export default function WorkspaceHome() {
         ) : (
           <div className="py-6 text-center text-xs text-gray-400">
             {overviewError ? (
-              <span>暂时拿不到趋势数据（{overviewError}）</span>
+              <span>{t('trendError', { err: overviewError })}</span>
             ) : (
-              <span>项目还没有 API 调用——先去 <Link href={`${base}/database/tables`} className="text-blue-600 hover:underline">建表</Link> 或 <Link href={`${base}/api`} className="text-blue-600 hover:underline">试一下 REST API</Link></span>
+              <span>{t('noCallsPre')}<Link href={`${base}/database/tables`} className="text-blue-600 hover:underline">{t('buildTable')}</Link>{t('or')}<Link href={`${base}/api`} className="text-blue-600 hover:underline">{t('tryRest')}</Link></span>
             )}
           </div>
         )}
@@ -203,19 +205,19 @@ export default function WorkspaceHome() {
       <section className="bg-white border border-gray-200 rounded-lg">
         <div className="px-4 py-3 border-b border-gray-100 flex items-baseline justify-between">
           <div>
-            <h2 className="text-sm font-medium text-gray-900">最近活动</h2>
+            <h2 className="text-sm font-medium text-gray-900">{t('recentActivity')}</h2>
             <p className="text-xs text-gray-500 mt-0.5">
-              来自本项目 audit 日志的最近 10 条
+              {t('recentActivityHint')}
             </p>
           </div>
           <span className="text-xs text-gray-400">
-            * 仅显示请求摘要，不暴露 IP / 请求体
+            {t('activityNote')}
           </span>
         </div>
         {activity.length === 0 ? (
           <div className="px-4 py-8 text-center text-sm text-gray-400">
             <i className="fas fa-clock mb-2 text-xl"></i>
-            <p>暂无活动数据</p>
+            <p>{t('noActivity')}</p>
           </div>
         ) : (
           <ul className="divide-y divide-gray-100">
@@ -309,60 +311,61 @@ function ResourceStats({
     canManageSecurity: boolean
   }
 }) {
+  const t = useTranslations('wsHome')
   const r = resources
   const cards = [
     caps.canManageEvents && {
       icon: 'fa-diagram-project',
-      label: '工作流',
+      label: t('resWorkflows'),
       value: r ? String(r.workflows) : '—',
-      hint: r ? `启用 ${r.workflows_enabled}` : undefined,
+      hint: r ? t('enabledN', { n: r.workflows_enabled }) : undefined,
       color: 'sky' as const,
       href: `${base}/automation/workflows`,
     },
     caps.canManageEvents && {
       icon: 'fa-clock',
-      label: '定时任务',
+      label: t('resScheduled'),
       value: r ? String(r.scheduled_tasks) : '—',
-      hint: r ? `启用 ${r.scheduled_tasks_active}` : undefined,
+      hint: r ? t('enabledN', { n: r.scheduled_tasks_active }) : undefined,
       color: 'orange' as const,
       href: `${base}/events/scheduled-tasks`,
     },
     caps.canManageEvents && {
       icon: 'fa-broadcast-tower',
-      label: 'Webhook',
+      label: t('resWebhook'),
       value: r ? String(r.webhooks) : '—',
-      hint: r ? `启用 ${r.webhooks_active}` : undefined,
+      hint: r ? t('enabledN', { n: r.webhooks_active }) : undefined,
       color: 'indigo' as const,
       href: `${base}/events/webhooks`,
     },
     caps.canManageMembers && {
       icon: 'fa-users',
-      label: '项目成员',
+      label: t('resMembers'),
       value: r ? String(r.members) : '—',
       color: 'blue' as const,
       href: `${base}/settings/members`,
     },
     caps.canManageEvents && {
       icon: 'fa-play-circle',
-      label: '工作流执行（24h）',
+      label: t('resWorkflowExec'),
       value: r ? String(r.workflow_runs_24h) : '—',
-      hint: r ? `失败 ${r.workflow_failed_24h}` : undefined,
+      hint: r ? t('failedN', { n: r.workflow_failed_24h }) : undefined,
       color: r && r.workflow_failed_24h > 0 ? ('red' as const) : ('green' as const),
       href: `${base}/automation/workflows`,
     },
     caps.canManageEvents && {
       icon: 'fa-history',
-      label: '定时任务执行（24h）',
+      label: t('resScheduledExec'),
       value: r ? String(r.scheduled_runs_24h) : '—',
-      hint: r ? `失败 ${r.scheduled_failed_24h}` : undefined,
+      hint: r ? t('failedN', { n: r.scheduled_failed_24h }) : undefined,
       color: r && r.scheduled_failed_24h > 0 ? ('red' as const) : ('green' as const),
       href: `${base}/events/scheduled-tasks`,
     },
     caps.canManageSecurity && {
       icon: 'fa-stream',
-      label: '执行日志',
-      value: '查看',
-      hint: '工作流 / 任务 / API',
+      label: t('resExecLogs'),
+      value: t('view'),
+      hint: t('execLogsHint'),
       color: 'gray' as const,
       href: `${base}/logs`,
     },
@@ -380,8 +383,8 @@ function ResourceStats({
   return (
     <section>
       <div className="flex items-baseline justify-between mb-3">
-        <h2 className="text-sm font-medium text-gray-900">资源与自动化</h2>
-        <span className="text-xs text-gray-400">点击卡片进入对应功能</span>
+        <h2 className="text-sm font-medium text-gray-900">{t('resTitle')}</h2>
+        <span className="text-xs text-gray-400">{t('resSubtitle')}</span>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
         {cards.map((card) => (
@@ -403,82 +406,83 @@ function ShortcutGrid({
     canManageSecurity: boolean
   }
 }) {
+  const t = useTranslations('wsHome')
   const items = [
     caps.canManageEvents && {
       href: `${base}/automation/workflows`,
       icon: 'fa-diagram-project',
-      title: '工作流',
-      desc: '编排自动化流程，发布为 API',
+      title: t('scWorkflowT'),
+      desc: t('scWorkflowD'),
       tone: 'sky',
     },
     caps.canManageEvents && {
       href: `${base}/events/scheduled-tasks`,
       icon: 'fa-clock',
-      title: '定时任务',
-      desc: 'Cron 调度 RPC / HTTP / Shell',
+      title: t('scScheduledT'),
+      desc: t('scScheduledD'),
       tone: 'orange',
     },
     {
       href: `${base}/database/tables`,
       icon: 'fa-table',
-      title: '数据表',
-      desc: '浏览与管理本项目表',
+      title: t('scTablesT'),
+      desc: t('scTablesD'),
       tone: 'blue',
     },
     {
       href: `${base}/database/table-designer?mode=create`,
       icon: 'fa-pen-ruler',
-      title: '建表',
-      desc: '可视化设计表结构',
+      title: t('scDesignerT'),
+      desc: t('scDesignerD'),
       tone: 'blue',
     },
     {
       href: `${base}/database/query`,
       icon: 'fa-terminal',
-      title: 'SQL 编辑器',
-      desc: '直接查询与调试 SQL',
+      title: t('scSqlT'),
+      desc: t('scSqlD'),
       tone: 'gray',
     },
     {
       href: `${base}/rpc`,
       icon: 'fa-code',
       title: 'RPC',
-      desc: '调用数据库函数',
+      desc: t('scRpcD'),
       tone: 'purple',
     },
     {
       href: `${base}/api`,
       icon: 'fa-cloud',
       title: 'REST API',
-      desc: '接口文档与试调',
+      desc: t('scApiD'),
       tone: 'indigo',
     },
     {
       href: `${base}/database/functions`,
       icon: 'fa-code',
-      title: '函数',
-      desc: '管理数据库函数与触发器',
+      title: t('scFuncT'),
+      desc: t('scFuncD'),
       tone: 'emerald',
     },
     caps.canManageEvents && {
       href: `${base}/events/webhooks`,
       icon: 'fa-broadcast-tower',
       title: 'Webhook',
-      desc: '数据变更推送到外部系统',
+      desc: t('scWebhookD'),
       tone: 'rose',
     },
     caps.canWriteDatabase && {
       href: `${base}/database/import`,
       icon: 'fa-file-import',
-      title: '数据导入',
-      desc: 'CSV / SQL 导入到表',
+      title: t('scImportT'),
+      desc: t('scImportD'),
       tone: 'gray',
     },
     caps.canManageSecurity && {
       href: `${base}/logs`,
       icon: 'fa-stream',
-      title: '执行日志',
-      desc: '按 trace 定位失败',
+      title: t('scLogsT'),
+      desc: t('scLogsD'),
       tone: 'gray',
     },
   ].filter(Boolean) as {
@@ -505,7 +509,7 @@ function ShortcutGrid({
 
   return (
     <section className="bg-white border border-gray-200 rounded-lg p-4">
-      <h2 className="text-sm font-medium text-gray-900 mb-3">快捷入口</h2>
+      <h2 className="text-sm font-medium text-gray-900 mb-3">{t('shortcutTitle')}</h2>
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
         {items.map((item) => (
           <Link
@@ -560,6 +564,7 @@ function Sparkline({ data, height = 56 }: { data: number[]; height?: number }) {
 }
 
 function ActivityItem({ row }: { row: DashboardActivityRow }) {
+  const t = useTranslations('wsHome')
   const status = row.response_status
   const statusColor = status == null
     ? 'text-gray-400'
@@ -586,7 +591,10 @@ function ActivityItem({ row }: { row: DashboardActivityRow }) {
           {row.duration_ms != null ? `${row.duration_ms} ms` : '—'}
         </span>
         <span className="text-gray-400 tabular-nums" title={row.created_at}>
-          {formatAge(row.created_at)}
+          {(() => {
+            const a = formatAge(row.created_at)
+            return a.key === 'raw' ? a.raw : t(a.key, a.n != null ? { n: a.n } : undefined)
+          })()}
         </span>
       </div>
     </li>
@@ -610,12 +618,12 @@ function formatCalls(n: number): string {
   return String(n)
 }
 
-function formatAge(iso: string): string {
-  const t = new Date(iso).getTime()
-  if (!Number.isFinite(t)) return iso
-  const diff = Date.now() - t
-  if (diff < 60_000) return '刚刚'
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
-  return `${Math.floor(diff / 86_400_000)} 天前`
+function formatAge(iso: string): { key: string; n?: number; raw?: string } {
+  const ts = new Date(iso).getTime()
+  if (!Number.isFinite(ts)) return { key: 'raw', raw: iso }
+  const diff = Date.now() - ts
+  if (diff < 60_000) return { key: 'ago_now' }
+  if (diff < 3_600_000) return { key: 'ago_min', n: Math.floor(diff / 60_000) }
+  if (diff < 86_400_000) return { key: 'ago_hour', n: Math.floor(diff / 3_600_000) }
+  return { key: 'ago_day', n: Math.floor(diff / 86_400_000) }
 }

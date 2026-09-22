@@ -1,6 +1,7 @@
 'use client'
 
 import { cn } from '@/lib/utils'
+import { useTranslations } from 'next-intl'
 
 export interface WorkflowConfirmDialogProps {
   open: boolean
@@ -18,13 +19,14 @@ export default function WorkflowConfirmDialog({
   open,
   title,
   message,
-  confirmLabel = '确认',
-  cancelLabel = '取消',
+  confirmLabel,
+  cancelLabel,
   variant = 'default',
   loading = false,
   onConfirm,
   onCancel,
 }: WorkflowConfirmDialogProps) {
+  const t = useTranslations('wfList')
   if (!open) return null
 
   return (
@@ -59,7 +61,7 @@ export default function WorkflowConfirmDialog({
             disabled={loading}
             className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 disabled:opacity-50"
           >
-            {cancelLabel}
+            {cancelLabel ?? t('cancel')}
           </button>
           <button
             type="button"
@@ -72,7 +74,7 @@ export default function WorkflowConfirmDialog({
                 : 'bg-indigo-600 text-white hover:bg-indigo-700',
             )}
           >
-            {loading ? '处理中…' : confirmLabel}
+            {loading ? t('processing') : (confirmLabel ?? t('confirm'))}
           </button>
         </div>
       </div>

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { organizationAPI } from '@/lib/api'
 
 type SecurityProject = {
@@ -26,6 +27,7 @@ type OrgSecurityOverviewViewProps = {
 export default function OrgSecurityOverviewView({
   organizationId,
 }: OrgSecurityOverviewViewProps) {
+  const t = useTranslations('orgSecOverview')
   const [overview, setOverview] = useState<SecurityOverview | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -41,14 +43,14 @@ export default function OrgSecurityOverviewView({
       })
       .catch((err) => {
         if (cancelled) return
-        setError(err?.response?.data?.error || err?.message || '加载失败')
+        setError(err?.response?.data?.error || err?.message || t('loadFailed'))
         setOverview(null)
       })
 
     return () => {
       cancelled = true
     }
-  }, [organizationId])
+  }, [organizationId, t])
 
   if (error) {
     return <p className="text-sm text-red-600">{error}</p>
@@ -56,7 +58,7 @@ export default function OrgSecurityOverviewView({
   if (!overview) {
     return (
       <p className="text-sm text-gray-400">
-        <i className="fas fa-spinner fa-spin mr-2"></i>加载安全总览…
+        <i className="fas fa-spinner fa-spin mr-2"></i>{t('loadingOverview')}
       </p>
     )
   }
@@ -64,23 +66,21 @@ export default function OrgSecurityOverviewView({
   return (
     <div className="space-y-4">
       <header>
-        <h1 className="text-xl font-semibold text-gray-900">安全总览</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          跨项目查看安全与集成配置；具体配置仍在各项目工作区管理。
-        </p>
+        <h1 className="text-xl font-semibold text-gray-900">{t('title')}</h1>
+        <p className="text-sm text-gray-500 mt-1">{t('subtitle')}</p>
       </header>
 
       <div className="bg-white border border-gray-200 rounded-lg overflow-x-auto">
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50 text-gray-500 border-b border-gray-200">
             <tr>
-              <th className="px-4 py-3 text-left font-medium">项目</th>
+              <th className="px-4 py-3 text-left font-medium">{t('colProject')}</th>
               <th className="px-4 py-3 text-right font-medium whitespace-nowrap">API Key</th>
               <th className="px-4 py-3 text-right font-medium">Webhook</th>
               <th className="px-4 py-3 text-right font-medium">SSO</th>
               <th className="px-4 py-3 text-right font-medium">IdP</th>
-              <th className="px-4 py-3 text-right font-medium whitespace-nowrap">DB 连接</th>
-              <th className="px-4 py-3 text-right font-medium">操作</th>
+              <th className="px-4 py-3 text-right font-medium whitespace-nowrap">{t('colDbConnections')}</th>
+              <th className="px-4 py-3 text-right font-medium">{t('colActions')}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -100,7 +100,7 @@ export default function OrgSecurityOverviewView({
                     href={`/workspace/${project.id}/security/api-keys`}
                     className="text-xs text-blue-600 hover:underline"
                   >
-                    打开安全
+                    {t('openSecurity')}
                   </a>
                   <a
                     href={`/workspace/${project.id}/security/idp`}
@@ -114,7 +114,7 @@ export default function OrgSecurityOverviewView({
             {overview.projects.length === 0 && (
               <tr>
                 <td className="px-4 py-8 text-center text-gray-400" colSpan={7}>
-                  暂无项目
+                  {t('noProjects')}
                 </td>
               </tr>
             )}

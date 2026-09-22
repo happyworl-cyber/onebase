@@ -130,13 +130,21 @@ pub fn verify_token(token: &str) -> Result<Claims, AppError> {
         &Validation::default(),
     )
     .map_err(|e| match e.kind() {
-        jsonwebtoken::errors::ErrorKind::ExpiredSignature => {
-            AppError::Unauthorized("Token 已过期".to_string())
-        }
-        jsonwebtoken::errors::ErrorKind::InvalidToken => {
-            AppError::Unauthorized("无效的 token".to_string())
-        }
-        _ => AppError::Unauthorized(format!("Token 验证失败: {}", e)),
+        jsonwebtoken::errors::ErrorKind::ExpiredSignature => AppError::unauthorized_coded(
+            "auth_token_expired",
+            "Token 已过期".to_string(),
+            serde_json::json!({}),
+        ),
+        jsonwebtoken::errors::ErrorKind::InvalidToken => AppError::unauthorized_coded(
+            "auth_invalid_token",
+            "无效的 token".to_string(),
+            serde_json::json!({}),
+        ),
+        _ => AppError::unauthorized_coded(
+            "auth_token_verify_failed",
+            format!("Token 验证失败: {}", e),
+            serde_json::json!({ "error": e.to_string() }),
+        ),
     })?;
 
     Ok(token_data.claims)
@@ -156,14 +164,20 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, AppError> {
 /// 简单的密码校验（与注册时一致：≥ 8 位、含大小写和数字）。
 pub fn validate_password(p: &str) -> Result<(), AppError> {
     if p.len() < 8 {
-        return Err(AppError::InvalidQuery("密码至少需要 8 位".to_string()));
+        return Err(AppError::validation(
+            "auth_password_min_length",
+            "密码至少需要 8 位".to_string(),
+            serde_json::json!({}),
+        ));
     }
     let has_upper = p.chars().any(|c| c.is_uppercase());
     let has_lower = p.chars().any(|c| c.is_lowercase());
     let has_digit = p.chars().any(|c| c.is_ascii_digit());
     if !(has_upper && has_lower && has_digit) {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "auth_password_complexity",
             "密码必须包含大写字母、小写字母和数字".to_string(),
+            serde_json::json!({}),
         ));
     }
     Ok(())
@@ -173,8 +187,10 @@ pub fn validate_password(p: &str) -> Result<(), AppError> {
 pub fn validate_username(name: &str) -> Result<(), AppError> {
     let trimmed = name.trim();
     if trimmed.is_empty() || trimmed.len() > 100 {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "auth_username_length",
             "用户名长度需在 1-100 字符之间".to_string(),
+            serde_json::json!({}),
         ));
     }
     Ok(())
@@ -184,7 +200,11 @@ pub fn validate_username(name: &str) -> Result<(), AppError> {
 pub fn validate_email(email: &str) -> Result<(), AppError> {
     let email = email.trim();
     if email.is_empty() || !email.contains('@') || !email.contains('.') || email.len() > 255 {
-        return Err(AppError::InvalidQuery("无效的邮箱地址".to_string()));
+        return Err(AppError::validation(
+            "auth_invalid_email",
+            "无效的邮箱地址".to_string(),
+            serde_json::json!({}),
+        ));
     }
     Ok(())
 }
@@ -274,8 +294,8 @@ mod tests {
     fn test_validate_password_rejects_too_short() {
         let err = validate_password("Ab1").unwrap_err();
         match err {
-            AppError::InvalidQuery(msg) => assert_eq!(msg, "密码至少需要 8 位"),
-            other => panic!("expected InvalidQuery, got {other:?}"),
+            AppError::Coded { message, .. } => assert_eq!(message, "密码至少需要 8 位"),
+            other => panic!("expected Coded, got {other:?}"),
         }
     }
 

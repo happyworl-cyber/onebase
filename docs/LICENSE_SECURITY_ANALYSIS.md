@@ -18,7 +18,7 @@
 **攻击方式**：
 ```bash
 # 读取 License 文件
-cat /etc/onebase/license.lic
+cat /etc/planeos/license.lic
 
 # 尝试解码 payload（base64）
 echo "eyJlZGl0aW9uIjoidHJpYWwiLCJtb2R1bGVzIjpbXX0=" | base64 -d
@@ -74,10 +74,10 @@ cargo run --bin license_tool issue \
   --edition "enterprise" \
   --modules "ai,ha,multitenant,audit,pipeline" \
   --days 36500 \
-  --out /etc/onebase/license.lic
+  --out /etc/planeos/license.lic
 
 # 3. 尝试替换验签公钥
-export ONEBASE_LICENSE_PUBLIC_KEY="$(cat ./hacked/public.pem)"
+export PLANEOS_LICENSE_PUBLIC_KEY="$(cat ./hacked/public.pem)"
 ```
 
 **防御机制 1**：✅ **编译期公钥硬编码**
@@ -93,14 +93,14 @@ fn read_public_key() -> Option<String> {
         return Some(EMBEDDED_PUBLIC_KEY.to_string());
     }
     // 仅当未内嵌时才回落到环境变量（开发模式）
-    std::env::var("ONEBASE_LICENSE_PUBLIC_KEY").ok()
+    std::env::var("PLANEOS_LICENSE_PUBLIC_KEY").ok()
 }
 ```
 
 **原理**：
 - 公钥在**编译时**被硬编码到二进制文件中（`include_str!`）
 - 运行时**无法修改**二进制中的公钥
-- 环境变量 `ONEBASE_LICENSE_PUBLIC_KEY` 只在**开发模式**有效（生产二进制忽略）
+- 环境变量 `PLANEOS_LICENSE_PUBLIC_KEY` 只在**开发模式**有效（生产二进制忽略）
 
 **破解难度**：⭐⭐⭐⭐ **高（需要二进制修改）**
 
@@ -266,10 +266,10 @@ FOR EACH ROW EXECUTE FUNCTION check_tenant_account_limit();
 **攻击方式**：
 ```bash
 # 尝试关闭 License 强制执行
-export ONEBASE_LICENSE_ENFORCE=off
+export PLANEOS_LICENSE_ENFORCE=off
 
 # 或者提供一个假的 License 文件
-export ONEBASE_LICENSE_PATH=/tmp/fake_license.lic
+export PLANEOS_LICENSE_PATH=/tmp/fake_license.lic
 ```
 
 **防御机制**：✅ **生产模式强制开启**
@@ -278,7 +278,7 @@ export ONEBASE_LICENSE_PATH=/tmp/fake_license.lic
 // src/license.rs:144
 impl EnforceMode {
     pub fn from_env() -> Self {
-        match std::env::var("ONEBASE_LICENSE_ENFORCE")
+        match std::env::var("PLANEOS_LICENSE_ENFORCE")
             .unwrap_or_default()
             .to_ascii_lowercase()
             .as_str()
@@ -307,7 +307,7 @@ pub fn from_env() -> Self {
     #[cfg(not(debug_assertions))]
     let default_mode = EnforceMode::Enforce;  // 生产构建强制开启
 
-    match std::env::var("ONEBASE_LICENSE_ENFORCE")
+    match std::env::var("PLANEOS_LICENSE_ENFORCE")
         .unwrap_or_default()
         .as_str()
     {
@@ -318,7 +318,7 @@ pub fn from_env() -> Self {
 }
 ```
 
-**结论**：✅ **需要确保生产环境设置 `ONEBASE_LICENSE_ENFORCE=enforce`**
+**结论**：✅ **需要确保生产环境设置 `PLANEOS_LICENSE_ENFORCE=enforce`**
 
 ---
 
@@ -341,14 +341,14 @@ pub fn from_env() -> Self {
 1. **强制 Enforce 模式（生产环境）**
    ```bash
    # 部署配置
-   export ONEBASE_LICENSE_ENFORCE=enforce
+   export PLANEOS_LICENSE_ENFORCE=enforce
    ```
 
 2. **限制数据库访问权限**
    ```sql
    -- 应用账号只给 API 需要的权限，不给超管权限
-   REVOKE ALL ON management.user_tenants FROM onebase_app;
-   GRANT SELECT, INSERT, UPDATE ON management.user_tenants TO onebase_app;
+   REVOKE ALL ON management.user_tenants FROM planeos_app;
+   GRANT SELECT, INSERT, UPDATE ON management.user_tenants TO planeos_app;
    ```
 
 3. **监控异常操作**
@@ -371,10 +371,10 @@ pub fn from_env() -> Self {
 5. **二进制代码签名**
    ```bash
    # macOS
-   codesign --sign "Developer ID" ./target/release/onebase
+   codesign --sign "Developer ID" ./target/release/planeos
 
    # Windows
-   signtool sign /f certificate.pfx /p password onebase.exe
+   signtool sign /f certificate.pfx /p password planeos.exe
    ```
 
 6. **启动时完整性检查**
@@ -394,7 +394,7 @@ pub fn from_env() -> Self {
    // 定期向 License 服务器报告使用情况
    async fn verify_with_server(license_id: &str) {
        let response = reqwest::get(
-           format!("https://license.onebase.com/verify/{}", license_id)
+           format!("https://license.planeos.com/verify/{}", license_id)
        ).await?;
 
        if !response.is_valid() {

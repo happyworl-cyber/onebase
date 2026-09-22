@@ -29,7 +29,7 @@
  */
 
 export const TOKEN_KEY = 'token'
-export const TOKEN_COOKIE = 'onebase_token'
+export const TOKEN_COOKIE = 'planeos_token'
 
 const COOKIE_MAX_AGE_SECS = 24 * 60 * 60
 

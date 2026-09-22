@@ -18,10 +18,11 @@ import {
 } from '@/lib/api'
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import { useNotification } from '@/hooks/useNotification'
+import { useTranslations } from 'next-intl'
 
 type TabKey = 'vault' | 'apps' | 'logs' | 'audit'
 
-type ProviderKey = 'google' | 'apple' | 'facebook' | 'github' | 'oidc' | 'mind'
+type ProviderKey = 'google' | 'apple' | 'facebook' | 'github' | 'oidc'
 
 interface ProviderMeta {
   key: ProviderKey
@@ -29,16 +30,16 @@ interface ProviderMeta {
   subtitle: string
   iconClass: string
   iconBgClass: string
-  callbackHint: string
+  labelKey: string
+  callbackHintKey: string
 }
 
 const PROVIDERS: ProviderMeta[] = [
-  { key: 'google', label: 'Google', subtitle: 'OAuth 2.0', iconClass: 'fab fa-google', iconBgClass: 'bg-red-50 text-red-500', callbackHint: '在 Google Cloud Console 填写以下回调地址：' },
-  { key: 'apple', label: 'Apple', subtitle: 'Sign in with Apple', iconClass: 'fab fa-apple', iconBgClass: 'bg-gray-900 text-white', callbackHint: '在 Apple Developer 的 Sign in with Apple 配置中填写以下回调地址：' },
-  { key: 'facebook', label: 'Facebook', subtitle: 'Meta Login', iconClass: 'fab fa-facebook-f', iconBgClass: 'bg-blue-600 text-white', callbackHint: '在 Meta for Developers 中填写以下 OAuth 回调地址：' },
-  { key: 'github', label: 'GitHub', subtitle: 'OAuth 2.0', iconClass: 'fab fa-github', iconBgClass: 'bg-gray-100 text-gray-800', callbackHint: '在 GitHub OAuth App 的 Authorization callback URL 中填写：' },
-  { key: 'oidc', label: '自定义 OIDC', subtitle: 'OpenID Connect', iconClass: 'fas fa-id-badge', iconBgClass: 'bg-indigo-100 text-indigo-600', callbackHint: '若上游 OIDC 需要固定回调地址，请登记以下地址：' },
-  { key: 'mind', label: 'Mind', subtitle: 'Mind SSO', iconClass: 'fas fa-brain', iconBgClass: 'bg-emerald-100 text-emerald-600', callbackHint: '在 Mind SSO 控制台中填写以下回调地址：' },
+  { key: 'google', label: 'Google', subtitle: 'OAuth 2.0', iconClass: 'fab fa-google', iconBgClass: 'bg-red-50 text-red-500', labelKey: 'providerGoogle', callbackHintKey: 'cbGoogle' },
+  { key: 'apple', label: 'Apple', subtitle: 'Sign in with Apple', iconClass: 'fab fa-apple', iconBgClass: 'bg-gray-900 text-white', labelKey: 'providerApple', callbackHintKey: 'cbApple' },
+  { key: 'facebook', label: 'Facebook', subtitle: 'Meta Login', iconClass: 'fab fa-facebook-f', iconBgClass: 'bg-blue-600 text-white', labelKey: 'providerFacebook', callbackHintKey: 'cbFacebook' },
+  { key: 'github', label: 'GitHub', subtitle: 'OAuth 2.0', iconClass: 'fab fa-github', iconBgClass: 'bg-gray-100 text-gray-800', labelKey: 'providerGithub', callbackHintKey: 'cbGithub' },
+  { key: 'oidc', label: 'Custom OIDC', subtitle: 'OpenID Connect', iconClass: 'fas fa-id-badge', iconBgClass: 'bg-indigo-100 text-indigo-600', labelKey: 'providerOidc', callbackHintKey: 'cbOidc' },
 ]
 
 interface ProviderFormState {
@@ -135,11 +136,11 @@ function getProviderMeta(providerType: string): ProviderMeta | undefined {
 /** 预设 scope；openid 为 OIDC 必选，不可移除。 */
 const PRESET_SCOPES = ['openid', 'email', 'profile'] as const
 
-const TABS: { key: TabKey; label: string; icon: string }[] = [
-  { key: 'vault', label: 'Provider 凭证库', icon: 'fas fa-vault' },
-  { key: 'apps', label: 'OAuth2 应用', icon: 'fas fa-table-cells-large' },
-  { key: 'logs', label: '活跃 Session', icon: 'fas fa-user-clock' },
-  { key: 'audit', label: '登录日志', icon: 'fas fa-scroll' },
+const TABS: { key: TabKey; labelKey: string; icon: string }[] = [
+  { key: 'vault', labelKey: 'tabVault', icon: 'fas fa-vault' },
+  { key: 'apps', labelKey: 'tabApps', icon: 'fas fa-table-cells-large' },
+  { key: 'logs', labelKey: 'tabLogs', icon: 'fas fa-user-clock' },
+  { key: 'audit', labelKey: 'tabAudit', icon: 'fas fa-scroll' },
 ]
 
 /** 设计稿同款的滑动开关（替代裸 checkbox）。 */
@@ -181,6 +182,7 @@ export default function ProjectIdpPage() {
   const projectId = parseInt(params.projectId, 10)
   const caps = useCurrentProjectCapabilities()
   const notify = useNotification()
+  const t = useTranslations('wsIdp')
 
   const [tab, setTab] = useState<TabKey>('vault')
   const [loading, setLoading] = useState(true)
@@ -335,7 +337,7 @@ export default function ProjectIdpPage() {
 
   const handleSaveProvider = async () => {
     if (!providerForm.client_id.trim()) {
-      notify.warning('请填写 Client ID')
+      notify.warning(t('errClientId'))
       return
     }
 
@@ -356,11 +358,11 @@ export default function ProjectIdpPage() {
     const clientSecretValue = isApple
       ? providerForm.applePrivateKeyPem.trim()
       : providerForm.client_secret.trim()
-    const secretLabel = isApple ? 'Apple 私钥 (.p8)' : 'Client Secret'
+    const secretLabel = isApple ? t('appleKeyLabel') : 'Client Secret'
 
     const existing = providerMap.get(providerForm.provider_type)
     if (isApple && !existing && (!providerForm.appleTeamId.trim() || !providerForm.appleKeyId.trim())) {
-      notify.warning('Apple 需要填写 Team ID 与 Key ID')
+      notify.warning(t('errAppleIds'))
       return
     }
     setProviderSaving(true)
@@ -374,10 +376,10 @@ export default function ProjectIdpPage() {
           provider_config: Object.keys(providerConfig).length ? providerConfig : undefined,
         }
         await idpAPI.updateProvider(projectId, providerForm.provider_type, payload)
-        notify.success(`${providerForm.display_name || providerForm.provider_type} 凭证已更新`)
+        notify.success(t('providerUpdated', { name: providerForm.display_name || providerForm.provider_type }))
       } else {
         if (!clientSecretValue) {
-          notify.warning(`首次配置必须填写 ${secretLabel}`)
+          notify.warning(t('firstConfigSecret', { label: secretLabel }))
           return
         }
         const payload: CreateProjectIdpProviderBody = {
@@ -389,7 +391,7 @@ export default function ProjectIdpPage() {
           provider_config: Object.keys(providerConfig).length ? providerConfig : undefined,
         }
         await idpAPI.createProvider(projectId, payload)
-        notify.success(`${providerForm.display_name || providerForm.provider_type} 凭证已创建`)
+        notify.success(t('providerCreated', { name: providerForm.display_name || providerForm.provider_type }))
       }
       closeProviderDrawer()
       load()
@@ -404,17 +406,17 @@ export default function ProjectIdpPage() {
     const redirectUris = parseMultilineList(appForm.redirectUrisText)
     const allowedScopes = parseMultilineList(appForm.allowedScopesText)
     if (!appForm.displayName.trim()) {
-      notify.warning('请填写应用名称')
+      notify.warning(t('errAppName'))
       return null
     }
     if (redirectUris.length === 0) {
-      notify.warning('请至少填写一个回调地址')
+      notify.warning(t('errRedirect'))
       return null
     }
     const accessTokenTtl = Number(appForm.accessTokenTtl)
     const refreshTokenTtl = Number(appForm.refreshTokenTtl)
     if (!Number.isFinite(accessTokenTtl) || !Number.isFinite(refreshTokenTtl)) {
-      notify.warning('Token TTL 必须是数字')
+      notify.warning(t('errTtl'))
       return null
     }
     return {
@@ -444,7 +446,7 @@ export default function ProjectIdpPage() {
       if (appForm.clientId) {
         await idpAPI.updateClient(projectId, appForm.clientId, payload as UpdateOauth2ClientBody)
         await idpAPI.replaceClientProviders(projectId, appForm.clientId, selectedClientProviders())
-        notify.success('OAuth2 应用已更新')
+        notify.success(t('appUpdated'))
       } else {
         const res = await idpAPI.createClient(projectId, payload as CreateOauth2ClientBody)
         const clientId = res.data.client_id
@@ -452,7 +454,7 @@ export default function ProjectIdpPage() {
         setAppForm((prev) => ({ ...prev, clientId }))
         setRevealedSecret(res.data.client_secret)
         await idpAPI.replaceClientProviders(projectId, clientId, selectedClientProviders())
-        notify.success('OAuth2 应用已创建')
+        notify.success(t('appCreated'))
       }
       await load()
       if (appForm.clientId) closeAppDrawer()
@@ -468,7 +470,7 @@ export default function ProjectIdpPage() {
     try {
       const res = await idpAPI.rotateClientSecret(projectId, appForm.clientId)
       setRevealedSecret(res.data.client_secret)
-      notify.success('Client Secret 已轮换，请立即保存')
+      notify.success(t('secretRotated'))
     } catch (err: any) {
       notify.error(err)
     }
@@ -498,7 +500,7 @@ export default function ProjectIdpPage() {
     const s = scopeInput.trim()
     if (!s) return
     if (!/^[A-Za-z0-9_.:-]+$/.test(s)) {
-      notify.warning('scope 仅支持字母、数字及 _ . : -')
+      notify.warning(t('errScope'))
       return
     }
     setScopes([...appScopes, s])
@@ -508,19 +510,19 @@ export default function ProjectIdpPage() {
   const copyText = async (value: string) => {
     try {
       await navigator.clipboard.writeText(value)
-      notify.success('已复制到剪贴板')
+      notify.success(t('copied'))
     } catch {
-      notify.warning('复制失败，请手动复制')
+      notify.warning(t('copyFail'))
     }
   }
 
   const handleRevokeSession = async (familyId: string) => {
-    const ok = window.confirm('确定踢出这个活跃 Session 吗？被踢出的第三方登录会话将无法继续刷新。')
+    const ok = window.confirm(t('confirmRevokeSession'))
     if (!ok) return
     setRevokingFamilyId(familyId)
     try {
       await idpAPI.revokeSession(projectId, familyId)
-      notify.success('Session 已踢出')
+      notify.success(t('sessionRevoked'))
       await load()
     } catch (err: any) {
       notify.error(err)
@@ -530,7 +532,7 @@ export default function ProjectIdpPage() {
   }
 
   if (!caps.canManageSecurity) {
-    return <ForbiddenPlaceholder reason="身份提供方管理需要项目 admin 或 owner 角色（或平台超管）" />
+    return <ForbiddenPlaceholder reason={t('forbidden')} />
   }
 
   const callbackBase = backendBaseUrl()
@@ -553,13 +555,13 @@ export default function ProjectIdpPage() {
     <div className="w-full space-y-6">
       <div>
         <div className="flex items-center gap-2 text-xs text-gray-400 mb-2">
-          <span>安全</span>
+          <span>{t('breadcrumbSecurity')}</span>
           <i className="fas fa-chevron-right text-[10px]"></i>
-          <span className="text-gray-600">身份提供方 (IdP)</span>
+          <span className="text-gray-600">{t('idpTitle')}</span>
         </div>
-        <h1 className="text-2xl font-bold text-gray-900">身份提供方 (IdP)</h1>
+        <h1 className="text-2xl font-bold text-gray-900">{t('idpTitle')}</h1>
         <p className="text-sm text-gray-500 mt-1">
-          凭证在项目层统一配置；各 OAuth2 应用独立控制允许哪些 Provider。
+          {t('idpSubtitle')}
         </p>
       </div>
 
@@ -578,7 +580,7 @@ export default function ProjectIdpPage() {
                 }`}
               >
                 <i className={`${item.icon} text-[11px]`}></i>
-                {item.label}
+                {t(item.labelKey)}
               </button>
             ))}
             {/* 滑动下划线 */}
@@ -592,10 +594,9 @@ export default function ProjectIdpPage() {
         {tab === 'vault' && (
           <div className="p-5 space-y-5">
             <div className="flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50/60 p-4">
-              <span className="inline-flex items-center rounded bg-blue-100 text-blue-700 px-2 py-0.5 text-xs font-medium flex-shrink-0">项目层</span>
+              <span className="inline-flex items-center rounded bg-blue-100 text-blue-700 px-2 py-0.5 text-xs font-medium flex-shrink-0">{t('vaultBadge')}</span>
               <p className="text-xs text-gray-600 leading-6">
-                在这里集中填写各 Provider 的 client_id / client_secret 凭证，本项目下所有 OAuth2 应用共用同一套密钥，无需重复填写。
-                这一层只管「凭证是否存在 / 是否全局启用」，不决定具体哪个应用能用——应用级开关请到「OAuth2 应用」Tab 配置。
+                {t('vaultDesc')}
               </p>
             </div>
 
@@ -627,7 +628,7 @@ export default function ProjectIdpPage() {
                             <i className={meta.iconClass}></i>
                           </div>
                           <div>
-                            <div className="font-semibold text-gray-900">{meta.label}</div>
+                            <div className="font-semibold text-gray-900">{t(meta.labelKey)}</div>
                             <div className="text-xs text-gray-500">{meta.subtitle}</div>
                           </div>
                         </div>
@@ -641,7 +642,7 @@ export default function ProjectIdpPage() {
                           }`}
                         >
                           <i className="fas fa-circle text-[6px]"></i>
-                          {configured ? (provider.is_enabled ? '凭证已配置' : '已禁用') : '未配置'}
+                          {configured ? (provider.is_enabled ? t('statusConfigured') : t('statusDisabledBadge')) : t('statusUnconfigured')}
                         </span>
                       </div>
 
@@ -655,14 +656,14 @@ export default function ProjectIdpPage() {
                         ) : (
                           <div className="h-full flex flex-col items-center justify-center text-center text-gray-400">
                             <i className="fas fa-plus mb-2"></i>
-                            <span className="text-sm">填写凭证</span>
+                            <span className="text-sm">{t('fillCred')}</span>
                           </div>
                         )}
                       </div>
 
                       <div className="mt-3 flex items-center justify-between text-xs text-gray-500">
-                        <span>{provider?.enabled_client_count ?? 0} 个应用已启用</span>
-                        <span className="text-blue-600 font-medium">{configured ? '编辑凭证' : '开始配置'}</span>
+                        <span>{t('enabledAppCount', { n: provider?.enabled_client_count ?? 0 })}</span>
+                        <span className="text-blue-600 font-medium">{configured ? t('editCred') : t('startConfig')}</span>
                       </div>
                     </button>
                   )
@@ -675,17 +676,16 @@ export default function ProjectIdpPage() {
         {tab === 'apps' && (
           <div className="p-5 space-y-4">
             <div className="flex items-start gap-3 rounded-xl border border-emerald-100 bg-emerald-50/60 p-4">
-              <span className="inline-flex items-center rounded bg-emerald-100 text-emerald-700 px-2 py-0.5 text-xs font-medium flex-shrink-0">应用层</span>
+              <span className="inline-flex items-center rounded bg-emerald-100 text-emerald-700 px-2 py-0.5 text-xs font-medium flex-shrink-0">{t('appsBadge')}</span>
               <p className="text-xs text-gray-600 leading-6">
-                每个应用独立控制允许哪些 Provider，以及各自的回调地址与 PKCE 策略，互不影响。
-                凭证仍统一来自「Provider 凭证库」，这里只负责按应用开关；未配置或被全局停用的 Provider 无法在此开启。
+                {t('appsDesc')}
               </p>
             </div>
             <div className="flex items-center justify-between gap-4">
-              <p className="text-sm text-gray-500">下面是本项目已注册的 OAuth2 应用。</p>
+              <p className="text-sm text-gray-500">{t('appsListHint')}</p>
               <button onClick={openAppDrawerForCreate} className="btn-primary whitespace-nowrap">
                 <i className="fas fa-plus mr-2"></i>
-                注册应用
+                {t('registerApp')}
               </button>
             </div>
 
@@ -693,13 +693,13 @@ export default function ProjectIdpPage() {
               <table className="min-w-full text-sm">
                 <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
                   <tr>
-                    <th className="px-5 py-3 text-left font-medium">应用名称</th>
+                    <th className="px-5 py-3 text-left font-medium">{t('thAppName')}</th>
                     <th className="px-5 py-3 text-left font-medium">Client ID</th>
-                    <th className="px-5 py-3 text-left font-medium">已启用 Provider</th>
-                    <th className="px-5 py-3 text-left font-medium">回调地址</th>
+                    <th className="px-5 py-3 text-left font-medium">{t('thEnabledProvider')}</th>
+                    <th className="px-5 py-3 text-left font-medium">{t('thRedirect')}</th>
                     <th className="px-5 py-3 text-left font-medium">PKCE</th>
-                    <th className="px-5 py-3 text-left font-medium">状态</th>
-                    <th className="px-5 py-3 text-right font-medium">操作</th>
+                    <th className="px-5 py-3 text-left font-medium">{t('thStatus')}</th>
+                    <th className="px-5 py-3 text-right font-medium">{t('thActions')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 bg-white">
@@ -713,7 +713,7 @@ export default function ProjectIdpPage() {
                   {!loading && clients.length === 0 && (
                     <tr>
                       <td colSpan={7} className="px-5 py-16 text-center text-gray-400">
-                        暂无 OAuth2 应用，点击右上角「注册应用」创建第一个。
+                        {t('emptyApps')}
                       </td>
                     </tr>
                   )}
@@ -732,7 +732,7 @@ export default function ProjectIdpPage() {
                           <td className="px-5 py-4">
                             <div className="flex flex-wrap items-center gap-1.5">
                               {enabledProviders.length === 0 ? (
-                                <span className="text-xs text-gray-400">未启用</span>
+                                <span className="text-xs text-gray-400">{t('notEnabled')}</span>
                               ) : (
                                 enabledProviders.map((provider) => (
                                   <span
@@ -757,7 +757,7 @@ export default function ProjectIdpPage() {
                                 ? 'bg-blue-100 text-blue-700'
                                 : 'bg-gray-100 text-gray-600'
                             }`}>
-                              {client.require_pkce ? '强制' : '可选'}
+                              {client.require_pkce ? t('pkceForced') : t('pkceOptional')}
                             </span>
                           </td>
                           <td className="px-5 py-4">
@@ -766,7 +766,7 @@ export default function ProjectIdpPage() {
                                 ? 'bg-green-100 text-green-700'
                                 : 'bg-gray-100 text-gray-600'
                             }`}>
-                              {client.is_active ? '启用' : '停用'}
+                              {client.is_active ? t('appActive') : t('appInactive')}
                             </span>
                           </td>
                           <td className="px-5 py-4 text-right">
@@ -775,7 +775,7 @@ export default function ProjectIdpPage() {
                               className="text-sm text-blue-600 hover:text-blue-800"
                             >
                               <i className="fas fa-pen mr-1"></i>
-                              编辑
+                              {t('edit')}
                             </button>
                           </td>
                         </tr>
@@ -793,13 +793,11 @@ export default function ProjectIdpPage() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="mb-1.5 flex flex-wrap items-center gap-2">
-                    <p className="text-[13px] font-semibold text-sky-900">OIDC Discovery 端点</p>
-                    <span className="rounded-full bg-sky-500 px-2 py-0.5 text-[10px] font-medium text-white">自动化配置</span>
+                    <p className="text-[13px] font-semibold text-sky-900">{t('discoveryTitle')}</p>
+                    <span className="rounded-full bg-sky-500 px-2 py-0.5 text-[10px] font-medium text-white">{t('autoConfig')}</span>
                   </div>
                   <p className="mb-2.5 text-xs leading-6 text-sky-700">
-                    第三方应用只需将此 URL 填入 OAuth2/OIDC 库的{' '}
-                    <code className="rounded bg-white/60 px-1 py-0.5 font-mono">issuer</code> 配置项，
-                    即可自动发现所有端点（授权、Token 交换、JWKS、Token 撤销），无需手动填写任何地址。
+                    {t.rich('discoveryDesc', { code: (c) => <code className="rounded bg-white/60 px-1 py-0.5 font-mono">{c}</code> })}
                   </p>
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="flex min-w-0 max-w-2xl flex-1 items-center overflow-hidden rounded-md border border-sky-200 bg-white">
@@ -808,7 +806,7 @@ export default function ProjectIdpPage() {
                         onClick={() => copyText(discoveryUrl)}
                         className="flex items-center gap-1 whitespace-nowrap border-l border-sky-200 bg-sky-50 px-3 py-2 text-[11px] text-sky-700 hover:bg-sky-100"
                       >
-                        <i className="fas fa-copy text-[10px]"></i>复制
+                        <i className="fas fa-copy text-[10px]"></i>{t('copy')}
                       </button>
                     </div>
                     <button
@@ -816,7 +814,7 @@ export default function ProjectIdpPage() {
                       className="flex items-center gap-1.5 whitespace-nowrap rounded-md bg-sky-500 px-3.5 py-2 text-[11px] font-medium text-white hover:bg-sky-600"
                     >
                       <i className="fas fa-book-open text-[9px]"></i>
-                      查看接入指南
+                      {t('viewGuide')}
                       <i className={`fas fa-chevron-down text-[9px] transition-transform ${guideOpen ? 'rotate-180' : ''}`}></i>
                     </button>
                   </div>
@@ -829,9 +827,9 @@ export default function ProjectIdpPage() {
               <div className="overflow-hidden rounded-lg border border-gray-200">
                 <div className="flex border-b border-gray-200 bg-gray-50 px-4">
                   {[
-                    { key: 'steps', label: '接入步骤', icon: 'fas fa-list-check' },
-                    { key: 'discovery', label: 'Discovery 响应', icon: 'fas fa-file-code' },
-                    { key: 'sdk', label: 'SDK 接入示例', icon: 'fas fa-code' },
+                    { key: 'steps', label: t('guideSteps'), icon: 'fas fa-list-check' },
+                    { key: 'discovery', label: t('guideDiscovery'), icon: 'fas fa-file-code' },
+                    { key: 'sdk', label: t('guideSdk'), icon: 'fas fa-code' },
                   ].map((g) => (
                     <button
                       key={g.key}
@@ -855,15 +853,13 @@ export default function ProjectIdpPage() {
                       <div className="flex gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3.5">
                         <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-sky-100 text-[11px] font-bold text-sky-600">1</div>
                         <div>
-                          <p className="mb-1 text-[13px] font-semibold text-gray-900">注册 OAuth2 应用</p>
+                          <p className="mb-1 text-[13px] font-semibold text-gray-900">{t('step1Title')}</p>
                           <p className="text-xs leading-6 text-gray-500">
-                            点击「注册应用」，填写应用名称和回调地址，获得{' '}
-                            <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px]">client_id</code> 和{' '}
-                            <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px]">client_secret</code>。
+                            {t.rich('step1Desc', { c: (c) => <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px]">{c}</code> })}
                           </p>
                           {clients.length > 0 && (
                             <span className="mt-2 inline-flex items-center gap-1 rounded bg-green-50 px-2 py-0.5 text-[11px] text-green-700">
-                              <i className="fas fa-check text-[8px]"></i>已完成
+                              <i className="fas fa-check text-[8px]"></i>{t('done')}
                             </span>
                           )}
                         </div>
@@ -872,11 +868,9 @@ export default function ProjectIdpPage() {
                       <div className="flex gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3.5">
                         <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-sky-100 text-[11px] font-bold text-sky-600">2</div>
                         <div>
-                          <p className="mb-1 text-[13px] font-semibold text-gray-900">将 Discovery URL 填入 SDK</p>
+                          <p className="mb-1 text-[13px] font-semibold text-gray-900">{t('step2Title')}</p>
                           <p className="text-xs leading-6 text-gray-500">
-                            主流 OAuth2/OIDC 库只需一个{' '}
-                            <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px]">issuer</code> URL，
-                            库会自动请求 Discovery 文档并发现所有端点。
+                            {t.rich('step2Desc', { code: (c) => <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px]">{c}</code> })}
                           </p>
                         </div>
                       </div>
@@ -884,9 +878,9 @@ export default function ProjectIdpPage() {
                       <div className="flex gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3.5">
                         <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-sky-100 text-[11px] font-bold text-sky-600">3</div>
                         <div>
-                          <p className="mb-1 text-[13px] font-semibold text-gray-900">确认回调地址已添加</p>
+                          <p className="mb-1 text-[13px] font-semibold text-gray-900">{t('step3Title')}</p>
                           <p className="text-xs leading-6 text-gray-500">
-                            你的服务回调地址必须和应用配置里的完全一致（精确匹配，不支持通配符）。
+                            {t('step3Desc')}
                           </p>
                         </div>
                       </div>
@@ -896,10 +890,9 @@ export default function ProjectIdpPage() {
                           <i className="fas fa-flag-checkered text-[10px] text-white"></i>
                         </div>
                         <div>
-                          <p className="mb-1 text-[13px] font-semibold text-green-700">完成接入！</p>
+                          <p className="mb-1 text-[13px] font-semibold text-green-700">{t('doneTitle')}</p>
                           <p className="text-xs leading-6 text-green-800">
-                            用户现在可以通过已启用的 Provider（Google…）登录，你的应用收到标准 OIDC{' '}
-                            <code className="rounded bg-black/5 px-1 py-0.5 font-mono text-[11px]">id_token</code>。
+                            {t.rich('doneDesc', { code: (c) => <code className="rounded bg-black/5 px-1 py-0.5 font-mono text-[11px]">{c}</code> })}
                           </p>
                         </div>
                       </div>
@@ -909,17 +902,17 @@ export default function ProjectIdpPage() {
                     <div className="overflow-hidden rounded-lg border border-gray-100">
                       <div className="border-b border-gray-100 bg-gray-50 px-4 py-2">
                         <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">
-                          核心端点速查（由 Discovery 自动提供）
+                          {t('coreEndpoints')}
                         </span>
                       </div>
                       <table className="w-full border-collapse text-xs">
                         <tbody>
                           {[
-                            ['授权', `${callbackBase}/oauth2/authorize`],
-                            ['Token 交换', `${callbackBase}/oauth2/token`],
-                            ['用户信息', `${callbackBase}/oauth2/userinfo`],
-                            ['JWKS 公钥', `${callbackBase}/.well-known/jwks.json`],
-                            ['撤销 Token', `${callbackBase}/oauth2/revoke`],
+                            [t('epAuthorize'), `${callbackBase}/oauth2/authorize`],
+                            [t('epToken'), `${callbackBase}/oauth2/token`],
+                            [t('epUserinfo'), `${callbackBase}/oauth2/userinfo`],
+                            [t('epJwks'), `${callbackBase}/.well-known/jwks.json`],
+                            [t('epRevoke'), `${callbackBase}/oauth2/revoke`],
                           ].map(([label, url], i, arr) => (
                             <tr key={label} className={i < arr.length - 1 ? 'border-b border-gray-100' : ''}>
                               <td className="w-36 whitespace-nowrap px-4 py-2 text-gray-500">{label}</td>
@@ -938,7 +931,7 @@ export default function ProjectIdpPage() {
                 {guideTab === 'discovery' && (
                   <div className="p-5">
                     <p className="mb-3 text-xs text-gray-500">
-                      访问 Discovery URL 返回的标准 JSON（符合 OIDC Core 1.0 规范，实际以本环境返回为准）：
+                      {t('discoveryResp')}
                     </p>
                     <div className="relative overflow-x-auto rounded-lg bg-slate-800 p-4">
                       <span className="absolute right-3 top-2.5 font-mono text-[11px] text-slate-500">
@@ -969,10 +962,10 @@ export default function ProjectIdpPage() {
                     <div className="mt-3 flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3.5 py-2.5">
                       <i className="fas fa-lightbulb mt-0.5 flex-shrink-0 text-xs text-amber-600"></i>
                       <p className="m-0 text-xs leading-6 text-amber-800">
-                        <strong>sub 是每个用户的稳定唯一标识</strong>——<strong>同一上游账号</strong>每次登录都返回相同的{' '}
-                        <code className="rounded bg-black/5 px-1 py-0.5 font-mono text-[11px]">sub</code>，与是否提供 email 无关。
-                        若不同 Provider 返回<strong>相同且已验证的 email</strong>，会自动归并为同一 <code className="rounded bg-black/5 px-1 py-0.5 font-mono text-[11px]">sub</code>；
-                        否则各自独立（如微信等不提供 email 的渠道会是独立身份）。
+                        {t.rich('subTip', {
+                          b: (c) => <strong>{c}</strong>,
+                          code: (c) => <code className="rounded bg-black/5 px-1 py-0.5 font-mono text-[11px]">{c}</code>,
+                        })}
                       </p>
                     </div>
                   </div>
@@ -1005,8 +998,10 @@ export default function ProjectIdpPage() {
                     {sdkTab === 'nextjs' && (
                       <div>
                         <p className="mb-2.5 text-xs text-gray-500">
-                          使用 <strong>NextAuth.js v5</strong>，只需配置{' '}
-                          <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px]">issuer</code>：
+                          {t.rich('sdkNextjs', {
+                            b: (c) => <strong>{c}</strong>,
+                            code: (c) => <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px]">{c}</code>,
+                          })}
                         </p>
                         <div className="overflow-hidden rounded-lg bg-slate-800">
                           <div className="border-b border-slate-700 bg-slate-900 px-3.5 py-1.5 font-mono text-[11px] text-slate-500">auth.ts</div>
@@ -1018,7 +1013,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     id: "planeos",
     name: "PlaneOS",
     type: "oidc",
-    // 只需这一个 URL，其余端点自动发现
+    // Only this one URL; other endpoints are auto-discovered
     issuer: "${callbackBase}",
     clientId: process.env.PLANEOS_CLIENT_ID,
     clientSecret: process.env.PLANEOS_CLIENT_SECRET,
@@ -1032,7 +1027,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
                     {sdkTab === 'python' && (
                       <div>
                         <p className="mb-2.5 text-xs text-gray-500">
-                          使用 <strong>Authlib + FastAPI</strong>：
+                          {t.rich('sdkPython', { b: (c) => <strong>{c}</strong> })}
                         </p>
                         <div className="overflow-hidden rounded-lg bg-slate-800">
                           <div className="border-b border-slate-700 bg-slate-900 px-3.5 py-1.5 font-mono text-[11px] text-slate-500">main.py</div>
@@ -1044,7 +1039,7 @@ oauth.register(
     name="planeos",
     client_id=PLANEOS_CLIENT_ID,
     client_secret=PLANEOS_CLIENT_SECRET,
-    # 自动从 Discovery URL 加载所有端点
+    # Auto-load all endpoints from the Discovery URL
     server_metadata_url="${discoveryUrl}",
     client_kwargs={"scope": "openid email profile"},
 )`}
@@ -1056,7 +1051,7 @@ oauth.register(
                     {sdkTab === 'ios' && (
                       <div>
                         <p className="mb-2.5 text-xs text-gray-500">
-                          使用 <strong>AppAuth-iOS</strong>（Swift）：
+                          {t.rich('sdkIos', { b: (c) => <strong>{c}</strong> })}
                         </p>
                         <div className="overflow-hidden rounded-lg bg-slate-800">
                           <div className="border-b border-slate-700 bg-slate-900 px-3.5 py-1.5 font-mono text-[11px] text-slate-500">AuthManager.swift</div>
@@ -1065,7 +1060,7 @@ oauth.register(
 
 let issuer = URL(string: "${callbackBase}")!
 
-// Discovery 自动完成——只需传 issuer
+// Discovery is automatic — just pass the issuer
 OIDAuthorizationService.discoverConfiguration(
     forIssuer: issuer
 ) { configuration, error in
@@ -1078,7 +1073,7 @@ OIDAuthorizationService.discoverConfiguration(
         responseType: OIDResponseTypeCode,
         additionalParameters: nil
     )
-    // PKCE 由 AppAuth 自动处理
+    // PKCE is handled automatically by AppAuth
 }`}
                           </pre>
                         </div>
@@ -1088,7 +1083,7 @@ OIDAuthorizationService.discoverConfiguration(
                     {sdkTab === 'android' && (
                       <div>
                         <p className="mb-2.5 text-xs text-gray-500">
-                          使用 <strong>AppAuth-Android</strong>（Kotlin）：
+                          {t.rich('sdkAndroid', { b: (c) => <strong>{c}</strong> })}
                         </p>
                         <div className="overflow-hidden rounded-lg bg-slate-800">
                           <div className="border-b border-slate-700 bg-slate-900 px-3.5 py-1.5 font-mono text-[11px] text-slate-500">AuthActivity.kt</div>
@@ -1097,7 +1092,7 @@ OIDAuthorizationService.discoverConfiguration(
 
 val issuerUri = Uri.parse("${callbackBase}")
 
-// 一行完成 Discovery，自动拉取所有端点
+// One line for Discovery; all endpoints fetched automatically
 AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
     val request = AuthorizationRequest.Builder(
         config!!,
@@ -1107,7 +1102,7 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
     )
     .setScope("openid email profile")
     .build()
-    // AppAuth 自动生成 PKCE code_verifier / code_challenge
+    // AppAuth generates the PKCE code_verifier / code_challenge automatically
     authService.performAuthorizationRequest(request, pendingIntent)
 }`}
                           </pre>
@@ -1125,7 +1120,7 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
           <div className="p-5 space-y-4">
             <div className="flex items-center justify-between gap-4">
               <p className="text-sm text-gray-500">
-                查看当前仍可续期的第三方登录 Session，并按需踢出。
+                {t('logsHint')}
               </p>
             </div>
 
@@ -1133,13 +1128,13 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
               <table className="min-w-full text-sm">
                 <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
                   <tr>
-                    <th className="px-5 py-3 text-left font-medium">时间</th>
-                    <th className="px-5 py-3 text-left font-medium">应用</th>
+                    <th className="px-5 py-3 text-left font-medium">{t('thTime')}</th>
+                    <th className="px-5 py-3 text-left font-medium">{t('thApp')}</th>
                     <th className="px-5 py-3 text-left font-medium">Provider</th>
                     <th className="px-5 py-3 text-left font-medium">Sub</th>
-                    <th className="px-5 py-3 text-left font-medium">用户</th>
-                    <th className="px-5 py-3 text-left font-medium">到期时间</th>
-                    <th className="px-5 py-3 text-right font-medium">操作</th>
+                    <th className="px-5 py-3 text-left font-medium">{t('thUser')}</th>
+                    <th className="px-5 py-3 text-left font-medium">{t('thExpires')}</th>
+                    <th className="px-5 py-3 text-right font-medium">{t('thActions')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 bg-white">
@@ -1153,7 +1148,7 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                   {!loading && sessions.length === 0 && (
                     <tr>
                       <td colSpan={7} className="px-5 py-16 text-center text-gray-400">
-                        当前没有活跃的 IdP Session。
+                        {t('emptySessions')}
                       </td>
                     </tr>
                   )}
@@ -1191,12 +1186,12 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                             {revokingFamilyId === session.family_id ? (
                               <>
                                 <i className="fas fa-spinner fa-spin mr-1"></i>
-                                踢出中...
+                                {t('kicking')}
                               </>
                             ) : (
                               <>
                                 <i className="fas fa-user-slash mr-1"></i>
-                                踢出
+                                {t('kick')}
                               </>
                             )}
                           </button>
@@ -1231,7 +1226,7 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                   value={logSearch}
                   onChange={(e) => setLogSearch(e.target.value)}
                   className="w-full input-base !pl-9"
-                  placeholder="搜索 sub、provider、email、IP…"
+                  placeholder={t('phSearchLog')}
                 />
               </div>
               <select
@@ -1239,10 +1234,10 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                 onChange={(e) => setLogProvider(e.target.value)}
                 className="input-base w-auto"
               >
-                <option value="">全部 Provider</option>
+                <option value="">{t('allProviders')}</option>
                 {PROVIDERS.map((p) => (
                   <option key={p.key} value={p.key}>
-                    {p.label}
+                    {t(p.labelKey)}
                   </option>
                 ))}
               </select>
@@ -1251,7 +1246,7 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                 onChange={(e) => setLogClient(e.target.value)}
                 className="input-base w-auto"
               >
-                <option value="">全部应用</option>
+                <option value="">{t('allApps')}</option>
                 {clients.map((c) => (
                   <option key={c.client_id} value={c.client_id}>
                     {c.display_name}
@@ -1264,12 +1259,12 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
               <table className="min-w-full text-sm">
                 <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
                   <tr>
-                    <th className="px-5 py-3 text-left font-medium">时间</th>
-                    <th className="px-5 py-3 text-left font-medium">事件</th>
+                    <th className="px-5 py-3 text-left font-medium">{t('thTime')}</th>
+                    <th className="px-5 py-3 text-left font-medium">{t('thEvent')}</th>
                     <th className="px-5 py-3 text-left font-medium">Provider</th>
                     <th className="px-5 py-3 text-left font-medium">Sub</th>
-                    <th className="px-5 py-3 text-left font-medium">应用</th>
-                    <th className="px-5 py-3 text-left font-medium">状态</th>
+                    <th className="px-5 py-3 text-left font-medium">{t('thApp')}</th>
+                    <th className="px-5 py-3 text-left font-medium">{t('thStatus')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 bg-white">
@@ -1283,7 +1278,7 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                   {!loading && filteredLogs.length === 0 && (
                     <tr>
                       <td colSpan={6} className="px-5 py-16 text-center text-gray-400">
-                        暂无登录日志。用户通过本项目的应用完成社交登录后，这里会出现记录。
+                        {t('emptyLogs')}
                       </td>
                     </tr>
                   )}
@@ -1322,7 +1317,7 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                           {log.status === 'success' ? (
                             <span className="inline-flex items-center gap-1 rounded-full bg-green-50 text-green-700 px-2 py-0.5 text-xs font-medium border border-green-200">
                               <i className="fas fa-circle text-[6px]"></i>
-                              成功
+                              {t('statusSuccess')}
                             </span>
                           ) : (
                             <span
@@ -1330,7 +1325,7 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                               title={log.error || ''}
                             >
                               <i className="fas fa-circle text-[6px]"></i>
-                              失败
+                              {t('statusFailure')}
                             </span>
                           )}
                         </td>
@@ -1346,15 +1341,15 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
       <Drawer
         isOpen={providerDrawerOpen}
         onClose={closeProviderDrawer}
-        title={`${providerMap.get(providerForm.provider_type) ? '编辑' : '配置'} ${PROVIDERS.find((p) => p.key === providerForm.provider_type)?.label || providerForm.provider_type} 凭证`}
+        title={t('providerDrawerTitle', { action: providerMap.get(providerForm.provider_type) ? t('editAction') : t('configAction'), name: (() => { const m = PROVIDERS.find((p) => p.key === providerForm.provider_type); return m ? t(m.labelKey) : providerForm.provider_type })() })}
         size="lg"
         footer={
           <div className="flex items-center justify-end gap-3">
             <button onClick={closeProviderDrawer} disabled={providerSaving} className="btn-default">
-              取消
+              {t('cancel')}
             </button>
             <button onClick={handleSaveProvider} disabled={providerSaving} className="btn-primary disabled:opacity-50">
-              {providerSaving ? '保存中...' : '保存凭证'}
+              {providerSaving ? t('saving') : t('saveCred')}
             </button>
           </div>
         }
@@ -1364,18 +1359,18 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Provider</label>
               <input
-                value={activeProviderMeta?.label || providerForm.provider_type}
+                value={activeProviderMeta ? t(activeProviderMeta.labelKey) : providerForm.provider_type}
                 disabled
                 className="w-full input-base bg-gray-50 text-gray-500"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">显示名称</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">{t('displayName')}</label>
               <input
                 value={providerForm.display_name}
                 onChange={(e) => setProviderForm((prev) => ({ ...prev, display_name: e.target.value }))}
                 className="w-full input-base"
-                placeholder="按钮文案"
+                placeholder={t('phButtonText')}
               />
             </div>
           </div>
@@ -1388,7 +1383,7 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
               value={providerForm.client_id}
               onChange={(e) => setProviderForm((prev) => ({ ...prev, client_id: e.target.value }))}
               className="w-full input-base font-mono"
-              placeholder="填写上游 Provider 的 Client ID"
+              placeholder={t('phClientId')}
             />
           </div>
 
@@ -1402,10 +1397,10 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                 value={providerForm.client_secret}
                 onChange={(e) => setProviderForm((prev) => ({ ...prev, client_secret: e.target.value }))}
                 className="w-full input-base font-mono"
-                placeholder={providerMap.get(providerForm.provider_type) ? '留空则保留现有值' : '填写上游 Provider 的 Client Secret'}
+                placeholder={providerMap.get(providerForm.provider_type) ? t('phSecretKeep') : t('phSecretNew')}
               />
               <p className="mt-1 text-xs text-gray-400">
-                填写后加密存储；已配置的 Provider 留空则保留现有密文不变。
+                {t('secretHint')}
               </p>
             </div>
           )}
@@ -1413,8 +1408,7 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
           {providerForm.provider_type === 'apple' && (
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="sm:col-span-2 text-xs text-gray-500">
-                Apple 用 Team ID + Key ID + 私钥(.p8) 现签 client_secret（ES256），
-                <code className="bg-gray-100 px-1 rounded font-mono">client_id</code> 填 Services ID。
+                {t.rich('appleHint', { code: (c) => <code className="bg-gray-100 px-1 rounded font-mono">{c}</code> })}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
@@ -1424,7 +1418,7 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                   value={providerForm.appleTeamId}
                   onChange={(e) => setProviderForm((prev) => ({ ...prev, appleTeamId: e.target.value }))}
                   className="w-full input-base font-mono"
-                  placeholder="例如 A1B2C3D4E5"
+                  placeholder={t('phTeamId')}
                 />
               </div>
               <div>
@@ -1435,12 +1429,12 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                   value={providerForm.appleKeyId}
                   onChange={(e) => setProviderForm((prev) => ({ ...prev, appleKeyId: e.target.value }))}
                   className="w-full input-base font-mono"
-                  placeholder="例如 X9Y8Z7W6V5"
+                  placeholder={t('phKeyId')}
                 />
               </div>
               <div className="sm:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  私钥 (.p8 PEM) {!providerMap.get(providerForm.provider_type) && <span className="text-red-500">*</span>}
+                  {t('applePrivateKeyLabel')} {!providerMap.get(providerForm.provider_type) && <span className="text-red-500">*</span>}
                 </label>
                 <textarea
                   rows={5}
@@ -1450,7 +1444,7 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                   placeholder={'-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----'}
                 />
                 <p className="mt-1 text-xs text-gray-400">
-                  从 Apple Developer 下载的 .p8 私钥，加密存储；编辑时留空则保留现有私钥。
+                  {t('appleKeyHint')}
                 </p>
               </div>
             </div>
@@ -1458,7 +1452,7 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
 
           {providerForm.provider_type === 'oidc' && (
             <div className="space-y-4 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
-              <div className="text-sm font-medium text-indigo-900">自定义 OIDC 端点</div>
+              <div className="text-sm font-medium text-indigo-900">{t('oidcEndpoints')}</div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">Authorization URL</label>
                 <input
@@ -1500,8 +1494,8 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
 
           <div className="flex items-center justify-between rounded-lg border border-gray-200 p-4">
             <div>
-              <div className="text-sm font-medium text-gray-800">全局启用</div>
-              <div className="text-xs text-gray-500 mt-1">关闭后该 Provider 会从所有 OAuth2 应用中整体失效。</div>
+              <div className="text-sm font-medium text-gray-800">{t('globalEnable')}</div>
+              <div className="text-xs text-gray-500 mt-1">{t('globalEnableDesc')}</div>
             </div>
             <Toggle
               checked={providerForm.is_enabled}
@@ -1512,10 +1506,10 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
           <div className="rounded-xl border border-gray-200 bg-blue-50 p-4">
             <div className="text-sm font-medium text-gray-800 mb-2">
               <i className="fas fa-circle-info text-blue-500 mr-2"></i>
-              回调地址
+              {t('callbackAddr')}
             </div>
             <p className="text-xs text-gray-600 mb-2">
-              {activeProviderMeta?.callbackHint || '在上游 Provider 控制台里将回调地址配置为：'}
+              {activeProviderMeta ? t(activeProviderMeta.callbackHintKey) : t('callbackHintDefault')}
             </p>
             <code className="block rounded bg-white px-3 py-2 text-xs text-blue-700 break-all border border-blue-100">
               {callbackBase}/oauth2/callback/{providerForm.provider_type}
@@ -1527,19 +1521,19 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
       <Drawer
         isOpen={appDrawerOpen}
         onClose={closeAppDrawer}
-        title={appForm.clientId ? '编辑 OAuth2 应用' : '注册 OAuth2 应用'}
+        title={appForm.clientId ? t('appDrawerEditTitle') : t('appDrawerCreateTitle')}
         size="xl"
         footer={
           <div className="flex items-center justify-between gap-3">
             <div className="text-xs text-gray-400">
-              Client Secret 仅在创建或轮换后显示一次。
+              {t('secretOnceNote')}
             </div>
             <div className="flex items-center gap-3">
               <button onClick={closeAppDrawer} disabled={appSaving} className="btn-default">
-                取消
+                {t('cancel')}
               </button>
               <button onClick={handleSaveApp} disabled={appSaving} className="btn-primary disabled:opacity-50">
-                {appSaving ? '保存中...' : appForm.clientId ? '保存应用' : '注册应用'}
+                {appSaving ? t('saving') : appForm.clientId ? t('saveApp') : t('registerApp')}
               </button>
             </div>
           </div>
@@ -1552,10 +1546,10 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
               <div className="flex items-center gap-3">
                 <code className="text-xs bg-white border border-gray-200 rounded px-2 py-1 text-gray-700">{appForm.clientId}</code>
                 <button onClick={() => copyText(appForm.clientId!)} className="text-sm text-blue-600 hover:text-blue-800">
-                  复制
+                  {t('copy')}
                 </button>
                 <button onClick={handleRotateSecret} className="text-sm text-orange-600 hover:text-orange-800">
-                  轮换 Secret
+                  {t('rotateSecret')}
                 </button>
               </div>
             </div>
@@ -1565,14 +1559,14 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <div className="text-sm font-medium text-amber-800">请立即保存 Client Secret</div>
-                  <p className="text-xs text-amber-700 mt-1">该明文只在当前操作后展示一次，关闭抽屉后无法再次读取。</p>
+                  <div className="text-sm font-medium text-amber-800">{t('saveSecretNow')}</div>
+                  <p className="text-xs text-amber-700 mt-1">{t('secretOnceWarn')}</p>
                   <code className="mt-3 block rounded bg-white border border-amber-200 px-3 py-2 text-xs text-amber-900 break-all">
                     {revealedSecret}
                   </code>
                 </div>
                 <button onClick={() => copyText(revealedSecret)} className="text-sm text-amber-700 hover:text-amber-900 whitespace-nowrap">
-                  复制
+                  {t('copy')}
                 </button>
               </div>
             </div>
@@ -1581,28 +1575,28 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="sm:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                应用名称 <span className="text-red-500">*</span>
+                {t('appNameLabel')} <span className="text-red-500">*</span>
               </label>
               <input
                 value={appForm.displayName}
                 onChange={(e) => setAppForm((prev) => ({ ...prev, displayName: e.target.value }))}
                 className="w-full input-base"
-                placeholder="例如：Acme Web"
+                placeholder={t('phAppName')}
               />
             </div>
 
             <div className="sm:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                回调地址 <span className="text-red-500">*</span>
+                {t('redirectLabel')} <span className="text-red-500">*</span>
               </label>
               <textarea
                 rows={3}
                 value={appForm.redirectUrisText}
                 onChange={(e) => setAppForm((prev) => ({ ...prev, redirectUrisText: e.target.value }))}
                 className="w-full input-base"
-                placeholder={'每行一个，例如：\nhttps://acme.com/auth/callback'}
+                placeholder={t('phRedirect')}
               />
-              <p className="mt-1 text-xs text-gray-400">每行一个，精确匹配，不支持通配符。</p>
+              <p className="mt-1 text-xs text-gray-400">{t('redirectHint')}</p>
             </div>
 
             <div className="sm:col-span-2">
@@ -1624,11 +1618,11 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                             ? 'bg-blue-50 border-blue-200 text-blue-700'
                             : 'bg-white border-gray-200 text-gray-500 hover:border-blue-200'
                         } ${required ? 'cursor-not-allowed' : ''}`}
-                        title={required ? 'OIDC 必选，不可移除' : ''}
+                        title={required ? t('oidcRequired') : ''}
                       >
                         {on && <i className="fas fa-check mr-1 text-[10px]"></i>}
                         {scope}
-                        {required && <span className="ml-1 text-[10px] text-blue-400">必选</span>}
+                        {required && <span className="ml-1 text-[10px] text-blue-400">{t('required')}</span>}
                       </button>
                     )
                   })}
@@ -1667,18 +1661,18 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                       }
                     }}
                     className="flex-1 input-base font-mono text-xs"
-                    placeholder="添加自定义 scope，回车确认"
+                    placeholder={t('phCustomScope')}
                   />
                   <button type="button" onClick={addCustomScope} className="btn-default whitespace-nowrap text-xs">
-                    添加
+                    {t('add')}
                   </button>
                 </div>
               </div>
-              <p className="mt-1 text-xs text-gray-400">第三方登录请求里只能申请这里勾选的 scope，超出会被拒绝。</p>
+              <p className="mt-1 text-xs text-gray-400">{t('scopesHint')}</p>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Access Token TTL（秒）</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">{t('accessTtl')}</label>
               <input
                 type="number"
                 min={60}
@@ -1688,7 +1682,7 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Refresh Token TTL（秒）</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">{t('refreshTtl')}</label>
               <input
                 type="number"
                 min={300}
@@ -1702,8 +1696,8 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="flex items-center justify-between rounded-lg border border-gray-200 p-4">
               <div>
-                <div className="text-sm font-medium text-gray-800">强制 PKCE</div>
-                <div className="text-xs text-gray-500 mt-1">移动端建议开启，Web 端也可强制要求。</div>
+                <div className="text-sm font-medium text-gray-800">{t('forcePkce')}</div>
+                <div className="text-xs text-gray-500 mt-1">{t('forcePkceDesc')}</div>
               </div>
               <Toggle
                 checked={appForm.requirePkce}
@@ -1712,8 +1706,8 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
             </div>
             <div className="flex items-center justify-between rounded-lg border border-gray-200 p-4">
               <div>
-                <div className="text-sm font-medium text-gray-800">应用启用</div>
-                <div className="text-xs text-gray-500 mt-1">停用后该 client 将无法继续发起登录流程。</div>
+                <div className="text-sm font-medium text-gray-800">{t('appEnable')}</div>
+                <div className="text-xs text-gray-500 mt-1">{t('appEnableDesc')}</div>
               </div>
               <Toggle
                 checked={appForm.isActive}
@@ -1725,10 +1719,10 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
           <div className="border-t border-gray-100 pt-6">
             <div className="flex items-center justify-between mb-3">
               <div>
-                <div className="text-sm font-semibold text-gray-900">Provider 权限</div>
-                <div className="text-xs text-gray-500 mt-1">控制此应用允许哪些登录方式。</div>
+                <div className="text-sm font-semibold text-gray-900">{t('providerPerm')}</div>
+                <div className="text-xs text-gray-500 mt-1">{t('providerPermDesc')}</div>
               </div>
-              <span className="text-[11px] rounded bg-gray-100 px-2 py-1 text-gray-500">凭证在项目层统一管理</span>
+              <span className="text-[11px] rounded bg-gray-100 px-2 py-1 text-gray-500">{t('credManagedProject')}</span>
             </div>
 
             {(() => {
@@ -1740,12 +1734,12 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                   <div className="overflow-hidden rounded-xl border border-gray-200 bg-gray-50/50">
                     <div className="px-4 py-2 bg-gray-100 border-b border-gray-200">
                       <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                        已配置凭证（可启用）
+                        {t('configuredCredHeader')}
                       </span>
                     </div>
                     {usable.length === 0 ? (
                       <div className="px-4 py-4 text-xs text-gray-400">
-                        本项目还没有可用的 Provider，请先到「Provider 凭证库」配置。
+                        {t('noUsableProvider')}
                       </div>
                     ) : (
                       usable.map((meta) => (
@@ -1757,7 +1751,7 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                             <i className={meta.iconClass}></i>
                           </div>
                           <div className="flex-1 min-w-0">
-                            <div className="text-sm font-medium text-gray-900">{meta.label}</div>
+                            <div className="text-sm font-medium text-gray-900">{t(meta.labelKey)}</div>
                             <div className="text-xs text-gray-500 mt-0.5">{meta.subtitle}</div>
                           </div>
                           <Toggle
@@ -1774,12 +1768,12 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                     <div className="overflow-hidden rounded-xl border border-gray-200 bg-gray-50">
                       <div className="px-4 py-2 bg-gray-100 border-b border-gray-200">
                         <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">
-                          未配置凭证（需先填写）
+                          {t('unconfiguredCredHeader')}
                         </span>
                       </div>
                       {unusable.map((meta) => {
                         const projectProvider = providerMap.get(meta.key)
-                        const reason = projectProvider ? '项目层已禁用' : '未配置凭证'
+                        const reason = projectProvider ? t('reasonDisabled') : t('reasonUnconfigured')
                         return (
                           <div
                             key={meta.key}
@@ -1789,7 +1783,7 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                               <i className={meta.iconClass}></i>
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className="text-sm font-medium text-gray-500">{meta.label}</div>
+                              <div className="text-sm font-medium text-gray-500">{t(meta.labelKey)}</div>
                               <div className="text-xs text-gray-400 mt-0.5">{reason}</div>
                             </div>
                             <button
@@ -1797,7 +1791,7 @@ AuthorizationServiceConfiguration.fetchFromIssuer(issuerUri) { config, ex ->
                               onClick={() => jumpToProviderVault(meta.key)}
                               className="text-xs text-blue-600 hover:text-blue-800 whitespace-nowrap"
                             >
-                              去配置 →
+                              {t('goConfigure')}
                             </button>
                           </div>
                         )

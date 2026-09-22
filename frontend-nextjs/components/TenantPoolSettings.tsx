@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { tenantAPI } from '@/lib/api'
 import { parseOptionalInt, parsePoolSettings, type OptionalInt } from '@/components/parseOptionalInt'
 
@@ -29,6 +30,7 @@ export function TenantPoolSettingsForm({
   liveTimeout?: number | null
   onSaved?: (max: number, timeout: number) => void
 }) {
+  const t = useTranslations('poolSettings')
   const [maxConn, setMaxConn] = useState<OptionalInt>(initialMax)
   const [timeoutSecs, setTimeoutSecs] = useState<OptionalInt>(initialTimeout)
   const [saving, setSaving] = useState(false)
@@ -54,13 +56,13 @@ export function TenantPoolSettingsForm({
         max_connections: max,
         connection_timeout: timeout,
       })
-      setMsg({ ok: true, text: '已保存，连接池将按新参数重建（无需重启服务）' })
+      setMsg({ ok: true, text: t('saved') })
       onSaved?.(max, timeout)
     } catch (err: unknown) {
       const error = err as { response?: { data?: { error?: string } }; message?: string }
       setMsg({
         ok: false,
-        text: error.response?.data?.error || error.message || '保存失败',
+        text: error.response?.data?.error || error.message || t('saveFailed'),
       })
     } finally {
       setSaving(false)
@@ -71,7 +73,7 @@ export function TenantPoolSettingsForm({
     <form onSubmit={handleSave} className="space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <label className="block">
-          <span className="block text-sm font-medium text-gray-700 mb-1">最大连接数</span>
+          <span className="block text-sm font-medium text-gray-700 mb-1">{t('fMaxConn')}</span>
           <input
             type="number"
             min={1}
@@ -81,11 +83,11 @@ export function TenantPoolSettingsForm({
             className="input-base w-full"
           />
           <p className="text-xs text-gray-400 mt-1">
-            建议 20–30。单次页面并行打多个工作流时，10 很容易打满。上限 {TENANT_MAX_CONNECTIONS_CAP}。
+            {t('maxConnHint', { cap: TENANT_MAX_CONNECTIONS_CAP })}
           </p>
         </label>
         <label className="block">
-          <span className="block text-sm font-medium text-gray-700 mb-1">获取连接超时（秒）</span>
+          <span className="block text-sm font-medium text-gray-700 mb-1">{t('fAcquireTimeout')}</span>
           <input
             type="number"
             min={1}
@@ -95,27 +97,29 @@ export function TenantPoolSettingsForm({
             className="input-base w-full"
           />
           <p className="text-xs text-gray-400 mt-1">
-            池里暂时没有空闲连接时，最多等这么久。默认 {DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS} 秒。
+            {t('acquireHint', { n: DEFAULT_TENANT_ACQUIRE_TIMEOUT_SECS })}
           </p>
         </label>
       </div>
 
       {(liveMax != null || liveTimeout != null) && (
         <p className="text-xs text-gray-500">
-          当前进程内水位：max {liveMax ?? '—'} · acquire {liveTimeout ?? '—'}s
-          {envOverride != null ? ` · 环境变量覆盖为 ${envOverride}` : ''}
+          {t('liveWater', { max: liveMax ?? '—', timeout: liveTimeout ?? '—' })}
+          {envOverride != null ? t('envOverride', { v: envOverride }) : ''}
         </p>
       )}
       {envOverride != null && (
         <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-          已设置 <code className="font-mono">TENANT_DB_MAX_CONNECTIONS={envOverride}</code>
-          ，会覆盖上面的「最大连接数」。改库配置要等该环境变量去掉并重建池后才生效。
+          {t.rich('envWarn', {
+            v: envOverride,
+            code: (c) => <code className="font-mono">{c}</code>,
+          })}
         </p>
       )}
 
       <div className="flex items-center gap-3">
         <button type="submit" disabled={saving} className="btn-primary text-sm disabled:opacity-50">
-          {saving ? '保存中…' : '保存并重建连接池'}
+          {saving ? t('saving') : t('saveRebuild')}
         </button>
         {msg && (
           <span className={`text-sm ${msg.ok ? 'text-emerald-700' : 'text-red-600'}`}>{msg.text}</span>

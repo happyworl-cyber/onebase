@@ -38,6 +38,6 @@ assert.equal(folderDisplayName('configs/', ''), 'configs')
 assert.equal(isGetTooLargeError('对象超过 5242880 字节，请改用 presign 下载'), true)
 assert.equal(isGetTooLargeError('对象不存在'), false)
 
-assert.equal(lastConnectionStorageKey(42), 'onebase.files.connection.42')
+assert.equal(lastConnectionStorageKey(42), 'planeos.files.connection.42')
 
 console.log('objectStorageFiles tests passed')

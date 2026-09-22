@@ -45,26 +45,6 @@ pub fn get_provider_endpoints(provider_type: &str) -> Option<ProviderEndpoints> 
             userinfo_url: "",
             default_scopes: "name email",
         }),
-        // Mind SSO（im30）。线上认证中心 base = https://login.im30.cn。
-        //
-        // 走「前端业务接入」流程（PKCE + 授权码）：
-        // - authorization_url：登录页**根路径**，文档示例
-        //   `${serverUrl}/?client_id=...&response_type=code&redirect_uri=...&scope=...&state=...&code_challenge=...&code_challenge_method=S256`，
-        //   所以这里 base 用根 `/`，查询参数由 build_authorization_url 追加。
-        // - token_url / userinfo_url：接入文档未给出确切路径（在内网 yapi
-        //   http://mind-yapi.im30.lan/project/87 上），这里按 `/account/api/*` 同族
-        //   做合理默认，**上线前务必对照 yapi 校验**。
-        // - scope：文档明确默认 `openid`。
-        //
-        // 这些只是预设兜底；不同环境（测试 http://login.mindoffice.lan:8888 /
-        // 预发 https://prelogin.mindoffice.cn）的实际 URL 由管理员在创建 Provider
-        // 时填 authorization_url/token_url/userinfo_url 覆盖（DB 列优先于预设）。
-        "mind" => Some(ProviderEndpoints {
-            authorization_url: "https://login.im30.cn/",
-            token_url: "https://login.im30.cn/account/api/token",
-            userinfo_url: "https://login.im30.cn/account/api/userInfo",
-            default_scopes: "openid",
-        }),
         _ => None,
     }
 }
@@ -156,14 +136,8 @@ impl SsoProvider {
 
 /// 该 provider 是否由**我们**发起 PKCE（在 authorize 带 code_challenge、token 带 code_verifier）。
 ///
-/// 现状：Mind 走的是其**托管登录页**（`http://login.mindoffice.lan/`），登录页内部
-/// 自行处理 PKCE，并**不校验**我们透传的 code_challenge。实测我们发出的 S256 pair
-/// 完全自洽（authorize 的 code_challenge == token 的 verifier 推导值），Mind 仍返回
-/// `code_challenge无效`——说明我们再叠一层 PKCE 反而和 Mind 内部的 PKCE 冲突。
-/// 因此对 Mind 关闭"我方 PKCE"，按**机密客户端**（code + client_secret）换 token，
-/// 与接入文档 token 步骤一致。
-///
-/// 函数与基础设施保留，便于将来对接「确实需要我方 PKCE」的 IdP 时打开。
+/// 当前所有内置 provider 都不需要我方叠加 PKCE（标准 OAuth2 授权码 + client_secret
+/// 换 token 即可）。函数与基础设施保留，便于将来对接「确实需要我方 PKCE」的 IdP 时打开。
 pub fn provider_requires_pkce(_provider_type: &str) -> bool {
     false
 }
@@ -198,7 +172,7 @@ pub fn pkce_challenge_s256(verifier: &str) -> String {
 ///
 /// `code_challenge` 非空时追加 PKCE 参数（`code_challenge` + `code_challenge_method=S256`）。
 /// `access_type=offline` 仅对 google 这类需要 refresh_token 的 IdP 追加，避免给
-/// Mind 等发它不认识的参数。
+/// 其它 IdP 发它不认识的参数。
 pub fn build_authorization_url(
     provider: &SsoProvider,
     redirect_uri: &str,
@@ -341,7 +315,7 @@ pub async fn exchange_code_for_token(
         )
     })?;
 
-    // 兼容 Mind 等 `{code, data, msg}` 信封：真实 token 在 data 里。
+    // 兼容部分 IdP 的 `{code, data, msg}` 信封：真实 token 在 data 里。
     let payload = unwrap_data_envelope(&raw);
 
     // 兼容 access_token / token 两种字段名。
@@ -389,7 +363,7 @@ pub async fn exchange_code_for_token(
     Ok(token)
 }
 
-/// 部分 IdP（如 Mind）用 `{code, data, msg}` 信封包裹真实数据；
+/// 部分非标准 IdP 用 `{code, data, msg}` 信封包裹真实数据；
 /// 若顶层存在对象型 `data` 字段则取出它，否则原样返回。标准 OAuth2 响应没有
 /// 这层信封，函数对它们是无操作（no-op）。
 fn unwrap_data_envelope(value: &serde_json::Value) -> serde_json::Value {
@@ -401,7 +375,7 @@ fn unwrap_data_envelope(value: &serde_json::Value) -> serde_json::Value {
 
 /// 解码 JWT 的 payload 段取出 claims（**不验签**，仅用于读取身份信息）。
 ///
-/// Mind 的 access_token 本身就是 JWT，用户身份 claims 已经在里面，可据此免去
+/// 例如 Apple 的 id_token 是 JWT，用户身份 claims 已经在里面，可据此免去
 /// 额外的 userinfo 调用（其 userinfo 路径在内网 yapi，且与 `/account/api/userinfo`
 /// 默认值不一致会 404）。
 pub fn decode_jwt_claims(token: &str) -> Result<serde_json::Value, String> {
@@ -419,53 +393,12 @@ pub fn decode_jwt_claims(token: &str) -> Result<serde_json::Value, String> {
     serde_json::from_slice(&bytes).map_err(|e| format!("JWT payload JSON 解析失败: {}", e))
 }
 
-/// 使用 access_token 获取用户信息。
-///
-/// Mind：access_token 是 JWT，先解出 claims（含稳定的 `UserID`）作为基础 profile，
-/// 再**尽力**调 userinfo 端点补充用户名/邮箱/头像；userinfo 失败仅告警、不阻断登录
-/// （此时只用 JWT 里的字段）。其他 IdP 走标准 userinfo。
+/// 使用 access_token 调 IdP 的 userinfo 端点获取用户信息（标准 OAuth2）。
 pub async fn fetch_user_profile(
     provider: &SsoProvider,
     access_token: &str,
 ) -> Result<serde_json::Value, String> {
-    if provider.provider_type == "mind" {
-        let claims = decode_jwt_claims(access_token)?;
-        let mut profile = unwrap_data_envelope(&claims);
-        tracing::info!(
-            target: "sso",
-            provider_id = provider.id,
-            provider_type = %provider.provider_type,
-            claims = %profile,
-            "Mind access_token(JWT) 解析出的 claims"
-        );
-
-        // Mind userinfo 需要 userId（来自 JWT 的 UserID）。
-        let jwt_user_id = profile.get("UserID").and_then(|v| v.as_str());
-
-        // 尽力补充资料；失败不阻断登录（例如 userinfo 路径未配置正确）。
-        match http_fetch_userinfo(provider, access_token, jwt_user_id).await {
-            Ok(userinfo) => {
-                tracing::info!(
-                    target: "sso",
-                    provider_id = provider.id,
-                    userinfo = %userinfo,
-                    "Mind userinfo 补充成功，合并进 profile"
-                );
-                merge_json_objects(&mut profile, &userinfo);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    target: "sso",
-                    provider_id = provider.id,
-                    err = %e,
-                    "Mind userinfo 获取失败（不阻断登录，仅用 JWT 中的字段）"
-                );
-            }
-        }
-        return Ok(profile);
-    }
-
-    let profile = http_fetch_userinfo(provider, access_token, None).await?;
+    let profile = http_fetch_userinfo(provider, access_token).await?;
 
     // GitHub 的 email 可能不在主响应中，需要额外获取
     if provider.provider_type == "github" && profile.get("email").and_then(|v| v.as_str()).is_none()
@@ -480,42 +413,29 @@ pub async fn fetch_user_profile(
     Ok(profile)
 }
 
-/// 向 IdP 的 userinfo 端点发请求并解析（含 `{code,data,msg}` 信封解包）。
-///
-/// `user_id` 仅 Mind 用到：Mind 的 userinfo 是 **POST**，body 为 `{"userId": "<UserID>"}`
-/// （来自 access_token JWT 里的 `UserID`）。其他 IdP 走标准 **GET** + Bearer。
+/// 向 IdP 的 userinfo 端点发标准 **GET** + Bearer 请求并解析
+/// （含 `{code,data,msg}` 信封解包，兼容非标准 IdP）。
 async fn http_fetch_userinfo(
     provider: &SsoProvider,
     access_token: &str,
-    user_id: Option<&str>,
 ) -> Result<serde_json::Value, String> {
     let userinfo_url = provider.get_userinfo_url();
-    let is_mind = provider.provider_type == "mind";
 
     tracing::info!(
         target: "sso",
         provider_id = provider.id,
         provider_type = %provider.provider_type,
-        method = if is_mind { "POST" } else { "GET" },
+        method = "GET",
         userinfo_url = %userinfo_url,
         access_token_prefix = %access_token.chars().take(12).collect::<String>(),
         "OAuth2 UserInfo 请求（即将发往 IdP）"
     );
 
     let client = reqwest::Client::new();
-    let request = if is_mind {
-        // Mind：POST + JSON body {"userId": "<UserID>"}（userId 可为空，服务端按 token 解析）。
-        client
-            .post(&userinfo_url)
-            .bearer_auth(access_token)
-            .header("User-Agent", "PlaneOS/1.0")
-            .json(&serde_json::json!({ "userId": user_id.unwrap_or("") }))
-    } else {
-        client
-            .get(&userinfo_url)
-            .bearer_auth(access_token)
-            .header("User-Agent", "PlaneOS/1.0")
-    };
+    let request = client
+        .get(&userinfo_url)
+        .bearer_auth(access_token)
+        .header("User-Agent", "PlaneOS/1.0");
     let response = request.send().await.map_err(|e| {
         tracing::error!(
             target: "sso",
@@ -557,19 +477,11 @@ async fn http_fetch_userinfo(
     let raw: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("解析 UserInfo 失败: {}", e))?;
 
-    // 兼容 Mind 等 `{code, data, msg}` 信封：真实用户信息在 data 里。
+    // 兼容部分 IdP 的 `{code, data, msg}` 信封：真实用户信息在 data 里。
     Ok(unwrap_data_envelope(&raw))
 }
 
 /// 把 overlay 对象的键浅合并进 base（overlay 优先；仅当两者都是 JSON 对象时生效）。
-fn merge_json_objects(base: &mut serde_json::Value, overlay: &serde_json::Value) {
-    if let (Some(b), Some(o)) = (base.as_object_mut(), overlay.as_object()) {
-        for (k, v) in o {
-            b.insert(k.clone(), v.clone());
-        }
-    }
-}
-
 /// GitHub 特殊处理：获取用户主 email
 async fn fetch_github_email(access_token: &str) -> Result<String, String> {
     let client = reqwest::Client::new();
@@ -600,7 +512,7 @@ pub fn extract_profile_fields(
     profile: &serde_json::Value,
 ) -> (String, Option<String>, Option<String>, Option<String>) {
     // 取稳定唯一标识：优先用管理员配置的字段；取不到时按常见键兜底
-    // （Mind 的 JWT claims 里恒有 `UserID`，OIDC 标准里是 `sub`）。
+    // （OIDC 标准用 `sub` 作为稳定用户标识）。
     // 这样即便 userinfo 暂时取不到、或字段名配错，也不会塌缩成 "unknown"
     // 而把所有 SSO 用户撞成同一个账号。
     let pick_id = |key: &str| {
@@ -617,7 +529,7 @@ pub fn extract_profile_fields(
         .or_else(|| pick_id("id"))
         .unwrap_or_else(|| "unknown".to_string());
 
-    // 空字符串视作“没有”——Mind 的 userinfo 常返回 email:""，若原样落库会破坏
+    // 空字符串视作“没有”——部分 IdP 的 userinfo 会返回 email:""，若原样落库会破坏
     // users.email 的 UNIQUE 约束（第二个空邮箱用户就建不出来）。
     let non_empty = |key: &str| {
         profile
@@ -673,16 +585,9 @@ mod tests {
     }
 
     #[test]
-    fn test_mind_endpoints() {
-        let ep = get_provider_endpoints("mind").unwrap();
-        assert!(ep.authorization_url.contains("login.im30.cn"));
-        // 前端接入：authorize 走登录页根路径，不再是 /account/api/authorize
-        assert!(!ep.authorization_url.contains("/account/api/authorize"));
-        assert!(ep.token_url.contains("/account/api/token"));
-        assert_eq!(ep.default_scopes, "openid");
-        // Mind 走托管登录页，PKCE 由其登录页内部处理，我方不再叠加。
-        assert!(!provider_requires_pkce("mind"));
+    fn test_pkce_disabled_for_all() {
         assert!(!provider_requires_pkce("google"));
+        assert!(!provider_requires_pkce("oidc"));
     }
 
     #[test]
@@ -843,11 +748,11 @@ mod tests {
         let provider = SsoProvider {
             id: 1,
             tenant_id: 1,
-            provider_type: "mind".to_string(),
-            display_name: "Mind".to_string(),
+            provider_type: "oidc".to_string(),
+            display_name: "Custom OIDC".to_string(),
             client_id: "cid".to_string(),
             client_secret_encrypted: "".to_string(),
-            authorization_url: Some("http://login.mindoffice.lan:8888/".to_string()),
+            authorization_url: Some("https://idp.example.com/authorize".to_string()),
             token_url: None,
             userinfo_url: None,
             scopes: None,
@@ -864,10 +769,10 @@ mod tests {
             "st",
             Some("CHALLENGE"),
         );
-        assert!(url.starts_with("http://login.mindoffice.lan:8888/?"));
+        assert!(url.starts_with("https://idp.example.com/authorize?"));
         assert!(url.contains("code_challenge=CHALLENGE"));
         assert!(url.contains("code_challenge_method=S256"));
-        // mind 不应带 google 专属的 access_type
+        // 非 google provider 不应带 google 专属的 access_type
         assert!(!url.contains("access_type"));
     }
 

@@ -13,7 +13,7 @@ use sqlx::PgPool;
 
 use crate::auth::Claims;
 use crate::error::{AppError, Result};
-use crate::license::{self, LicenseClaims, LicenseState, LicenseStatus};
+use planeos::license::{self, LicenseClaims, LicenseState, LicenseStatus};
 
 /// License 上下文（由 license_middleware 注入）
 #[derive(Debug, Clone)]
@@ -201,7 +201,11 @@ pub async fn license_middleware(
             // License 无效或已过期，根据 enforce 模式决定是否拦截
             let enforce_mode = license::EnforceMode::from_env();
             if enforce_mode == license::EnforceMode::Enforce {
-                return Err(AppError::Forbidden(format!("License 无效: {}", e)));
+                return Err(AppError::forbidden_coded(
+                    "lic_invalid",
+                    format!("License 无效: {}", e),
+                    serde_json::json!({ "error": e.to_string() }),
+                ));
             } else {
                 // warn 模式：记录日志但不拦截
                 tracing::warn!("License 校验失败（warn 模式，继续执行）: {}", e);
@@ -252,10 +256,11 @@ pub fn require_module(ctx: &LicenseContext, module: &str) -> Result<()> {
     if ctx.has_module(module) {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "当前 License 未授权「{}」模块，请升级 License",
-            module
-        )))
+        Err(AppError::forbidden_coded(
+            "lic_module_not_licensed",
+            format!("当前 License 未授权「{}」模块，请升级 License", module),
+            serde_json::json!({ "module": module }),
+        ))
     }
 }
 
@@ -264,10 +269,14 @@ pub fn require_edition(ctx: &LicenseContext, required: &str) -> Result<()> {
     if ctx.has_edition(required) {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "此功能需要「{}」版本或更高版本，当前为「{}」",
-            required, ctx.claims.edition
-        )))
+        Err(AppError::forbidden_coded(
+            "lic_edition_insufficient",
+            format!(
+                "此功能需要「{}」版本或更高版本，当前为「{}」",
+                required, ctx.claims.edition
+            ),
+            serde_json::json!({ "required": required, "current": ctx.claims.edition }),
+        ))
     }
 }
 
@@ -276,10 +285,14 @@ pub async fn check_tenant_limit(ctx: &LicenseContext, pool: &PgPool) -> Result<(
     if ctx.can_create_tenant(pool).await? {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "已达到租户数量上限（{}），请升级 License 或删除未使用的租户",
-            ctx.claims.max_tenants.unwrap_or(0)
-        )))
+        Err(AppError::forbidden_coded(
+            "lic_tenant_limit_reached",
+            format!(
+                "已达到租户数量上限（{}），请升级 License 或删除未使用的租户",
+                ctx.claims.max_tenants.unwrap_or(0)
+            ),
+            serde_json::json!({ "max": ctx.claims.max_tenants.unwrap_or(0) }),
+        ))
     }
 }
 
@@ -288,10 +301,14 @@ pub async fn check_node_limit(ctx: &LicenseContext, pool: &PgPool) -> Result<()>
     if ctx.can_add_node(pool).await? {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "已达到节点数量上限（{}），请升级 License",
-            ctx.claims.max_nodes.unwrap_or(0)
-        )))
+        Err(AppError::forbidden_coded(
+            "lic_node_limit_reached",
+            format!(
+                "已达到节点数量上限（{}），请升级 License",
+                ctx.claims.max_nodes.unwrap_or(0)
+            ),
+            serde_json::json!({ "max": ctx.claims.max_nodes.unwrap_or(0) }),
+        ))
     }
 }
 
@@ -304,10 +321,14 @@ pub async fn check_account_limit(
     if ctx.can_add_account(pool, tenant_id).await? {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "租户已达到账号数量上限（{}），请升级 License",
-            ctx.claims.max_accounts_per_tenant.unwrap_or(0)
-        )))
+        Err(AppError::forbidden_coded(
+            "lic_account_limit_reached",
+            format!(
+                "租户已达到账号数量上限（{}），请升级 License",
+                ctx.claims.max_accounts_per_tenant.unwrap_or(0)
+            ),
+            serde_json::json!({ "max": ctx.claims.max_accounts_per_tenant.unwrap_or(0) }),
+        ))
     }
 }
 
@@ -318,10 +339,14 @@ pub async fn check_project_limit(ctx: &LicenseContext, pool: &PgPool) -> Result<
     if ctx.can_create_project(pool).await? {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "已达到项目数量上限（{}），请升级 License 或删除未使用的项目",
-            ctx.claims.max_projects.unwrap_or(0)
-        )))
+        Err(AppError::forbidden_coded(
+            "lic_project_limit_reached",
+            format!(
+                "已达到项目数量上限（{}），请升级 License 或删除未使用的项目",
+                ctx.claims.max_projects.unwrap_or(0)
+            ),
+            serde_json::json!({ "max": ctx.claims.max_projects.unwrap_or(0) }),
+        ))
     }
 }
 
@@ -330,10 +355,14 @@ pub async fn check_workflow_limit(ctx: &LicenseContext, pool: &PgPool) -> Result
     if ctx.can_create_workflow(pool).await? {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "已达到工作流数量上限（{}），请升级 License 或删除未使用的工作流",
-            ctx.claims.max_workflows.unwrap_or(0)
-        )))
+        Err(AppError::forbidden_coded(
+            "lic_workflow_limit_reached",
+            format!(
+                "已达到工作流数量上限（{}），请升级 License 或删除未使用的工作流",
+                ctx.claims.max_workflows.unwrap_or(0)
+            ),
+            serde_json::json!({ "max": ctx.claims.max_workflows.unwrap_or(0) }),
+        ))
     }
 }
 
@@ -342,10 +371,14 @@ pub async fn check_api_endpoint_limit(ctx: &LicenseContext, pool: &PgPool) -> Re
     if ctx.can_create_api_endpoint(pool).await? {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "已达到 API 端点数量上限（{}），请升级 License",
-            ctx.claims.max_api_endpoints.unwrap_or(0)
-        )))
+        Err(AppError::forbidden_coded(
+            "lic_api_endpoint_limit_reached",
+            format!(
+                "已达到 API 端点数量上限（{}），请升级 License",
+                ctx.claims.max_api_endpoints.unwrap_or(0)
+            ),
+            serde_json::json!({ "max": ctx.claims.max_api_endpoints.unwrap_or(0) }),
+        ))
     }
 }
 
@@ -354,10 +387,14 @@ pub async fn check_scheduled_job_limit(ctx: &LicenseContext, pool: &PgPool) -> R
     if ctx.can_create_scheduled_job(pool).await? {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "已达到定时任务数量上限（{}），请升级 License",
-            ctx.claims.max_scheduled_jobs.unwrap_or(0)
-        )))
+        Err(AppError::forbidden_coded(
+            "lic_scheduled_job_limit_reached",
+            format!(
+                "已达到定时任务数量上限（{}），请升级 License",
+                ctx.claims.max_scheduled_jobs.unwrap_or(0)
+            ),
+            serde_json::json!({ "max": ctx.claims.max_scheduled_jobs.unwrap_or(0) }),
+        ))
     }
 }
 
@@ -366,10 +403,14 @@ pub async fn check_database_connection_limit(ctx: &LicenseContext, pool: &PgPool
     if ctx.can_add_database_connection(pool).await? {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "已达到数据库连接数量上限（{}），请升级 License",
-            ctx.claims.max_database_connections.unwrap_or(0)
-        )))
+        Err(AppError::forbidden_coded(
+            "lic_db_connection_limit_reached",
+            format!(
+                "已达到数据库连接数量上限（{}），请升级 License",
+                ctx.claims.max_database_connections.unwrap_or(0)
+            ),
+            serde_json::json!({ "max": ctx.claims.max_database_connections.unwrap_or(0) }),
+        ))
     }
 }
 
@@ -378,10 +419,14 @@ pub async fn check_team_member_limit(ctx: &LicenseContext, pool: &PgPool) -> Res
     if ctx.can_add_team_member(pool).await? {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!(
-            "已达到团队成员数量上限（{}），请升级 License 或移除未使用的成员",
-            ctx.claims.max_team_members.unwrap_or(0)
-        )))
+        Err(AppError::forbidden_coded(
+            "lic_team_member_limit_reached",
+            format!(
+                "已达到团队成员数量上限（{}），请升级 License 或移除未使用的成员",
+                ctx.claims.max_team_members.unwrap_or(0)
+            ),
+            serde_json::json!({ "max": ctx.claims.max_team_members.unwrap_or(0) }),
+        ))
     }
 }
 
@@ -402,10 +447,14 @@ pub async fn check_tenant_limit_with_state(state: &LicenseState, pool: &PgPool) 
                 .await?;
 
         if current_count >= max_tenants as i64 {
-            return Err(AppError::Forbidden(format!(
-                "已达到项目数量上限（{}），请升级 License 或删除未使用的项目",
-                max_tenants
-            )));
+            return Err(AppError::forbidden_coded(
+                "lic_project_limit_reached",
+                format!(
+                    "已达到项目数量上限（{}），请升级 License 或删除未使用的项目",
+                    max_tenants
+                ),
+                serde_json::json!({ "max": max_tenants }),
+            ));
         }
     }
 
@@ -426,10 +475,14 @@ pub async fn check_workflow_limit_with_state(state: &LicenseState, pool: &PgPool
         .await?;
 
         if current_count >= max_workflows as i64 {
-            return Err(AppError::Forbidden(format!(
-                "已达到工作流数量上限（{}），请升级 License 或删除未使用的工作流",
-                max_workflows
-            )));
+            return Err(AppError::forbidden_coded(
+                "lic_workflow_limit_reached",
+                format!(
+                    "已达到工作流数量上限（{}），请升级 License 或删除未使用的工作流",
+                    max_workflows
+                ),
+                serde_json::json!({ "max": max_workflows }),
+            ));
         }
     }
 
@@ -453,10 +506,11 @@ pub async fn check_scheduled_job_limit_with_state(
         .await?;
 
         if current_count >= max_jobs as i64 {
-            return Err(AppError::Forbidden(format!(
-                "已达到定时任务数量上限（{}），请升级 License",
-                max_jobs
-            )));
+            return Err(AppError::forbidden_coded(
+                "lic_scheduled_job_limit_reached",
+                format!("已达到定时任务数量上限（{}），请升级 License", max_jobs),
+                serde_json::json!({ "max": max_jobs }),
+            ));
         }
     }
 
@@ -480,10 +534,11 @@ pub async fn check_database_connection_limit_with_state(
         .await?;
 
         if current_count >= max_conns as i64 {
-            return Err(AppError::Forbidden(format!(
-                "已达到数据库连接数量上限（{}），请升级 License",
-                max_conns
-            )));
+            return Err(AppError::forbidden_coded(
+                "lic_db_connection_limit_reached",
+                format!("已达到数据库连接数量上限（{}），请升级 License", max_conns),
+                serde_json::json!({ "max": max_conns }),
+            ));
         }
     }
 
@@ -504,10 +559,14 @@ pub async fn check_team_member_limit_with_state(state: &LicenseState, pool: &PgP
         .await?;
 
         if current_count >= max_members as i64 {
-            return Err(AppError::Forbidden(format!(
-                "已达到团队成员数量上限（{}），请升级 License 或移除未使用的成员",
-                max_members
-            )));
+            return Err(AppError::forbidden_coded(
+                "lic_team_member_limit_reached",
+                format!(
+                    "已达到团队成员数量上限（{}），请升级 License 或移除未使用的成员",
+                    max_members
+                ),
+                serde_json::json!({ "max": max_members }),
+            ));
         }
     }
 
@@ -532,10 +591,11 @@ pub async fn check_api_endpoint_limit_with_state(
         .await?;
 
         if current_count >= max_endpoints as i64 {
-            return Err(AppError::Forbidden(format!(
-                "已达到 API 端点数量上限（{}），请升级 License",
-                max_endpoints
-            )));
+            return Err(AppError::forbidden_coded(
+                "lic_api_endpoint_limit_reached",
+                format!("已达到 API 端点数量上限（{}），请升级 License", max_endpoints),
+                serde_json::json!({ "max": max_endpoints }),
+            ));
         }
     }
 

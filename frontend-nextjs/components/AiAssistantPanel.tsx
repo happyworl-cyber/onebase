@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { useTranslations } from 'next-intl'
 import { useParams, usePathname } from 'next/navigation'
 import { useAppStore } from '@/lib/store'
 import {
@@ -154,6 +155,7 @@ function SafeMarkdown({ content }: { content: string }) {
 }
 
 export default function AiAssistantPanel() {
+  const t = useTranslations('aiAssistant')
   const params = useParams<{ projectId?: string | string[] }>()
   const pathname = usePathname()
   const currentProject = useAppStore((state) => state.currentProject)
@@ -162,10 +164,18 @@ export default function AiAssistantPanel() {
   const pathProjectId = routeMatch ? Number(routeMatch[1]) : null
   const paramProjectId = routeParam && /^\d+$/.test(routeParam) ? Number(routeParam) : null
   const isWorkspaceRoute = pathname.startsWith('/workspace/')
+  // `useAppStore` 的 currentProject 在模块初始化时同步读 localStorage（见 lib/store.ts），
+  // 所以服务端渲染拿到 null、客户端首次渲染就已有值 —— 直接用会 hydration 不匹配
+  // （Server: "项目加载中" / Client: 项目名）。这里让首帧与服务端保持一致，挂载后再放行。
+  const [hydrated, setHydrated] = useState(false)
+  useEffect(() => {
+    setHydrated(true)
+  }, [])
   // URL 是权威信源；pathname 与 useParams 必须一致，且 store 已加载同一项目后才可发送。
   const routeProjectId =
     pathProjectId && paramProjectId === pathProjectId ? pathProjectId : null
-  const projectReady = routeProjectId !== null && currentProject?.id === routeProjectId
+  const projectReady =
+    hydrated && routeProjectId !== null && currentProject?.id === routeProjectId
   const projectId = projectReady ? routeProjectId : null
   const projectScopeKey = routeProjectId === null ? 'no-project' : `project:${routeProjectId}`
   const projectContextKey = `${projectScopeKey}:${projectReady ? 'ready' : 'loading'}`
@@ -228,7 +238,7 @@ export default function AiAssistantPanel() {
   const effectiveWidth = isMobile ? viewportWidth : Math.min(width, maxAllowed)
 
   useEffect(() => {
-    window.dispatchEvent(new CustomEvent('onebase:ai-panel', {
+    window.dispatchEvent(new CustomEvent('planeos:ai-panel', {
       detail: { open, width: effectiveWidth, mobile: isMobile },
     }))
     const offset = open && !isMobile ? effectiveWidth : 0
@@ -263,7 +273,7 @@ export default function AiAssistantPanel() {
     setStreaming(false)
     setMessages((prev) => prev.map((message, index) =>
       message.role === 'assistant' && !message.content && index === prev.length - 1
-        ? { ...message, content: '已停止生成。' }
+        ? { ...message, content: t('stopped') }
         : message,
     ))
   }, [])
@@ -282,8 +292,8 @@ export default function AiAssistantPanel() {
     if (!projectId) {
       setError(
         isWorkspaceRoute
-          ? '项目正在切换或加载，请等待项目上下文就绪后再发送。'
-          : '未选择项目。请先进入一个项目，再使用 AI 助手。',
+          ? t('switchingWait')
+          : t('noProjectSelected'),
       )
       return
     }
@@ -317,17 +327,17 @@ export default function AiAssistantPanel() {
         ))
       }
       if (event.type === 'error') {
-        setError(event.message || 'AI Provider 返回未知错误')
+        setError(event.message || t('providerError'))
         setMessages((prev) => prev.map((message) =>
           message.id === assistantId && !message.content
-            ? { ...message, content: '抱歉，本次回答未能生成。' }
+            ? { ...message, content: t('sorryNoAnswer') }
             : message,
         ))
       }
       if (event.type === 'done') {
         setMessages((prev) => prev.map((message) =>
           message.id === assistantId && !message.content
-            ? { ...message, content: 'Provider 未返回文本内容。' }
+            ? { ...message, content: t('noText') }
             : message,
         ))
         if (!openRef.current) setUnread(true)
@@ -342,10 +352,10 @@ export default function AiAssistantPanel() {
         scopeRef.current === requestScope &&
         (err as Error)?.name !== 'AbortError'
       ) {
-        const message = err instanceof Error ? err.message : 'AI 请求失败，请稍后重试'
+        const message = err instanceof Error ? err.message : t('reqFailed')
         setError(message)
         setMessages((prev) => prev.map((item) =>
-          item.id === assistantId && !item.content ? { ...item, content: '抱歉，本次回答未能生成。' } : item,
+          item.id === assistantId && !item.content ? { ...item, content: t('sorryNoAnswer') } : item,
         ))
       }
     } finally {
@@ -467,6 +477,15 @@ export default function AiAssistantPanel() {
     }
   }
 
+  // 登录 / 改密 / SSO 回调这些未认证页面不挂助手：此时既没有项目上下文（助手不可用），
+  // 悬浮球又会成为页面上唯一的高饱和色块，破坏视觉层次。
+  // 注意必须放在所有 hooks 之后 —— 提前 return 不能改变 hooks 的调用顺序。
+  const isAuthRoute =
+    pathname === '/login' ||
+    pathname === '/change-password' ||
+    pathname.startsWith('/sso/')
+  if (isAuthRoute) return null
+
   return (
     <Fragment>
       <button
@@ -474,8 +493,8 @@ export default function AiAssistantPanel() {
         onPointerMove={onFabPointerMove}
         onPointerUp={(event) => endFabDrag(event, true)}
         onPointerCancel={(event) => endFabDrag(event, false)}
-        aria-label="AI 助手"
-        title="拖动可挪开；点击打开 AI 助手"
+        aria-label={t('assistantAria')}
+        title={t('dragHint')}
         style={fabPos ? { left: fabPos.x, top: fabPos.y, right: 'auto', bottom: 'auto' } : undefined}
         className={`fixed z-[9998] flex h-14 w-14 touch-none items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-500/30 hover:shadow-xl ${
           fabPos ? '' : 'bottom-6 right-6'
@@ -490,7 +509,7 @@ export default function AiAssistantPanel() {
       {isResizing && <div className="fixed inset-0 z-[10001] cursor-col-resize" />}
 
       <aside
-        aria-label="AI 助手面板"
+        aria-label={t('panelAria')}
         className={`fixed right-0 top-0 z-[10000] flex h-full flex-col border-l border-gray-200 bg-white shadow-2xl ${
           isResizing ? '' : 'transition-transform duration-300 ease-out'
         } ${open ? 'translate-x-0' : 'translate-x-full'}`}
@@ -501,7 +520,7 @@ export default function AiAssistantPanel() {
             onPointerDown={(event) => { event.preventDefault(); setIsResizing(true) }}
             onDoubleClick={() => { setWidth(DEFAULT_WIDTH); localStorage.setItem(STORAGE_WIDTH_KEY, String(DEFAULT_WIDTH)) }}
             className={`absolute left-0 top-0 z-10 h-full w-1.5 cursor-col-resize hover:bg-indigo-400/40 ${isResizing ? 'bg-indigo-400/60' : ''}`}
-            title="拖拽调整宽度（双击复位）"
+            title={t('resizeHint')}
           />
         )}
 
@@ -511,20 +530,20 @@ export default function AiAssistantPanel() {
               <i className="fas fa-robot text-sm" />
             </span>
             <div className="min-w-0">
-              <div className="text-sm font-semibold text-gray-900">AI 助手</div>
+              <div className="text-sm font-semibold text-gray-900">{t('assistant')}</div>
               <div className="truncate text-[10px] text-gray-500">
-                {modelLabel || (projectReady ? currentProject?.name : null) || (isWorkspaceRoute ? '项目加载中' : '未选择项目')}
+                {modelLabel || (projectReady ? currentProject?.name : null) || (isWorkspaceRoute ? t('projectLoading') : t('noProject'))}
               </div>
             </div>
           </div>
           <div className="flex items-center gap-1">
-            <button onClick={newSession} title="新会话" className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-200 hover:text-gray-600">
+            <button onClick={newSession} title={t('newSession')} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-200 hover:text-gray-600">
               <i className="fas fa-plus text-sm" />
             </button>
-            <button onClick={stop} disabled={!streaming} title="停止生成" className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-200 hover:text-gray-600 disabled:opacity-30">
+            <button onClick={stop} disabled={!streaming} title={t('stopGen')} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-200 hover:text-gray-600 disabled:opacity-30">
               <i className="fas fa-stop text-sm" />
             </button>
-            <button onClick={close} title="关闭" className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-200 hover:text-gray-600">
+            <button onClick={close} title={t('close')} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-200 hover:text-gray-600">
               <i className="fas fa-times" />
             </button>
           </div>
@@ -536,13 +555,13 @@ export default function AiAssistantPanel() {
               <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-600">
                 <i className="fas fa-wand-magic-sparkles text-xl" />
               </span>
-              <h2 className="text-base font-semibold text-gray-900">有什么可以帮你？</h2>
+              <h2 className="text-base font-semibold text-gray-900">{t('greeting')}</h2>
               <p className="mt-2 text-sm leading-6 text-gray-500">
                 {projectReady
-                  ? '我可以结合当前项目的工作流和数据库元数据协助分析。'
+                  ? t('introReady')
                   : isWorkspaceRoute
-                    ? '项目正在切换或加载，项目上下文就绪后即可开始对话。'
-                    : '请先进入一个项目，再开始对话。'}
+                    ? t('introSwitching')
+                    : t('introNoProject')}
               </p>
             </div>
           )}
@@ -557,7 +576,7 @@ export default function AiAssistantPanel() {
                   {message.role === 'assistant' ? (
                     message.content
                       ? <SafeMarkdown content={message.content} />
-                      : <span className="flex items-center gap-2 text-sm text-gray-400"><i className="fas fa-circle-notch fa-spin" />正在思考…</span>
+                      : <span className="flex items-center gap-2 text-sm text-gray-400"><i className="fas fa-circle-notch fa-spin" />{t('thinking')}</span>
                   ) : (
                     <div className="whitespace-pre-wrap break-words text-sm leading-6">{message.content}</div>
                   )}
@@ -593,21 +612,21 @@ export default function AiAssistantPanel() {
               rows={2}
               placeholder={
                 projectReady
-                  ? '输入问题，Enter 发送，Shift+Enter 换行'
+                  ? t('phInput')
                   : isWorkspaceRoute
-                    ? '项目加载中，请稍候'
-                    : '请先进入一个项目'
+                    ? t('phLoading')
+                    : t('phNoProject')
               }
               className="block max-h-36 min-h-[48px] w-full resize-none border-0 bg-transparent px-1 text-sm outline-none placeholder:text-gray-400 disabled:bg-transparent"
             />
             <div className="flex items-center justify-between pt-1">
-              <span className="px-1 text-[10px] text-gray-400">回答仅在当前页面内存中保存</span>
+              <span className="px-1 text-[10px] text-gray-400">{t('memoryNote')}</span>
               {streaming ? (
                 <button type="button" onClick={stop} className="flex h-8 items-center gap-1.5 rounded-lg bg-gray-900 px-3 text-xs font-medium text-white">
-                  <i className="fas fa-stop" />停止
+                  <i className="fas fa-stop" />{t('stop')}
                 </button>
               ) : (
-                <button type="submit" disabled={!input.trim() || !projectReady} className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40" title="发送">
+                <button type="submit" disabled={!input.trim() || !projectReady} className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40" title={t('send')}>
                   <i className="fas fa-arrow-up text-xs" />
                 </button>
               )}

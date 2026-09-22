@@ -205,7 +205,9 @@ fn random_hex(bytes: usize) -> String {
 }
 
 fn random_code() -> String {
-    format!("crac_{}", random_hex(24))
+    // 前缀与 obm_ / obp_ / obes_ 同族。无任何按前缀的校验逻辑，改前缀不影响
+    // 已签发凭证（都按完整值查库）。
+    format!("obac_{}", random_hex(24))
 }
 
 fn callback_uri(base: &str, provider_type: &str) -> String {
@@ -217,8 +219,13 @@ fn callback_uri(base: &str, provider_type: &str) -> String {
 }
 
 fn build_redirect_with_params(base: &str, params: &[(&str, &str)]) -> Result<String> {
-    let mut url = reqwest::Url::parse(base)
-        .map_err(|_| AppError::InvalidQuery(format!("无效的 redirect_uri: {}", base)))?;
+    let mut url = reqwest::Url::parse(base).map_err(|_| {
+        AppError::validation(
+            "idp_oidc_invalid_redirect_uri",
+            format!("无效的 redirect_uri: {}", base),
+            serde_json::json!({ "redirect_uri": base }),
+        )
+    })?;
     {
         let mut pairs = url.query_pairs_mut();
         for (k, v) in params {
@@ -249,19 +256,26 @@ fn parse_scopes(raw: Option<&str>, allowed_scopes: &[String]) -> Result<Vec<Stri
     };
 
     if scopes.is_empty() {
-        return Err(AppError::InvalidQuery("scope 不能为空".to_string()));
+        return Err(AppError::validation(
+            "idp_oidc_scope_required",
+            "scope 不能为空",
+            serde_json::json!({}),
+        ));
     }
     for scope in &scopes {
         if !allowed_scopes.contains(scope) {
-            return Err(AppError::InvalidQuery(format!(
-                "scope {} 未在该 client 的 allowed_scopes 中启用",
-                scope
-            )));
+            return Err(AppError::validation(
+                "idp_oidc_scope_not_allowed",
+                format!("scope {} 未在该 client 的 allowed_scopes 中启用", scope),
+                serde_json::json!({ "scope": scope }),
+            ));
         }
     }
     if !scopes.iter().any(|s| s == "openid") {
-        return Err(AppError::InvalidQuery(
-            "OIDC 请求必须包含 openid scope".to_string(),
+        return Err(AppError::validation(
+            "idp_oidc_openid_scope_required",
+            "OIDC 请求必须包含 openid scope",
+            serde_json::json!({}),
         ));
     }
     Ok(scopes)
@@ -319,15 +333,25 @@ fn build_runtime_sso_provider(provider: &IdpProjectProvider) -> Result<sso::SsoP
                 .filter(|s| !s.is_empty())
         };
         let team_id = field("team_id").ok_or_else(|| {
-            AppError::InvalidQuery("Apple 缺少 Team ID（provider_config.team_id）".to_string())
+            AppError::validation(
+                "idp_oidc_apple_missing_team_id",
+                "Apple 缺少 Team ID（provider_config.team_id）",
+                serde_json::json!({}),
+            )
         })?;
         let key_id = field("key_id").ok_or_else(|| {
-            AppError::InvalidQuery("Apple 缺少 Key ID（provider_config.key_id）".to_string())
+            AppError::validation(
+                "idp_oidc_apple_missing_key_id",
+                "Apple 缺少 Key ID（provider_config.key_id）",
+                serde_json::json!({}),
+            )
         })?;
         let private_key_pem = crypto::decrypt_secret(&provider.client_secret_enc)?;
         if private_key_pem.trim().is_empty() {
-            return Err(AppError::InvalidQuery(
-                "Apple 缺少私钥(.p8)——请在凭证里填写".to_string(),
+            return Err(AppError::validation(
+                "idp_oidc_apple_missing_private_key",
+                "Apple 缺少私钥(.p8)——请在凭证里填写",
+                serde_json::json!({}),
             ));
         }
         let jwt = apple_client_secret(team_id, key_id, &private_key_pem, &provider.client_id)?;
@@ -339,7 +363,6 @@ fn build_runtime_sso_provider(provider: &IdpProjectProvider) -> Result<sso::SsoP
     let (user_id_field, email_field, name_field, avatar_field) =
         match provider.provider_type.as_str() {
             "github" => ("id", "email", "name", "avatar_url"),
-            "mind" => ("UserID", "email", "name", "picture"),
             _ => ("sub", "email", "name", "picture"),
         };
 
@@ -404,7 +427,13 @@ async fn load_oauth_client(pool: &PgPool, client_id: &str) -> Result<OauthClient
     .bind(client_id)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::Unauthorized("未知的 client_id".to_string()))?;
+    .ok_or_else(|| {
+        AppError::unauthorized_coded(
+            "idp_oidc_unknown_client",
+            "未知的 client_id",
+            serde_json::json!({}),
+        )
+    })?;
 
     Ok(OauthClient {
         client_id: row.get("client_id"),
@@ -427,16 +456,26 @@ async fn authenticate_client(
 ) -> Result<OauthClient> {
     let client = load_oauth_client(pool, client_id).await?;
     if !client.is_active {
-        return Err(AppError::Unauthorized(
-            "该 OAuth2 Client 已停用".to_string(),
+        return Err(AppError::unauthorized_coded(
+            "idp_oidc_client_inactive",
+            "该 OAuth2 Client 已停用",
+            serde_json::json!({}),
         ));
     }
     if let Some(secret) = client_secret {
         if hash_secret(secret) != client.client_secret_hash {
-            return Err(AppError::Unauthorized("client_secret 无效".to_string()));
+            return Err(AppError::unauthorized_coded(
+                "idp_oidc_client_secret_invalid",
+                "client_secret 无效",
+                serde_json::json!({}),
+            ));
         }
     } else if !allow_pkce_without_secret {
-        return Err(AppError::Unauthorized("缺少 client_secret".to_string()));
+        return Err(AppError::unauthorized_coded(
+            "idp_oidc_client_secret_missing",
+            "缺少 client_secret",
+            serde_json::json!({}),
+        ));
     }
     Ok(client)
 }
@@ -469,7 +508,13 @@ async fn load_available_provider(
     .bind(provider_type)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::InvalidQuery(format!("provider {} 对该 client 不可用", provider_type)))?;
+    .ok_or_else(|| {
+        AppError::validation(
+            "idp_oidc_provider_unavailable",
+            format!("provider {} 对该 client 不可用", provider_type),
+            serde_json::json!({ "provider_type": provider_type }),
+        )
+    })?;
 
     Ok(IdpProjectProvider {
         tenant_id: row.get("tenant_id"),
@@ -526,11 +571,21 @@ async fn load_auth_state(pool: &PgPool, state_token: &str) -> Result<Authorizati
     .bind(state_token)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::Unauthorized("无效的授权 state".to_string()))?;
+    .ok_or_else(|| {
+        AppError::unauthorized_coded(
+            "idp_oidc_auth_state_invalid",
+            "无效的授权 state",
+            serde_json::json!({}),
+        )
+    })?;
 
     let expires_at: chrono::DateTime<chrono::Utc> = row.get("expires_at");
     if expires_at < Utc::now() {
-        return Err(AppError::Unauthorized("授权 state 已过期".to_string()));
+        return Err(AppError::unauthorized_coded(
+            "idp_oidc_auth_state_expired",
+            "授权 state 已过期",
+            serde_json::json!({}),
+        ));
     }
 
     Ok(AuthorizationState {
@@ -807,7 +862,13 @@ fn decode_rs256_claims(token: &str, signing_key: &SigningKeyMaterial) -> Result<
             .map_err(|e| AppError::Internal(format!("加载 RSA 公钥失败: {}", e)))?,
         &validation,
     )
-    .map_err(|e| AppError::Unauthorized(format!("token 验证失败: {}", e)))?;
+    .map_err(|e| {
+        AppError::unauthorized_coded(
+            "idp_oidc_token_verify_failed",
+            format!("token 验证失败: {}", e),
+            serde_json::json!({ "reason": e.to_string() }),
+        )
+    })?;
     Ok(claims.claims)
 }
 
@@ -830,9 +891,13 @@ fn extract_bearer_or_body_token(headers: &HeaderMap, body_token: Option<&str>) -
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
     {
-        let token = auth_header
-            .strip_prefix("Bearer ")
-            .ok_or_else(|| AppError::Unauthorized("Authorization 必须使用 Bearer".to_string()))?;
+        let token = auth_header.strip_prefix("Bearer ").ok_or_else(|| {
+            AppError::unauthorized_coded(
+                "idp_oidc_bearer_required",
+                "Authorization 必须使用 Bearer",
+                serde_json::json!({}),
+            )
+        })?;
         return Ok(token.to_string());
     }
 
@@ -840,17 +905,28 @@ fn extract_bearer_or_body_token(headers: &HeaderMap, body_token: Option<&str>) -
         return Ok(token.to_string());
     }
 
-    Err(AppError::Unauthorized(
-        "缺少 access token（Bearer 或 body.access_token）".to_string(),
+    Err(AppError::unauthorized_coded(
+        "idp_oidc_access_token_missing",
+        "缺少 access token（Bearer 或 body.access_token）",
+        serde_json::json!({}),
     ))
 }
 
 async fn decode_userinfo_token(pool: &PgPool, token: &str) -> Result<OidcTokenClaims> {
-    let header = decode_header(token)
-        .map_err(|e| AppError::Unauthorized(format!("token header 解析失败: {}", e)))?;
-    let kid = header
-        .kid
-        .ok_or_else(|| AppError::Unauthorized("token 缺少 kid".to_string()))?;
+    let header = decode_header(token).map_err(|e| {
+        AppError::unauthorized_coded(
+            "idp_oidc_token_header_invalid",
+            format!("token header 解析失败: {}", e),
+            serde_json::json!({ "reason": e.to_string() }),
+        )
+    })?;
+    let kid = header.kid.ok_or_else(|| {
+        AppError::unauthorized_coded(
+            "idp_oidc_token_missing_kid",
+            "token 缺少 kid",
+            serde_json::json!({}),
+        )
+    })?;
     let row = sqlx::query(
         r#"
         SELECT kid, public_key_pem, private_key_enc
@@ -861,7 +937,9 @@ async fn decode_userinfo_token(pool: &PgPool, token: &str) -> Result<OidcTokenCl
     .bind(&kid)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::Unauthorized("未知的 kid".to_string()))?;
+    .ok_or_else(|| {
+        AppError::unauthorized_coded("idp_oidc_unknown_kid", "未知的 kid", serde_json::json!({}))
+    })?;
 
     let signing_key = SigningKeyMaterial {
         kid: row.get("kid"),
@@ -880,7 +958,7 @@ async fn issue_refresh_token(
     auth_method: Option<&str>,
     ttl_secs: i32,
 ) -> Result<String> {
-    let refresh_token = format!("crrt_{}", random_hex(32));
+    let refresh_token = format!("obrt_{}", random_hex(32));
     sqlx::query(
         r#"
         INSERT INTO management.oauth2_refresh_tokens
@@ -1024,15 +1102,19 @@ pub async fn oauth2_authorize(
 ) -> Result<Response> {
     let request_base = request_base_from_headers(&headers);
     if q.response_type.as_deref().unwrap_or("code") != "code" {
-        return Err(AppError::InvalidQuery(
-            "当前仅支持 response_type=code".to_string(),
+        return Err(AppError::validation(
+            "idp_oidc_response_type_unsupported",
+            "当前仅支持 response_type=code",
+            serde_json::json!({}),
         ));
     }
 
     let client = load_oauth_client(&pool, &q.client_id).await?;
     if !client.is_active {
-        return Err(AppError::Unauthorized(
-            "该 OAuth2 Client 已停用".to_string(),
+        return Err(AppError::unauthorized_coded(
+            "idp_oidc_client_inactive",
+            "该 OAuth2 Client 已停用",
+            serde_json::json!({}),
         ));
     }
     if !client
@@ -1040,8 +1122,10 @@ pub async fn oauth2_authorize(
         .iter()
         .any(|uri| uri == &q.redirect_uri)
     {
-        return Err(AppError::InvalidQuery(
-            "redirect_uri 未在 client 白名单中".to_string(),
+        return Err(AppError::validation(
+            "idp_oidc_redirect_uri_not_whitelisted",
+            "redirect_uri 未在 client 白名单中",
+            serde_json::json!({}),
         ));
     }
     let provider_type = if let Some(connection) = q.connection.as_deref() {
@@ -1050,8 +1134,10 @@ pub async fn oauth2_authorize(
         let providers =
             list_enabled_provider_types(&pool, client.tenant_id, &client.client_id).await?;
         if providers.is_empty() {
-            return Err(AppError::NotFound(
-                "该 client 当前没有可用的登录 Provider".to_string(),
+            return Err(AppError::not_found_coded(
+                "idp_oidc_no_provider_available",
+                "该 client 当前没有可用的登录 Provider",
+                serde_json::json!({}),
             ));
         }
 
@@ -1108,13 +1194,17 @@ pub async fn oauth2_authorize(
 
     if client.require_pkce {
         if q.code_challenge.as_deref().unwrap_or("").is_empty() {
-            return Err(AppError::InvalidQuery(
-                "该 client 要求 PKCE，必须提供 code_challenge".to_string(),
+            return Err(AppError::validation(
+                "idp_oidc_pkce_challenge_required",
+                "该 client 要求 PKCE，必须提供 code_challenge",
+                serde_json::json!({}),
             ));
         }
         if q.code_challenge_method.as_deref() != Some("S256") {
-            return Err(AppError::InvalidQuery(
-                "当前仅支持 code_challenge_method=S256".to_string(),
+            return Err(AppError::validation(
+                "idp_oidc_pkce_method_unsupported",
+                "当前仅支持 code_challenge_method=S256",
+                serde_json::json!({}),
             ));
         }
     }
@@ -1153,7 +1243,7 @@ pub async fn oauth2_authorize(
     Ok(Redirect::temporary(&upstream_redirect).into_response())
 }
 
-/// GET 回调（Google / GitHub / Mind 等标准 query 重定向）。
+/// GET 回调（Google / GitHub 等标准 query 重定向）。
 pub async fn oauth2_upstream_callback(
     State(pool): State<PgPool>,
     headers: HeaderMap,
@@ -1185,8 +1275,10 @@ async fn process_upstream_callback(
     let auth_state = load_auth_state(&pool, &q.state).await?;
     if auth_state.provider_type != provider_type {
         delete_auth_state(&pool, &q.state).await?;
-        return Err(AppError::Unauthorized(
-            "回调 provider 与授权阶段不一致".to_string(),
+        return Err(AppError::unauthorized_coded(
+            "idp_oidc_callback_provider_mismatch",
+            "回调 provider 与授权阶段不一致",
+            serde_json::json!({}),
         ));
     }
 
@@ -1226,10 +1318,13 @@ async fn process_upstream_callback(
         return Ok(redirect);
     }
 
-    let code = q
-        .code
-        .as_deref()
-        .ok_or_else(|| AppError::Unauthorized("上游回调缺少 code".to_string()))?;
+    let code = q.code.as_deref().ok_or_else(|| {
+        AppError::unauthorized_coded(
+            "idp_oidc_callback_code_missing",
+            "上游回调缺少 code",
+            serde_json::json!({}),
+        )
+    })?;
     let provider = load_available_provider(
         &pool,
         auth_state.tenant_id,
@@ -1325,16 +1420,17 @@ pub async fn oauth2_token(
     Form(req): Form<TokenRequest>,
 ) -> Result<Json<serde_json::Value>> {
     let request_base = request_base_from_headers(&headers);
-    let client_id = req
-        .client_id
-        .as_deref()
-        .ok_or_else(|| AppError::InvalidQuery("缺少 client_id".to_string()))?;
+    let client_id = req.client_id.as_deref().ok_or_else(|| {
+        AppError::validation("idp_oidc_client_id_missing", "缺少 client_id", serde_json::json!({}))
+    })?;
     match req.grant_type.as_str() {
         "authorization_code" => {}
         "refresh_token" => {}
         _ => {
-            return Err(AppError::InvalidQuery(
-                "当前仅支持 authorization_code / refresh_token grant".to_string(),
+            return Err(AppError::validation(
+                "idp_oidc_grant_type_unsupported",
+                "当前仅支持 authorization_code / refresh_token grant",
+                serde_json::json!({}),
             ))
         }
     }
@@ -1342,10 +1438,13 @@ pub async fn oauth2_token(
     if req.grant_type == "refresh_token" {
         let client =
             authenticate_client(&pool, client_id, req.client_secret.as_deref(), false).await?;
-        let refresh_token = req
-            .refresh_token
-            .as_deref()
-            .ok_or_else(|| AppError::InvalidQuery("缺少 refresh_token".to_string()))?;
+        let refresh_token = req.refresh_token.as_deref().ok_or_else(|| {
+            AppError::validation(
+                "idp_oidc_refresh_token_missing",
+                "缺少 refresh_token",
+                serde_json::json!({}),
+            )
+        })?;
 
         let row = sqlx::query(
             r#"
@@ -1363,20 +1462,30 @@ pub async fn oauth2_token(
         .bind(client_id)
         .fetch_optional(&pool)
         .await?
-        .ok_or_else(|| AppError::Unauthorized("refresh_token 无效".to_string()))?;
+        .ok_or_else(|| {
+            AppError::unauthorized_coded(
+                "idp_oidc_refresh_token_invalid",
+                "refresh_token 无效",
+                serde_json::json!({}),
+            )
+        })?;
 
         let family_id: String = row.get("family_id");
         if row.get::<bool, _>("revoked") || row.get::<bool, _>("rotated") {
             revoke_refresh_family(&pool, &family_id).await?;
-            return Err(AppError::Unauthorized(
-                "refresh_token 已失效，请重新登录".to_string(),
+            return Err(AppError::unauthorized_coded(
+                "idp_oidc_refresh_token_revoked",
+                "refresh_token 已失效，请重新登录",
+                serde_json::json!({}),
             ));
         }
         let expires_at: chrono::DateTime<chrono::Utc> = row.get("expires_at");
         if expires_at < Utc::now() {
             revoke_refresh_family(&pool, &family_id).await?;
-            return Err(AppError::Unauthorized(
-                "refresh_token 已过期，请重新登录".to_string(),
+            return Err(AppError::unauthorized_coded(
+                "idp_oidc_refresh_token_expired",
+                "refresh_token 已过期，请重新登录",
+                serde_json::json!({}),
             ));
         }
 
@@ -1407,14 +1516,16 @@ pub async fn oauth2_token(
         return Ok(Json(body));
     }
 
-    let code = req
-        .code
-        .as_deref()
-        .ok_or_else(|| AppError::InvalidQuery("缺少 code".to_string()))?;
-    let redirect_uri = req
-        .redirect_uri
-        .as_deref()
-        .ok_or_else(|| AppError::InvalidQuery("缺少 redirect_uri".to_string()))?;
+    let code = req.code.as_deref().ok_or_else(|| {
+        AppError::validation("idp_oidc_code_missing", "缺少 code", serde_json::json!({}))
+    })?;
+    let redirect_uri = req.redirect_uri.as_deref().ok_or_else(|| {
+        AppError::validation(
+            "idp_oidc_redirect_uri_missing",
+            "缺少 redirect_uri",
+            serde_json::json!({}),
+        )
+    })?;
 
     let client = authenticate_client(&pool, client_id, req.client_secret.as_deref(), true).await?;
 
@@ -1434,39 +1545,64 @@ pub async fn oauth2_token(
     .bind(client_id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::Unauthorized("授权码无效".to_string()))?;
+    .ok_or_else(|| {
+        AppError::unauthorized_coded("idp_oidc_auth_code_invalid", "授权码无效", serde_json::json!({}))
+    })?;
 
     if row.get::<bool, _>("used") {
-        return Err(AppError::Unauthorized("授权码已被使用".to_string()));
+        return Err(AppError::unauthorized_coded(
+            "idp_oidc_auth_code_used",
+            "授权码已被使用",
+            serde_json::json!({}),
+        ));
     }
     let expires_at: chrono::DateTime<chrono::Utc> = row.get("expires_at");
     if expires_at < Utc::now() {
-        return Err(AppError::Unauthorized("授权码已过期".to_string()));
+        return Err(AppError::unauthorized_coded(
+            "idp_oidc_auth_code_expired",
+            "授权码已过期",
+            serde_json::json!({}),
+        ));
     }
     let stored_redirect_uri: String = row.get("redirect_uri");
     if stored_redirect_uri != redirect_uri {
-        return Err(AppError::Unauthorized(
-            "redirect_uri 与授权阶段不一致".to_string(),
+        return Err(AppError::unauthorized_coded(
+            "idp_oidc_redirect_uri_mismatch",
+            "redirect_uri 与授权阶段不一致",
+            serde_json::json!({}),
         ));
     }
 
     let stored_challenge: Option<String> = row.get("code_challenge");
     let stored_challenge_method: Option<String> = row.get("challenge_method");
     if client.require_pkce || stored_challenge.is_some() {
-        let verifier = req
-            .code_verifier
-            .as_deref()
-            .ok_or_else(|| AppError::Unauthorized("缺少 code_verifier".to_string()))?;
+        let verifier = req.code_verifier.as_deref().ok_or_else(|| {
+            AppError::unauthorized_coded(
+                "idp_oidc_code_verifier_missing",
+                "缺少 code_verifier",
+                serde_json::json!({}),
+            )
+        })?;
         if stored_challenge_method.as_deref() != Some("S256") {
-            return Err(AppError::Unauthorized("当前仅支持 S256 PKCE".to_string()));
+            return Err(AppError::unauthorized_coded(
+                "idp_oidc_pkce_s256_only",
+                "当前仅支持 S256 PKCE",
+                serde_json::json!({}),
+            ));
         }
         let derived = sso::pkce_challenge_s256(verifier);
         if Some(derived) != stored_challenge {
-            return Err(AppError::Unauthorized("code_verifier 校验失败".to_string()));
+            return Err(AppError::unauthorized_coded(
+                "idp_oidc_code_verifier_invalid",
+                "code_verifier 校验失败",
+                serde_json::json!({}),
+            ));
         }
     } else if req.client_secret.is_none() {
-        return Err(AppError::Unauthorized(
-            "该 client 需要 client_secret 或 PKCE".to_string(),
+        return Err(AppError::unauthorized_coded(
+            "idp_oidc_client_secret_or_pkce_required",
+            "该 client 需要 client_secret 或 PKCE",
+            serde_json::json!({}),
         ));
     }
 
@@ -1511,8 +1647,10 @@ pub async fn oauth2_userinfo(State(pool): State<PgPool>, headers: HeaderMap) -> 
     let claims = decode_userinfo_token(&pool, &token).await?;
 
     if claims.token_use.as_deref() != Some("access_token") {
-        return Err(AppError::Unauthorized(
-            "userinfo 只能使用 access_token".to_string(),
+        return Err(AppError::unauthorized_coded(
+            "idp_oidc_userinfo_access_token_only",
+            "userinfo 只能使用 access_token",
+            serde_json::json!({}),
         ));
     }
 
@@ -1528,8 +1666,10 @@ pub async fn oauth2_userinfo_post(
     let claims = decode_userinfo_token(&pool, &token).await?;
 
     if claims.token_use.as_deref() != Some("access_token") {
-        return Err(AppError::Unauthorized(
-            "userinfo 只能使用 access_token".to_string(),
+        return Err(AppError::unauthorized_coded(
+            "idp_oidc_userinfo_access_token_only",
+            "userinfo 只能使用 access_token",
+            serde_json::json!({}),
         ));
     }
 
@@ -1540,10 +1680,9 @@ pub async fn oauth2_revoke(
     State(pool): State<PgPool>,
     Form(req): Form<RevokeRequest>,
 ) -> Result<StatusCode> {
-    let client_id = req
-        .client_id
-        .as_deref()
-        .ok_or_else(|| AppError::InvalidQuery("缺少 client_id".to_string()))?;
+    let client_id = req.client_id.as_deref().ok_or_else(|| {
+        AppError::validation("idp_oidc_client_id_missing", "缺少 client_id", serde_json::json!({}))
+    })?;
     let _client =
         authenticate_client(&pool, client_id, req.client_secret.as_deref(), false).await?;
 

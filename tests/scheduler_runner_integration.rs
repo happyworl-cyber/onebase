@@ -9,11 +9,11 @@
 //!   单个 due 任务只会被其中一个 runner claim，最终 `scheduled_task_runs` 只有 1 行。
 //! - HTTP 调用本身会失败（example.test 不存在），无所谓——我们只验证 claim 去重。
 
-use onebase::scheduler::executors::{
+use planeos::scheduler::executors::{
     HttpExecutor, RpcExecutor, ShellExecutor, ShellSandboxMode, UnsupportedWorkflowExecutor,
     WorkflowKindExecutor,
 };
-use onebase::scheduler::runner::{SchedulerConfig, SchedulerRunner};
+use planeos::scheduler::runner::{SchedulerConfig, SchedulerRunner};
 use sqlx::PgPool;
 use std::sync::Arc;
 

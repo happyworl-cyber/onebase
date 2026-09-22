@@ -131,8 +131,10 @@ fn normalize_alert_webhook_url(url: Option<&str>) -> Result<Option<String>, AppE
         return Ok(None);
     }
     if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "sched_alert_webhook_url_scheme",
             "告警 Webhook URL 必须以 http:// 或 https:// 开头".to_string(),
+            serde_json::json!({}),
         ));
     }
     Ok(Some(trimmed.to_string()))
@@ -141,8 +143,10 @@ fn normalize_alert_webhook_url(url: Option<&str>) -> Result<Option<String>, AppE
 fn validate_alert_webhook_template(template: Option<&Value>) -> Result<(), AppError> {
     if let Some(v) = template {
         if !v.is_object() {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "sched_alert_webhook_template_not_object",
                 "告警 Webhook 模板必须是 JSON object".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -152,8 +156,10 @@ fn validate_alert_webhook_template(template: Option<&Value>) -> Result<(), AppEr
 fn validate_alert_throttle_hours(hours: Option<i32>) -> Result<(), AppError> {
     if let Some(h) = hours {
         if !(0..=720).contains(&h) {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "sched_alert_throttle_hours_range",
                 "告警限流小时数必须在 0 到 720 之间".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -171,17 +177,29 @@ async fn load_enabled_workflow_for_tenant(
     .bind(workflow_id)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("工作流不存在".into()))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded("sched_workflow_not_found", "工作流不存在", serde_json::json!({}))
+    })?;
 
     if wf.tenant_id != Some(tenant_id) {
-        return Err(AppError::InvalidQuery("工作流不属于当前项目".to_string()));
+        return Err(AppError::validation(
+            "sched_workflow_wrong_tenant",
+            "工作流不属于当前项目".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if !wf.is_enabled {
-        return Err(AppError::InvalidQuery("只能选择已启用的工作流".to_string()));
+        return Err(AppError::validation(
+            "sched_workflow_not_enabled",
+            "只能选择已启用的工作流".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if wf.published_version.is_none() {
-        return Err(AppError::InvalidQuery(
-            "只能选择已发布且启用的工作流".into(),
+        return Err(AppError::validation(
+            "sched_workflow_not_published",
+            "只能选择已发布且启用的工作流",
+            serde_json::json!({}),
         ));
     }
     Ok(wf)
@@ -190,8 +208,10 @@ async fn load_enabled_workflow_for_tenant(
 fn workflow_input_or_empty(v: Option<Value>) -> Result<Value, AppError> {
     let v = v.unwrap_or_else(|| json!({}));
     if !v.is_object() {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "sched_workflow_input_not_object",
             "workflow_input 必须是 JSON 对象".to_string(),
+            serde_json::json!({}),
         ));
     }
     Ok(v)
@@ -247,8 +267,10 @@ async fn validate_can_manage(
             if admins.contains(&t) {
                 Ok(())
             } else {
-                Err(AppError::Forbidden(
+                Err(AppError::forbidden_coded(
+                    "sched_manage_requires_tenant_admin",
                     "仅租户 owner/admin 可管理此任务".to_string(),
+                    serde_json::json!({}),
                 ))
             }
         }
@@ -272,14 +294,22 @@ async fn validate_database_belongs_to_tenant(
     .fetch_optional(pool)
     .await
     .map_err(|e| AppError::Internal(format!("查询数据库归属失败: {e}")))?
-    .ok_or_else(|| AppError::InvalidQuery("database_id 不存在或未启用".to_string()))?;
+    .ok_or_else(|| {
+        AppError::validation(
+            "sched_database_id_not_found",
+            "database_id 不存在或未启用".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
     match (tenant_id, owner_opt) {
         // 平台级任务（仅超管能创建到达此处）可指任何活跃库
         (None, _) => Ok(()),
         // 租户级任务必须指向同租户的库
         (Some(t), Some(o)) if t == o => Ok(()),
-        _ => Err(AppError::InvalidQuery(
+        _ => Err(AppError::validation(
+            "sched_database_id_wrong_tenant",
             "database_id 不属于指定的 tenant_id".to_string(),
+            serde_json::json!({}),
         )),
     }
 }
@@ -319,6 +349,24 @@ fn record_task_op(
         Some(t) => t,
         None => return,
     };
+    let (summary_code, summary_params) = match action {
+        crate::operation_log::action::CREATE => {
+            ("oplog_task_create", json!({ "name": task_name }))
+        }
+        crate::operation_log::action::DELETE => {
+            ("oplog_task_delete", json!({ "name": task_name }))
+        }
+        crate::operation_log::action::TRIGGER => {
+            ("oplog_task_trigger", json!({ "name": task_name }))
+        }
+        _ if summary.starts_with("启用") => {
+            ("oplog_task_enable", json!({ "name": task_name }))
+        }
+        _ if summary.starts_with("停用") => {
+            ("oplog_task_disable", json!({ "name": task_name }))
+        }
+        _ => ("oplog_task_update", json!({ "name": task_name })),
+    };
     let mut input = crate::operation_log::OperationLogInput::new(
         tenant_id,
         crate::operation_log::Actor::from_claims(claims),
@@ -331,7 +379,8 @@ fn record_task_op(
         crate::operation_log::resource_type::SCHEDULED_TASK,
         task_name.to_string(),
         Some(task_id.to_string()),
-    );
+    )
+    .summary_code(summary_code, summary_params);
     input.high_risk = high_risk;
     crate::operation_log::record(pool, input);
 }
@@ -340,7 +389,7 @@ pub async fn create_task(
     State(pool): State<PgPool>,
     Extension(claims): Extension<Claims>,
     api_key_ctx: Option<Extension<ApiKeyContext>>,
-    license_state: Option<Extension<crate::license::LicenseState>>,
+    license_state: Option<Extension<planeos::license::LicenseState>>,
     Json(mut req): Json<CreateTaskReq>,
 ) -> Result<Json<ScheduledTask>, AppError> {
     fill_from_api_key_context(
@@ -358,8 +407,10 @@ pub async fn create_task(
 
     let kind = req.kind.as_str();
     if kind != "rpc" && kind != "http" && kind != "shell" && kind != "workflow" {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "sched_kind_invalid",
             "kind 必须是 rpc / http / shell / workflow".to_string(),
+            serde_json::json!({}),
         ));
     }
     // shell 任务的鉴权完全交给 `validate_can_manage`：
@@ -373,15 +424,19 @@ pub async fn create_task(
 
     if kind == "rpc" {
         if req.database_id.is_none() || req.rpc_schema.is_none() || req.rpc_fn_name.is_none() {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "sched_rpc_missing_fields",
                 "rpc 任务必须提供 database_id / rpc_schema / rpc_fn_name".to_string(),
+                serde_json::json!({}),
             ));
         }
         validate_database_belongs_to_tenant(&pool, req.database_id.unwrap(), req.tenant_id).await?;
     } else if kind == "http" {
         if req.http_method.is_none() || req.http_url.is_none() {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "sched_http_missing_fields",
                 "http 任务必须提供 http_method / http_url".to_string(),
+                serde_json::json!({}),
             ));
         }
     } else if kind == "shell" {
@@ -391,14 +446,18 @@ pub async fn create_task(
             .map(|s| !s.trim().is_empty())
             .unwrap_or(false);
         if !script_ok {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "sched_shell_script_required",
                 "shell 任务必须提供非空的 shell_script".to_string(),
+                serde_json::json!({}),
             ));
         }
         if let Some(env) = &req.shell_env {
             if !env.is_object() {
-                return Err(AppError::InvalidQuery(
+                return Err(AppError::validation(
+                    "sched_shell_env_not_object",
                     "shell_env 必须是 JSON object（{key: value, ...}）".to_string(),
+                    serde_json::json!({}),
                 ));
             }
         }
@@ -409,11 +468,19 @@ pub async fn create_task(
     let mut workflow_input: Option<Value> = None;
     if kind == "workflow" {
         let tenant_id = req.tenant_id.ok_or_else(|| {
-            AppError::InvalidQuery("工作流任务必须属于一个项目（tenant_id）".into())
+            AppError::validation(
+                "sched_workflow_requires_tenant",
+                "工作流任务必须属于一个项目（tenant_id）",
+                serde_json::json!({}),
+            )
         })?;
-        let wf_id = req
-            .workflow_id
-            .ok_or_else(|| AppError::InvalidQuery("工作流任务必须提供 workflow_id".into()))?;
+        let wf_id = req.workflow_id.ok_or_else(|| {
+            AppError::validation(
+                "sched_workflow_id_required",
+                "工作流任务必须提供 workflow_id",
+                serde_json::json!({}),
+            )
+        })?;
         let wf = load_enabled_workflow_for_tenant(&pool, wf_id, tenant_id).await?;
         workflow_id = Some(wf.id);
         workflow_slug = Some(wf.slug.clone());
@@ -525,7 +592,11 @@ pub async fn list_tasks(
         }
         if let Some(t) = q.tenant_id {
             if !admins.contains(&t) {
-                return Err(AppError::Forbidden("无权查看该租户的定时任务".to_string()));
+                return Err(AppError::forbidden_coded(
+                    "sched_list_forbidden_tenant",
+                    "无权查看该租户的定时任务".to_string(),
+                    serde_json::json!({}),
+                ));
             }
             bind_idx += 1;
             where_parts.push(format!("t.tenant_id = ${}", bind_idx));
@@ -654,8 +725,10 @@ pub async fn update_task(
     // 显式传值才覆盖；不传（None）走 COALESCE 保留原值。
     if let Some(u) = req.http_url.as_deref() {
         if u.trim().is_empty() {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "sched_http_url_empty",
                 "http_url 不能为空字符串".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -679,9 +752,13 @@ pub async fn update_task(
     let mut workflow_input: Option<Value> = None;
     if task.kind == "workflow" {
         if let Some(wf_id) = req.workflow_id {
-            let tenant_id = task
-                .tenant_id
-                .ok_or_else(|| AppError::InvalidQuery("工作流任务缺少 tenant_id".into()))?;
+            let tenant_id = task.tenant_id.ok_or_else(|| {
+                AppError::validation(
+                    "sched_workflow_task_missing_tenant",
+                    "工作流任务缺少 tenant_id",
+                    serde_json::json!({}),
+                )
+            })?;
             let wf = load_enabled_workflow_for_tenant(&pool, wf_id, tenant_id).await?;
             workflow_id = Some(wf.id);
             workflow_slug = Some(wf.slug);
@@ -892,8 +969,10 @@ pub async fn run_now(
     // - 即使前端已把按钮禁掉，后端也要兜底防止直接 cURL 攻击面
     // 用户想"临时跑一次"应先 resume → run-now → pause（明确意图）。
     if !task.is_active {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "sched_run_now_task_inactive",
             "任务已停用；请先恢复（resume）后再触发，或在恢复后立即停用".to_string(),
+            serde_json::json!({}),
         ));
     }
     tracing::info!(
@@ -1066,8 +1145,10 @@ pub async fn dry_run(
 
     let kind = req.kind.as_str();
     if kind != "rpc" && kind != "http" && kind != "shell" && kind != "workflow" {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "sched_kind_invalid",
             "kind 必须是 rpc / http / shell / workflow".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -1086,37 +1167,53 @@ pub async fn dry_run(
             .map(|s| !s.trim().is_empty())
             .unwrap_or(false);
         if !script_ok {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "sched_shell_script_required",
                 "shell 任务必须提供非空的 shell_script".to_string(),
+                serde_json::json!({}),
             ));
         }
         if let Some(env) = &req.shell_env {
             if !env.is_object() {
-                return Err(AppError::InvalidQuery(
+                return Err(AppError::validation(
+                    "sched_dryrun_shell_env_not_object",
                     "shell_env 必须是 JSON object".to_string(),
+                    serde_json::json!({}),
                 ));
             }
         }
     } else if kind == "rpc" {
         if req.database_id.is_none() || req.rpc_schema.is_none() || req.rpc_fn_name.is_none() {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "sched_rpc_missing_fields",
                 "rpc 任务必须提供 database_id / rpc_schema / rpc_fn_name".to_string(),
+                serde_json::json!({}),
             ));
         }
         validate_database_belongs_to_tenant(&pool, req.database_id.unwrap(), req.tenant_id).await?;
     } else if kind == "http" {
         if req.http_method.is_none() || req.http_url.is_none() {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "sched_http_missing_fields",
                 "http 任务必须提供 http_method / http_url".to_string(),
+                serde_json::json!({}),
             ));
         }
     } else if kind == "workflow" {
         let tenant_id = req.tenant_id.ok_or_else(|| {
-            AppError::InvalidQuery("工作流任务必须属于一个项目（tenant_id）".into())
+            AppError::validation(
+                "sched_workflow_requires_tenant",
+                "工作流任务必须属于一个项目（tenant_id）",
+                serde_json::json!({}),
+            )
         })?;
-        let wf_id = req
-            .workflow_id
-            .ok_or_else(|| AppError::InvalidQuery("工作流任务必须提供 workflow_id".into()))?;
+        let wf_id = req.workflow_id.ok_or_else(|| {
+            AppError::validation(
+                "sched_workflow_id_required",
+                "工作流任务必须提供 workflow_id",
+                serde_json::json!({}),
+            )
+        })?;
         let wf = load_enabled_workflow_for_tenant(&pool, wf_id, tenant_id).await?;
         let _ = workflow_input_or_empty(req.workflow_input.clone())?;
         return Ok(Json(json!({
@@ -1244,7 +1341,13 @@ async fn fetch_task_or_404(pool: &PgPool, id: i64) -> Result<ScheduledTask, AppE
         .fetch_optional(pool)
         .await
         .map_err(|e| AppError::Internal(format!("查询任务失败: {e}")))?
-        .ok_or_else(|| AppError::NotFound(format!("scheduled_task {id} 不存在")))
+        .ok_or_else(|| {
+            AppError::not_found_coded(
+                "sched_task_not_found",
+                format!("scheduled_task {id} 不存在"),
+                serde_json::json!({ "id": id }),
+            )
+        })
 }
 
 /// 永远不要把 `http_secret_enc` 密文回给客户端。

@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import {
   objectStorageAPI,
   OBJECT_STORAGE_OPS,
@@ -41,8 +42,8 @@ const OS_TOKEN_OPS: ObjectStorageTokenOp[] = [...OBJECT_STORAGE_TOKEN_OPS]
 
 const PROVIDERS: { value: ObjectStorageProvider; label: string }[] = [
   { value: 'minio', label: 'MinIO' },
-  { value: 'cos', label: '腾讯云 COS' },
-  { value: 'oss', label: '阿里云 OSS' },
+  { value: 'cos', label: 'Tencent Cloud COS' },
+  { value: 'oss', label: 'Alibaba Cloud OSS' },
   { value: 'gcs', label: 'Google Cloud Storage' },
 ]
 
@@ -79,28 +80,29 @@ function applyProviderFormDefaults<T extends ProviderFormFields>(
 }
 
 function endpointHint(provider: ObjectStorageProvider): string {
-  if (provider === 'gcs') return 'GCS HMAC 默认 https://storage.googleapis.com'
-  if (provider === 'minio') return '形如 http://minio.local:9000'
-  if (provider === 'oss') return '形如 https://oss-cn-hangzhou.aliyuncs.com'
-  return '形如 https://cos.ap-guangzhou.myqcloud.com'
+  if (provider === 'gcs') return 'endpoint_gcs'
+  if (provider === 'minio') return 'endpoint_minio'
+  if (provider === 'oss') return 'endpoint_oss'
+  return 'endpoint_cos'
 }
 
 function regionHint(provider: ObjectStorageProvider): string {
-  if (provider === 'gcs') return 'GCS SigV4 推荐填 auto'
-  if (provider === 'minio') return 'MinIO 可任意填，如 us-east-1'
-  return '与厂商地域一致，如 ap-guangzhou / cn-hangzhou'
+  if (provider === 'gcs') return 'region_gcs'
+  if (provider === 'minio') return 'region_minio'
+  return 'region_other'
 }
 
 const DEFAULT_EXEC_ARGS = '{"key":"demo.txt","content":"hello"}'
 
 export default function ObjectStorageConnectionsPage() {
+  const tr = useTranslations('wsOsConn')
   const params = useParams<{ projectId: string }>()
   const projectId = parseInt(params.projectId, 10)
   const caps = useCurrentProjectCapabilities()
 
   if (!caps.canManageEvents) {
     return (
-      <ForbiddenPlaceholder reason="对象存储数据源管理需要 admin+ 角色（owner / admin / 超管）" />
+      <ForbiddenPlaceholder reason={tr('forbidden')} />
     )
   }
 
@@ -108,7 +110,7 @@ export default function ObjectStorageConnectionsPage() {
     return (
       <div className="text-center py-12 text-gray-400">
         <i className="fas fa-spinner fa-spin text-2xl"></i>
-        <p className="text-sm mt-2">正在加载项目上下文…</p>
+        <p className="text-sm mt-2">{tr('loadingCtx')}</p>
       </div>
     )
   }
@@ -120,6 +122,7 @@ export default function ObjectStorageConnectionsPage() {
 
 function ObjectStorageConnectionsManager({ tenantId }: { tenantId: number }) {
   const notify = useNotification()
+  const tr = useTranslations('wsOsConn')
   const [connections, setConnections] = useState<ObjectStorageConnection[]>([])
   const [loading, setLoading] = useState(true)
   const [activeId, setActiveId] = useState<number | null>(null)
@@ -159,15 +162,14 @@ function ObjectStorageConnectionsManager({ tenantId }: { tenantId: number }) {
         <div>
           <h1 className="text-2xl font-semibold">
             <i className="fas fa-cloud mr-2 text-sky-600"></i>
-            对象存储数据源
+            {tr('title')}
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            登记租户已有的 COS / OSS / MinIO / GCS（S3 兼容）桶；平台保管 endpoint / 密钥，业务经数据
-            API 与工作流统一读写，无需散落凭据。
+            {tr('subtitle')}
           </p>
         </div>
         <button type="button" onClick={() => setShowCreate(true)} className="btn-primary">
-          <i className="fas fa-plus mr-2"></i>新建连接
+          <i className="fas fa-plus mr-2"></i>{tr('newConn')}
         </button>
       </div>
 
@@ -180,13 +182,13 @@ function ObjectStorageConnectionsManager({ tenantId }: { tenantId: number }) {
           ) : connections.length === 0 ? (
             <div className="text-center py-12 bg-gray-50 border border-dashed border-gray-300 rounded">
               <i className="fas fa-cloud text-3xl text-gray-300 mb-2"></i>
-              <p className="text-sm text-gray-500">还没有对象存储连接</p>
+              <p className="text-sm text-gray-500">{tr('emptyList')}</p>
               <button
                 type="button"
                 onClick={() => setShowCreate(true)}
                 className="mt-3 text-sm text-blue-600 hover:underline"
               >
-                立即创建第一个
+                {tr('createFirst')}
               </button>
             </div>
           ) : (
@@ -211,7 +213,7 @@ function ObjectStorageConnectionsManager({ tenantId }: { tenantId: number }) {
             />
           ) : (
             <div className="bg-gray-50 border border-dashed border-gray-300 rounded p-12 text-center text-sm text-gray-400">
-              请从左侧选择一个连接，或新建一个
+              {tr('selectHint')}
             </div>
           )}
         </div>
@@ -225,7 +227,7 @@ function ObjectStorageConnectionsManager({ tenantId }: { tenantId: number }) {
             setShowCreate(false)
             setActiveId(id)
             loadConnections()
-            notify.success('对象存储连接已创建')
+            notify.success(tr('connCreated'))
           }}
         />
       )}
@@ -235,8 +237,8 @@ function ObjectStorageConnectionsManager({ tenantId }: { tenantId: number }) {
 
 // ── 连接列表项 ────────────────────────────────────────────────────────
 
-function providerLabel(provider: string): string {
-  return PROVIDERS.find((p) => p.value === provider)?.label ?? provider
+function providerLabel(provider: string, tr: (k: string) => string): string {
+  return PROVIDERS.some((p) => p.value === provider) ? tr('provider_' + provider) : provider
 }
 
 function ConnectionListItem({
@@ -248,6 +250,7 @@ function ConnectionListItem({
   active: boolean
   onClick: () => void
 }) {
+  const tr = useTranslations('wsOsConn')
   return (
     <button
       type="button"
@@ -259,17 +262,17 @@ function ConnectionListItem({
       <div className="flex items-center justify-between">
         <div className="font-medium text-sm truncate">{connection.connection_name}</div>
         {!connection.is_active && (
-          <span className="text-xs bg-gray-200 text-gray-700 px-1.5 py-0.5 rounded">已停用</span>
+          <span className="text-xs bg-gray-200 text-gray-700 px-1.5 py-0.5 rounded">{tr('disabledBadge')}</span>
         )}
       </div>
       <div className="text-xs text-gray-500 mt-1 truncate font-mono">{connection.bucket}</div>
       <div className="flex items-center text-xs text-gray-400 mt-1 space-x-2">
-        <span title="服务商">
+        <span title={tr('titleProvider')}>
           <i className="fas fa-server mr-1"></i>
-          {providerLabel(connection.provider)}
+          {providerLabel(connection.provider, tr)}
         </span>
         {connection.force_path_style && (
-          <span title="强制 path-style 寻址">
+          <span title={tr('titlePathStyle')}>
             <i className="fas fa-route mr-1"></i>path-style
           </span>
         )}
@@ -290,18 +293,19 @@ function ConnectionDetail({
   onDeleted: () => void
 }) {
   const notify = useNotification()
+  const tr = useTranslations('wsOsConn')
   const [tab, setTab] = useState<'usage' | 'tokens' | 'console' | 'settings'>('usage')
 
   const handleDelete = async () => {
     if (
       !window.confirm(
-        `确认删除连接「${connection.connection_name}」？删除后引用它的数据 API / 工作流节点会立即失败。`,
+        tr('confirmDelete', { name: connection.connection_name }),
       )
     )
       return
     try {
       await objectStorageAPI.deleteConnection(connection.id)
-      notify.success('连接已删除')
+      notify.success(tr('connDeleted'))
       onDeleted()
     } catch {
       /* noop */
@@ -314,14 +318,14 @@ function ConnectionDetail({
         <div>
           <div className="font-semibold">{connection.connection_name}</div>
           <div className="text-xs text-gray-500 font-mono mt-0.5">
-            {providerLabel(connection.provider)} · {connection.bucket} · {connection.endpoint}
+            {providerLabel(connection.provider, tr)} · {connection.bucket} · {connection.endpoint}
           </div>
         </div>
         <button
           type="button"
           onClick={handleDelete}
           className="text-sm text-red-600 hover:text-red-700"
-          title="删除连接"
+          title={tr('deleteConn')}
         >
           <i className="fas fa-trash"></i>
         </button>
@@ -329,10 +333,10 @@ function ConnectionDetail({
 
       <div className="border-b flex text-sm flex-wrap">
         {[
-          { id: 'usage', label: '接入指南', icon: 'fa-book' },
-          { id: 'tokens', label: '访问令牌', icon: 'fa-key' },
-          { id: 'console', label: '控制台', icon: 'fa-terminal' },
-          { id: 'settings', label: '设置', icon: 'fa-cog' },
+          { id: 'usage', label: tr('tabUsage'), icon: 'fa-book' },
+          { id: 'tokens', label: tr('tabTokens'), icon: 'fa-key' },
+          { id: 'console', label: tr('tabConsole'), icon: 'fa-terminal' },
+          { id: 'settings', label: tr('tabSettings'), icon: 'fa-cog' },
         ].map((t) => (
           <button
             key={t.id}
@@ -364,6 +368,7 @@ function ConnectionDetail({
 
 function UsageTab({ connection }: { connection: ObjectStorageConnection }) {
   const notify = useNotification()
+  const tr = useTranslations('wsOsConn')
   const { currentConnection, currentProject } = useAppStore()
   const origin =
     typeof window !== 'undefined' ? window.location.origin : 'https://platform.example.com'
@@ -379,9 +384,9 @@ function UsageTab({ connection }: { connection: ObjectStorageConnection }) {
   const copy = async (text: string, label: string) => {
     try {
       await navigator.clipboard.writeText(text)
-      notify.success(`已复制：${label}`)
+      notify.success(tr('copied', { label }))
     } catch {
-      notify.error('复制失败，请手动选择文本')
+      notify.error(tr('copyFailed'))
     }
   }
 
@@ -397,26 +402,27 @@ function UsageTab({ connection }: { connection: ObjectStorageConnection }) {
     <div className="space-y-4 text-sm">
       <div className="bg-blue-50 border border-blue-200 text-blue-900 rounded p-3 space-y-1.5 text-xs">
         <div className="font-semibold">
-          <i className="fas fa-lightbulb mr-1"></i>对外 REST（对齐 Kafka）
+          <i className="fas fa-lightbulb mr-1"></i>{tr('restHeader')}
         </div>
         {!databaseSlug && (
           <p className="text-amber-800">
-            当前项目尚未绑定主数据库连接，示例暂用{' '}
-            <code className="bg-white px-1 rounded">/api/object-storage/...</code>
-            ；绑定后将自动带上项目 slug。
+            {tr.rich('noSlugNote', {
+              code: (c) => <code className="bg-white px-1 rounded">{c}</code>,
+            })}
           </p>
         )}
         <ul className="list-disc list-inside space-y-0.5">
           <li>
-            先在「访问令牌」Tab 创建 <code className="bg-white px-1 rounded">obes_os_*</code>
-            ，明文仅创建时显示一次。
+            {tr.rich('bullet1', {
+              code: (c) => <code className="bg-white px-1 rounded">{c}</code>,
+            })}
           </li>
           <li>
-            请求头：
-            <code className="bg-white px-1 rounded">Authorization: ApiKey obes_os_...</code>
-            （也支持 Bearer / X-Os-Token）。
+            {tr.rich('bullet2', {
+              code: (c) => <code className="bg-white px-1 rounded">{c}</code>,
+            })}
           </li>
-          <li>令牌可限制 allowed_ops 与 key_prefix_allowlist；无需平台登录即可调用。</li>
+          <li>{tr('bullet3')}</li>
         </ul>
       </div>
 
@@ -432,7 +438,7 @@ function UsageTab({ connection }: { connection: ObjectStorageConnection }) {
               className="text-xs text-blue-600 hover:underline"
               onClick={() => copy(item.curl, item.title)}
             >
-              复制
+              {tr('copy')}
             </button>
           </div>
           <pre className="p-3 text-xs font-mono overflow-x-auto bg-gray-900 text-gray-100 leading-relaxed">
@@ -446,6 +452,7 @@ function UsageTab({ connection }: { connection: ObjectStorageConnection }) {
 
 function TokensTab({ connectionId }: { connectionId: number }) {
   const notify = useNotification()
+  const tr = useTranslations('wsOsConn')
   const [tokens, setTokens] = useState<ObjectStorageAccessToken[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
@@ -470,7 +477,7 @@ function TokensTab({ connectionId }: { connectionId: number }) {
   const toggleActive = async (t: ObjectStorageAccessToken) => {
     try {
       await objectStorageAPI.updateToken(connectionId, t.id, { is_active: !t.is_active })
-      notify.success(t.is_active ? 'token 已停用' : 'token 已启用')
+      notify.success(t.is_active ? tr('tokDisabled') : tr('tokEnabled'))
       load()
     } catch {
       /* noop */
@@ -478,10 +485,10 @@ function TokensTab({ connectionId }: { connectionId: number }) {
   }
 
   const remove = async (t: ObjectStorageAccessToken) => {
-    if (!window.confirm(`确认删除 token「${t.name}」？使用中的请求将立即 401。`)) return
+    if (!window.confirm(tr('confirmDelTok', { name: t.name }))) return
     try {
       await objectStorageAPI.deleteToken(connectionId, t.id)
-      notify.success('token 已删除')
+      notify.success(tr('tokDeleted'))
       load()
     } catch {
       /* noop */
@@ -492,10 +499,10 @@ function TokensTab({ connectionId }: { connectionId: number }) {
     <div className="space-y-3 text-sm">
       <div className="flex items-center justify-between gap-2">
         <div className="text-gray-600 text-xs">
-          每个 token 独立配置 ops / object key 白名单；明文仅在创建时一次性显示。
+          {tr('tokDesc')}
         </div>
         <button type="button" onClick={() => setShowCreate(true)} className="btn-primary text-xs shrink-0">
-          <i className="fas fa-plus mr-1"></i>新建 token
+          <i className="fas fa-plus mr-1"></i>{tr('newTok')}
         </button>
       </div>
 
@@ -505,20 +512,20 @@ function TokensTab({ connectionId }: { connectionId: number }) {
         </div>
       ) : tokens.length === 0 ? (
         <div className="text-center py-8 text-gray-400 border border-dashed border-gray-300 rounded">
-          还没有 token
+          {tr('noTok')}
         </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead className="text-left text-gray-500 border-b">
               <tr>
-                <th className="py-2 px-2">名称</th>
-                <th className="py-2 px-2">前缀</th>
+                <th className="py-2 px-2">{tr('thName')}</th>
+                <th className="py-2 px-2">{tr('thPrefix')}</th>
                 <th className="py-2 px-2">ops</th>
                 <th className="py-2 px-2">keys</th>
-                <th className="py-2 px-2">使用</th>
-                <th className="py-2 px-2">状态</th>
-                <th className="py-2 px-2 text-right">操作</th>
+                <th className="py-2 px-2">{tr('thUse')}</th>
+                <th className="py-2 px-2">{tr('thStatus')}</th>
+                <th className="py-2 px-2 text-right">{tr('thActions')}</th>
               </tr>
             </thead>
             <tbody>
@@ -536,7 +543,7 @@ function TokensTab({ connectionId }: { connectionId: number }) {
                     {t.key_prefix_allowlist.join(', ')}
                   </td>
                   <td className="py-2 px-2 text-gray-500">
-                    {t.use_count > 0 ? `${t.use_count} 次` : '—'}
+                    {t.use_count > 0 ? tr('useCount', { n: t.use_count }) : '—'}
                   </td>
                   <td className="py-2 px-2">
                     {t.is_active && !t.revoked_at ? (
@@ -547,10 +554,10 @@ function TokensTab({ connectionId }: { connectionId: number }) {
                   </td>
                   <td className="py-2 px-2 text-right space-x-2 whitespace-nowrap">
                     <button type="button" className="text-blue-600 hover:underline" onClick={() => toggleActive(t)}>
-                      {t.is_active ? '停用' : '启用'}
+                      {t.is_active ? tr('disable') : tr('enable')}
                     </button>
                     <button type="button" className="text-red-600 hover:underline" onClick={() => remove(t)}>
-                      删除
+                      {tr('del')}
                     </button>
                   </td>
                 </tr>
@@ -575,9 +582,9 @@ function TokensTab({ connectionId }: { connectionId: number }) {
       {revealed && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-lg w-full p-5 space-y-3">
-            <h3 className="font-semibold text-gray-900">Token 已创建：{revealed.name}</h3>
+            <h3 className="font-semibold text-gray-900">{tr('tokCreatedTitle', { name: revealed.name })}</h3>
             <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-              明文仅显示一次，请立即复制保存。关闭后无法再查看。
+              {tr('onceOnly')}
             </p>
             <pre className="text-xs font-mono bg-gray-900 text-gray-100 p-3 rounded break-all whitespace-pre-wrap">
               {revealed.token}
@@ -589,16 +596,16 @@ function TokensTab({ connectionId }: { connectionId: number }) {
                 onClick={async () => {
                   try {
                     await navigator.clipboard.writeText(revealed.token)
-                    notify.success('已复制 token')
+                    notify.success(tr('tokCopied'))
                   } catch {
-                    notify.error('复制失败')
+                    notify.error(tr('copyFailed2'))
                   }
                 }}
               >
-                复制
+                {tr('copy')}
               </button>
               <button type="button" className="btn-primary text-xs" onClick={() => setRevealed(null)}>
-                我已保存
+                {tr('saved')}
               </button>
             </div>
           </div>
@@ -618,6 +625,7 @@ function CreateOsTokenModal({
   onCreated: (token: string, name: string) => void
 }) {
   const notify = useNotification()
+  const tr = useTranslations('wsOsConn')
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [ops, setOps] = useState<ObjectStorageTokenOp[]>([...OS_TOKEN_OPS])
@@ -630,11 +638,11 @@ function CreateOsTokenModal({
 
   const submit = async () => {
     if (!name.trim()) {
-      notify.error('请填写名称')
+      notify.error(tr('errName'))
       return
     }
     if (ops.length === 0) {
-      notify.error('至少选择一个 op')
+      notify.error(tr('errOp'))
       return
     }
     const key_prefix_allowlist = keys
@@ -642,7 +650,7 @@ function CreateOsTokenModal({
       .map((s) => s.trim())
       .filter(Boolean)
     if (key_prefix_allowlist.length === 0) {
-      notify.error('key 白名单不能为空')
+      notify.error(tr('errKeys'))
       return
     }
     const payload: CreateObjectStorageTokenInput = {
@@ -654,7 +662,7 @@ function CreateOsTokenModal({
     setSaving(true)
     try {
       const res = await objectStorageAPI.createToken(connectionId, payload)
-      notify.success('token 已创建')
+      notify.success(tr('tokCreated'))
       onCreated(res.data.token, res.data.record.name)
     } catch {
       /* interceptor */
@@ -666,18 +674,18 @@ function CreateOsTokenModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-5 space-y-3">
-        <h3 className="font-semibold">新建对象存储访问令牌</h3>
+        <h3 className="font-semibold">{tr('modalTitle')}</h3>
         <div>
-          <label className="block text-xs text-gray-500 mb-1">名称 *</label>
+          <label className="block text-xs text-gray-500 mb-1">{tr('lblName')}</label>
           <input
             className="w-full border rounded px-3 py-2 text-sm"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="上传服务 put"
+            placeholder={tr('phName')}
           />
         </div>
         <div>
-          <label className="block text-xs text-gray-500 mb-1">说明</label>
+          <label className="block text-xs text-gray-500 mb-1">{tr('lblDesc')}</label>
           <input
             className="w-full border rounded px-3 py-2 text-sm"
             value={description}
@@ -697,7 +705,7 @@ function CreateOsTokenModal({
         </div>
         <div>
           <label className="block text-xs text-gray-500 mb-1">
-            key_prefix_allowlist（逗号或换行，* 表示不限；支持 uploads/*）
+            {tr('lblKeys')}
           </label>
           <textarea
             className="w-full border rounded px-3 py-2 text-sm font-mono"
@@ -709,10 +717,10 @@ function CreateOsTokenModal({
         </div>
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" className="btn-default text-xs" onClick={onClose} disabled={saving}>
-            取消
+            {tr('cancel')}
           </button>
           <button type="button" className="btn-primary text-xs" onClick={submit} disabled={saving}>
-            {saving ? '创建中…' : '创建'}
+            {saving ? tr('creating') : tr('create')}
           </button>
         </div>
       </div>
@@ -724,6 +732,7 @@ function CreateOsTokenModal({
 
 function ConsoleTab({ connection }: { connection: ObjectStorageConnection }) {
   const notify = useNotification()
+  const tr = useTranslations('wsOsConn')
   const [op, setOp] = useState<ObjectStorageOp>('get')
   const [argsText, setArgsText] = useState(DEFAULT_EXEC_ARGS)
   const [running, setRunning] = useState(false)
@@ -736,11 +745,11 @@ function ConsoleTab({ connection }: { connection: ObjectStorageConnection }) {
       try {
         const parsed = JSON.parse(argsText)
         if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-          throw new Error('args 必须是 JSON 对象')
+          throw new Error(tr('errArgsObj'))
         }
         args = parsed as Record<string, unknown>
       } catch (err: any) {
-        notify.error(`args 不是合法 JSON：${err?.message || err}`)
+        notify.error(tr('errArgsJson', { msg: err?.message || String(err) }))
         return
       }
     }
@@ -752,7 +761,7 @@ function ConsoleTab({ connection }: { connection: ObjectStorageConnection }) {
       const res = await objectStorageAPI.exec(connection.id, { op, args })
       setResult(res.data.result)
     } catch (err: any) {
-      setError(err?.response?.data?.error || err?.message || '执行失败')
+      setError(err?.response?.data?.error || err?.message || tr('execFailed'))
     } finally {
       setRunning(false)
     }
@@ -762,13 +771,13 @@ function ConsoleTab({ connection }: { connection: ObjectStorageConnection }) {
     <div className="space-y-3 text-sm">
       {!connection.is_active && (
         <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded p-2 text-xs">
-          <i className="fas fa-exclamation-triangle mr-1"></i>连接已停用，执行会失败。
+          <i className="fas fa-exclamation-triangle mr-1"></i>{tr('connDisabledExec')}
         </div>
       )}
 
       <div className="flex items-end gap-2">
         <div className="w-40">
-          <label className="block text-xs font-medium text-gray-700 mb-1">操作</label>
+          <label className="block text-xs font-medium text-gray-700 mb-1">{tr('lblOp')}</label>
           <select
             value={op}
             onChange={(e) => {
@@ -788,17 +797,17 @@ function ConsoleTab({ connection }: { connection: ObjectStorageConnection }) {
         <button type="button" onClick={run} disabled={running} className="btn-primary">
           {running ? (
             <>
-              <i className="fas fa-spinner fa-spin mr-2"></i>执行中…
+              <i className="fas fa-spinner fa-spin mr-2"></i>{tr('executing')}
             </>
           ) : (
             <>
-              <i className="fas fa-play mr-2"></i>执行
+              <i className="fas fa-play mr-2"></i>{tr('execute')}
             </>
           )}
         </button>
       </div>
 
-      <FormRow label="args（JSON）" hint="按所选 op 填写参数，如 put: {key, content}；list: {prefix, max_keys}">
+      <FormRow label="args (JSON)" hint={tr('argsHint')}>
         <textarea
           value={argsText}
           onChange={(e) => setArgsText(e.target.value)}
@@ -816,7 +825,7 @@ function ConsoleTab({ connection }: { connection: ObjectStorageConnection }) {
       )}
       {result !== null && (
         <div>
-          <div className="text-xs font-medium text-gray-700 mb-1">结果</div>
+          <div className="text-xs font-medium text-gray-700 mb-1">{tr('result')}</div>
           <pre className="bg-gray-900 text-emerald-300 text-xs p-3 rounded overflow-x-auto whitespace-pre-wrap break-all">
             {JSON.stringify(result, null, 2)}
           </pre>
@@ -824,8 +833,10 @@ function ConsoleTab({ connection }: { connection: ObjectStorageConnection }) {
       )}
 
       <div className="text-xs text-gray-500 pt-2 border-t">
-        支持的操作：<span className="font-mono">{OBJECT_STORAGE_OPS.join(' / ')}</span>。写操作
-        （put / delete / presign PUT）需 owner/admin/member，读操作任意成员可用。
+        {tr.rich('consoleFooter', {
+          ops: OBJECT_STORAGE_OPS.join(' / '),
+          mono: (c) => <span className="font-mono">{c}</span>,
+        })}
       </div>
     </div>
   )
@@ -841,6 +852,7 @@ function SettingsTab({
   onUpdated: () => void
 }) {
   const notify = useNotification()
+  const tr = useTranslations('wsOsConn')
   const [form, setForm] = useState({
     connection_name: connection.connection_name,
     provider: connection.provider as ObjectStorageProvider,
@@ -887,7 +899,7 @@ function SettingsTab({
         payload.secret_key = form.secret_key
       }
       await objectStorageAPI.updateConnection(connection.id, payload)
-      notify.success('连接已更新')
+      notify.success(tr('connUpdated'))
       setForm({ ...form, secret_key: '' })
       onUpdated()
     } catch {
@@ -904,12 +916,12 @@ function SettingsTab({
       const res = await objectStorageAPI.healthCheck(connection.id)
       setHealthResult(res.data)
       if (res.data.ok) {
-        notify.success('对象存储可达')
+        notify.success(tr('osReachable'))
       } else {
-        notify.warning('探活失败')
+        notify.warning(tr('probeFailed'))
       }
     } catch (err: any) {
-      setHealthResult({ ok: false, error: err?.response?.data?.error || err?.message || '探活失败' })
+      setHealthResult({ ok: false, error: err?.response?.data?.error || err?.message || tr('probeFailed') })
     } finally {
       setHealthChecking(false)
     }
@@ -917,7 +929,7 @@ function SettingsTab({
 
   return (
     <div className="space-y-3 text-sm">
-      <FormRow label="连接名称">
+      <FormRow label={tr('lblConnName')}>
         <input
           value={form.connection_name}
           onChange={(e) => setForm({ ...form, connection_name: e.target.value })}
@@ -925,7 +937,7 @@ function SettingsTab({
         />
       </FormRow>
       <div className="grid grid-cols-2 gap-3">
-        <FormRow label="服务商">
+        <FormRow label={tr('titleProvider')}>
           <select
             value={form.provider}
             onChange={(e) => handleProviderChange(e.target.value as ObjectStorageProvider)}
@@ -933,12 +945,12 @@ function SettingsTab({
           >
             {PROVIDERS.map((p) => (
               <option key={p.value} value={p.value}>
-                {p.label}
+                {tr('provider_' + p.value)}
               </option>
             ))}
           </select>
         </FormRow>
-        <FormRow label="region" hint={regionHint(form.provider)}>
+        <FormRow label="region" hint={tr(regionHint(form.provider))}>
           <input
             value={form.region}
             onChange={(e) => setForm({ ...form, region: e.target.value })}
@@ -946,7 +958,7 @@ function SettingsTab({
           />
         </FormRow>
       </div>
-      <FormRow label="endpoint" hint={endpointHint(form.provider)}>
+      <FormRow label="endpoint" hint={tr(endpointHint(form.provider))}>
         <input
           value={form.endpoint}
           onChange={(e) => setForm({ ...form, endpoint: e.target.value })}
@@ -961,7 +973,7 @@ function SettingsTab({
             className="input-base w-full font-mono"
           />
         </FormRow>
-        <FormRow label="超时（秒）">
+        <FormRow label={tr('lblTimeout')}>
           <input
             type="number"
             min={1}
@@ -976,7 +988,7 @@ function SettingsTab({
       </div>
       <FormRow
         label="access_key_id"
-        hint={form.provider === 'gcs' ? 'GCS 控制台「互操作性」HMAC Access Key' : undefined}
+        hint={form.provider === 'gcs' ? tr('gcsHint') : undefined}
       >
         <input
           value={form.access_key_id}
@@ -984,12 +996,12 @@ function SettingsTab({
           className="input-base w-full font-mono"
         />
       </FormRow>
-      <FormRow label="secret_key" hint="留空则不修改。新输入会替换并加密入库。">
+      <FormRow label="secret_key" hint={tr('secretHintEdit')}>
         <input
           type="password"
           value={form.secret_key}
           onChange={(e) => setForm({ ...form, secret_key: e.target.value })}
-          placeholder="••••••••（输入新值以替换）"
+          placeholder={tr('secretPh')}
           className="input-base w-full font-mono"
         />
       </FormRow>
@@ -1003,7 +1015,7 @@ function SettingsTab({
               setForm({ ...form, force_path_style: e.target.checked })
             }}
           />
-          <span>强制 path-style 寻址</span>
+          <span>{tr('forcePathStyle')}</span>
         </label>
         <label className="flex items-center space-x-2">
           <input
@@ -1011,7 +1023,7 @@ function SettingsTab({
             checked={form.is_active}
             onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
           />
-          <span>连接启用中</span>
+          <span>{tr('connActive')}</span>
         </label>
       </div>
 
@@ -1019,11 +1031,11 @@ function SettingsTab({
         <button type="button" onClick={save} disabled={saving} className="btn-primary">
           {saving ? (
             <>
-              <i className="fas fa-spinner fa-spin mr-2"></i>保存中…
+              <i className="fas fa-spinner fa-spin mr-2"></i>{tr('saving')}
             </>
           ) : (
             <>
-              <i className="fas fa-save mr-2"></i>保存
+              <i className="fas fa-save mr-2"></i>{tr('save')}
             </>
           )}
         </button>
@@ -1032,15 +1044,15 @@ function SettingsTab({
           onClick={probe}
           disabled={healthChecking}
           className="btn-default"
-          title="HeadBucket 探活"
+          title={tr('probeTitle')}
         >
           {healthChecking ? (
             <>
-              <i className="fas fa-spinner fa-spin mr-2"></i>探活中…
+              <i className="fas fa-spinner fa-spin mr-2"></i>{tr('probing')}
             </>
           ) : (
             <>
-              <i className="fas fa-heartbeat mr-2"></i>测试连接
+              <i className="fas fa-heartbeat mr-2"></i>{tr('testConn')}
             </>
           )}
         </button>
@@ -1056,10 +1068,10 @@ function SettingsTab({
         >
           {healthResult.ok ? (
             <div>
-              <i className="fas fa-check-circle mr-1"></i>连通正常
+              <i className="fas fa-check-circle mr-1"></i>{tr('reachOk')}
               {typeof healthResult.latency_ms === 'number' && (
                 <span className="ml-2">
-                  延迟 <span className="font-mono">{healthResult.latency_ms}ms</span>
+                  {tr('latency')} <span className="font-mono">{healthResult.latency_ms}ms</span>
                 </span>
               )}
               {healthResult.bucket && (
@@ -1071,7 +1083,7 @@ function SettingsTab({
           ) : (
             <div>
               <i className="fas fa-times-circle mr-1"></i>
-              {healthResult.error || '探活失败'}
+              {healthResult.error || tr('probeFailed')}
             </div>
           )}
         </div>
@@ -1092,6 +1104,7 @@ function CreateConnectionDialog({
   onCreated: (id: number) => void
 }) {
   const notify = useNotification()
+  const tr = useTranslations('wsOsConn')
   const [form, setForm] = useState({
     connection_name: '',
     provider: 'minio' as ObjectStorageProvider,
@@ -1113,23 +1126,23 @@ function CreateConnectionDialog({
 
   const submit = async () => {
     if (!form.connection_name.trim()) {
-      notify.error('请填写连接名称')
+      notify.error(tr('errConnName'))
       return
     }
     if (!form.endpoint.trim()) {
-      notify.error('请填写 endpoint')
+      notify.error(tr('errEndpoint'))
       return
     }
     if (!form.bucket.trim()) {
-      notify.error('请填写 bucket')
+      notify.error(tr('errBucket'))
       return
     }
     if (!form.access_key_id.trim()) {
-      notify.error('请填写 access_key_id')
+      notify.error(tr('errAkid'))
       return
     }
     if (!form.secret_key.trim()) {
-      notify.error('请填写 secret_key')
+      notify.error(tr('errSecret'))
       return
     }
     setSaving(true)
@@ -1156,9 +1169,9 @@ function CreateConnectionDialog({
   }
 
   return (
-    <Dialog title="新建对象存储连接" onClose={onClose} widthClass="max-w-lg">
+    <Dialog title={tr('dlgTitle')} onClose={onClose} widthClass="max-w-lg">
       <div className="space-y-3 text-sm">
-        <FormRow label="连接名称 *" hint="同租户内不可重名">
+        <FormRow label={tr('lblConnName') + ' *'} hint={tr('connNameHint')}>
           <input
             autoFocus
             value={form.connection_name}
@@ -1168,7 +1181,7 @@ function CreateConnectionDialog({
           />
         </FormRow>
         <div className="grid grid-cols-2 gap-3">
-          <FormRow label="服务商 *">
+          <FormRow label={tr('providerReq')}>
             <select
               value={form.provider}
               onChange={(e) => handleProviderChange(e.target.value as ObjectStorageProvider)}
@@ -1176,12 +1189,12 @@ function CreateConnectionDialog({
             >
               {PROVIDERS.map((p) => (
                 <option key={p.value} value={p.value}>
-                  {p.label}
+                  {tr('provider_' + p.value)}
                 </option>
               ))}
             </select>
           </FormRow>
-          <FormRow label="region" hint={regionHint(form.provider)}>
+          <FormRow label="region" hint={tr(regionHint(form.provider))}>
             <input
               value={form.region}
               onChange={(e) => setForm({ ...form, region: e.target.value })}
@@ -1189,7 +1202,7 @@ function CreateConnectionDialog({
             />
           </FormRow>
         </div>
-        <FormRow label="endpoint *" hint={endpointHint(form.provider)}>
+        <FormRow label="endpoint *" hint={tr(endpointHint(form.provider))}>
           <input
             value={form.endpoint}
             onChange={(e) => setForm({ ...form, endpoint: e.target.value })}
@@ -1205,7 +1218,7 @@ function CreateConnectionDialog({
               className="input-base w-full font-mono"
             />
           </FormRow>
-          <FormRow label="超时（秒）">
+          <FormRow label={tr('lblTimeout')}>
             <input
               type="number"
               min={1}
@@ -1220,7 +1233,7 @@ function CreateConnectionDialog({
         </div>
         <FormRow
           label="access_key_id *"
-          hint={form.provider === 'gcs' ? 'GCS 控制台「互操作性」HMAC Access Key' : undefined}
+          hint={form.provider === 'gcs' ? tr('gcsHint') : undefined}
         >
           <input
             value={form.access_key_id}
@@ -1228,7 +1241,7 @@ function CreateConnectionDialog({
             className="input-base w-full font-mono"
           />
         </FormRow>
-        <FormRow label="secret_key *" hint="后端加密入库，永不回传明文">
+        <FormRow label="secret_key *" hint={tr('secretHintCreate')}>
           <input
             type="password"
             value={form.secret_key}
@@ -1246,25 +1259,23 @@ function CreateConnectionDialog({
             }}
           />
           <span>
-            强制 path-style 寻址
-            <span className="text-xs text-gray-400 ml-1">
-              （MinIO / GCS / 自建 S3 常需开启；COS / OSS 通常关闭）
-            </span>
+            {tr('forcePathStyle')}
+            <span className="text-xs text-gray-400 ml-1">{tr('forcePathStyleNote')}</span>
           </span>
         </label>
       </div>
       <div className="flex justify-end space-x-2 pt-4 border-t mt-4">
         <button type="button" onClick={onClose} className="btn-default">
-          取消
+          {tr('cancel')}
         </button>
         <button type="button" onClick={submit} disabled={saving} className="btn-primary">
           {saving ? (
             <>
-              <i className="fas fa-spinner fa-spin mr-2"></i>创建中…
+              <i className="fas fa-spinner fa-spin mr-2"></i>{tr('creating')}
             </>
           ) : (
             <>
-              <i className="fas fa-plus mr-2"></i>创建
+              <i className="fas fa-plus mr-2"></i>{tr('create')}
             </>
           )}
         </button>

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { schemaAPI } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
 
@@ -22,6 +23,7 @@ interface ColumnInfo {
 }
 
 export default function SchemaPage() {
+  const t = useTranslations('wsSchemas')
   const { currentSchema } = useAppStore()
   const [tables, setTables] = useState<TableInfo[]>([])
   const [selectedTable, setSelectedTable] = useState<string>('')
@@ -71,9 +73,9 @@ export default function SchemaPage() {
       const data = Array.isArray(response.data) ? response.data : []
       setTables(data)
     } catch (err: any) {
-      console.error('加载 tables 失败:', err)
+      console.error(t('loadTablesLog'), err)
       setTables([])
-      setError(err.response?.data?.error || err.message || '加载失败')
+      setError(err.response?.data?.error || err.message || t('loadFailed'))
     } finally {
       setLoading(false)
     }
@@ -97,14 +99,14 @@ export default function SchemaPage() {
         // 如果返回的是对象，包含 columns 字段
         setColumns(data.columns)
       } else {
-        console.error('API 返回的数据格式不正确:', data)
+        console.error(t('badFormatLog'), data)
         setColumns([])
-        setError('返回的表结构数据格式错误')
+        setError(t('badFormat'))
       }
     } catch (err: any) {
-      console.error('加载表结构失败:', err)
+      console.error(t('loadStructFailed'), err)
       setColumns([])  // 重置为空数组
-      setError(err.response?.data?.error || '加载失败')
+      setError(err.response?.data?.error || t('loadFailed'))
     } finally {
       setLoading(false)
     }
@@ -114,14 +116,14 @@ export default function SchemaPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-800">Schema 浏览器</h1>
+          <h1 className="text-2xl font-semibold text-gray-800">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            当前 Schema: <span className="font-mono font-medium text-gray-900">{currentSchema}</span>
+            {t('currentSchema')} <span className="font-mono font-medium text-gray-900">{currentSchema}</span>
           </p>
         </div>
         <button onClick={() => currentSchema && loadTables(currentSchema)} className="btn-default">
           <i className="fas fa-sync-alt text-xs mr-2"></i>
-          刷新
+          {t('refresh')}
         </button>
       </div>
 
@@ -142,12 +144,12 @@ export default function SchemaPage() {
               {loading ? (
                 <div className="p-4 text-center">
                   <i className="fas fa-spinner fa-spin text-2xl text-primary-500"></i>
-                  <p className="text-sm text-gray-500 mt-2">加载中...</p>
+                  <p className="text-sm text-gray-500 mt-2">{t('loading')}</p>
                 </div>
               ) : tables.length === 0 ? (
                 <div className="p-8 text-center">
                   <i className="fas fa-table text-3xl text-gray-300 mb-3"></i>
-                  <p className="text-sm text-gray-500">暂无数据表</p>
+                  <p className="text-sm text-gray-500">{t('emptyTables')}</p>
                 </div>
               ) : (
                 tables.map((table) => (
@@ -167,7 +169,7 @@ export default function SchemaPage() {
                           {table.table_name}
                         </p>
                         <p className="text-xs text-gray-500">
-                          ~{table.row_count} 行
+                          {t('rowsApprox', { n: table.row_count })}
                         </p>
                       </div>
                     </div>
@@ -183,33 +185,33 @@ export default function SchemaPage() {
           <div className="card">
             <div className="px-4 py-3 border-b border-gray-100">
               <h3 className="text-sm font-semibold text-gray-700">
-                {selectedTable ? `表结构: ${selectedTable}` : '表结构'}
+                {selectedTable ? t('structOf', { name: selectedTable }) : t('structTitle')}
               </h3>
             </div>
             <div className="overflow-auto max-h-[600px]">
               {!selectedTable ? (
                 <div className="p-12 text-center">
                   <i className="fas fa-table text-4xl text-gray-300 mb-4"></i>
-                  <p className="text-gray-500">请选择一张表查看结构</p>
+                  <p className="text-gray-500">{t('selectTable')}</p>
                 </div>
               ) : loading ? (
                 <div className="p-8 text-center">
                   <i className="fas fa-spinner fa-spin text-2xl text-primary-500"></i>
-                  <p className="text-sm text-gray-500 mt-2">加载中...</p>
+                  <p className="text-sm text-gray-500 mt-2">{t('loading')}</p>
                 </div>
               ) : !Array.isArray(columns) || columns.length === 0 ? (
                 <div className="p-12 text-center">
                   <i className="fas fa-inbox text-4xl text-gray-300 mb-4"></i>
-                  <p className="text-gray-500">暂无列信息</p>
+                  <p className="text-gray-500">{t('noColumns')}</p>
                 </div>
               ) : (
                 <table className="w-full enterprise-table">
                   <thead>
                     <tr>
-                      <th>列名</th>
-                      <th>数据类型</th>
-                      <th>允许 NULL</th>
-                      <th>默认值</th>
+                      <th>{t('colName')}</th>
+                      <th>{t('colType')}</th>
+                      <th>{t('colNullable')}</th>
+                      <th>{t('colDefault')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -233,7 +235,7 @@ export default function SchemaPage() {
                                 : 'bg-red-100 text-red-700'
                             }`}
                           >
-                            {col.is_nullable === 'YES' ? '是' : '否'}
+                            {col.is_nullable === 'YES' ? t('yes') : t('no')}
                           </span>
                         </td>
                         <td>

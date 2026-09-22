@@ -264,6 +264,8 @@ pub async fn update_project_gateway_settings(
     let normalized = normalize_and_validate(body.public_base_url)?;
     set_base_url(&pool, Some(project_id), normalized.clone()).await?;
 
+    let old_display = old_value.clone().unwrap_or_else(|| "—".to_string());
+    let new_display = normalized.clone().unwrap_or_else(|| "—".to_string());
     let input = OperationLogInput::new(
         project_id,
         Actor::from_claims(&claims),
@@ -284,11 +286,15 @@ pub async fn update_project_gateway_settings(
             "node": "项目设置",
             "fields": [{
                 "field": "对外调用基址",
-                "old": old_value.unwrap_or_else(|| "—".to_string()),
-                "new": normalized.clone().unwrap_or_else(|| "—".to_string()),
+                "old": old_display.clone(),
+                "new": new_display.clone(),
             }]
         }]
-    }));
+    }))
+    .summary_code(
+        "oplog_project_gateway_settings_update",
+        json!({ "old": old_display, "new": new_display }),
+    );
     operation_log::record(&pool, input);
 
     Ok(Json(json!({ "public_base_url": normalized })))

@@ -2,38 +2,40 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 
 const NAV_ITEMS = [
   {
-    name: '概览',
+    nameKey: 'navOverview',
     icon: 'fa-dashboard',
     href: '/partner',
   },
   {
-    name: 'License 签发',
+    nameKey: 'navLicenseIssue',
     icon: 'fa-certificate',
     href: '/partner/licenses',
   },
   {
-    name: '佣金记录',
+    nameKey: 'navCommissions',
     icon: 'fa-coins',
     href: '/partner/commissions',
   },
   {
-    name: '对账单',
+    nameKey: 'navStatements',
     icon: 'fa-file-invoice-dollar',
     href: '/partner/statements',
   },
 ]
 
 export default function PartnerSidebar() {
+  const t = useTranslations('partnerSidebar')
   const pathname = usePathname()
 
   return (
     <div className="w-64 bg-gray-900 h-screen flex flex-col">
       {/* Logo */}
       <div className="h-16 flex items-center justify-center border-b border-gray-800">
-        <h1 className="text-xl font-bold text-white">代理商控制台</h1>
+        <h1 className="text-xl font-bold text-white">{t('consoleTitle')}</h1>
       </div>
 
       {/* Navigation */}
@@ -54,7 +56,7 @@ export default function PartnerSidebar() {
               `}
             >
               <i className={`fas ${item.icon} w-5 mr-3`}></i>
-              {item.name}
+              {t(item.nameKey)}
             </Link>
           )
         })}
@@ -67,7 +69,7 @@ export default function PartnerSidebar() {
           className="flex items-center px-3 py-2 text-sm text-gray-400 hover:text-white transition-colors"
         >
           <i className="fas fa-arrow-left mr-3"></i>
-          返回工作台
+          {t('backToWorkspace')}
         </Link>
       </div>
     </div>

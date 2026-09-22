@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import { queryAPI } from '@/lib/api'
 import { formatDateTime, downloadFile } from '@/lib/utils'
 import Pagination, { sliceForPage } from '@/components/Pagination'
@@ -363,6 +364,7 @@ function splitSqlStatements(sql: string): string[] {
 }
 
 export default function QueryPage() {
+  const t = useTranslations('wsQuery')
   const [sql, setSql] = useState('SELECT * FROM public.users LIMIT 10;')
   // 批量执行：每条语句一个结果项（按执行顺序）
   const [results, setResults] = useState<ExecItem[]>([])
@@ -496,8 +498,8 @@ export default function QueryPage() {
           })
           setResults([...items])
         } catch (err: any) {
-          console.error('SQL 查询失败:', err)
-          const errorMsg = err.response?.data?.error || err.message || '查询失败'
+          console.error(t('queryFailedLog'), err)
+          const errorMsg = err.response?.data?.error || err.message || t('queryFailed')
           items.push({ sql: stmt, type: getSqlType(stmt), success: false, error: errorMsg })
           hist.push({
             sql: stmt,
@@ -549,7 +551,7 @@ export default function QueryPage() {
     } else {
       // 批量：手抄 CONFIRM 放行（含写操作的多条脚本）
       setConfirmModal({
-        sqlType: `批量 ${stmts.length} 条（含 ${writeStmts.length} 条写/DDL）`,
+        sqlType: t('batchType', { n: stmts.length, w: writeStmts.length }),
         isDangerous,
         confirmPhrase: 'CONFIRM',
         statements: stmts,
@@ -572,7 +574,7 @@ export default function QueryPage() {
       const response = await queryAPI.exportCSV(item.sql)
       downloadFile(response.data, `query_${Date.now()}.csv`)
     } catch (err: any) {
-      alert('导出失败：' + (err.response?.data?.error || err.message))
+      alert(t('exportFailed', { err: err.response?.data?.error || err.message }))
     }
   }
 
@@ -651,7 +653,7 @@ export default function QueryPage() {
     if (!sql.trim()) return
     askAi({
       prompt:
-        '请分析下面这条 SQL 的作用、性能与潜在风险，并给出优化建议：\n\n' +
+        t('aiAnalyzePrompt') +
         '```sql\n' +
         sql.trim() +
         '\n```',
@@ -664,10 +666,10 @@ export default function QueryPage() {
     if (!item.error) return
     askAi({
       prompt:
-        '我执行下面这条 SQL 时报错了，请帮我分析原因并给出修复方案：\n\n' +
+        t('aiErrPrompt1') +
         '```sql\n' +
         item.sql.trim() +
-        '\n```\n\n报错信息：\n```\n' +
+        t('aiErrPrompt2') +
         item.error +
         '\n```',
       requestId: genRequestId('sql-debug'),
@@ -685,12 +687,12 @@ export default function QueryPage() {
         <div className="flex items-start gap-3">
           <i className="fas fa-exclamation-triangle mt-0.5 text-amber-600"></i>
           <div className="space-y-1">
-            <div className="font-semibold">这是 SQL 编辑器 —— 平台级原始 SQL 通道</div>
+            <div className="font-semibold">{t('bannerTitle')}</div>
             <ul className="list-disc list-inside text-xs text-amber-800 space-y-0.5">
-              <li>所有调用都会被记录在 <span className="font-mono">management.audit_logs</span>（含 SQL 类型、长度、调用者），可在「平台 → 审计 → 原始 SQL 审计」面板回溯。</li>
-              <li>禁止访问 <span className="font-mono">management.*</span> schema 与 <span className="font-mono">pg_catalog</span> / <span className="font-mono">information_schema</span> 系统视图，请求会被后端拦截。</li>
-              <li>必须先在右上角选定目标数据库（<span className="font-mono">X-Database-Id</span>），否则后端直接 403。</li>
-              <li>写 / DDL 类操作需要二次手动输入确认，避免误执行。</li>
+              <li>{t('bannerLi1')}</li>
+              <li>{t('bannerLi2Pre')}<span className="font-mono">management.*</span> / <span className="font-mono">pg_catalog</span> / <span className="font-mono">information_schema</span>{t('bannerLi2Post')}</li>
+              <li>{t('bannerLi3Pre')}<span className="font-mono">X-Database-Id</span>{t('bannerLi3Post')}</li>
+              <li>{t('bannerLi4')}</li>
             </ul>
           </div>
         </div>
@@ -699,9 +701,9 @@ export default function QueryPage() {
       {/* 页面头部 */}
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-800">SQL 编辑器</h1>
+          <h1 className="text-2xl font-semibold text-gray-800">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            支持所有 SQL 操作 · -- 与 /* */ 注释执行时自动忽略 · 可用 ; 分隔一次执行多条语句 · 快捷键: Ctrl+Enter 执行
+            {t('subtitle')}
           </p>
         </div>
         
@@ -714,7 +716,7 @@ export default function QueryPage() {
               onChange={(e) => setReadOnly(e.target.checked)}
               className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
             />
-            <span className="text-gray-600">只读模式</span>
+            <span className="text-gray-600">{t('readonlyMode')}</span>
           </label>
         </div>
       </div>
@@ -726,12 +728,12 @@ export default function QueryPage() {
           <div className="card flex-1 flex flex-col min-h-0">
             <div className="px-4 py-2 border-b border-gray-200 flex items-center justify-between bg-gray-50">
               <div className="flex items-center space-x-3">
-                <span className="text-sm font-medium text-gray-700">SQL 查询</span>
+                <span className="text-sm font-medium text-gray-700">{t('sqlQuery')}</span>
                 {isMulti ? (
                   <span className={`text-xs px-2 py-0.5 rounded font-medium ${
                     isWrite ? 'bg-yellow-100 text-yellow-700' : 'bg-indigo-100 text-indigo-700'
                   }`}>
-                    {statements.length} 条语句
+                    {t('statementCount', { n: statements.length })}
                   </span>
                 ) : sql.trim() ? (
                   <span className={`text-xs px-2 py-0.5 rounded font-medium ${
@@ -749,19 +751,19 @@ export default function QueryPage() {
                 <button
                   onClick={formatSQL}
                   className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1"
-                  title="格式化 SQL"
+                  title={t('formatTitle')}
                 >
                   <i className="fas fa-align-left mr-1"></i>
-                  格式化
+                  {t('format')}
                 </button>
                 <button
                   onClick={() => setShowSaveDialog(true)}
                   disabled={!sql.trim()}
                   className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 disabled:opacity-50"
-                  title="保存查询"
+                  title={t('saveTitle')}
                 >
                   <i className="fas fa-save mr-1"></i>
-                  保存
+                  {t('save')}
                 </button>
               </div>
             </div>
@@ -773,7 +775,7 @@ export default function QueryPage() {
                 onChange={(e) => setSql(e.target.value)}
                 onKeyDown={handleKeyDown}
                 className="w-full h-full p-4 font-mono text-sm resize-none focus:outline-none border-0"
-                placeholder="输入 SQL… 支持 -- 行注释和 /* */ 块注释（执行时忽略）。可用 ; 分隔多条语句。"
+                placeholder={t('editorPlaceholder')}
                 spellCheck={false}
               />
             </div>
@@ -791,12 +793,12 @@ export default function QueryPage() {
                 >
                   <i className={`fas ${loading ? 'fa-spinner fa-spin' : 'fa-play'} mr-2`}></i>
                   {loading
-                    ? '执行中...'
+                    ? t('executing')
                     : isMulti
-                      ? `执行 ${statements.length} 条语句`
+                      ? t('execN', { n: statements.length })
                       : isWrite && !readOnly
-                        ? '执行写操作'
-                        : '执行查询'}
+                        ? t('execWrite')
+                        : t('execQuery')}
                 </button>
 
                 <button
@@ -804,22 +806,22 @@ export default function QueryPage() {
                   className="btn-default text-sm"
                 >
                   <i className="fas fa-eraser mr-2"></i>
-                  清空
+                  {t('clear')}
                 </button>
 
                 <button
                   onClick={analyzeWithAi}
                   disabled={!sql.trim()}
                   className="px-3 py-2 text-sm font-medium rounded-lg text-white bg-gradient-to-br from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  title="用 AI 分析当前 SQL"
+                  title={t('aiAnalyzeTitle')}
                 >
                   <i className="fas fa-robot mr-2"></i>
-                  AI 分析
+                  {t('aiAnalyze')}
                 </button>
               </div>
               
               <span className="text-xs text-gray-500">
-                Ctrl+Enter 执行 · Ctrl+S 保存
+                {t('shortcuts')}
               </span>
             </div>
           </div>
@@ -830,7 +832,7 @@ export default function QueryPage() {
               <div className="card h-full flex items-center justify-center text-gray-400">
                 <div className="text-center">
                   <i className="fas fa-terminal text-4xl mb-3"></i>
-                  <p>执行查询后结果将显示在这里</p>
+                  <p>{t('resultPlaceholder')}</p>
                 </div>
               </div>
             ) : (
@@ -843,7 +845,7 @@ export default function QueryPage() {
                           <span className="text-xs font-mono text-gray-400 flex-shrink-0">#{idx + 1}</span>
                         )}
                         <h3 className="text-sm font-semibold text-gray-700 truncate">
-                          {item.result.message || '查询结果'}
+                          {['SELECT', 'WITH', 'EXPLAIN', 'SHOW'].includes((item.result.type || '').toUpperCase()) ? t('queryResult') : t('opSuccess')}
                         </h3>
                         <span className={`text-xs px-2 py-0.5 rounded font-medium flex-shrink-0 ${
                           item.result.type === 'SELECT' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'
@@ -859,18 +861,18 @@ export default function QueryPage() {
                         {item.result.rows_affected !== undefined && (
                           <span>
                             <i className="fas fa-edit mr-1"></i>
-                            影响 {item.result.rows_affected} 行
+                            {t('rowsAffected', { n: item.result.rows_affected })}
                           </span>
                         )}
                         <span>
                           <i className="fas fa-list mr-1"></i>
-                          返回 {item.result.row_count} 行
+                          {t('rowsReturned', { n: item.result.row_count })}
                         </span>
                         {item.result.data.length > 0 && (
                           <button
                             onClick={() => exportItemCSV(item)}
                             className="text-gray-500 hover:text-gray-700"
-                            title="导出 CSV"
+                            title={t('exportCsv')}
                           >
                             <i className="fas fa-download"></i>
                           </button>
@@ -882,7 +884,7 @@ export default function QueryPage() {
                       {item.result.data.length === 0 ? (
                         <div className="p-6 text-center">
                           <i className="fas fa-check-circle text-2xl text-green-500 mb-2"></i>
-                          <p className="text-sm text-gray-600">{item.result.message || '操作成功，无返回数据'}</p>
+                          <p className="text-sm text-gray-600">{t('opOkNoData')}</p>
                         </div>
                       ) : (
                         <table className="w-full text-sm">
@@ -932,7 +934,7 @@ export default function QueryPage() {
                       <i className="fas fa-exclamation-circle text-red-500 mt-0.5"></i>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-red-800">
-                          查询错误{isMulti ? `（第 ${idx + 1} 条）` : ''}
+                          {isMulti ? t('queryErrorN', { n: idx + 1 }) : t('queryError')}
                         </p>
                         {isMulti && (
                           <p className="text-xs text-red-700/80 mt-1 font-mono line-clamp-2">{item.sql}</p>
@@ -943,7 +945,7 @@ export default function QueryPage() {
                           className="mt-3 inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-lg text-white bg-gradient-to-br from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 transition-colors"
                         >
                           <i className="fas fa-robot mr-1.5"></i>
-                          问 AI 这个错误
+                          {t('askAiError')}
                         </button>
                       </div>
                     </div>
@@ -968,7 +970,7 @@ export default function QueryPage() {
                 }`}
               >
                 <i className="fas fa-history mr-2"></i>
-                历史 ({history.length})
+                {t('history', { n: history.length })}
               </button>
               <button
                 onClick={() => setActiveTab('saved')}
@@ -979,7 +981,7 @@ export default function QueryPage() {
                 }`}
               >
                 <i className="fas fa-star mr-2"></i>
-                已保存 ({savedQueries.length})
+                {t('saved', { n: savedQueries.length })}
               </button>
             </div>
 
@@ -994,7 +996,7 @@ export default function QueryPage() {
                         className="text-xs text-red-600 hover:text-red-700"
                       >
                         <i className="fas fa-trash mr-1"></i>
-                        清空历史
+                        {t('clearHistory')}
                       </button>
                     </div>
                   )}
@@ -1002,7 +1004,7 @@ export default function QueryPage() {
                   {history.length === 0 ? (
                     <div className="p-8 text-center">
                       <i className="fas fa-history text-3xl text-gray-300 mb-3"></i>
-                      <p className="text-sm text-gray-500">暂无查询历史</p>
+                      <p className="text-sm text-gray-500">{t('noHistory')}</p>
                     </div>
                   ) : (
                     <div className="divide-y divide-gray-100">
@@ -1039,10 +1041,10 @@ export default function QueryPage() {
                               {item.success && (
                                 <div className="flex items-center space-x-2 mt-1 text-xs text-gray-500">
                                   {item.rows_affected !== undefined && (
-                                    <span>影响 {item.rows_affected} 行</span>
+                                    <span>{t('rowsAffected', { n: item.rows_affected })}</span>
                                   )}
                                   {item.row_count !== undefined && (
-                                    <span>返回 {item.row_count} 行</span>
+                                    <span>{t('rowsReturned', { n: item.row_count })}</span>
                                   )}
                                   {item.elapsed_ms !== undefined && (
                                     <span>{item.elapsed_ms} ms</span>
@@ -1075,8 +1077,8 @@ export default function QueryPage() {
                   {savedQueries.length === 0 ? (
                     <div className="p-8 text-center">
                       <i className="fas fa-star text-3xl text-gray-300 mb-3"></i>
-                      <p className="text-sm text-gray-500">暂无保存的查询</p>
-                      <p className="text-xs text-gray-400 mt-1">使用 Ctrl+S 保存常用查询</p>
+                      <p className="text-sm text-gray-500">{t('noSaved')}</p>
+                      <p className="text-xs text-gray-400 mt-1">{t('noSavedHint')}</p>
                     </div>
                   ) : (
                     <div className="divide-y divide-gray-100">
@@ -1102,7 +1104,7 @@ export default function QueryPage() {
                                 deleteSavedQuery(item.id)
                               }}
                               className="opacity-0 group-hover:opacity-100 p-1 text-red-500 hover:text-red-700 transition-opacity"
-                              title="删除"
+                              title={t('delete')}
                             >
                               <i className="fas fa-trash text-xs"></i>
                             </button>
@@ -1141,18 +1143,18 @@ export default function QueryPage() {
               ></i>
               <div>
                 <h3 className="text-lg font-semibold text-gray-900">
-                  {confirmModal.isDangerous ? '危险操作二次确认' : '写操作确认'}
+                  {confirmModal.isDangerous ? t('dangerConfirm') : t('writeConfirm')}
                 </h3>
                 <p className="text-sm text-gray-600 mt-1">
-                  即将执行 <span className="font-mono font-semibold">{confirmModal.sqlType}</span> 操作；
+                  {t('aboutToExecPre')}<span className="font-mono font-semibold">{confirmModal.sqlType}</span>{t('aboutToExecPost')}
                   {confirmModal.isDangerous
-                    ? '该操作可能不可逆并影响整张表。'
-                    : '该操作会修改数据库数据。'}
+                    ? t('irreversible')
+                    : t('modifiesData')}
                 </p>
               </div>
             </div>
             <div className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded p-2">
-              请在下方输入框中手动键入 <span className="font-mono text-gray-900">{confirmModal.confirmPhrase}</span> 以继续：
+              {t('typePhrasePre')}<span className="font-mono text-gray-900">{confirmModal.confirmPhrase}</span>{t('typePhrasePost')}
             </div>
             <input
               type="text"
@@ -1170,7 +1172,7 @@ export default function QueryPage() {
                 }}
                 className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900"
               >
-                取消
+                {t('cancel')}
               </button>
               <button
                 onClick={onConfirmExecute}
@@ -1181,7 +1183,7 @@ export default function QueryPage() {
                     : 'bg-amber-500 hover:bg-amber-600'
                 } disabled:opacity-40 disabled:cursor-not-allowed`}
               >
-                我已知晓，确认执行
+                {t('confirmExec')}
               </button>
             </div>
           </div>
@@ -1192,12 +1194,12 @@ export default function QueryPage() {
       {showSaveDialog && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg shadow-xl w-96 p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">保存查询</h3>
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('saveQuery')}</h3>
             <input
               type="text"
               value={saveName}
               onChange={(e) => setSaveName(e.target.value)}
-              placeholder="输入查询名称..."
+              placeholder={t('queryNamePlaceholder')}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
               autoFocus
               onKeyDown={(e) => e.key === 'Enter' && saveQuery()}
@@ -1210,14 +1212,14 @@ export default function QueryPage() {
                 }}
                 className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900"
               >
-                取消
+                {t('cancel')}
               </button>
               <button
                 onClick={saveQuery}
                 disabled={!saveName.trim()}
                 className="px-4 py-2 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50"
               >
-                保存
+                {t('save')}
               </button>
             </div>
           </div>

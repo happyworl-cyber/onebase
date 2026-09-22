@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, ReactNode } from 'react'
+import { useTranslations } from 'next-intl'
 
 interface ModalProps {
   isOpen: boolean
@@ -148,11 +149,12 @@ export function ConfirmDialog({
   onConfirm,
   title,
   message,
-  confirmText = '确认',
-  cancelText = '取消',
+  confirmText,
+  cancelText,
   type = 'danger',
   loading = false,
 }: ConfirmDialogProps) {
+  const t = useTranslations('modal')
   const typeStyles = {
     danger: {
       icon: 'fa-exclamation-triangle',
@@ -189,7 +191,7 @@ export function ConfirmDialog({
             disabled={loading}
             className="flex-1 px-4 py-2.5 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50"
           >
-            {cancelText}
+            {cancelText ?? t('cancel')}
           </button>
           <button
             onClick={onConfirm}
@@ -199,10 +201,10 @@ export function ConfirmDialog({
             {loading ? (
               <>
                 <i className="fas fa-spinner fa-spin mr-2"></i>
-                处理中...
+                {t('processing')}
               </>
             ) : (
-              confirmText
+              confirmText ?? t('confirm')
             )}
           </button>
         </div>

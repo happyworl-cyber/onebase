@@ -13,12 +13,12 @@
 //! 不额外引入重量；签发 / 校验逻辑集中在此，服务端与 `license_tool` CLI 共用。
 //!
 //! 环境变量：
-//! - `ONEBASE_LICENSE_ENFORCE`      off | warn | enforce（默认 warn：只告警不拦截）
-//! - `ONEBASE_LICENSE_PATH`         License 文件路径（默认探测 ./license.lic、/etc/onebase/license.lic）
-//! - `ONEBASE_LICENSE_PUBLIC_KEY`   验签公钥（PEM 内联字符串）
-//! - `ONEBASE_LICENSE_PUBLIC_KEY_PATH` 验签公钥文件路径（与上者二选一）
-//! - `ONEBASE_DEPLOY_FINGERPRINT`   覆盖当前部署指纹（默认由主机名派生）
-//! - `ONEBASE_LICENSE_REFRESH_SECS` 后台重载间隔秒（默认 300）
+//! - `PLANEOS_LICENSE_ENFORCE`      off | warn | enforce（默认 warn：只告警不拦截）
+//! - `PLANEOS_LICENSE_PATH`         License 文件路径（默认探测 ./license.lic、/etc/planeos/license.lic）
+//! - `PLANEOS_LICENSE_PUBLIC_KEY`   验签公钥（PEM 内联字符串）
+//! - `PLANEOS_LICENSE_PUBLIC_KEY_PATH` 验签公钥文件路径（与上者二选一）
+//! - `PLANEOS_DEPLOY_FINGERPRINT`   覆盖当前部署指纹（默认由主机名派生）
+//! - `PLANEOS_LICENSE_REFRESH_SECS` 后台重载间隔秒（默认 300）
 
 use std::sync::Arc;
 
@@ -55,6 +55,16 @@ pub struct LicenseClaims {
     /// 启用的模块开关（对齐报价单加购项）：multitenant / ai / xinchuang / ha / audit / pipeline。
     #[serde(default)]
     pub modules: Vec<String>,
+    /// 执法模式（off / warn / enforce）。**写进签名**，客户改不了。
+    ///
+    /// 与环境变量 `PLANEOS_LICENSE_ENFORCE` 的关系：取两者中**更严**的一个。
+    /// 也就是说客户可以把环境变量设得更严（自测用），但不能用它把签名里
+    /// 声明的 enforce 放松成 off —— 后者是私有化部署下唯一还算有效的约束点。
+    ///
+    /// `None` = 老版本签发的 License 没有此字段，此时完全沿用环境变量，
+    /// 行为与引入本字段之前一致（向后兼容）。
+    #[serde(default)]
+    pub enforce: Option<String>,
     /// 部署节点上限（None = 不限）。
     #[serde(default)]
     pub max_nodes: Option<u32>,
@@ -157,7 +167,10 @@ impl LicenseStatus {
 }
 
 /// 强制模式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// 变体顺序即严格程度（Off < Warn < Enforce），`Ord` 由此派生：
+/// 合并"环境变量声明"与"License 签名里声明"时取较严的一个。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EnforceMode {
     /// 完全不校验（开发 / 兼容旧部署）。
     Off,
@@ -168,16 +181,17 @@ pub enum EnforceMode {
 }
 
 impl EnforceMode {
-    pub fn from_env() -> Self {
-        match std::env::var("ONEBASE_LICENSE_ENFORCE")
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .as_str()
-        {
+    /// 解析模式字面量；无法识别时回退到 `Warn`（与历史默认一致）。
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
             "off" | "false" | "0" | "none" => EnforceMode::Off,
             "enforce" | "strict" | "on" | "1" => EnforceMode::Enforce,
             _ => EnforceMode::Warn,
         }
+    }
+
+    pub fn from_env() -> Self {
+        EnforceMode::parse(&std::env::var("PLANEOS_LICENSE_ENFORCE").unwrap_or_default())
     }
 
     pub fn as_str(&self) -> &'static str {
@@ -196,6 +210,10 @@ pub struct LicenseSnapshot {
     pub message: String,
     pub claims: Option<LicenseClaims>,
     pub checked_at: i64,
+    /// 本次加载解析出的实际生效模式 = max(环境变量, License 签名里声明的)。
+    /// 放在快照里而不是 LicenseState 上，是因为换 License 文件后（reload）
+    /// 它可能变化，而 LicenseState.mode 是不可变的环境变量基线。
+    pub effective_mode: EnforceMode,
 }
 
 /// 授权状态句柄：内部持有一个可原子替换的快照，后台任务定期重载。
@@ -299,7 +317,7 @@ fn hostname_best_effort() -> String {
 
 /// 当前部署指纹：优先取环境变量覆盖，否则由主机名派生（sha256 前 8 字节 hex）。
 pub fn current_fingerprint() -> String {
-    if let Ok(fp) = std::env::var("ONEBASE_DEPLOY_FINGERPRINT") {
+    if let Ok(fp) = std::env::var("PLANEOS_DEPLOY_FINGERPRINT") {
         if !fp.is_empty() {
             return fp;
         }
@@ -312,21 +330,33 @@ pub fn current_fingerprint() -> String {
 
 // ============================ 加载 / 状态机 ============================
 
+/// 判据必须是"能否真的解析成 RSA 公钥"，不能用 `contains("BEGIN")`。
+///
+/// 历史 bug：占位文件 `src/license_public.pem` 的中文注释里就写着
+/// 「保留 -----BEGIN/END----- 行」「一旦本文件包含真实公钥（含 "BEGIN"）」，
+/// 于是占位文件被误判为"已内嵌真实公钥"并直接返回。后果是两条：
+///   1. PEM 解析必然失败 → **任何** License 都被判成 invalid；
+///   2. 下面的环境变量回退永远走不到 → 注释承诺的"未内嵌时可用环境变量"成了死代码。
+/// 表现为：出厂构建里 enforce 模式会把付费客户的写操作全部 402 拦死。
+fn parse_public_key(pem: &str) -> bool {
+    RsaPublicKey::from_public_key_pem(pem).is_ok()
+}
+
 fn read_public_key() -> Option<String> {
-    // 内嵌公钥优先：一旦编译期内嵌了真实公钥（含 "BEGIN"），就忽略环境变量，
+    // 内嵌公钥优先：一旦编译期内嵌了**可解析的**真实公钥，就忽略环境变量，
     // 防止客户替换公钥文件 + 自签授权绕过校验——这正是"内嵌"的硬化意义。
-    if EMBEDDED_PUBLIC_KEY.contains("BEGIN") {
+    if parse_public_key(EMBEDDED_PUBLIC_KEY) {
         return Some(EMBEDDED_PUBLIC_KEY.to_string());
     }
     // 仅当未内嵌真实公钥（占位文件）时，回落到环境变量，便于开发 / 尚未内嵌前使用。
-    if let Ok(pem) = std::env::var("ONEBASE_LICENSE_PUBLIC_KEY") {
-        if pem.contains("BEGIN") {
+    if let Ok(pem) = std::env::var("PLANEOS_LICENSE_PUBLIC_KEY") {
+        if parse_public_key(&pem) {
             return Some(pem);
         }
     }
-    if let Ok(path) = std::env::var("ONEBASE_LICENSE_PUBLIC_KEY_PATH") {
+    if let Ok(path) = std::env::var("PLANEOS_LICENSE_PUBLIC_KEY_PATH") {
         if let Ok(pem) = std::fs::read_to_string(&path) {
-            if pem.contains("BEGIN") {
+            if parse_public_key(&pem) {
                 return Some(pem);
             }
         }
@@ -335,10 +365,10 @@ fn read_public_key() -> Option<String> {
 }
 
 fn read_license_file() -> Option<String> {
-    if let Ok(path) = std::env::var("ONEBASE_LICENSE_PATH") {
+    if let Ok(path) = std::env::var("PLANEOS_LICENSE_PATH") {
         return std::fs::read_to_string(&path).ok();
     }
-    for candidate in ["./license.lic", "/etc/onebase/license.lic"] {
+    for candidate in ["./license.lic", "/etc/planeos/license.lic"] {
         if let Ok(content) = std::fs::read_to_string(candidate) {
             return Some(content);
         }
@@ -346,16 +376,49 @@ fn read_license_file() -> Option<String> {
     None
 }
 
-fn load_snapshot() -> LicenseSnapshot {
+/// 合并"环境变量声明"与"License 签名里声明"的执法模式：取更严的一个。
+///
+/// - 老 License（无 `enforce` 字段）→ 完全沿用环境变量，行为与引入该字段前一致；
+/// - 新 License 声明了 enforce → 客户把环境变量设成 off 也无法放松，因为签名字段改不了；
+/// - 客户仍可把环境变量设得更严（例如上线前自测 enforce），这是允许的。
+fn resolve_mode(env_mode: EnforceMode, claims: Option<&LicenseClaims>) -> EnforceMode {
+    match claims.and_then(|c| c.enforce.as_deref()) {
+        Some(raw) => EnforceMode::parse(raw).max(env_mode),
+        None => env_mode,
+    }
+}
+
+/// 加载快照；若最终生效模式仍是 Off，则还原成"校验已关闭"的快照。
+///
+/// 这一步是**向后兼容的关键**：改动前 env=off 时压根不读 License 文件，
+/// `/api/license` 显示的是「授权校验已关闭」。现在为了能读出签名里的 enforce
+/// 必须先加载，但只要签名没要求收紧（老 License / 无 License），就把快照还原成
+/// 与改动前逐字相同的内容，对外行为零变化。
+fn load_or_disabled(env_mode: EnforceMode) -> LicenseSnapshot {
+    let snap = load_snapshot(env_mode);
+    if snap.effective_mode == EnforceMode::Off {
+        return LicenseSnapshot {
+            status: LicenseStatus::Unlicensed,
+            message: "授权校验已关闭（PLANEOS_LICENSE_ENFORCE=off）".to_string(),
+            claims: None,
+            checked_at: chrono::Utc::now().timestamp(),
+            effective_mode: EnforceMode::Off,
+        };
+    }
+    snap
+}
+
+fn load_snapshot(env_mode: EnforceMode) -> LicenseSnapshot {
     let now = chrono::Utc::now().timestamp();
     let public_pem = match read_public_key() {
         Some(p) => p,
         None => {
             return LicenseSnapshot {
                 status: LicenseStatus::Missing,
-                message: "未配置验签公钥（ONEBASE_LICENSE_PUBLIC_KEY[_PATH]）".to_string(),
+                message: "未配置验签公钥（PLANEOS_LICENSE_PUBLIC_KEY[_PATH]）".to_string(),
                 claims: None,
                 checked_at: now,
+                effective_mode: env_mode,
             };
         }
     };
@@ -364,20 +427,23 @@ fn load_snapshot() -> LicenseSnapshot {
         None => {
             return LicenseSnapshot {
                 status: LicenseStatus::Missing,
-                message: "未找到 License 文件（ONEBASE_LICENSE_PATH / ./license.lic）".to_string(),
+                message: "未找到 License 文件（PLANEOS_LICENSE_PATH / ./license.lic）".to_string(),
                 claims: None,
                 checked_at: now,
+                effective_mode: env_mode,
             };
         }
     };
     match verify_license_file(&public_pem, &file_content) {
         Ok(claims) => {
             let (status, message) = evaluate(&claims, now, &current_fingerprint());
+            let effective_mode = resolve_mode(env_mode, Some(&claims));
             LicenseSnapshot {
                 status,
                 message,
                 claims: Some(claims),
                 checked_at: now,
+                effective_mode,
             }
         }
         Err(e) => LicenseSnapshot {
@@ -385,6 +451,7 @@ fn load_snapshot() -> LicenseSnapshot {
             message: e,
             claims: None,
             checked_at: now,
+            effective_mode: env_mode,
         },
     }
 }
@@ -393,19 +460,9 @@ impl LicenseState {
     /// 从环境变量初始化：读取强制模式并加载一次快照。
     pub fn init_from_env() -> Self {
         let mode = EnforceMode::from_env();
-        let snapshot = if mode == EnforceMode::Off {
-            LicenseSnapshot {
-                status: LicenseStatus::Unlicensed,
-                message: "授权校验已关闭（ONEBASE_LICENSE_ENFORCE=off）".to_string(),
-                claims: None,
-                checked_at: chrono::Utc::now().timestamp(),
-            }
-        } else {
-            load_snapshot()
-        };
         LicenseState {
             mode,
-            inner: Arc::new(std::sync::RwLock::new(Arc::new(snapshot))),
+            inner: Arc::new(std::sync::RwLock::new(Arc::new(load_or_disabled(mode)))),
         }
     }
 
@@ -424,15 +481,19 @@ impl LicenseState {
 
     /// 重新加载 License（续期换文件 / 到期状态迁移都靠它生效）。
     pub fn reload(&self) {
-        if self.mode == EnforceMode::Off {
-            return;
-        }
-        self.store(load_snapshot());
+        // 不能因为环境变量是 off 就跳过加载 —— 签名里可能声明了 enforce，
+        // 那种情况下必须读出来才能生效（客户改不了签名字段，这是硬约束的落点）。
+        self.store(load_or_disabled(self.mode));
+    }
+
+    /// 当前实际生效的模式（环境变量与签名声明中更严的一个）。
+    pub fn effective_mode(&self) -> EnforceMode {
+        self.snapshot().effective_mode
     }
 
     /// 当前是否允许写操作。返回 (是否允许, 拒绝原因)。
     pub fn allows_write(&self) -> (bool, Option<String>) {
-        match self.mode {
+        match self.effective_mode() {
             EnforceMode::Off | EnforceMode::Warn => (true, None),
             EnforceMode::Enforce => {
                 let snap = self.snapshot();
@@ -451,7 +512,7 @@ impl LicenseState {
     /// 当前授权是否包含某模块（对齐报价单加购项）。返回 (是否允许, 拒绝原因)。
     /// warn / off 模式下永不拦截；enforce 模式下要求授权有效且已购该模块。
     pub fn allows_module(&self, module: &str) -> (bool, Option<String>) {
-        match self.mode {
+        match self.effective_mode() {
             EnforceMode::Off | EnforceMode::Warn => (true, None),
             EnforceMode::Enforce => {
                 let snap = self.snapshot();
@@ -487,7 +548,10 @@ impl LicenseState {
         let snap = self.snapshot();
         let mut out = json!({
             "status": snap.status.as_str(),
-            "enforcement": self.mode.as_str(),
+            // 对外报告的是**实际生效**的模式；env 基线单列，便于审计时一眼看出
+            // "签名要求 enforce 但机器上把环境变量设成了 off"这种情况。
+            "enforcement": snap.effective_mode.as_str(),
+            "enforcement_env": self.mode.as_str(),
             "message": snap.message,
             "fingerprint_current": current_fingerprint(),
             "checked_at": to_rfc3339(snap.checked_at),
@@ -515,7 +579,8 @@ impl LicenseState {
             LicenseStatus::Active => {
                 tracing::info!(
                     status = snap.status.as_str(),
-                    enforcement = self.mode.as_str(),
+                    enforcement = snap.effective_mode.as_str(),
+                    enforcement_env = self.mode.as_str(),
                     "PlaneOS 授权校验：{}",
                     snap.message
                 );
@@ -526,7 +591,8 @@ impl LicenseState {
             _ => {
                 tracing::warn!(
                     status = snap.status.as_str(),
-                    enforcement = self.mode.as_str(),
+                    enforcement = snap.effective_mode.as_str(),
+                    enforcement_env = self.mode.as_str(),
                     "PlaneOS 授权校验：{}（enforce=enforce 时写操作将被拦截并降级为只读）",
                     snap.message
                 );
@@ -536,10 +602,12 @@ impl LicenseState {
 
     /// 启动后台重载任务：周期性重新读取 License 文件，让续期 / 到期迁移无需重启即可生效。
     pub fn spawn_refresh(&self) {
-        if self.mode == EnforceMode::Off {
-            return;
+        // 即便环境变量是 off 也要跑：客户之后换上声明了 enforce 的 License 时，
+        // 必须能被这个轮询读出来并收紧，否则签名约束等于可以用"先启动再换文件"绕过。
+        if self.mode == EnforceMode::Off && self.effective_mode() == EnforceMode::Off {
+            // 仍然启动轮询，只是间隔沿用配置；这里不再提前 return。
         }
-        let secs = std::env::var("ONEBASE_LICENSE_REFRESH_SECS")
+        let secs = std::env::var("PLANEOS_LICENSE_REFRESH_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .filter(|v| *v >= 5)
@@ -640,7 +708,7 @@ pub async fn license_enforcement_middleware(
 /// 挂在按模块划分的路由组上，例如：
 /// ```ignore
 /// .layer(axum_middleware::from_fn(|req, next| {
-///     onebase::license::require_module(req, next, "pipeline")
+///     planeos::license::require_module(req, next, "pipeline")
 /// }))
 /// ```
 pub async fn require_module(
@@ -675,8 +743,17 @@ mod tests {
             customer: "测试客户".to_string(),
             edition: "enterprise".to_string(),
             modules: vec!["ai".to_string(), "ha".to_string()],
+            enforce: None,
             max_nodes: Some(3),
             max_tenants: None,
+            max_accounts_per_tenant: None,
+            max_projects: None,
+            max_workflows: None,
+            max_executions_per_month: None,
+            max_api_endpoints: None,
+            max_scheduled_jobs: None,
+            max_database_connections: None,
+            max_team_members: None,
             issued_at: 1_000,
             expires_at,
             grace_days: 30,
@@ -745,5 +822,79 @@ mod tests {
             evaluate(&claims, 1_500, "bound-fp").0,
             LicenseStatus::Active
         );
+    }
+
+    // ── 本次硬化改动的回归测试 ────────────────────────────────────────
+
+    #[test]
+    fn placeholder_public_key_is_not_treated_as_embedded() {
+        // 占位文件的注释里含 "BEGIN" 字样，但不是可解析的 PEM。
+        // 历史 bug：contains("BEGIN") 会把它当成已内嵌真实公钥，导致任何
+        // License 都被判 invalid，且环境变量回退成为死代码。
+        let placeholder = "# 保留 -----BEGIN/END----- 行\n# 一旦本文件包含真实公钥（含 \"BEGIN\"）...\n";
+        assert!(
+            !parse_public_key(placeholder),
+            "占位文件不得被认定为可用公钥"
+        );
+
+        let (_priv_pem, pub_pem) = generate_keypair().expect("keygen");
+        assert!(parse_public_key(&pub_pem), "真实公钥必须可解析");
+    }
+
+    #[test]
+    fn old_license_without_enforce_field_keeps_env_behaviour() {
+        // 向后兼容：老 License 没有 enforce 字段，生效模式必须完全等于环境变量，
+        // 与引入该字段之前的行为一致。
+        let mut claims = sample_claims(chrono::Utc::now().timestamp() + 86_400);
+        claims.enforce = None;
+        for env in [EnforceMode::Off, EnforceMode::Warn, EnforceMode::Enforce] {
+            assert_eq!(resolve_mode(env, Some(&claims)), env);
+        }
+        // 连 claims 都没有时同理。
+        for env in [EnforceMode::Off, EnforceMode::Warn, EnforceMode::Enforce] {
+            assert_eq!(resolve_mode(env, None), env);
+        }
+    }
+
+    #[test]
+    fn signed_enforce_cannot_be_loosened_by_env() {
+        // 签名声明 enforce，客户把环境变量设成 off / warn 都不能放松。
+        let mut claims = sample_claims(chrono::Utc::now().timestamp() + 86_400);
+        claims.enforce = Some("enforce".to_string());
+        assert_eq!(resolve_mode(EnforceMode::Off, Some(&claims)), EnforceMode::Enforce);
+        assert_eq!(resolve_mode(EnforceMode::Warn, Some(&claims)), EnforceMode::Enforce);
+        assert_eq!(
+            resolve_mode(EnforceMode::Enforce, Some(&claims)),
+            EnforceMode::Enforce
+        );
+    }
+
+    #[test]
+    fn env_may_tighten_beyond_signed_mode() {
+        // 反向允许：签名说 warn，客户自己要更严可以设 enforce。
+        let mut claims = sample_claims(chrono::Utc::now().timestamp() + 86_400);
+        claims.enforce = Some("warn".to_string());
+        assert_eq!(
+            resolve_mode(EnforceMode::Enforce, Some(&claims)),
+            EnforceMode::Enforce
+        );
+        assert_eq!(resolve_mode(EnforceMode::Off, Some(&claims)), EnforceMode::Warn);
+    }
+
+    #[test]
+    fn enforce_field_survives_sign_verify_roundtrip() {
+        // enforce 必须真的进签名：篡改它会导致验签失败（否则约束毫无意义）。
+        let (priv_pem, pub_pem) = generate_keypair().expect("keygen");
+        let mut claims = sample_claims(chrono::Utc::now().timestamp() + 86_400);
+        claims.enforce = Some("enforce".to_string());
+        let file = sign_license(&priv_pem, &claims).expect("sign");
+        let parsed = verify_license_file(&pub_pem, &file).expect("verify");
+        assert_eq!(parsed.enforce.as_deref(), Some("enforce"));
+    }
+
+    #[test]
+    fn enforce_mode_ordering_is_off_warn_enforce() {
+        assert!(EnforceMode::Off < EnforceMode::Warn);
+        assert!(EnforceMode::Warn < EnforceMode::Enforce);
     }
 }

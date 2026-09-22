@@ -1,5 +1,7 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
+
 // M4：列级可见性 UI
 //
 // 心智模型（deny-first）：
@@ -44,6 +46,7 @@ export default function ColumnControl({
   mode,
   onChange,
 }: ColumnControlProps) {
+  const t = useTranslations('rbacColumnControl')
   const switchMode = (m: ColumnMode) => {
     if (m === mode) return
     if (m === 'deny') {
@@ -81,7 +84,7 @@ export default function ColumnControl({
     <div className="space-y-3">
       {/* 模式切换 */}
       <div className="flex items-center gap-2 text-xs">
-        <span className="text-gray-500">模式：</span>
+        <span className="text-gray-500">{t('modeLabel')}</span>
         <button
           type="button"
           onClick={() => switchMode('deny')}
@@ -91,7 +94,7 @@ export default function ColumnControl({
               : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
           }`}
         >
-          黑名单（隐藏指定列）
+          {t('blacklist')}
         </button>
         <button
           type="button"
@@ -102,20 +105,20 @@ export default function ColumnControl({
               : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
           }`}
         >
-          白名单（仅显示指定列）
+          {t('whitelist')}
         </button>
       </div>
 
       <p className="text-xs text-gray-500">
         {mode === 'deny'
-          ? '默认全部可见，勾选的列会被隐藏。'
-          : '默认全部隐藏，仅勾选的列可见。'}
+          ? t('denyHint')
+          : t('allowHint')}
       </p>
 
       {/* 列网格 */}
       {availableColumns.length === 0 ? (
         <div className="text-xs text-gray-400 italic px-3 py-3 border border-dashed border-gray-200 rounded">
-          无法加载列名 — 请先选择 schema.table 资源
+          {t('noColumns')}
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-1 max-h-48 overflow-y-auto p-2 border border-gray-200 rounded">
@@ -127,7 +130,7 @@ export default function ColumnControl({
                 className={`flex items-center gap-2 px-2 py-1 text-xs rounded cursor-pointer hover:bg-gray-50 ${
                   hidden ? 'opacity-60' : ''
                 }`}
-                title={hidden ? '当前已隐藏' : '当前可见'}
+                title={hidden ? t('currentlyHidden') : t('currentlyVisible')}
               >
                 <input
                   type="checkbox"
@@ -156,11 +159,11 @@ export default function ColumnControl({
       <p className="text-[11px] text-gray-400">
         {mode === 'deny'
           ? denied_columns.length === 0
-            ? '当前：全部可见'
-            : `当前：隐藏 ${denied_columns.length} 列`
+            ? t('sumAllVisible')
+            : t('sumHiddenN', { n: denied_columns.length })
           : (allowed_columns ?? []).length === 0
-            ? '当前：全部隐藏（无可见列）'
-            : `当前：仅 ${(allowed_columns ?? []).length} 列可见`}
+            ? t('sumAllHidden')
+            : t('sumOnlyNVisible', { n: (allowed_columns ?? []).length })}
       </p>
     </div>
   )

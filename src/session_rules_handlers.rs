@@ -185,7 +185,13 @@ pub async fn get_rule(
     .bind(id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("session rule {} 不存在", id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "sessrule_rule_not_found",
+            format!("session rule {} 不存在", id),
+            serde_json::json!({ "id": id }),
+        )
+    })?;
 
     Ok(Json(row_to_json(&row)))
 }
@@ -211,11 +217,17 @@ pub async fn create_rule(
 
     let trimmed_name = req.name.trim();
     if trimmed_name.is_empty() {
-        return Err(AppError::InvalidQuery("name 不能为空".to_string()));
+        return Err(AppError::validation(
+            "sessrule_name_empty",
+            "name 不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if trimmed_name.len() > 100 {
-        return Err(AppError::InvalidQuery(
+        return Err(AppError::validation(
+            "sessrule_name_too_long",
             "name 长度超过 100 个字符".to_string(),
+            serde_json::json!({}),
         ));
     }
 
@@ -279,11 +291,17 @@ pub async fn update_rule(
     if let Some(ref name) = req.name {
         let t = name.trim();
         if t.is_empty() {
-            return Err(AppError::InvalidQuery("name 不能为空".to_string()));
+            return Err(AppError::validation(
+                "sessrule_name_empty",
+                "name 不能为空".to_string(),
+                serde_json::json!({}),
+            ));
         }
         if t.len() > 100 {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "sessrule_name_too_long",
                 "name 长度超过 100 个字符".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -319,7 +337,13 @@ pub async fn update_rule(
     .bind(id)
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("session rule {} 不存在", id)))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "sessrule_rule_not_found",
+            format!("session rule {} 不存在", id),
+            serde_json::json!({ "id": id }),
+        )
+    })?;
 
     let json_row = row_to_json(&row);
     audit_detail(
@@ -363,7 +387,11 @@ pub async fn delete_rule(
             .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("session rule {} 不存在", id)));
+        return Err(AppError::not_found_coded(
+            "sessrule_rule_not_found",
+            format!("session rule {} 不存在", id),
+            serde_json::json!({ "id": id }),
+        ));
     }
 
     audit_detail(

@@ -1,8 +1,10 @@
 /**
- * 执行回放图本地 mock fixture —— 零后端依赖，供 dev 预览页渲染验证。
- * 覆盖：成功/失败/跳过三态、条件分支二选一、耗时热力梯度、5 种特殊节点角标
- *（http_call/kafka/redis/call_workflow/sse_publish）、失败运行的错误信息展示、
- * run#3 的静默空响应三例（http 200 空 body / kafka 无 ack / db_execute 0 行受影响）。
+ * Local mock fixture for the execution replay graph -- zero backend dependency, used to
+ * verify rendering on the dev preview page.
+ * Covers: the three states success/failed/skipped, a two-way conditional branch, an elapsed-
+ * time heat gradient, 5 special-node badges (http_call/kafka/redis/call_workflow/sse_publish),
+ * error-message display for a failed run, and run#3's three silent empty-response cases
+ * (http 200 with empty body / kafka with no ack / db_execute with 0 rows affected).
  */
 
 import type { WorkflowEdgeDef, WorkflowNodeDef } from '@/components/workflow/WorkflowCanvas'
@@ -12,45 +14,45 @@ export const MOCK_WORKFLOW_NODES: WorkflowNodeDef[] = [
   {
     id: 'fetch_user',
     type: 'http_call',
-    label: '拉取用户信息',
+    label: 'Fetch user info',
     config: { method: 'GET', url: 'https://api.example.com/users/{{trigger.user_id}}', headers: { Authorization: 'Bearer {{env.API_TOKEN}}' } },
   },
   {
     id: 'check_tier',
     type: 'condition',
-    label: '判断会员等级',
+    label: 'Determine membership tier',
     config: {
       conditions: [{ branch: 'vip', expression: '{{fetch_user.body.tier}} == "vip"' }],
       default_branch: 'default',
     },
   },
-  { id: 'apply_discount', type: 'code', label: '计算折扣', config: { language: 'lua', code: 'return { discount = 0.8 }' } },
+  { id: 'apply_discount', type: 'code', label: 'Calculate discount', config: { language: 'lua', code: 'return { discount = 0.8 }' } },
   {
     id: 'publish_kafka',
     type: 'kafka',
-    label: '发通知消息',
+    label: 'Send notification message',
     config: { connection_id: 3, op: 'produce', topic: 'order-events', key: '{{fetch_user.body.id}}', value: { event: 'discount_applied' } },
   },
   {
     id: 'save_order',
     type: 'db_execute',
-    label: '写订单',
+    label: 'Write order',
     config: { sql: 'UPDATE orders SET discount = {{apply_discount.discount}} WHERE user_id = {{trigger.user_id}}', params: [] },
   },
   {
     id: 'call_sub_refund',
     type: 'call_workflow',
-    label: '调用退款子流程',
+    label: 'Call refund sub-workflow',
     config: { workflow: 'refund-issue', input: { order_id: '{{save_order.id}}' }, allow_failure: false },
   },
-  { id: 'publish_sse', type: 'sse_publish', label: '推送前端', config: { topic: 'order/{{trigger.user_id}}', event: 'discount' } },
+  { id: 'publish_sse', type: 'sse_publish', label: 'Push to frontend', config: { topic: 'order/{{trigger.user_id}}', event: 'discount' } },
   {
     id: 'log_default',
     type: 'redis',
-    label: '记录普通用户',
+    label: 'Record regular user',
     config: { connection_id: 1, op: 'incr', key: 'stat:default_user_count' },
   },
-  { id: 'respond', type: 'response', label: '返回结果', config: { status_code: 200, body: { ok: true } } },
+  { id: 'respond', type: 'response', label: 'Return result', config: { status_code: 200, body: { ok: true } } },
 ]
 
 export const MOCK_WORKFLOW_EDGES: WorkflowEdgeDef[] = [
@@ -65,7 +67,8 @@ export const MOCK_WORKFLOW_EDGES: WorkflowEdgeDef[] = [
   { from: 'log_default', to: 'respond' },
 ]
 
-/** run#2：vip 分支，走到写库变慢（900ms，热力最红），子流程调用失败，下游被跳过。 */
+/** run#2: vip branch, hits a slow DB write (900ms, hottest on the heatmap), the sub-workflow
+ * call fails, and downstream nodes are skipped. */
 const RUN_2_DETAIL: ReplayRunDetail = {
   id: 2,
   workflow_id: 1,
@@ -74,7 +77,7 @@ const RUN_2_DETAIL: ReplayRunDetail = {
   elapsed_ms: 1585,
   started_at: '2026-08-19T10:15:00Z',
   completed_at: '2026-08-19T10:15:02Z',
-  error_message: '子工作流 refund-issue 执行失败：连接超时',
+  error_message: 'Sub-workflow refund-issue failed: connection timeout',
   final_output: null,
   node_results: [
     {
@@ -99,19 +102,22 @@ const RUN_2_DETAIL: ReplayRunDetail = {
       node_type: 'call_workflow',
       status: 'failed',
       elapsed_ms: 700,
-      error: '子工作流 refund-issue 返回失败：连接超时（3000ms）',
+      error: 'Sub-workflow refund-issue failed: connection timeout (3000ms)',
     },
-    // skipped 节点后端 elapsed_ms 恒为 0（非 null）——fixture 与真实数据对齐，
-    // 这样才能在预览页里验证"热力不覆盖 skipped 灰框、侧栏不显 0ms"这两处修复。
+    // For skipped nodes the backend always sets elapsed_ms to 0 (not null) -- this fixture
+    // matches real data so we can verify the two fixes on the preview page: "heat coloring
+    // doesn't cover the skipped gray box" and "the side panel doesn't show 0ms".
     { node_id: 'publish_sse', node_type: 'sse_publish', status: 'skipped', elapsed_ms: 0 },
     { node_id: 'respond', node_type: 'response', status: 'skipped', elapsed_ms: 0 },
   ],
 }
 
 /**
- * run#3：vip 分支全程成功，但其中 3 个节点是"连接通、不报错、但没拿到数据"的静默空响应——
- * fetch_user 200 但 body 为空、publish_kafka 投递后没拿到 result（无 ack）、save_order
- * UPDATE 没匹配到行（rows_affected=0）。用来验收空响应角标/侧栏快照/总览统计三处联动。
+ * run#3: the vip branch succeeds all the way through, but 3 of its nodes are silent empty
+ * responses -- "connection fine, no error, but no data came back": fetch_user returns 200 with
+ * an empty body, publish_kafka delivers but gets no result back (no ack), and save_order's
+ * UPDATE matches no rows (rows_affected=0). Used to verify the interplay between the empty-
+ * response badge, the side-panel snapshot, and the overview stats.
  */
 const RUN_3_DETAIL: ReplayRunDetail = {
   id: 3,
@@ -189,7 +195,8 @@ const RUN_3_DETAIL: ReplayRunDetail = {
   ],
 }
 
-/** run#1：default 分支，全程成功，走另一条路径（供切换运行验证分支跟着换）。 */
+/** run#1: default branch, succeeds all the way through a different path (used to verify the
+ * branch highlight switches when the selected run changes). */
 const RUN_1_DETAIL: ReplayRunDetail = {
   id: 1,
   workflow_id: 1,

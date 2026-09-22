@@ -16,11 +16,11 @@
 
 ```bash
 # 创建数据库
-createdb onebase_db
+createdb planeos_db
 
 # 或使用 psql
 psql -U postgres
-CREATE DATABASE onebase_db;
+CREATE DATABASE planeos_db;
 \q
 ```
 
@@ -37,7 +37,7 @@ JWT_SECRET=$(openssl rand -base64 48)
 ENCRYPTION_KEY=$(openssl rand -base64 32)
 
 # ── 必填：管理库连接串 ──
-DATABASE_URL=postgresql://your_username:your_password@localhost:5432/onebase_db
+DATABASE_URL=postgresql://your_username:your_password@localhost:5432/planeos_db
 
 # ── 可选：JWT 过期时间（秒），默认 86400（24 小时）──
 JWT_EXPIRATION=86400
@@ -45,7 +45,7 @@ JWT_EXPIRATION=86400
 # ── 可选：监听地址 / 端口 / 日志 / 缓存 ──
 HOST=127.0.0.1
 PORT=3000
-RUST_LOG=info,onebase=debug
+RUST_LOG=info,planeos=debug
 REDIS_URL=redis://127.0.0.1:6379
 
 # ── 可选：CORS 白名单，生产环境务必改为实际域名 ──
@@ -85,7 +85,7 @@ cargo run
 
 # 或者先编译再运行
 cargo build
-./target/debug/onebase
+./target/debug/planeos
 ```
 
 你应该看到：
@@ -257,7 +257,7 @@ cargo build
 
 ```bash
 # 测试数据库连接
-psql "postgresql://username:password@localhost:5432/onebase_db"
+psql "postgresql://username:password@localhost:5432/planeos_db"
 ```
 
 ### 3. Token 验证失败

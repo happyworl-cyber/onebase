@@ -14,6 +14,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useParams } from 'next/navigation'
 import { monitorAPI, queryPerfAPI, LockWait } from '@/lib/api'
 import { useNotification } from '@/hooks/useNotification'
@@ -40,6 +41,7 @@ type KillTarget = {
 export default function LocksPage() {
   const params = useParams<{ projectId: string }>()
   const projectId = parseInt(params.projectId, 10)
+  const t = useTranslations('wsLocks')
   const notify = useNotification()
   const currentConnection = useAppStore((s) => s.currentConnection)
   const databaseId = currentConnection?.database_id ?? null
@@ -100,8 +102,8 @@ export default function LocksPage() {
       await queryPerfAPI.cancelActiveQuery(killTarget.pid, killTerminate)
       notify.success(
         killTerminate
-          ? `已请求终止后端进程 (pid=${killTarget.pid})`
-          : `已请求取消查询 (pid=${killTarget.pid})`,
+          ? t('terminatedProc', { pid: killTarget.pid })
+          : t('cancelledQuery', { pid: killTarget.pid }),
       )
       setKillTarget(null)
       await load()
@@ -114,17 +116,19 @@ export default function LocksPage() {
 
   const analyzeWithAi = (r: LockWait) => {
     askAi({
-      prompt:
-        '下面是当前数据库的一处锁等待 / 阻塞关系，请分析阻塞成因、风险，并给出处理建议' +
-        '（例如该终止哪个进程、如何避免再次发生、是否存在长事务 / 缺索引等问题）：\n\n' +
-        `- 等待的对象（表）：${r.blocked_relation || '（非表级锁）'}\n` +
-        `- 被阻塞会话申请的锁模式：${r.blocked_lock_mode || '-'}\n` +
-        `- 被阻塞会话等待事件：${[r.wait_event_type, r.wait_event].filter(Boolean).join(': ') || '-'}\n` +
-        `- 被阻塞会话已等待：${fmtSeconds(r.blocked_duration_seconds)}\n\n` +
-        `被阻塞会话 SQL (pid=${r.blocked_pid}, user=${r.blocked_user || '-'})：\n` +
-        '```sql\n' + (r.blocked_query || '-') + '\n```\n\n' +
-        `阻塞方会话 SQL (pid=${r.blocking_pid}, user=${r.blocking_user || '-'}, state=${r.blocking_state || '-'})：\n` +
-        '```sql\n' + (r.blocking_query || '-') + '\n```',
+      prompt: t('aiPrompt', {
+        blockedRelation: r.blocked_relation || t('nonTableLockParen'),
+        blockedLockMode: r.blocked_lock_mode || '-',
+        waitEvent: [r.wait_event_type, r.wait_event].filter(Boolean).join(': ') || '-',
+        blockedWaited: fmtSeconds(r.blocked_duration_seconds),
+        blockedPid: r.blocked_pid,
+        blockedUser: r.blocked_user || '-',
+        blockedQuery: r.blocked_query || '-',
+        blockingPid: r.blocking_pid,
+        blockingUser: r.blocking_user || '-',
+        blockingState: r.blocking_state || '-',
+        blockingQuery: r.blocking_query || '-',
+      }),
       requestId: genRequestId('lock-analyze'),
     })
   }
@@ -134,9 +138,9 @@ export default function LocksPage() {
       {/* 顶部 */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">锁与阻塞</h1>
+          <h1 className="text-2xl font-semibold text-gray-900">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            基于 pg_blocking_pids / pg_locks 查看当前的锁等待关系，并可终止持锁进程
+            {t('subtitle')}
           </p>
         </div>
         <div className="flex items-center space-x-3">
@@ -147,10 +151,10 @@ export default function LocksPage() {
               onChange={(e) => setAutoRefresh(e.target.checked)}
               className="w-4 h-4 text-blue-600 rounded"
             />
-            <span>每 5s 自动刷新</span>
+            <span>{t('autoRefresh')}</span>
           </label>
           <button onClick={load} className="btn-default text-sm">
-            <i className="fas fa-sync-alt mr-1"></i>刷新
+            <i className="fas fa-sync-alt mr-1"></i>{t('refresh')}
           </button>
         </div>
       </div>
@@ -159,25 +163,25 @@ export default function LocksPage() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <SummaryCard
           icon="fa-link"
-          label="阻塞关系"
+          label={t('sumBlockingRel')}
           value={String(stats.pairs)}
           color={stats.pairs > 0 ? 'red' : 'gray'}
         />
         <SummaryCard
           icon="fa-hand-paper"
-          label="被阻塞会话"
+          label={t('sumBlockedSess')}
           value={String(stats.blocked)}
           color={stats.blocked > 0 ? 'orange' : 'gray'}
         />
         <SummaryCard
           icon="fa-lock"
-          label="持锁(阻塞)会话"
+          label={t('sumHoldingSess')}
           value={String(stats.blocking)}
           color={stats.blocking > 0 ? 'purple' : 'gray'}
         />
         <SummaryCard
           icon="fa-stopwatch"
-          label="最长等待"
+          label={t('sumLongestWait')}
           value={fmtSeconds(stats.longest)}
           color={stats.longest > 0 ? 'red' : 'gray'}
         />
@@ -189,18 +193,18 @@ export default function LocksPage() {
           <table className="min-w-full divide-y divide-gray-200 text-sm">
             <thead className="bg-gray-50">
               <tr className="text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                <th className="px-4 py-3">等待对象 / 锁模式</th>
-                <th className="px-4 py-3">被阻塞会话</th>
-                <th className="px-4 py-3 text-right">已等待</th>
-                <th className="px-4 py-3">阻塞方会话</th>
-                <th className="px-4 py-3 text-right">操作</th>
+                <th className="px-4 py-3">{t('thWaitObj')}</th>
+                <th className="px-4 py-3">{t('thBlockedSess')}</th>
+                <th className="px-4 py-3 text-right">{t('thWaited')}</th>
+                <th className="px-4 py-3">{t('thBlockingSess')}</th>
+                <th className="px-4 py-3 text-right">{t('thActions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
               {loading && rows.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-4 py-12 text-center text-gray-400">
-                    <i className="fas fa-spinner fa-spin mr-2"></i>加载中…
+                    <i className="fas fa-spinner fa-spin mr-2"></i>{t('loading')}
                   </td>
                 </tr>
               )}
@@ -208,7 +212,7 @@ export default function LocksPage() {
                 <tr>
                   <td colSpan={5} className="px-4 py-12 text-center text-gray-400">
                     <i className="fas fa-check-circle text-green-400 mr-2"></i>
-                    当前没有检测到锁等待 / 阻塞
+                    {t('empty')}
                   </td>
                 </tr>
               )}
@@ -220,7 +224,7 @@ export default function LocksPage() {
                   <td className="px-4 py-3 whitespace-nowrap">
                     <div className="font-medium text-gray-900">
                       {r.blocked_relation || (
-                        <span className="text-gray-400">非表级锁</span>
+                        <span className="text-gray-400">{t('nonTableLock')}</span>
                       )}
                     </div>
                     {r.blocked_lock_mode && (
@@ -270,7 +274,7 @@ export default function LocksPage() {
                       className="text-xs text-indigo-600 hover:underline"
                       onClick={() => analyzeWithAi(r)}
                     >
-                      AI 分析
+                      {t('aiAnalyze')}
                     </button>
                     <button
                       className="text-xs text-red-600 hover:underline font-medium"
@@ -284,7 +288,7 @@ export default function LocksPage() {
                         setKillTerminate(true)
                       }}
                     >
-                      终止持锁进程…
+                      {t('killProc')}
                     </button>
                   </td>
                 </tr>
@@ -298,7 +302,7 @@ export default function LocksPage() {
       <Drawer
         isOpen={!!detail}
         onClose={() => setDetail(null)}
-        title="锁等待详情"
+        title={t('detailTitle')}
         size="xl"
         footer={
           <div className="flex justify-end">
@@ -307,7 +311,7 @@ export default function LocksPage() {
               className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-gradient-to-br from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 transition-colors"
             >
               <i className="fas fa-robot mr-2"></i>
-              AI 分析
+              {t('aiAnalyze')}
             </button>
           </div>
         }
@@ -315,10 +319,10 @@ export default function LocksPage() {
         {detail && (
           <div className="space-y-4 text-sm">
             <div className="grid grid-cols-2 gap-3">
-              <Field label="等待对象" value={detail.blocked_relation || '非表级锁'} />
-              <Field label="锁模式" value={detail.blocked_lock_mode || '-'} />
+              <Field label={t('fWaitObj')} value={detail.blocked_relation || t('nonTableLock')} />
+              <Field label={t('fLockMode')} value={detail.blocked_lock_mode || '-'} />
               <Field
-                label="等待事件"
+                label={t('fWaitEvent')}
                 value={
                   [detail.wait_event_type, detail.wait_event]
                     .filter(Boolean)
@@ -326,15 +330,14 @@ export default function LocksPage() {
                 }
               />
               <Field
-                label="已等待"
+                label={t('fWaited')}
                 value={fmtSeconds(detail.blocked_duration_seconds)}
               />
             </div>
 
             <div>
               <div className="text-xs font-medium text-gray-500 mb-1">
-                被阻塞会话 SQL（pid {detail.blocked_pid}
-                {detail.blocked_user ? ` · ${detail.blocked_user}` : ''}）
+                {t('blockedSessSql', { pid: detail.blocked_pid, suffix: detail.blocked_user ? ` · ${detail.blocked_user}` : '' })}
               </div>
               <pre className="bg-gray-900 text-amber-300 text-xs font-mono p-3 rounded-md overflow-auto max-h-60 whitespace-pre-wrap">
                 {detail.blocked_query || '-'}
@@ -343,9 +346,7 @@ export default function LocksPage() {
 
             <div>
               <div className="text-xs font-medium text-gray-500 mb-1">
-                阻塞方会话 SQL（pid {detail.blocking_pid}
-                {detail.blocking_user ? ` · ${detail.blocking_user}` : ''}
-                {detail.blocking_state ? ` · ${detail.blocking_state}` : ''}）
+                {t('blockingSessSql', { pid: detail.blocking_pid, suffix: `${detail.blocking_user ? ` · ${detail.blocking_user}` : ''}${detail.blocking_state ? ` · ${detail.blocking_state}` : ''}` })}
               </div>
               <pre className="bg-gray-900 text-green-300 text-xs font-mono p-3 rounded-md overflow-auto max-h-60 whitespace-pre-wrap">
                 {detail.blocking_query || '-'}
@@ -359,7 +360,7 @@ export default function LocksPage() {
       <Drawer
         isOpen={!!killTarget}
         onClose={() => !killing && setKillTarget(null)}
-        title="终止持锁进程"
+        title={t('killModalTitle')}
         size="lg"
         footer={
           <div className="flex justify-end space-x-2">
@@ -368,7 +369,7 @@ export default function LocksPage() {
               onClick={() => setKillTarget(null)}
               disabled={killing}
             >
-              取消
+              {t('cancel')}
             </button>
             <button
               className="btn-primary bg-red-600 hover:bg-red-700"
@@ -376,10 +377,10 @@ export default function LocksPage() {
               disabled={killing}
             >
               {killing
-                ? '执行中…'
+                ? t('running')
                 : killTerminate
-                ? '终止后端进程'
-                : '取消该查询'}
+                ? t('terminateProc')
+                : t('cancelThisQuery')}
             </button>
           </div>
         }
@@ -387,12 +388,12 @@ export default function LocksPage() {
         {killTarget && (
           <div className="space-y-3 text-sm text-gray-700">
             <div className="bg-gray-50 rounded p-3">
-              <div className="text-xs text-gray-500 mb-1">目标 PID（阻塞方）</div>
+              <div className="text-xs text-gray-500 mb-1">{t('targetPid')}</div>
               <div className="font-mono">
                 {killTarget.pid}
                 {killTarget.user ? ` · ${killTarget.user}` : ''}
               </div>
-              <div className="text-xs text-gray-500 mt-2 mb-1">已运行</div>
+              <div className="text-xs text-gray-500 mt-2 mb-1">{t('runningLabel')}</div>
               <div>{fmtSeconds(killTarget.duration_seconds)}</div>
               <div className="text-xs text-gray-500 mt-2 mb-1">SQL</div>
               <pre className="bg-gray-900 text-green-300 text-xs font-mono p-2 rounded overflow-auto max-h-32 whitespace-pre-wrap">
@@ -407,15 +408,14 @@ export default function LocksPage() {
                 className="mt-0.5 w-4 h-4"
               />
               <div>
-                <div className="font-medium text-gray-900">终止后端进程（推荐）</div>
+                <div className="font-medium text-gray-900">{t('terminateRecommended')}</div>
                 <div className="text-xs text-gray-500">
-                  勾选后调用 <code>pg_terminate_backend()</code>，断开该连接并释放它持有的全部锁；
-                  不勾选则只调用 <code>pg_cancel_backend()</code>，仅取消当前查询，若锁由事务持有可能仍不会释放。
+                  {t.rich('terminateHint', { code: (c) => <code>{c}</code> })}
                 </div>
               </div>
             </label>
             <p className="text-xs text-yellow-700 bg-yellow-50 p-2 rounded">
-              该操作仅平台超管可用，且会影响对应业务连接，请确认后再执行。
+              {t('superAdminWarn')}
             </p>
           </div>
         )}

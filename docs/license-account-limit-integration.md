@@ -392,7 +392,7 @@ cargo run --bin license_tool issue \
   --modules "multitenant" \
   --max-accounts-per-tenant 3 \
   --days 365 \
-  --out /etc/onebase/license.lic
+  --out /etc/planeos/license.lic
 ```
 
 #### 2. 创建租户并添加成员

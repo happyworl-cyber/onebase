@@ -26,6 +26,7 @@ import {
 } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
 import { useNotification } from '@/hooks/useNotification'
+import { useTranslations } from 'next-intl'
 import Drawer from '@/components/Drawer'
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
 import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
@@ -63,10 +64,10 @@ const EMPTY_FORM: FormState = {
 }
 
 const PATTERN_PRESETS = [
-  { label: '全部事件', value: '*.*.*' },
-  { label: '所有 INSERT', value: '*.*.INSERT' },
-  { label: '所有 UPDATE', value: '*.*.UPDATE' },
-  { label: '所有 DELETE', value: '*.*.DELETE' },
+  { labelKey: 'presetAll', value: '*.*.*' },
+  { labelKey: 'presetInsert', value: '*.*.INSERT' },
+  { labelKey: 'presetUpdate', value: '*.*.UPDATE' },
+  { labelKey: 'presetDelete', value: '*.*.DELETE' },
 ]
 
 function routeToForm(r: SseRoute): FormState {
@@ -86,6 +87,7 @@ export default function SseRoutesPage() {
   const tenantId = currentConnection?.tenant_id ?? null
   const databaseId = currentConnection?.database_id ?? null
   const caps = useCurrentProjectCapabilities()
+  const tr = useTranslations('wsSseRoutes')
   const notify = useNotification()
 
   const [routes, setRoutes] = useState<SseRoute[]>([])
@@ -114,7 +116,7 @@ export default function SseRoutesPage() {
       seen.set(c.database_id, {
         id: c.database_id,
         label: `${c.connection_name || c.db_name} (${c.db_host}:${c.db_port}/${c.db_name})${
-          c.is_primary ? ' · 主' : ''
+          c.is_primary ? tr('dbPrimarySuffix') : ''
         }`,
       })
     }
@@ -140,7 +142,7 @@ export default function SseRoutesPage() {
       const res = await tenantAPI.getMyConnections(tenantId ?? undefined)
       setConnections(Array.isArray(res.data) ? res.data : [])
     } catch (err) {
-      console.error('加载数据库连接失败:', err)
+      console.error(tr('loadDbFailed'), err)
     }
   }
 
@@ -171,15 +173,15 @@ export default function SseRoutesPage() {
   const handleSave = async () => {
     if (tenantId == null || databaseId == null) return
     if (!form.name.trim()) {
-      notify.warning('请填写规则名称')
+      notify.warning(tr('errRuleName'))
       return
     }
     if (!form.topic_template.trim()) {
-      notify.warning('请填写目标 topic 模板')
+      notify.warning(tr('errTopic'))
       return
     }
     if (!form.database_id.trim()) {
-      notify.warning('请选择数据库')
+      notify.warning(tr('errDb'))
       return
     }
 
@@ -198,7 +200,7 @@ export default function SseRoutesPage() {
           event_name,
         }
         await sseRouteAPI.create(payload)
-        notify.success('推送规则已创建')
+        notify.success(tr('created'))
       } else {
         const payload: UpdateSseRouteInput = {
           name: form.name.trim(),
@@ -208,7 +210,7 @@ export default function SseRoutesPage() {
           event_name,
         }
         await sseRouteAPI.update(editingId, payload)
-        notify.success('推送规则已更新')
+        notify.success(tr('updated'))
       }
       setDrawerOpen(false)
       loadRoutes()
@@ -222,7 +224,7 @@ export default function SseRoutesPage() {
   const handleToggle = async (r: SseRoute) => {
     try {
       await sseRouteAPI.update(r.id, { is_active: !r.is_active })
-      notify.success(r.is_active ? '规则已停用' : '规则已启用')
+      notify.success(r.is_active ? tr('deactivated') : tr('activated'))
       loadRoutes()
     } catch (err) {
       notify.error(err as Error)
@@ -230,10 +232,10 @@ export default function SseRoutesPage() {
   }
 
   const handleDelete = async (r: SseRoute) => {
-    if (!confirm(`确定删除推送规则 "${r.name}"？`)) return
+    if (!confirm(tr('confirmDelete', { name: r.name }))) return
     try {
       await sseRouteAPI.delete(r.id)
-      notify.success('规则已删除')
+      notify.success(tr('deleted'))
       loadRoutes()
     } catch (err) {
       notify.error(err as Error)
@@ -242,14 +244,14 @@ export default function SseRoutesPage() {
 
   // ─── 守卫 ───
   if (!caps.canManageEvents) {
-    return <ForbiddenPlaceholder reason="实时推送规则需要 admin+ 角色（owner / admin / 超管）" />
+    return <ForbiddenPlaceholder reason={tr('forbidden')} />
   }
 
   if (databaseId == null || tenantId == null) {
     return (
       <div className="p-8 text-center text-gray-500 space-y-3">
         <i className="fas fa-plug text-4xl text-gray-300"></i>
-        <p>本项目尚未绑定主数据库连接，无法配置实时推送规则。</p>
+        <p>{tr('noConn')}</p>
       </div>
     )
   }
@@ -258,11 +260,9 @@ export default function SseRoutesPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <h1 className="text-2xl font-bold text-gray-900">实时推送规则</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{tr('title')}</h1>
           <p className="text-sm text-gray-600 mt-1">
-            数据变更命中条件时，自动通过 SSE 推送到指定 topic（客户端用{' '}
-            <code className="font-mono text-xs">EventSource</code> 订阅{' '}
-            <code className="font-mono text-xs">/sse</code>）
+            {tr.rich('subtitle', { c1: (c) => <code className="font-mono text-xs">{c}</code>, c2: (c) => <code className="font-mono text-xs">{c}</code> })}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
@@ -273,11 +273,11 @@ export default function SseRoutesPage() {
                 className="btn-default whitespace-nowrap"
               >
                 <i className="fas fa-circle-question mr-2"></i>
-                使用说明
+                {tr('help')}
               </button>
               <button onClick={openCreate} className="btn-primary whitespace-nowrap">
                 <i className="fas fa-plus mr-2"></i>
-                新建规则
+                {tr('newRule')}
               </button>
             </>
           )}
@@ -286,10 +286,10 @@ export default function SseRoutesPage() {
 
       <div className="flex gap-1 border-b border-gray-200">
         {[
-          { id: 'rules' as const, label: '推送规则' },
-          { id: 'bridges' as const, label: 'NOTIFY 监听桥' },
-          { id: 'endpoints' as const, label: '对外端点' },
-          { id: 'monitor' as const, label: '推送监控' },
+          { id: 'rules' as const, label: tr('tabRules') },
+          { id: 'bridges' as const, label: tr('tabBridges') },
+          { id: 'endpoints' as const, label: tr('tabEndpoints') },
+          { id: 'monitor' as const, label: tr('tabMonitor') },
         ].map((t) => (
           <button
             key={t.id}
@@ -323,10 +323,10 @@ export default function SseRoutesPage() {
         ) : tenantRoutes.length === 0 ? (
           <div className="p-12 text-center text-gray-500">
             <i className="fas fa-tower-broadcast text-4xl mb-4 text-gray-300"></i>
-            <p className="mb-4">本项目暂无推送规则</p>
+            <p className="mb-4">{tr('empty')}</p>
             <button onClick={openCreate} className="btn-primary">
               <i className="fas fa-plus mr-2"></i>
-              新建第一条规则
+              {tr('newFirstRule')}
             </button>
           </div>
         ) : (
@@ -357,7 +357,7 @@ export default function SseRoutesPage() {
                         {r.event_pattern}
                       </span>
                       <span className="px-2 py-0.5 rounded text-xs bg-blue-50 text-blue-700">
-                        {r.database_id == null ? '该租户全部库' : `本项目库 #${r.database_id}`}
+                        {r.database_id == null ? tr('allTenantDbs') : tr('projectDb', { id: r.database_id })}
                       </span>
                     </div>
                     <p className="text-xs text-gray-500 font-mono mt-1 truncate">
@@ -365,7 +365,7 @@ export default function SseRoutesPage() {
                       {r.topic_template}
                     </p>
                     <p className="text-xs text-gray-400 mt-0.5">
-                      event: {r.event_name || '(动作名 INSERT/UPDATE/DELETE)'}
+                      {tr('eventPrefix', { name: r.event_name || tr('eventFallback') })}
                     </p>
                   </div>
                 </div>
@@ -375,7 +375,7 @@ export default function SseRoutesPage() {
                       r.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
                     }`}
                   >
-                    {r.is_active ? '生效中' : '已停用'}
+                    {r.is_active ? tr('active') : tr('inactive')}
                   </span>
                   <button
                     onClick={() => handleToggle(r)}
@@ -385,19 +385,19 @@ export default function SseRoutesPage() {
                         : 'text-green-700 hover:bg-green-50'
                     }`}
                   >
-                    {r.is_active ? '停用' : '启用'}
+                    {r.is_active ? tr('deactivate') : tr('activate')}
                   </button>
                   <button
                     onClick={() => openEdit(r)}
                     className="px-3 py-1 text-sm text-blue-600 hover:bg-blue-50 rounded-lg"
                   >
-                    编辑
+                    {tr('edit')}
                   </button>
                   <button
                     onClick={() => handleDelete(r)}
                     className="px-3 py-1 text-sm text-red-600 hover:bg-red-50 rounded-lg"
                   >
-                    删除
+                    {tr('delete')}
                   </button>
                 </div>
               </div>
@@ -411,7 +411,7 @@ export default function SseRoutesPage() {
       <Drawer
         isOpen={drawerOpen}
         onClose={closeDrawer}
-        title={editingId == null ? '新建推送规则' : `编辑推送规则 #${editingId}`}
+        title={editingId == null ? tr('createTitle') : tr('editTitle', { id: editingId })}
         size="lg"
         footer={
           <div className="flex gap-3">
@@ -420,14 +420,14 @@ export default function SseRoutesPage() {
               disabled={saving}
               className="flex-1 h-11 px-5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
             >
-              取消
+              {tr('cancel')}
             </button>
             <button
               onClick={handleSave}
               disabled={saving || !form.name.trim()}
               className="flex-1 btn-primary disabled:opacity-50"
             >
-              {saving ? '保存中...' : editingId == null ? '创建' : '保存'}
+              {saving ? tr('saving') : editingId == null ? tr('create') : tr('save')}
             </button>
           </div>
         }
@@ -435,13 +435,13 @@ export default function SseRoutesPage() {
         <div className="space-y-5">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              规则名称 <span className="text-red-500">*</span>
+              {tr('ruleNameLabel')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="例：订单变更实时推送"
+              placeholder={tr('phRuleName')}
               className="w-full input-base"
               maxLength={100}
             />
@@ -449,7 +449,7 @@ export default function SseRoutesPage() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              数据库 <span className="text-red-500">*</span>
+              {tr('dbLabel')} <span className="text-red-500">*</span>
             </label>
             <select
               value={form.database_id}
@@ -457,7 +457,7 @@ export default function SseRoutesPage() {
               className="w-full input-base"
               required
             >
-              <option value="">— 选择数据库 —</option>
+              <option value="">{tr('selectDb')}</option>
               {databaseOptions.map((d) => (
                 <option key={d.id} value={String(d.id)}>
                   {d.label}
@@ -465,16 +465,14 @@ export default function SseRoutesPage() {
               ))}
             </select>
             {databaseOptions.length === 0 && (
-              <p className="mt-1 text-xs text-gray-500">本项目下暂无可用数据库</p>
+              <p className="mt-1 text-xs text-gray-500">{tr('noDbAvailable')}</p>
             )}
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              事件模式{' '}
-              <span className="text-gray-400 text-xs">
-                （格式：schema.table.action，支持 * 通配）
-              </span>
+              {tr('eventPatternLabel')}{' '}
+              <span className="text-gray-400 text-xs">{tr('eventPatternHint')}</span>
             </label>
             <input
               type="text"
@@ -490,7 +488,7 @@ export default function SseRoutesPage() {
                   onClick={() => setForm({ ...form, event_pattern: p.value })}
                   className="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-600"
                 >
-                  {p.label}
+                  {tr(p.labelKey)}
                 </button>
               ))}
             </div>
@@ -498,7 +496,7 @@ export default function SseRoutesPage() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              目标 topic 模板 <span className="text-red-500">*</span>
+              {tr('topicTemplateLabel')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
@@ -507,22 +505,20 @@ export default function SseRoutesPage() {
               className="w-full input-base font-mono text-xs"
             />
             <p className="text-xs text-gray-400 mt-1">
-              占位符：{'{database_id}'} {'{schema}'} {'{table}'} {'{action}'}
+              {tr('placeholders')}{'{database_id}'} {'{schema}'} {'{table}'} {'{action}'}
             </p>
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              SSE event 名{' '}
-              <span className="text-gray-400 text-xs">
-                （留空 = 用动作名 INSERT/UPDATE/DELETE）
-              </span>
+              {tr('sseEventLabel')}{' '}
+              <span className="text-gray-400 text-xs">{tr('sseEventHint')}</span>
             </label>
             <input
               type="text"
               value={form.event_name}
               onChange={(e) => setForm({ ...form, event_name: e.target.value })}
-              placeholder="如 order_created"
+              placeholder={tr('phSseEvent')}
               className="w-full input-base"
             />
           </div>

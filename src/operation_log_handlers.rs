@@ -131,11 +131,14 @@ fn row_to_list_json(r: &sqlx::postgres::PgRow) -> Value {
         "high_risk": r.get::<bool, _>("high_risk"),
         "ip": r.get::<Option<String>, _>("ip"),
         "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
+        "summary_code": r.get::<Option<String>, _>("summary_code"),
+        "summary_params": r.get::<Value, _>("summary_params"),
     })
 }
 
 const LIST_COLUMNS: &str = "id, actor_type, actor_id, actor_name, actor_role, source, action, \
-     resource_type, resource_name, resource_id, summary, status, high_risk, ip, created_at";
+     resource_type, resource_name, resource_id, summary, status, high_risk, ip, created_at, \
+     summary_code, summary_params";
 
 /// 列表查询参数。字段内联（不用 `#[serde(flatten)]`——axum Query 底层 serde_urlencoded
 /// 不支持 flatten），再经 [`ListQuery::filters`] 收敛成 [`LogFilters`] 复用绑定逻辑。
@@ -223,7 +226,8 @@ pub async fn get_operation_log(
     let row = sqlx::query(
         "SELECT id, tenant_id, actor_type, actor_id, actor_name, actor_role, source, action, \
                 resource_type, resource_name, resource_id, summary, status, high_risk, \
-                ip, user_agent, session_id, trace_id, duration_ms, detail, created_at \
+                ip, user_agent, session_id, trace_id, duration_ms, detail, created_at, \
+                summary_code, summary_params \
          FROM management.operation_logs WHERE id = $1 AND tenant_id = $2",
     )
     .bind(log_id)
@@ -231,7 +235,13 @@ pub async fn get_operation_log(
     .fetch_optional(&pool)
     .await?;
 
-    let row = row.ok_or_else(|| crate::error::AppError::NotFound("操作日志不存在".to_string()))?;
+    let row = row.ok_or_else(|| {
+        crate::error::AppError::not_found_coded(
+            "oplog_not_found",
+            "操作日志不存在".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
 
     let action = row.get::<String, _>("action");
     let resource_type = row.get::<Option<String>, _>("resource_type");
@@ -266,6 +276,8 @@ pub async fn get_operation_log(
         "detail": detail,
         "change_view": change_view,
         "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
+        "summary_code": row.get::<Option<String>, _>("summary_code"),
+        "summary_params": row.get::<Value, _>("summary_params"),
     })))
 }
 
@@ -476,7 +488,8 @@ pub async fn export_operation_logs(
             format!("导出操作日志（{} 条，CSV）", rows.len()),
             operation_log::Status::Success,
         )
-        .resource(operation_log::resource_type::SYSTEM, "操作日志", None),
+        .resource(operation_log::resource_type::SYSTEM, "操作日志", None)
+        .summary_code("oplog_operation_log_export", json!({ "count": rows.len() })),
     );
 
     let mut headers = HeaderMap::new();
@@ -573,10 +586,11 @@ async fn resolve_org_project_scope(
         if all.contains(&pid) {
             Ok(vec![pid])
         } else {
-            Err(AppError::NotFound(format!(
-                "项目 {} 不属于组织 {}",
-                pid, organization_id
-            )))
+            Err(AppError::not_found_coded(
+                "oplog_project_not_in_organization",
+                format!("项目 {} 不属于组织 {}", pid, organization_id),
+                serde_json::json!({ "project_id": pid, "organization_id": organization_id }),
+            ))
         }
     } else {
         Ok(all)
@@ -698,7 +712,11 @@ pub async fn get_organization_operation_log(
     permissions::require_organization_admin(&pool, &claims, organization_id).await?;
     let project_ids = org_project_ids(&pool, organization_id).await?;
     if project_ids.is_empty() {
-        return Err(AppError::NotFound("操作日志不存在".to_string()));
+        return Err(AppError::not_found_coded(
+            "oplog_not_found",
+            "操作日志不存在".to_string(),
+            serde_json::json!({}),
+        ));
     }
 
     let row = sqlx::query(
@@ -716,7 +734,13 @@ pub async fn get_organization_operation_log(
     .fetch_optional(&pool)
     .await?;
 
-    let row = row.ok_or_else(|| AppError::NotFound("操作日志不存在".to_string()))?;
+    let row = row.ok_or_else(|| {
+        AppError::not_found_coded(
+            "oplog_not_found",
+            "操作日志不存在".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
 
     let action = row.get::<String, _>("action");
     let resource_type = row.get::<Option<String>, _>("resource_type");

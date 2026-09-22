@@ -66,7 +66,7 @@ Ensure `tokio` is already a crate dependency (it is). Keep existing `uuid_format
 
 - [x] **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p onebase --lib pg_row_json::tests::smallint_and_real_decode_as_json_numbers_not_null -- --nocapture`
+Run: `cargo test -p planeos --lib pg_row_json::tests::smallint_and_real_decode_as_json_numbers_not_null -- --nocapture`
 
 Expected (with DB available): FAIL — `s` is `Null` (or `r` is `Null`), not the expected number.
 
@@ -112,7 +112,7 @@ Run: same `cargo test` command as Step 2.
 
 Expected: PASS (or skip only if DB truly unreachable).
 
-Also run: `cargo test -p onebase --lib pg_row_json::tests -- --nocapture`
+Also run: `cargo test -p planeos --lib pg_row_json::tests -- --nocapture`
 
 Expected: both unit tests pass / skip cleanly.
 

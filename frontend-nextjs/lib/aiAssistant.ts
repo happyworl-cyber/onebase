@@ -75,17 +75,17 @@ export function genRequestId(prefix = 'host'): string {
 
 /** 旧 API 兼容：原生聊天以安全纯文本表达文件引用，不再生成 Embed XML chip。 */
 export function buildFileChip(f: AiFileRef): string {
-  return `- ${f.displayPath || f.value}${f.origin === 'local_device' ? '（本地文件）' : ''}`
+  return `- ${f.displayPath || f.value}${f.origin === 'local_device' ? ' (local file)' : ''}`
 }
 
 /** 组装发送给原生聊天接口的用户文本。 */
 export function buildAskText(req: AiAskRequest): string {
   const sections = [req.prompt.trim()]
   if (req.files?.length) {
-    sections.push(`相关文件：\n${req.files.map(buildFileChip).join('\n')}`)
+    sections.push(`Related files:\n${req.files.map(buildFileChip).join('\n')}`)
   }
   if (req.skills?.length) {
-    sections.push(`请参考这些技能方向：${req.skills.join('、')}`)
+    sections.push(`Consider these skill areas: ${req.skills.join(', ')}`)
   }
   return sections.filter(Boolean).join('\n\n')
 }
@@ -131,10 +131,10 @@ function chatErrorMessage(status: number, raw: string): string {
   } catch {
     // 非 JSON 响应直接使用文本。
   }
-  if (status === 403) return detail || '权限不足：当前账号不能使用此项目的 AI 助手'
-  if (status === 404) return detail || '项目尚未配置 AI Provider，请联系项目管理员'
-  if (status === 401) return '登录状态已失效，请重新登录'
-  return detail || `AI 请求失败（HTTP ${status}）`
+  if (status === 403) return detail || "Permission denied: your account cannot use this project's AI assistant"
+  if (status === 404) return detail || 'This project has no AI Provider configured yet; please contact the project admin'
+  if (status === 401) return 'Your session has expired; please sign in again'
+  return detail || `AI request failed (HTTP ${status})`
 }
 
 function parseSseBlock(block: string): AiSseEvent | null {
@@ -152,7 +152,7 @@ function parseSseBlock(block: string): AiSseEvent | null {
   } catch {
     return {
       type: 'error',
-      message: `无法解析 AI 流式响应（${eventName || 'unknown'}）`,
+      message: `Failed to parse the AI streaming response (${eventName || 'unknown'})`,
     }
   }
 }
@@ -168,7 +168,7 @@ export async function streamAiChat(
   signal?: AbortSignal,
 ): Promise<void> {
   if (!Number.isFinite(projectId) || projectId <= 0) {
-    throw new AiChatError('未选择项目，无法发起 AI 对话')
+    throw new AiChatError('No project selected; cannot start an AI conversation')
   }
 
   const apiBase = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/+$/, '')
@@ -190,7 +190,7 @@ export async function streamAiChat(
     throw new AiChatError(chatErrorMessage(response.status, raw), response.status)
   }
   if (!response.body) {
-    throw new AiChatError('浏览器未收到可读取的 AI 流式响应')
+    throw new AiChatError('The browser did not receive a readable AI streaming response')
   }
 
   const reader = response.body.getReader()

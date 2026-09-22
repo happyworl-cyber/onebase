@@ -1,6 +1,7 @@
 'use client'
 
 import { cn } from '@/lib/utils'
+import { useTranslations } from 'next-intl'
 
 interface RowIconCheckboxProps {
   selected: boolean
@@ -17,6 +18,7 @@ export default function RowIconCheckbox({
   onToggle,
   variant = 'compact',
 }: RowIconCheckboxProps) {
+  const t = useTranslations('wfList')
   const wrapClass = variant === 'card' ? 'workflow-card-ico-wrap' : 'workflow-row-ico-wrap'
 
   return (
@@ -36,7 +38,7 @@ export default function RowIconCheckbox({
           onChange={() => onToggle()}
           onClick={(e) => e.stopPropagation()}
           className="w-3.5 h-3.5 cursor-pointer rounded accent-indigo-600"
-          aria-label={selected ? '取消选择' : '选择工作流'}
+          aria-label={selected ? t('deselect') : t('selectWorkflow')}
         />
       </div>
     </div>

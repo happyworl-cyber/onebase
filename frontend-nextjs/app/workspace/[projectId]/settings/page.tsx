@@ -17,6 +17,7 @@ import { useParams } from 'next/navigation'
 import api, { projectAPI } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
 import { useCurrentProjectCapabilities } from '@/lib/permissions'
+import { useTranslations } from 'next-intl'
 import { useNotification } from '@/hooks/useNotification'
 import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
 
@@ -32,6 +33,7 @@ interface ProjectDetail {
 }
 
 export default function ProjectSettingsPage() {
+  const t = useTranslations('wsSettings')
   const params = useParams<{ projectId: string }>()
   const projectId = parseInt(params.projectId, 10)
   const caps = useCurrentProjectCapabilities()
@@ -85,7 +87,7 @@ export default function ProjectSettingsPage() {
   const handleSave = async () => {
     if (!project) return
     if (name.trim().length === 0) {
-      notify.warning('项目名不能为空')
+      notify.warning(t('nameEmpty'))
       return
     }
 
@@ -98,7 +100,7 @@ export default function ProjectSettingsPage() {
         parsedConfig = JSON.parse(configText)
         setConfigError(null)
       } catch (err: any) {
-        setConfigError(`JSON 解析错误：${err.message ?? '未知错误'}`)
+        setConfigError(t('jsonError', { err: err.message ?? t('unknownError') }))
         return
       }
     }
@@ -111,7 +113,7 @@ export default function ProjectSettingsPage() {
     if (parsedConfig !== undefined) body.workspace_config = parsedConfig
 
     if (Object.keys(body).length === 0) {
-      notify.warning('没有可保存的改动')
+      notify.warning(t('noChanges'))
       return
     }
 
@@ -126,7 +128,7 @@ export default function ProjectSettingsPage() {
         ...(useAppStore.getState().currentProject ?? {}),
         ...updated,
       })
-      notify.success('项目信息已保存')
+      notify.success(t('saved'))
     } catch (err: any) {
       notify.error(err)
     } finally {
@@ -136,7 +138,7 @@ export default function ProjectSettingsPage() {
 
   if (!caps.canManageProjectSettings) {
     return (
-      <ForbiddenPlaceholder reason="项目信息编辑需要 owner 角色（或平台超管）" />
+      <ForbiddenPlaceholder reason={t('forbidden')} />
     )
   }
 
@@ -151,10 +153,9 @@ export default function ProjectSettingsPage() {
   return (
     <div className="p-6 max-w-3xl space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">项目信息</h1>
+        <h1 className="text-2xl font-bold text-gray-900">{t('title')}</h1>
         <p className="text-sm text-gray-500 mt-1">
-          只有 owner 能改本页内容。slug / 状态 / 数据库连接的归属调整等
-          平台级操作请联系平台管理员（走 <code className="text-xs bg-gray-100 px-1 rounded">/platform</code>）。
+          {t('subtitle1')} {t('subtitle2')}<code className="text-xs bg-gray-100 px-1 rounded">/platform</code>{t('subtitle3')}
         </p>
       </div>
 
@@ -163,23 +164,23 @@ export default function ProjectSettingsPage() {
         <div className="p-5 space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              项目名 <span className="text-red-500">*</span>
+              {t('nameLabel')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="w-full input-base"
-              placeholder="给项目起一个易识别的名字"
+              placeholder={t('namePlaceholder')}
               maxLength={200}
             />
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              联系邮箱
+              {t('emailLabel')}
               <span className="ml-2 text-xs text-gray-400 font-normal">
-                （用于运维通知；留空清除）
+                {t('emailHint')}
               </span>
             </label>
             <input
@@ -196,7 +197,7 @@ export default function ProjectSettingsPage() {
         {/* 只读字段：明确告诉用户"想改这个？联系超管"——避免静默 disable 让用户疑惑 */}
         <div className="p-5 space-y-3 bg-gray-50/50">
           <h3 className="text-xs uppercase tracking-wider text-gray-400 font-medium">
-            只读（平台超管路径才能改）
+            {t('readonlyHint')}
           </h3>
           <div className="grid grid-cols-3 gap-4 text-sm">
             <div>
@@ -204,11 +205,11 @@ export default function ProjectSettingsPage() {
               <code className="text-gray-700 font-mono text-xs">{project.slug}</code>
             </div>
             <div>
-              <div className="text-xs text-gray-500 mb-0.5">类型</div>
+              <div className="text-xs text-gray-500 mb-0.5">{t('typeLabel')}</div>
               <span className="text-gray-700">{project.kind}</span>
             </div>
             <div>
-              <div className="text-xs text-gray-500 mb-0.5">状态</div>
+              <div className="text-xs text-gray-500 mb-0.5">{t('statusLabel')}</div>
               <span
                 className={`px-2 py-0.5 rounded text-xs font-medium ${
                   project.status === 'active'
@@ -232,7 +233,7 @@ export default function ProjectSettingsPage() {
             <i
               className={`fas fa-chevron-${showAdvanced ? 'down' : 'right'} text-xs`}
             ></i>
-            <span className="font-medium">高级：workspace_config (JSON)</span>
+            <span className="font-medium">{t('advancedLabel')}</span>
           </button>
           {showAdvanced && (
             <div>
@@ -251,7 +252,7 @@ export default function ProjectSettingsPage() {
                 <p className="mt-2 text-xs text-red-600">{configError}</p>
               )}
               <p className="mt-2 text-xs text-gray-500">
-                空字符串 = 不修改本字段；想清空请改成{' '}
+                {t('configHint')}{' '}
                 <code className="bg-gray-100 px-1 rounded">null</code>。
               </p>
             </div>
@@ -276,7 +277,7 @@ export default function ProjectSettingsPage() {
             disabled={!dirty || saving}
             className="px-4 py-2 text-sm text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
           >
-            撤销改动
+            {t('revert')}
           </button>
           <button
             type="button"
@@ -284,7 +285,7 @@ export default function ProjectSettingsPage() {
             disabled={!dirty || saving || name.trim().length === 0}
             className="btn-primary disabled:opacity-50"
           >
-            {saving ? '保存中...' : '保存'}
+            {saving ? t('saving') : t('save')}
           </button>
         </div>
       </div>

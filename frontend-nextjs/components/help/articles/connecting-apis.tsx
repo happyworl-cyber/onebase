@@ -1,38 +1,42 @@
+import { useTranslations } from 'next-intl'
 import { HelpCode, HelpSection } from '@/components/help/HelpArticle'
 
-const CURL = `curl "\${API_BASE}/api/v1/{库slug}/{schema}/{table}?limit=1" \\
+const CURL = `curl "\${API_BASE}/api/v1/{db-slug}/{schema}/{table}?limit=1" \\
   -H "Authorization: Bearer ob_..."`
 
 export default function ConnectingApisArticle() {
+  const t = useTranslations('helpConnectingApis')
   return (
     <>
-      <HelpSection title="基址">
+      <HelpSection title={t('baseUrlTitle')}>
         <p>
-          表 REST：<code className="font-mono text-xs">/api/v1/{'{库slug}'}/{'{schema}'}</code>，后面接表名。
-          函数 RPC：<code className="font-mono text-xs">/api/v1/{'{库slug}'}/rpc/{'{function}'}</code>。
-          库 slug 不是项目数字 id，以 REST API 页上的示例为准。
+          {t.rich('baseUrlBody', {
+            code: (chunks) => <code className="font-mono text-xs">{chunks}</code>,
+          })}
         </p>
       </HelpSection>
-      <HelpSection title="鉴权">
+      <HelpSection title={t('authTitle')}>
         <p>
-          默认带 <code className="font-mono text-xs">Authorization: Bearer &lt;API Key&gt;</code>，Key 以{' '}
-          <code className="font-mono text-xs">ob_</code> 开头。也支持 <code className="font-mono text-xs">apikey</code> 头。
-          登录用户可用 JWT。项目若配置了网关对外基址，鉴权由网关处理，调用方不一定再带 Key。
+          {t.rich('authBody', {
+            code: (chunks) => <code className="font-mono text-xs">{chunks}</code>,
+            apiKeyPh: '<API Key>',
+          })}
         </p>
       </HelpSection>
-      <HelpSection title="选哪条路">
+      <HelpSection title={t('pickPathTitle')}>
         <ul className="list-disc ml-5 space-y-1">
-          <li>读写表 → REST。</li>
-          <li>调数据库函数 → RPC。</li>
-          <li>浏览器要实时收表变更 → SSE（实时推送页）。</li>
-          <li>变更发生时通知你自己的 HTTP 服务 → Webhook。</li>
+          <li>{t('pathRestTable')}</li>
+          <li>{t('pathRpcFunction')}</li>
+          <li>{t('pathSseRealtime')}</li>
+          <li>{t('pathWebhookNotify')}</li>
         </ul>
       </HelpSection>
-      <HelpSection title="最小示例">
+      <HelpSection title={t('minimalExampleTitle')}>
         <HelpCode>{CURL}</HelpCode>
         <p>
-          RPC 把路径换成 <code className="font-mono text-xs">/rpc/{'{function}'}</code> 并改用 POST JSON。过滤参数、HTTP
-          方法全集在 REST API 页，这里不重复。
+          {t.rich('minimalExampleBody', {
+            code: (chunks) => <code className="font-mono text-xs">{chunks}</code>,
+          })}
         </p>
       </HelpSection>
     </>

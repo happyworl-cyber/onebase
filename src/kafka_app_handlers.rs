@@ -48,8 +48,10 @@ async fn resolve_access(
     tenant_scope: Option<&EsTenantScope>,
 ) -> Result<ResolvedAccess, AppError> {
     let plain = kafka_auth::extract_token(headers).ok_or_else(|| {
-        AppError::Unauthorized(
+        AppError::unauthorized_coded(
+            "kafkaapp_missing_token",
             "缺少 Kafka 访问令牌；请用 `Authorization: ApiKey obes_kafka_xxx`".to_string(),
+            serde_json::json!({}),
         )
     })?;
     let hash = kafka_auth::hash_token(&plain);
@@ -62,16 +64,28 @@ async fn resolve_access(
     .fetch_optional(pool)
     .await
     .map_err(|e| AppError::Internal(format!("查询 Kafka token 失败: {e}")))?
-    .ok_or_else(|| AppError::Unauthorized("Kafka 访问令牌无效或已停用".to_string()))?;
+    .ok_or_else(|| {
+        AppError::unauthorized_coded(
+            "kafkaapp_token_invalid",
+            "Kafka 访问令牌无效或已停用".to_string(),
+            serde_json::json!({}),
+        )
+    })?;
 
     if token.connection_id != connection_id {
-        return Err(AppError::Forbidden(
+        return Err(AppError::forbidden_coded(
+            "kafkaapp_token_connection_mismatch",
             "令牌与请求的 Kafka 连接不匹配".to_string(),
+            serde_json::json!({}),
         ));
     }
     if let Some(exp) = token.expires_at {
         if exp < Utc::now() {
-            return Err(AppError::Unauthorized("Kafka 访问令牌已过期".to_string()));
+            return Err(AppError::unauthorized_coded(
+                "kafkaapp_token_expired",
+                "Kafka 访问令牌已过期".to_string(),
+                serde_json::json!({}),
+            ));
         }
     }
 
@@ -87,15 +101,23 @@ async fn resolve_access(
     .fetch_optional(pool)
     .await
     .map_err(|e| AppError::Internal(format!("查询 Kafka 连接失败: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("Kafka 连接 {connection_id} 不存在")))?;
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "kafkaapp_connection_not_found",
+            format!("Kafka 连接 {connection_id} 不存在"),
+            serde_json::json!({ "id": connection_id }),
+        )
+    })?;
 
     if !connection.is_active {
         return Err(AppError::ServiceUnavailable("Kafka 连接已停用".to_string()));
     }
     if let Some(scope) = tenant_scope {
         if connection.tenant_id != scope.tenant_id {
-            return Err(AppError::Forbidden(
+            return Err(AppError::forbidden_coded(
+                "kafkaapp_token_tenant_mismatch",
                 "Kafka 令牌不属于该项目（database_slug 租户不匹配）".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -128,7 +150,11 @@ pub async fn produce(
 ) -> Result<Json<Value>, AppError> {
     let topic = body.topic.trim();
     if topic.is_empty() {
-        return Err(AppError::InvalidQuery("topic 不能为空".to_string()));
+        return Err(AppError::validation(
+            "kafkaapp_topic_required",
+            "topic 不能为空".to_string(),
+            serde_json::json!({}),
+        ));
     }
     let access = resolve_access(
         &pool,
@@ -147,8 +173,10 @@ pub async fn produce(
         Value::String(s) => s.clone(),
         Value::Object(_) | Value::Array(_) => body.value.to_string(),
         _ => {
-            return Err(AppError::InvalidQuery(
+            return Err(AppError::validation(
+                "kafkaapp_value_invalid_type",
                 "value 必须是字符串、对象或数组".to_string(),
+                serde_json::json!({}),
             ));
         }
     };

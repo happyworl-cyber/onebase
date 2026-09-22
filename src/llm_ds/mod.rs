@@ -18,7 +18,13 @@ pub async fn fetch_active(pool: &PgPool, id: i64) -> Result<LlmConnection> {
     .fetch_optional(pool)
     .await
     .map_err(|e| AppError::Internal(format!("查询 LLM 连接失败: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("LLM 连接 {id} 不存在或已禁用")))
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "llmds_connection_not_found_or_disabled",
+            format!("LLM 连接 {id} 不存在或已禁用"),
+            serde_json::json!({ "id": id }),
+        )
+    })
 }
 
 pub async fn fetch_active_for_tenant(
@@ -35,7 +41,13 @@ pub async fn fetch_active_for_tenant(
     .fetch_optional(pool)
     .await
     .map_err(|e| AppError::Internal(format!("查询 LLM 连接失败: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("LLM 连接 {id} 不存在 / 已禁用 / 不属于当前租户")))
+    .ok_or_else(|| {
+        AppError::not_found_coded(
+            "llmds_connection_not_found_for_tenant",
+            format!("LLM 连接 {id} 不存在 / 已禁用 / 不属于当前租户"),
+            serde_json::json!({ "id": id }),
+        )
+    })
 }
 
 pub async fn list_for_tenant(pool: &PgPool, tenant_id: i32) -> Result<Vec<LlmConnection>> {

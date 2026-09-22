@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useEffect, Suspense } from 'react'
+import { useTranslations } from 'next-intl'
+import LocaleSwitcher from '@/components/LocaleSwitcher'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAppStore } from '@/lib/store'
 import { ssoAPI } from '@/lib/api'
@@ -15,12 +17,13 @@ interface SsoProviderInfo {
   tenant_name: string
 }
 
-const providerIcons: Record<string, { icon: string; color: string; bg: string }> = {
-  google: { icon: 'fab fa-google', color: 'text-white', bg: 'bg-red-500 hover:bg-red-600' },
-  facebook: { icon: 'fab fa-facebook-f', color: 'text-white', bg: 'bg-blue-600 hover:bg-blue-700' },
-  github: { icon: 'fab fa-github', color: 'text-white', bg: 'bg-gray-800 hover:bg-gray-900' },
-  oidc: { icon: 'fas fa-key', color: 'text-white', bg: 'bg-indigo-500 hover:bg-indigo-600' },
-  mind: { icon: 'fas fa-brain', color: 'text-white', bg: 'bg-emerald-600 hover:bg-emerald-700' },
+// SSO 按钮统一为中性描边样式，只用图标本身的品牌色做识别 —— 满屏彩色实心按钮
+// 会盖过页面唯一的强调色（登录按钮），与克制的整体风格冲突。
+const providerIcons: Record<string, { icon: string; dot: string }> = {
+  google: { icon: 'fab fa-google', dot: 'text-[#EA4335]' },
+  facebook: { icon: 'fab fa-facebook-f', dot: 'text-[#1877F2]' },
+  github: { icon: 'fab fa-github', dot: 'text-slate-900' },
+  oidc: { icon: 'fas fa-key', dot: 'text-slate-500' },
 }
 
 export default function LoginPage() {
@@ -32,6 +35,7 @@ export default function LoginPage() {
 }
 
 function LoginPageInner() {
+  const t = useTranslations('login')
   const router = useRouter()
   const searchParams = useSearchParams()
   const setCurrentUser = useAppStore(state => state.setCurrentUser)
@@ -84,7 +88,7 @@ function LoginPageInner() {
   useEffect(() => {
     if (isExpiredSession) {
       clearAuthToken()
-      setError('登录已过期，请重新登录')
+      setError(t('sessionExpired'))
     }
   }, [isExpiredSession])
 
@@ -171,7 +175,7 @@ function LoginPageInner() {
         navigateAfterLogin('/orgs')
       }
     } catch (err: any) {
-      setError(err.response?.data?.error || '登录失败')
+      setError(err.response?.data?.error || t('errorFallback'))
     } finally {
       setLoading(false)
     }
@@ -197,167 +201,189 @@ function LoginPageInner() {
         window.location.href = authorization_url
       }
     } catch (err: any) {
-      setError(err.response?.data?.error || `${provider.display_name} 登录失败`)
+      setError(err.response?.data?.error || t('errorFallback'))
       setSsoLoading(null)
     }
   }
 
   return (
-    <div className="min-h-screen flex bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500">
-      {/* 左侧品牌展示 */}
-      <div className="flex-1 flex items-center justify-center p-8 lg:p-16">
-        <div className="text-white max-w-lg space-y-8">
-          <div className="space-y-6">
-            <div className="flex items-center space-x-4 group">
-              <div className="w-14 h-14 bg-white/10 backdrop-blur-lg rounded-xl flex items-center justify-center 
-                            shadow-2xl transform transition-all duration-300 group-hover:scale-110 group-hover:rotate-3
-                            border border-white/20">
-                <i className="fas fa-database text-3xl text-white"></i>
-              </div>
-              <div>
-                <h1 className="text-4xl font-bold tracking-tight">PlaneOS</h1>
-                <p className="text-sm opacity-90 font-light">Zero-Code Data Gateway</p>
-              </div>
+    <div className="min-h-screen bg-[#FAFAFA] text-slate-900">
+      {/* 语言切换：固定右上角，登录前即可切换 */}
+      <div className="absolute right-4 top-4 z-10">
+        <LocaleSwitcher />
+      </div>
+      <div className="mx-auto flex min-h-screen w-full max-w-[1440px] flex-col lg:flex-row">
+        {/* 左：品牌与价值主张 */}
+        <section className="flex flex-1 items-center px-8 py-16 lg:px-20">
+          <div className="w-full max-w-xl">
+            <div className="flex items-center gap-3">
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-900">
+                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <ellipse cx="12" cy="6" rx="8" ry="3" />
+                  <path d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6" />
+                  <path d="M4 12v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" />
+                </svg>
+              </span>
+              <span className="text-lg font-semibold tracking-tight">{t('brand')}</span>
             </div>
-          </div>
 
-          <div className="space-y-4">
-            <h2 className="text-3xl font-semibold leading-tight">
-              企业级数据网关<br />统一管理平台
-            </h2>
-            <p className="text-lg opacity-90 leading-relaxed font-light">
-              支持 RBAC 权限引擎、分布式缓存、SSO 社交登录，帮助企业零代码构建数据服务。
+            <h1 className="mt-14 text-[2.75rem] font-semibold leading-[1.15] tracking-tight text-slate-900 lg:text-[3.25rem]">
+              {t('headline1')}
+              <br />
+              {t('headline2')}
+            </h1>
+
+            <p className="mt-6 max-w-md text-lg leading-relaxed text-slate-500">
+              {t('subtitle')}
+            </p>
+
+            {/* 首条标记为 AI —— 这些能力都有对应实现：内置助手见 src/ai/mod.rs，
+                MCP 工具见 src/mcp_tools.rs，工作流 LLM 节点见 src/workflow_llm.rs。 */}
+            <dl className="mt-14 max-w-md">
+              {[
+                { key: 'ai', ai: true },
+                { key: 'api' },
+                { key: 'automation' },
+                { key: 'governance' },
+              ].map(({ key, ai }) => (
+                <div key={key} className="border-t border-slate-200 py-4 first:border-t-0 first:pt-0">
+                  <dt className="flex items-center gap-2 text-sm font-medium text-slate-900">
+                    {t(`features.${key}.term`)}
+                    {ai && (
+                      <span className="rounded border border-primary-700/25 bg-primary-700/5 px-1.5 py-px text-[10px] font-semibold tracking-wide text-primary-700">
+                        AI
+                      </span>
+                    )}
+                  </dt>
+                  <dd className="mt-1 text-sm leading-relaxed text-slate-500">{t(`features.${key}.desc`)}</dd>
+                </div>
+              ))}
+            </dl>
+
+            <p className="mt-8 max-w-md border-t border-slate-200 pt-4 text-xs leading-relaxed text-slate-400">
+              {t('footnote')}
             </p>
           </div>
+        </section>
 
-          <div className="grid grid-cols-2 gap-4">
-            {['Auto API', 'RBAC 权限', 'Redis 缓存', 'SSO 登录'].map((feature, idx) => (
-              <div
-                key={idx}
-                className="flex items-center space-x-3 bg-white/10 backdrop-blur-sm rounded-lg p-3 
-                          transition-all duration-300 hover:bg-white/20 hover:scale-105 cursor-default"
-              >
-                <div className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center">
-                  <i className={`fas fa-${['bolt', 'shield-alt', 'memory', 'sign-in-alt'][idx]} text-sm`}></i>
-                </div>
-                <span className="text-sm font-medium">{feature}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+        {/* 右：登录表单 */}
+        <section className="flex w-full items-center justify-center border-t border-slate-200 bg-white px-8 py-16 lg:w-[520px] lg:border-l lg:border-t-0 lg:px-16">
+          <div className="w-full max-w-sm">
+            <h2 className="text-2xl font-semibold tracking-tight text-slate-900">{t('cardTitle')}</h2>
+            <p className="mt-2 text-sm text-slate-500">{t('cardSubtitle')}</p>
 
-      {/* 右侧登录表单 */}
-      <div className="w-full lg:w-[480px] bg-white flex items-center justify-center p-8 shadow-2xl">
-        <div className="w-full max-w-sm space-y-6">
-          <div className="space-y-2">
-            <h3 className="text-2xl font-semibold text-gray-800">登录账户</h3>
-            <p className="text-sm text-gray-500">欢迎回来，请登录您的账户</p>
-          </div>
+            {/* SSO 登录 */}
+            {ssoProviders.length > 0 && (
+              <div className="mt-8 space-y-3">
+                {ssoProviders.map((provider) => {
+                  const style = providerIcons[provider.provider_type] || providerIcons.oidc
+                  const key = provider.provider_type
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => handleSsoLogin(provider)}
+                      disabled={ssoLoading !== null}
+                      className="flex h-11 w-full items-center justify-center gap-2.5 rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-700 transition-colors hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {ssoLoading === key ? (
+                        <Spinner className="text-slate-400" />
+                      ) : (
+                        <i className={`${style.icon} ${style.dot} text-base`} />
+                      )}
+                      <span>{t('ssoButton', { provider: provider.display_name })}</span>
+                    </button>
+                  )
+                })}
 
-          {/* SSO 登录按钮 */}
-          {ssoProviders.length > 0 && (
-            <div className="space-y-3">
-              {ssoProviders.map((provider) => {
-                const style = providerIcons[provider.provider_type] || providerIcons.oidc
-                // 每种 SSO 只有一个统一入口（后端按 provider_type 去重）。
-                // 登录后进入哪个项目由用户权限决定（/workspace picker），入口不区分项目。
-                const key = provider.provider_type
-                return (
-                  <button
-                    key={key}
-                    onClick={() => handleSsoLogin(provider)}
-                    disabled={ssoLoading !== null}
-                    className={`w-full h-10 ${style.bg} ${style.color} font-medium rounded-lg 
-                              flex items-center justify-center space-x-2 transition-all duration-200
-                              disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md`}
-                  >
-                    {ssoLoading === key ? (
-                      <i className="fas fa-spinner fa-spin"></i>
-                    ) : (
-                      <i className={style.icon}></i>
-                    )}
-                    <span>{provider.display_name} 登录</span>
-                  </button>
-                )
-              })}
-
-              <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-gray-200"></div>
-                </div>
-                <div className="relative flex justify-center text-xs">
-                  <span className="px-3 bg-white text-gray-400">或使用邮箱密码</span>
+                <div className="relative py-2">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-slate-200" />
+                  </div>
+                  <div className="relative flex justify-center">
+                    <span className="bg-white px-3 text-xs text-slate-400">{t('ssoDivider')}</span>
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* 邮箱密码登录 */}
-          <form onSubmit={handleLogin} className="space-y-5">
-            <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700">邮箱地址</label>
-              <div className="relative">
+            {/* 邮箱密码登录 */}
+            <form onSubmit={handleLogin} className="mt-8 space-y-5">
+              <div>
+                <label htmlFor="login-email" className="block text-sm font-medium text-slate-700">
+                  {t('emailLabel')}
+                </label>
                 <input
+                  id="login-email"
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
                   autoComplete="email"
-                  className="w-full input-with-icon pl-10"
-                  placeholder="请输入邮箱地址"
+                  placeholder={t('emailPlaceholder')}
+                  className="mt-2 h-11 w-full rounded-lg border border-slate-300 bg-white px-3.5 text-sm text-slate-900 placeholder:text-slate-400 transition-colors focus:border-primary-700 focus:outline-none focus:ring-1 focus:ring-primary-700"
                 />
-                <i className="fas fa-envelope absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none"></i>
               </div>
-            </div>
 
-            <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700">密码</label>
-              <div className="relative">
+              <div>
+                <label htmlFor="login-password" className="block text-sm font-medium text-slate-700">
+                  {t('passwordLabel')}
+                </label>
                 <input
+                  id="login-password"
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
                   autoComplete="current-password"
-                  className="w-full input-with-icon pl-10"
-                  placeholder="请输入密码"
+                  placeholder="••••••••"
+                  className="mt-2 h-11 w-full rounded-lg border border-slate-300 bg-white px-3.5 text-sm text-slate-900 placeholder:text-slate-400 transition-colors focus:border-primary-700 focus:outline-none focus:ring-1 focus:ring-primary-700"
                 />
-                <i className="fas fa-lock absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none"></i>
               </div>
-            </div>
 
-            {error && (
-              <div className="flex items-start space-x-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded p-3">
-                <i className="fas fa-exclamation-circle mt-0.5"></i>
-                <span>{error}</span>
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full h-10 bg-primary-500 hover:bg-primary-400 active:bg-primary-600 
-                       text-white font-medium rounded-lg shadow-lg hover:shadow-xl
-                       transform transition-all duration-200 hover:-translate-y-0.5
-                       focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2
-                       disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
-            >
-              {loading ? (
-                <span className="flex items-center justify-center space-x-2">
-                  <i className="fas fa-spinner fa-spin"></i>
-                  <span>登录中...</span>
-                </span>
-              ) : (
-                <span className="flex items-center justify-center space-x-2">
-                  <span>登录</span>
-                  <i className="fas fa-arrow-right text-sm"></i>
-                </span>
+              {error && (
+                <div
+                  role="alert"
+                  className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700"
+                >
+                  <svg viewBox="0 0 20 20" className="mt-0.5 h-4 w-4 shrink-0" fill="currentColor" aria-hidden="true">
+                    <path
+                      fillRule="evenodd"
+                      d="M10 18a8 8 0 100-16 8 8 0 000 16zM9 5a1 1 0 112 0v5a1 1 0 11-2 0V5zm1 9a1.25 1.25 0 100 2.5A1.25 1.25 0 0010 14z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                  <span>{error}</span>
+                </div>
               )}
-            </button>
-          </form>
-        </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-primary-700 text-sm font-medium text-white transition-colors hover:bg-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-700 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {loading ? (
+                  <>
+                    <Spinner className="text-white" />
+                    <span>{t('submitting')}</span>
+                  </>
+                ) : (
+                  <span>{t('submit')}</span>
+                )}
+              </button>
+            </form>
+          </div>
+        </section>
       </div>
     </div>
+  )
+}
+
+/** 内联 spinner：登录页首屏不依赖 Font Awesome CDN，断网 / 内网部署也能正常显示。 */
+function Spinner({ className = '' }: { className?: string }) {
+  return (
+    <svg className={`h-4 w-4 animate-spin ${className}`} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+      <path d="M22 12a10 10 0 00-10-10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+    </svg>
   )
 }

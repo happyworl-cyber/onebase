@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { adminPartnerAPI } from '@/lib/api'
+import { useTranslations } from 'next-intl'
 import { useNotification } from '@/hooks/useNotification'
 import Drawer from '@/components/Drawer'
 import type { PartnerStats, CreatePartnerRequest, UpdatePartnerRequest } from '@/lib/types/partner'
@@ -11,10 +12,10 @@ import type { PartnerStats, CreatePartnerRequest, UpdatePartnerRequest } from '@
 // ═══════════════════════════════════════════════════════════
 
 const STATUS_OPTIONS = [
-  { value: '', label: '全部状态' },
-  { value: 'active', label: '活跃' },
-  { value: 'suspended', label: '已挂起' },
-  { value: 'inactive', label: '未激活' },
+  { value: '', key: 'statusAll' },
+  { value: 'active', key: 'statusActive' },
+  { value: 'suspended', key: 'statusSuspended' },
+  { value: 'inactive', key: 'statusInactive' },
 ]
 
 const STATUS_BADGE: Record<string, string> = {
@@ -24,24 +25,24 @@ const STATUS_BADGE: Record<string, string> = {
 }
 
 const STATUS_LABEL: Record<string, string> = {
-  active: '活跃',
-  suspended: '已挂起',
-  inactive: '未激活',
+  active: 'statusActive',
+  suspended: 'statusSuspended',
+  inactive: 'statusInactive',
 }
 
 const EDITION_OPTIONS = [
-  { value: 'standard', label: 'Standard（标准版）' },
-  { value: 'enterprise', label: 'Enterprise（企业版）' },
-  { value: 'trial', label: 'Trial（试用版）' },
+  { value: 'standard', key: 'editionStandard' },
+  { value: 'enterprise', key: 'editionEnterprise' },
+  { value: 'trial', key: 'editionTrial' },
 ]
 
 const MODULE_OPTIONS = [
-  { value: 'ai', label: 'AI 能力' },
-  { value: 'ha', label: '高可用（HA）' },
-  { value: 'backup', label: '备份恢复' },
-  { value: 'multitenant', label: '多租户' },
-  { value: 'audit', label: '审计日志' },
-  { value: 'pipeline', label: 'CI/CD 流水线' },
+  { value: 'ai', key: 'modAi' },
+  { value: 'ha', key: 'modHa' },
+  { value: 'backup', key: 'modBackup' },
+  { value: 'multitenant', key: 'modMultitenant' },
+  { value: 'audit', key: 'modAudit' },
+  { value: 'pipeline', key: 'modPipeline' },
 ]
 
 const formatDate = (raw: string): string => {
@@ -61,6 +62,8 @@ const formatNumber = (n: number | string | null | undefined): string => {
 // ═══════════════════════════════════════════════════════════
 
 export default function PartnersPage() {
+  const t = useTranslations('platformPartners')
+  const tp = useTranslations('platformPartnersPage')
   const notify = useNotification()
 
   const [partners, setPartners] = useState<PartnerStats[]>([])
@@ -112,7 +115,7 @@ export default function PartnersPage() {
       setPartners(res.data.partners as PartnerStats[])
       setTotalPages(res.data.pagination.total_pages)
     } catch (error: any) {
-      notify.error(error.response?.data?.error || '加载代理商列表失败')
+      notify.error(error.response?.data?.error || t('loadFailed'))
     } finally {
       setLoading(false)
     }
@@ -128,14 +131,14 @@ export default function PartnersPage() {
 
   const handleCreate = async () => {
     if (!newPartner.name || !newPartner.company_name || !newPartner.slug || !newPartner.contact_email) {
-      notify.error('请填写所有必填字段')
+      notify.error(t('fillRequired'))
       return
     }
 
     try {
       setCreating(true)
       await adminPartnerAPI.create(newPartner)
-      notify.success('代理商创建成功')
+      notify.success(t('createOk'))
       setShowCreate(false)
       setNewPartner({
         name: '',
@@ -153,7 +156,7 @@ export default function PartnersPage() {
       })
       loadPartners()
     } catch (error: any) {
-      notify.error(error.response?.data?.error || '创建代理商失败')
+      notify.error(error.response?.data?.error || t('createFailed'))
     } finally {
       setCreating(false)
     }
@@ -179,11 +182,11 @@ export default function PartnersPage() {
     try {
       setUpdating(true)
       await adminPartnerAPI.update(editingPartner.partner_id, editData)
-      notify.success('代理商信息更新成功')
+      notify.success(t('updateOk'))
       setShowEdit(false)
       loadPartners()
     } catch (error: any) {
-      notify.error(error.response?.data?.error || '更新代理商失败')
+      notify.error(error.response?.data?.error || t('updateFailed'))
     } finally {
       setUpdating(false)
     }
@@ -194,16 +197,16 @@ export default function PartnersPage() {
   // ──────────────────────────────────────────────
 
   const handleSuspend = async (partner: PartnerStats) => {
-    if (!confirm(`确定要挂起代理商「${partner.name}」吗？挂起后将无法签发新 License。`)) {
+    if (!confirm(t('confirmSuspend', { name: partner.name }))) {
       return
     }
 
     try {
       await adminPartnerAPI.suspend(partner.partner_id)
-      notify.success('代理商已挂起')
+      notify.success(t('suspendOk'))
       loadPartners()
     } catch (error: any) {
-      notify.error(error.response?.data?.error || '挂起代理商失败')
+      notify.error(error.response?.data?.error || t('suspendFailed'))
     }
   }
 
@@ -225,22 +228,22 @@ export default function PartnersPage() {
       {/* 标题栏 */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">代理商管理</h1>
-          <p className="text-sm text-gray-500 mt-1">管理代理商配额、佣金比例和授权范围</p>
+          <h1 className="text-2xl font-bold text-gray-900">{t('title')}</h1>
+          <p className="text-sm text-gray-500 mt-1">{t('subtitle')}</p>
         </div>
         <button
           onClick={() => setShowCreate(true)}
           className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
         >
           <i className="fas fa-plus mr-2"></i>
-          创建代理商
+          {t('createBtn')}
         </button>
       </div>
 
       {/* 筛选栏 */}
       <div className="mb-4 flex items-center gap-4">
         <div className="flex items-center gap-2">
-          <label className="text-sm text-gray-600">状态：</label>
+          <label className="text-sm text-gray-600">{t('statusLabel')}</label>
           <select
             value={statusFilter}
             onChange={(e) => {
@@ -251,7 +254,7 @@ export default function PartnersPage() {
           >
             {STATUS_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
-                {opt.label}
+                {t(opt.key)}
               </option>
             ))}
           </select>
@@ -262,12 +265,12 @@ export default function PartnersPage() {
       {loading ? (
         <div className="text-center py-12">
           <i className="fas fa-spinner fa-spin text-3xl text-gray-400"></i>
-          <p className="text-gray-500 mt-2">加载中...</p>
+          <p className="text-gray-500 mt-2">{t('loading')}</p>
         </div>
       ) : partners.length === 0 ? (
         <div className="text-center py-12 bg-gray-50 rounded-lg">
           <i className="fas fa-inbox text-4xl text-gray-400 mb-3"></i>
-          <p className="text-gray-500">暂无代理商</p>
+          <p className="text-gray-500">{t('empty')}</p>
         </div>
       ) : (
         <div className="bg-white rounded-lg shadow overflow-hidden">
@@ -275,25 +278,25 @@ export default function PartnersPage() {
             <thead className="bg-gray-50">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  代理商信息
+                  {t('colPartner')}
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  状态
+                  {t('colStatus')}
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  配额使用
+                  {t('colQuota')}
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  佣金比例
+                  {t('colCommRate')}
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  License 统计
+                  {t('colLicStat')}
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  佣金统计
+                  {t('colCommStat')}
                 </th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  操作
+                  {t('colActions')}
                 </th>
               </tr>
             </thead>
@@ -314,7 +317,7 @@ export default function PartnersPage() {
                           STATUS_BADGE[partner.status] || 'bg-gray-100 text-gray-700'
                         }`}
                       >
-                        {STATUS_LABEL[partner.status] || partner.status}
+                        {t(STATUS_LABEL[partner.status] || partner.status)}
                       </span>
                     </td>
                     <td className="px-6 py-4">
@@ -337,18 +340,18 @@ export default function PartnersPage() {
                     <td className="px-6 py-4 text-sm text-gray-900">{partner.commission_rate}%</td>
                     <td className="px-6 py-4">
                       <div className="text-sm text-gray-900">
-                        总数: {formatNumber(partner.total_licenses)}
+                        {t('total')}: {formatNumber(partner.total_licenses)}
                       </div>
                       <div className="text-xs text-gray-500">
-                        活跃: {formatNumber(partner.active_licenses)}
+                        {t('active')}: {formatNumber(partner.active_licenses)}
                       </div>
                     </td>
                     <td className="px-6 py-4">
                       <div className="text-sm text-gray-900">
-                        总计: ¥{formatNumber(partner.total_commission)}
+                        {t('sumTotal')}: ¥{formatNumber(partner.total_commission)}
                       </div>
                       <div className="text-xs text-gray-500">
-                        待结算: ¥{formatNumber(partner.pending_commission)}
+                        {t('pending')}: ¥{formatNumber(partner.pending_commission)}
                       </div>
                     </td>
                     <td className="px-6 py-4 text-right space-x-2">
@@ -356,20 +359,20 @@ export default function PartnersPage() {
                         onClick={() => viewDetail(partner)}
                         className="text-blue-600 hover:text-blue-800 text-sm"
                       >
-                        详情
+                        {t('detail')}
                       </button>
                       <button
                         onClick={() => openEdit(partner)}
                         className="text-green-600 hover:text-green-800 text-sm"
                       >
-                        编辑
+                        {t('edit')}
                       </button>
                       {partner.status === 'active' && (
                         <button
                           onClick={() => handleSuspend(partner)}
                           className="text-red-600 hover:text-red-800 text-sm"
                         >
-                          挂起
+                          {t('suspend')}
                         </button>
                       )}
                     </td>
@@ -385,7 +388,7 @@ export default function PartnersPage() {
       {totalPages > 1 && (
         <div className="mt-4 flex items-center justify-between">
           <div className="text-sm text-gray-600">
-            第 {page} / {totalPages} 页
+            {t('pageInfo', { page, total: totalPages })}
           </div>
           <div className="flex gap-2">
             <button
@@ -393,14 +396,14 @@ export default function PartnersPage() {
               disabled={page === 1}
               className="px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
             >
-              上一页
+              {t('prevPage')}
             </button>
             <button
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={page === totalPages}
               className="px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
             >
-              下一页
+              {t('nextPage')}
             </button>
           </div>
         </div>
@@ -410,7 +413,7 @@ export default function PartnersPage() {
       <Drawer
         isOpen={showCreate}
         onClose={() => setShowCreate(false)}
-        title="创建代理商"
+        title={t('createTitle')}
         size="lg"
         footer={
           <div className="flex justify-end gap-3">
@@ -418,14 +421,14 @@ export default function PartnersPage() {
               onClick={() => setShowCreate(false)}
               className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
             >
-              取消
+              {tp('cancel')}
             </button>
             <button
               onClick={handleCreate}
               disabled={creating}
               className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
-              {creating ? '创建中...' : '创建'}
+              {creating ? t('creating') : t('create')}
             </button>
           </div>
         }
@@ -433,27 +436,27 @@ export default function PartnersPage() {
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              代理商名称 <span className="text-red-500">*</span>
+              {t('nameLabel')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
               value={newPartner.name}
               onChange={(e) => setNewPartner({ ...newPartner, name: e.target.value })}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="例如：华东区代理商"
+              placeholder={t('namePlaceholder')}
             />
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              公司名称 <span className="text-red-500">*</span>
+              {t('companyLabel')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
               value={newPartner.company_name}
               onChange={(e) => setNewPartner({ ...newPartner, company_name: e.target.value })}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="例如：上海云联科技有限公司"
+              placeholder={t('companyPlaceholder')}
             />
           </div>
 
@@ -466,15 +469,15 @@ export default function PartnersPage() {
               value={newPartner.slug}
               onChange={(e) => setNewPartner({ ...newPartner, slug: e.target.value })}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="例如：huadong-partner"
+              placeholder={t('slugPlaceholder')}
             />
-            <p className="text-xs text-gray-500 mt-1">用于 URL 识别，仅支持小写字母、数字、连字符</p>
+            <p className="text-xs text-gray-500 mt-1">{t('slugHint')}</p>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                联系邮箱 <span className="text-red-500">*</span>
+                {t('emailLabel')} <span className="text-red-500">*</span>
               </label>
               <input
                 type="email"
@@ -485,7 +488,7 @@ export default function PartnersPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">联系电话</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">{t('phoneLabel')}</label>
               <input
                 type="text"
                 value={newPartner.contact_phone}
@@ -497,7 +500,7 @@ export default function PartnersPage() {
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">佣金比例 (%)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">{t('commRateLabel')}</label>
               <input
                 type="number"
                 min="0"
@@ -512,7 +515,7 @@ export default function PartnersPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">账期天数</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">{t('paymentTermLabel')}</label>
               <input
                 type="number"
                 value={newPartner.payment_terms}
@@ -526,7 +529,7 @@ export default function PartnersPage() {
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">License 配额</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">{t('quotaLabel')}</label>
               <input
                 type="number"
                 min="0"
@@ -540,7 +543,7 @@ export default function PartnersPage() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                最长签发天数
+                {t('maxDaysLabel')}
               </label>
               <input
                 type="number"
@@ -552,13 +555,13 @@ export default function PartnersPage() {
                   })
                 }
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="不限制"
+                placeholder={t('noLimit')}
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">允许的版本</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">{t('allowedEditions')}</label>
             <div className="space-y-2">
               {EDITION_OPTIONS.map((opt) => (
                 <label key={opt.value} className="flex items-center">
@@ -580,14 +583,14 @@ export default function PartnersPage() {
                     }}
                     className="mr-2"
                   />
-                  {opt.label}
+                  {t(opt.key)}
                 </label>
               ))}
             </div>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">允许的模块</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">{t('allowedModules')}</label>
             <div className="space-y-2">
               {MODULE_OPTIONS.map((opt) => (
                 <label key={opt.value} className="flex items-center">
@@ -609,7 +612,7 @@ export default function PartnersPage() {
                     }}
                     className="mr-2"
                   />
-                  {opt.label}
+                  {t(opt.key)}
                 </label>
               ))}
             </div>
@@ -621,7 +624,7 @@ export default function PartnersPage() {
       <Drawer
         isOpen={showEdit}
         onClose={() => setShowEdit(false)}
-        title="编辑代理商"
+        title={t('editTitle')}
         size="md"
         footer={
           <div className="flex justify-end gap-3">
@@ -629,14 +632,14 @@ export default function PartnersPage() {
               onClick={() => setShowEdit(false)}
               className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
             >
-              取消
+              {tp('cancel')}
             </button>
             <button
               onClick={handleUpdate}
               disabled={updating}
               className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
-              {updating ? '保存中...' : '保存'}
+              {updating ? t('updating') : t('save')}
             </button>
           </div>
         }
@@ -644,20 +647,20 @@ export default function PartnersPage() {
         {editingPartner && (
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">状态</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">{t('colStatus')}</label>
               <select
                 value={editData.status || editingPartner.status}
                 onChange={(e) => setEditData({ ...editData, status: e.target.value as any })}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
-                <option value="active">活跃</option>
-                <option value="suspended">已挂起</option>
-                <option value="inactive">未激活</option>
+                <option value="active">{t('statusActive')}</option>
+                <option value="suspended">{t('statusSuspended')}</option>
+                <option value="inactive">{t('statusInactive')}</option>
               </select>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">佣金比例 (%)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">{t('commRateLabel')}</label>
               <input
                 type="number"
                 min="0"
@@ -672,7 +675,7 @@ export default function PartnersPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">License 配额</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">{t('quotaLabel')}</label>
               <input
                 type="number"
                 min="0"
@@ -683,7 +686,7 @@ export default function PartnersPage() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
               <p className="text-xs text-gray-500 mt-1">
-                当前已用：{editingPartner.used_quota}
+                {t('currentUsed', { used: editingPartner.used_quota })}
               </p>
             </div>
           </div>
@@ -694,16 +697,16 @@ export default function PartnersPage() {
       <Drawer
         isOpen={showDetail}
         onClose={() => setShowDetail(false)}
-        title="代理商详情"
+        title={t('detailTitle')}
         size="lg"
       >
         {detailPartner && (
           <div className="space-y-6">
             <div>
-              <h3 className="text-sm font-medium text-gray-500 mb-2">基本信息</h3>
+              <h3 className="text-sm font-medium text-gray-500 mb-2">{t('basicInfo')}</h3>
               <dl className="grid grid-cols-2 gap-4">
                 <div>
-                  <dt className="text-xs text-gray-500">代理商名称</dt>
+                  <dt className="text-xs text-gray-500">{t('nameLabel')}</dt>
                   <dd className="text-sm font-medium text-gray-900">{detailPartner.name}</dd>
                 </div>
                 <div>
@@ -711,35 +714,35 @@ export default function PartnersPage() {
                   <dd className="text-sm font-medium text-gray-900">{detailPartner.slug}</dd>
                 </div>
                 <div>
-                  <dt className="text-xs text-gray-500">状态</dt>
+                  <dt className="text-xs text-gray-500">{t('colStatus')}</dt>
                   <dd>
                     <span
                       className={`px-2 py-1 text-xs font-medium rounded-full ${
                         STATUS_BADGE[detailPartner.status]
                       }`}
                     >
-                      {STATUS_LABEL[detailPartner.status]}
+                      {t(STATUS_LABEL[detailPartner.status])}
                     </span>
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-xs text-gray-500">创建时间</dt>
+                  <dt className="text-xs text-gray-500">{t('createdAt')}</dt>
                   <dd className="text-sm text-gray-900">{formatDate(detailPartner.created_at)}</dd>
                 </div>
               </dl>
             </div>
 
             <div>
-              <h3 className="text-sm font-medium text-gray-500 mb-2">配额与佣金</h3>
+              <h3 className="text-sm font-medium text-gray-500 mb-2">{t('quotaComm')}</h3>
               <dl className="grid grid-cols-2 gap-4">
                 <div>
-                  <dt className="text-xs text-gray-500">佣金比例</dt>
+                  <dt className="text-xs text-gray-500">{t('colCommRate')}</dt>
                   <dd className="text-sm font-medium text-gray-900">
                     {detailPartner.commission_rate}%
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-xs text-gray-500">配额使用</dt>
+                  <dt className="text-xs text-gray-500">{t('colQuota')}</dt>
                   <dd className="text-sm font-medium text-gray-900">
                     {detailPartner.used_quota} / {detailPartner.license_quota}
                   </dd>
@@ -748,28 +751,28 @@ export default function PartnersPage() {
             </div>
 
             <div>
-              <h3 className="text-sm font-medium text-gray-500 mb-2">License 统计</h3>
+              <h3 className="text-sm font-medium text-gray-500 mb-2">{t('licStat')}</h3>
               <dl className="grid grid-cols-2 gap-4">
                 <div>
-                  <dt className="text-xs text-gray-500">总 License 数</dt>
+                  <dt className="text-xs text-gray-500">{t('totalLic')}</dt>
                   <dd className="text-sm font-medium text-gray-900">
                     {formatNumber(detailPartner.total_licenses)}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-xs text-gray-500">活跃 License</dt>
+                  <dt className="text-xs text-gray-500">{t('activeLic')}</dt>
                   <dd className="text-sm font-medium text-gray-900">
                     {formatNumber(detailPartner.active_licenses)}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-xs text-gray-500">订阅制</dt>
+                  <dt className="text-xs text-gray-500">{t('subscription')}</dt>
                   <dd className="text-sm text-gray-900">
                     {formatNumber(detailPartner.subscription_licenses)}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-xs text-gray-500">永久买断</dt>
+                  <dt className="text-xs text-gray-500">{t('perpetual')}</dt>
                   <dd className="text-sm text-gray-900">
                     {formatNumber(detailPartner.perpetual_licenses)}
                   </dd>
@@ -778,22 +781,22 @@ export default function PartnersPage() {
             </div>
 
             <div>
-              <h3 className="text-sm font-medium text-gray-500 mb-2">佣金统计</h3>
+              <h3 className="text-sm font-medium text-gray-500 mb-2">{t('commStat')}</h3>
               <dl className="grid grid-cols-2 gap-4">
                 <div>
-                  <dt className="text-xs text-gray-500">总佣金</dt>
+                  <dt className="text-xs text-gray-500">{t('totalComm')}</dt>
                   <dd className="text-sm font-medium text-gray-900">
                     ¥{formatNumber(detailPartner.total_commission)}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-xs text-gray-500">已结算</dt>
+                  <dt className="text-xs text-gray-500">{t('settled')}</dt>
                   <dd className="text-sm text-gray-900">
                     ¥{formatNumber(detailPartner.settled_commission)}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-xs text-gray-500">待结算</dt>
+                  <dt className="text-xs text-gray-500">{t('pending')}</dt>
                   <dd className="text-sm text-gray-900">
                     ¥{formatNumber(detailPartner.pending_commission)}
                   </dd>

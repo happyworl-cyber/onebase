@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { cn, closeOnBackdropPress } from '@/lib/utils'
 import { showToast } from '@/components/Toast'
 import { TRIGGER_META } from './constants'
@@ -48,9 +49,9 @@ interface Props {
 
 const SLUG_RE = /^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$/
 
-function triggerLabel(type: string): string {
+function triggerLabel(type: string, t: (k: string) => string): string {
   const meta = TRIGGER_META[type] ?? TRIGGER_META.manual
-  return meta.label
+  return t(meta.labelKey)
 }
 
 function buildDef(file: ParsedFile): ImportWorkflowDef {
@@ -87,6 +88,8 @@ function buildDef(file: ParsedFile): ImportWorkflowDef {
 }
 
 export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }: Props) {
+  const t = useTranslations('wfImport')
+  const tTrig = useTranslations('wfTrigger')
   const [step, setStep] = useState<'select' | 'review' | 'progress' | 'done'>('select')
   const [parsing, setParsing] = useState(false)
   const [files, setFiles] = useState<ParsedFile[]>([])
@@ -143,7 +146,7 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
             const { workflow, department, category } = parseImportedWorkflowFile(json)
             const slug = typeof workflow.slug === 'string' ? workflow.slug : ''
             const name =
-              typeof workflow.name === 'string' && workflow.name ? workflow.name : '未命名工作流'
+              typeof workflow.name === 'string' && workflow.name ? workflow.name : t('unnamed')
             const triggerType =
               typeof workflow.trigger_type === 'string' ? workflow.trigger_type : 'endpoint'
             const description =
@@ -154,7 +157,7 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
                 key,
                 filename: file.name,
                 status: 'error',
-                error: '文件缺少 slug',
+                error: t('missingSlug'),
                 name,
                 slug: '',
                 description,
@@ -225,7 +228,7 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
               key,
               filename: file.name,
               status: 'error',
-              error: err instanceof Error ? err.message : '文件解析失败',
+              error: err instanceof Error ? err.message : t('parseFailed'),
               name: file.name,
               slug: '',
               description: null,
@@ -238,7 +241,7 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
         setRes(nextRes)
         setStep('review')
       } catch {
-        showToast('error', '读取已有工作流失败，请重试')
+        showToast('error', t('readExistingFailed'))
       } finally {
         setParsing(false)
       }
@@ -249,13 +252,13 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
   const checkNewSlug = useCallback(
     (originalSlug: string, newSlug: string): { valid: boolean; msg: string } => {
       const v = (newSlug || '').trim()
-      if (!v) return { valid: false, msg: 'Slug 不能为空' }
+      if (!v) return { valid: false, msg: t('slugEmpty') }
       if (!SLUG_RE.test(v))
-        return { valid: false, msg: '只能用小写字母、数字、下划线、连字符，且首尾不能是连字符或下划线' }
-      if (existingSlugs.has(v)) return { valid: false, msg: '该 Slug 在系统中已存在，请换一个' }
+        return { valid: false, msg: t('slugFormat') }
+      if (existingSlugs.has(v)) return { valid: false, msg: t('slugExists') }
       // 与批次中其他文件原始 slug 冲突
       const batchSlugs = files.filter((f) => f.slug && f.slug !== originalSlug).map((f) => f.slug)
-      if (batchSlugs.includes(v)) return { valid: false, msg: '与批次中另一个文件的 Slug 重复' }
+      if (batchSlugs.includes(v)) return { valid: false, msg: t('slugDupBatch') }
       // 与其他重命名目标冲突
       const otherRenames = files
         .filter(
@@ -263,7 +266,7 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
         )
         .map((f) => res[f.slug]?.newSlug)
         .filter(Boolean)
-      if (otherRenames.includes(v)) return { valid: false, msg: '与另一条重命名的目标 Slug 重复' }
+      if (otherRenames.includes(v)) return { valid: false, msg: t('slugDupRename') }
       return { valid: true, msg: '' }
     },
     [existingSlugs, files, res],
@@ -347,23 +350,23 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
       setStep('done')
       const warnCount = r.succeeded.reduce((n, s) => n + (s.warnings?.length ?? 0), 0)
       if (r.failed_count > 0) {
-        showToast('warning', `导入完成：成功 ${r.succeeded_count}，失败 ${r.failed_count}`)
+        showToast('warning', t('importDonePartial', { ok: r.succeeded_count, fail: r.failed_count }))
       } else if (warnCount > 0) {
-        showToast('warning', `已导入 ${r.succeeded_count} 个工作流，有 ${warnCount} 条提示（如新增节点的连接需手动选择），详见结果页`)
+        showToast('warning', t('importWithWarn', { ok: r.succeeded_count, warn: warnCount }))
       } else {
         // 按 action 分类计数：新建/重命名 = 默认启用；覆盖 = 保留原启用状态。
         const created = r.succeeded.filter((s) => s.action === 'create' || s.action === 'rename').length
         const overwritten = r.succeeded.filter((s) => s.action === 'overwrite').length
         const parts: string[] = []
-        if (created) parts.push(`新建 ${created}（已启用）`)
-        if (overwritten) parts.push(`覆盖 ${overwritten}（保留原状态）`)
+        if (created) parts.push(t('createdN', { n: created }))
+        if (overwritten) parts.push(t('overwrittenN', { n: overwritten }))
         const detail = parts.length ? `：${parts.join(' · ')}` : ''
-        showToast('success', `已导入 ${r.succeeded_count} 个工作流${detail}`)
+        showToast('success', t('importOkN', { ok: r.succeeded_count, detail }))
       }
       onDone()
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
-      showToast('error', msg || '批量导入失败')
+      showToast('error', msg || t('importFailed'))
       setStep('review')
     } finally {
       setImporting(false)
@@ -397,12 +400,12 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
                 <i className="fas fa-layer-group text-white text-sm" />
               </div>
               <div>
-                <h2 className="text-base font-semibold text-gray-900">批量导入工作流</h2>
+                <h2 className="text-base font-semibold text-gray-900">{t('title')}</h2>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  {step === 'select' && '选择一个或多个 .workflow.json 文件'}
-                  {step === 'review' && `已解析 ${files.length} 个文件，请确认导入计划`}
-                  {step === 'progress' && '正在将工作流写入系统…'}
-                  {step === 'done' && '全部处理完毕'}
+                  {step === 'select' && t('stepSelect')}
+                  {step === 'review' && t('stepReview', { n: files.length })}
+                  {step === 'progress' && t('stepProgress')}
+                  {step === 'done' && t('stepDone')}
                 </p>
               </div>
             </div>
@@ -417,9 +420,9 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
           {step !== 'select' && (
             <div className="flex items-center pb-4 border-b border-gray-100">
               {[
-                { n: 1, t: '选择文件' },
-                { n: 2, t: '确认并导入' },
-                { n: 3, t: '完成' },
+                { n: 1, t: t('step1') },
+                { n: 2, t: t('step2') },
+                { n: 3, t: t('step3') },
               ].map((s, idx) => (
                 <div key={s.n} className="flex items-center flex-1 last:flex-none">
                   <div className="flex flex-col items-center gap-1 shrink-0">
@@ -480,17 +483,17 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
                 </div>
                 <div className="text-center">
                   <p className="text-sm font-medium text-gray-700">
-                    {parsing ? '正在解析文件…' : '拖拽文件到此处，或'}
-                    {!parsing && <span className="text-indigo-600"> 点击选择</span>}
+                    {parsing ? t('parsing') : t('dropHint')}
+                    {!parsing && <span className="text-indigo-600">{t('clickSelect')}</span>}
                   </p>
                   <p className="text-xs text-gray-400 mt-1">
-                    支持多选 · 仅限 <code className="bg-gray-100 px-1.5 py-0.5 rounded font-mono">.workflow.json</code> 格式
+                    {t('multiSelectHint')} <code className="bg-gray-100 px-1.5 py-0.5 rounded font-mono">.workflow.json</code> {t('onlyFormat')}
                   </p>
                 </div>
               </div>
               <div className="mt-4 flex items-start gap-2.5 text-xs text-gray-500 bg-blue-50/40 rounded-xl px-4 py-3.5 border border-blue-100/60">
                 <i className="fas fa-info-circle text-blue-400 mt-0.5 shrink-0" />
-                批量导入会直接写入系统：新建/重命名默认为启用状态，覆盖保留原启用状态及数据源/Redis 连接配置（不会被导入文件里的环境连接覆盖）。请确认文件来源可信。
+                {t('importWarn')}
               </div>
             </div>
           )}
@@ -499,10 +502,10 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
             <div>
               <div className="grid grid-cols-4 gap-3 px-6 py-4 bg-gray-50/50 border-b border-gray-100">
                 {[
-                  { n: stats.total, l: '全部文件', c: '#6366f1', i: 'fa-file-alt' },
-                  { n: stats.ok, l: '可直接导入', c: '#10b981', i: 'fa-check-circle' },
-                  { n: stats.con, l: 'Slug 冲突', c: '#f59e0b', i: 'fa-exclamation-circle' },
-                  { n: stats.err, l: '格式错误', c: '#ef4444', i: 'fa-times-circle' },
+                  { n: stats.total, l: t('statTotal'), c: '#6366f1', i: 'fa-file-alt' },
+                  { n: stats.ok, l: t('statOk'), c: '#10b981', i: 'fa-check-circle' },
+                  { n: stats.con, l: t('statConflict'), c: '#f59e0b', i: 'fa-exclamation-circle' },
+                  { n: stats.err, l: t('statError'), c: '#ef4444', i: 'fa-times-circle' },
                 ].map((s) => (
                   <div key={s.l} className="bg-white rounded-xl border border-gray-100 px-4 py-3 flex items-center gap-3 shadow-sm">
                     <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: `${s.c}1a` }}>
@@ -518,21 +521,21 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
 
               <div className="px-6 pt-5 pb-6">
                 <div className="flex items-center justify-between mb-3">
-                  <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">解析结果</span>
+                  <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">{t('parseResult')}</span>
                   {stats.con > 0 && (
                     <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-gray-400">冲突快速应用：</span>
+                      <span className="text-xs text-gray-400">{t('conflictQuick')}</span>
                       <button
                         onClick={() => bulkAction('overwrite')}
                         className="text-xs px-2.5 py-1 rounded-lg border border-gray-200 text-gray-600 hover:border-indigo-300 hover:text-indigo-600 hover:bg-indigo-50 font-medium"
                       >
-                        全部覆盖
+                        {t('allOverwrite')}
                       </button>
                       <button
                         onClick={() => bulkAction('skip')}
                         className="text-xs px-2.5 py-1 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 font-medium"
                       >
-                        全部放弃
+                        {t('allDiscard')}
                       </button>
                     </div>
                   )}
@@ -559,7 +562,7 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
           {step === 'progress' && (
             <div className="p-6 flex flex-col items-center justify-center gap-4 py-16">
               <div className="w-12 h-12 border-2 border-gray-200 border-t-indigo-500 rounded-full animate-spin" />
-              <p className="text-sm text-gray-500">正在导入 {willImportCount} 个工作流…</p>
+              <p className="text-sm text-gray-500">{t('importingN', { n: willImportCount })}</p>
             </div>
           )}
 
@@ -569,39 +572,39 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
                 <i className="fas fa-check text-emerald-600 text-2xl" />
               </div>
               <div>
-                <h3 className="text-xl font-semibold text-gray-900">导入完成</h3>
+                <h3 className="text-xl font-semibold text-gray-900">{t('importComplete')}</h3>
                 <p className="text-sm text-gray-400 mt-1">
-                  共处理 {files.length} 个文件，{result.succeeded_count} 个成功写入
+                  {t('processedSummary', { files: files.length, ok: result.succeeded_count })}
                 </p>
               </div>
               <div className="grid grid-cols-3 gap-3 w-full max-w-sm">
                 <div className="rounded-2xl bg-emerald-50 border border-emerald-100 px-4 py-4 text-center">
                   <div className="text-3xl font-bold text-emerald-700">{result.succeeded_count}</div>
-                  <div className="text-xs text-emerald-500 mt-1 font-medium">成功导入</div>
+                  <div className="text-xs text-emerald-500 mt-1 font-medium">{t('importedOk')}</div>
                 </div>
                 <div className="rounded-2xl bg-gray-50 border border-gray-100 px-4 py-4 text-center">
                   <div className="text-3xl font-bold text-gray-500">{stats.con - result.succeeded.filter((s) => s.action === 'overwrite' || s.action === 'rename').length}</div>
-                  <div className="text-xs text-gray-400 mt-1 font-medium">已跳过</div>
+                  <div className="text-xs text-gray-400 mt-1 font-medium">{t('skipped')}</div>
                 </div>
                 <div className="rounded-2xl bg-red-50 border border-red-100 px-4 py-4 text-center">
                   <div className="text-3xl font-bold text-red-500">{stats.err + result.failed_count}</div>
-                  <div className="text-xs text-red-400 mt-1 font-medium">未写入</div>
+                  <div className="text-xs text-red-400 mt-1 font-medium">{t('notWritten')}</div>
                 </div>
               </div>
               {result.succeeded.length > 0 && (
                 <div className="w-full text-left bg-gray-50 rounded-2xl border border-gray-100 overflow-hidden divide-y divide-gray-100 max-h-48 overflow-y-auto">
                   <div className="px-4 py-2.5 text-[11px] font-bold text-gray-400 uppercase tracking-wider bg-gray-50">
-                    已写入的工作流
+                    {t('writtenWorkflows')}
                   </div>
                   {result.succeeded.map((s) => (
                     <div key={s.id} className="px-4 py-3">
                       <div className="flex items-center gap-2 text-sm font-medium text-gray-800">
                         {s.name}
                         {s.action === 'overwrite' && (
-                          <span className="text-[11px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">覆盖</span>
+                          <span className="text-[11px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">{t('tagOverwrite')}</span>
                         )}
                         {s.action === 'rename' && (
-                          <span className="text-[11px] bg-sky-100 text-sky-700 px-1.5 py-0.5 rounded">重命名</span>
+                          <span className="text-[11px] bg-sky-100 text-sky-700 px-1.5 py-0.5 rounded">{t('tagRename')}</span>
                         )}
                       </div>
                       <div className="font-mono text-[11px] text-gray-400 mt-0.5">{s.slug}</div>
@@ -624,7 +627,7 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
               )}
               {result.failed.length > 0 && (
                 <div className="w-full text-left bg-red-50/50 rounded-2xl border border-red-100 overflow-hidden divide-y divide-red-100 max-h-40 overflow-y-auto">
-                  <div className="px-4 py-2.5 text-[11px] font-bold text-red-400 uppercase tracking-wider">写入失败</div>
+                  <div className="px-4 py-2.5 text-[11px] font-bold text-red-400 uppercase tracking-wider">{t('writeFailed')}</div>
                   {result.failed.map((f, i) => (
                     <div key={i} className="px-4 py-2.5 text-xs text-red-600">
                       <span className="font-medium">{f.name || f.slug}</span>
@@ -637,7 +640,7 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
                 onClick={onClose}
                 className="mt-2 px-6 py-2.5 bg-gray-900 text-white text-sm font-semibold rounded-xl hover:bg-gray-700"
               >
-                完成，返回列表
+                {t('doneBack')}
               </button>
             </div>
           )}
@@ -647,7 +650,7 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
         {(step === 'select' || step === 'review') && (
           <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between shrink-0 bg-gray-50/40">
             <button onClick={onClose} className="text-sm text-gray-400 hover:text-gray-600 px-3 py-1.5 rounded-lg hover:bg-gray-100">
-              取消
+              {t('cancel')}
             </button>
             {step === 'review' && (
               <div className="flex items-center gap-3">
@@ -669,10 +672,10 @@ export default function WorkflowBatchImportModal({ databaseId, onClose, onDone }
                   )}
                 >
                   {unresolvedCount > 0
-                    ? `还有 ${unresolvedCount} 个冲突未处理`
+                    ? t('unresolvedN', { n: unresolvedCount })
                     : invalidRenameCount > 0
-                      ? 'Slug 冲突未解决，请修改后再导入'
-                      : `导入 ${willImportCount} 个工作流`}
+                      ? t('slugUnresolved')
+                      : t('importN', { n: willImportCount })}
                   {unresolvedCount === 0 && invalidRenameCount === 0 && willImportCount > 0 && (
                     <i className="fas fa-arrow-right text-xs" />
                   )}
@@ -693,13 +696,14 @@ function ConflictHint({
   conflicts: ParsedFile[]
   res: Record<string, Resolution>
 }) {
+  const t = useTranslations('wfImport')
   const ov = conflicts.filter((f) => res[f.slug]?.action === 'overwrite').length
   const rn = conflicts.filter((f) => res[f.slug]?.action === 'rename').length
   const sk = conflicts.filter((f) => res[f.slug]?.action === 'skip').length
   const parts: string[] = []
-  if (ov) parts.push(`覆盖 ${ov}`)
-  if (rn) parts.push(`重命名 ${rn}`)
-  if (sk) parts.push(`跳过 ${sk}`)
+  if (ov) parts.push(t('summaryOv', { n: ov }))
+  if (rn) parts.push(t('summaryRn', { n: rn }))
+  if (sk) parts.push(t('summarySk', { n: sk }))
   if (parts.length === 0) return null
   return <span className="text-xs text-gray-400">{parts.join(' · ')}</span>
 }
@@ -723,6 +727,8 @@ function FileItem({
   onAutoSlug: (slug: string) => void
   checkNewSlug: (originalSlug: string, newSlug: string) => { valid: boolean; msg: string }
 }) {
+  const t = useTranslations('wfImport')
+  const tTrig = useTranslations('wfTrigger')
   if (file.status === 'error') {
     return (
       <div className="rounded-2xl border-[1.5px] border-red-200 bg-red-50/40 overflow-hidden">
@@ -733,7 +739,7 @@ function FileItem({
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between gap-2">
               <span className="text-sm font-medium text-red-700 truncate">{file.filename}</span>
-              <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-medium shrink-0">格式错误</span>
+              <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-medium shrink-0">{t('formatError')}</span>
             </div>
             <div className="text-xs text-red-400 mt-1 font-mono">{file.error}</div>
           </div>
@@ -753,14 +759,14 @@ function FileItem({
             <div className="flex items-center justify-between gap-2">
               <span className="text-sm font-medium text-gray-800 truncate">{file.name}</span>
               <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-medium shrink-0">
-                ✓ 正常
+                {t('normalOk')}
               </span>
             </div>
             <div className="flex items-center gap-2 mt-0.5">
               <span className="font-mono text-xs text-gray-400">{file.slug}</span>
               <span className="text-gray-300">·</span>
               <span className="text-xs text-gray-400">
-                {triggerLabel(file.triggerType)} · {file.nodeCount} 节点
+                {triggerLabel(file.triggerType, tTrig)} · {t('nodesCount', { n: file.nodeCount })}
               </span>
             </div>
           </div>
@@ -775,26 +781,26 @@ function FileItem({
   const resolved = !!r.action
   const diffs = ex
     ? [
-        { label: '描述', old: ex.description || '—', nw: file.description || '—' },
-        { label: '触发', old: triggerLabel(ex.triggerType), nw: triggerLabel(file.triggerType) },
-        { label: '节点', old: `${ex.nodeCount} 个`, nw: `${file.nodeCount} 个` },
+        { label: t('diffDesc'), old: ex.description || '—', nw: file.description || '—' },
+        { label: t('diffTrigger'), old: triggerLabel(ex.triggerType, tTrig), nw: triggerLabel(file.triggerType, tTrig) },
+        { label: t('diffNode'), old: t('diffNodeVal', { n: ex.nodeCount }), nw: t('diffNodeVal', { n: file.nodeCount }) },
       ]
     : []
   const renameCheck = r.action === 'rename' ? checkNewSlug(file.slug, r.newSlug) : { valid: true, msg: '' }
 
   const actions: { a: ConflictAction; icon: string; iconColor: string; bg: string; title: string; sub: string }[] = [
-    { a: 'overwrite', icon: 'fa-redo', iconColor: 'text-indigo-500', bg: 'bg-indigo-50', title: '覆盖', sub: '替换为导入版本，保留 ID 及数据源/Redis 连接' },
-    { a: 'rename', icon: 'fa-pen', iconColor: 'text-sky-500', bg: 'bg-sky-50', title: '重命名', sub: '另存为新工作流，用新 slug' },
-    { a: 'skip', icon: 'fa-ban', iconColor: 'text-gray-400', bg: 'bg-gray-50', title: '放弃', sub: '跳过，不做任何操作' },
+    { a: 'overwrite', icon: 'fa-redo', iconColor: 'text-indigo-500', bg: 'bg-indigo-50', title: t('actOverwrite'), sub: t('actOverwriteSub') },
+    { a: 'rename', icon: 'fa-pen', iconColor: 'text-sky-500', bg: 'bg-sky-50', title: t('actRename'), sub: t('actRenameSub') },
+    { a: 'skip', icon: 'fa-ban', iconColor: 'text-gray-400', bg: 'bg-gray-50', title: t('actSkip'), sub: t('actSkipSub') },
   ]
 
   const resolvedTag =
     r.action === 'overwrite' ? (
-      <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium">覆盖</span>
+      <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium">{t('tagOverwrite')}</span>
     ) : r.action === 'rename' ? (
-      <span className="text-xs bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full font-medium">重命名</span>
+      <span className="text-xs bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full font-medium">{t('tagRename')}</span>
     ) : r.action === 'skip' ? (
-      <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-medium">放弃</span>
+      <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-medium">{t('actSkip')}</span>
     ) : null
 
   return (
@@ -816,7 +822,7 @@ function FileItem({
             {resolvedTag}
           </div>
           <div className="text-xs text-gray-400 mt-0.5">
-            {triggerLabel(file.triggerType)} · {file.nodeCount} 节点
+            {triggerLabel(file.triggerType, tTrig)} · {t('nodesCount', { n: file.nodeCount })}
           </div>
         </div>
         <button
@@ -824,7 +830,7 @@ function FileItem({
           className="shrink-0 flex items-center gap-1 text-xs text-gray-400 hover:text-indigo-600 px-2 py-1 rounded-lg hover:bg-indigo-50"
         >
           <i className={cn('fas text-xs', collapsed ? 'fa-chevron-down' : 'fa-chevron-up')} />
-          <span>{collapsed ? '展开' : '收起'}</span>
+          <span>{collapsed ? t('expand') : t('collapse')}</span>
         </button>
       </div>
 
@@ -836,11 +842,11 @@ function FileItem({
                 <div className="px-2.5 py-1.5" />
                 <div className="px-2.5 py-1.5 border-r border-gray-100 flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-gray-400" />
-                  <span className="text-[11px] font-semibold text-gray-400 uppercase">现有版本</span>
+                  <span className="text-[11px] font-semibold text-gray-400 uppercase">{t('existingVersion')}</span>
                 </div>
                 <div className="px-2.5 py-1.5 flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-indigo-500" />
-                  <span className="text-[11px] font-semibold text-gray-400 uppercase">导入版本</span>
+                  <span className="text-[11px] font-semibold text-gray-400 uppercase">{t('importVersion')}</span>
                 </div>
               </div>
               {diffs.map((d) => {
@@ -861,7 +867,7 @@ function FileItem({
           )}
 
           <div className="px-4 py-4">
-            <p className="text-[11px] font-semibold text-gray-400 mb-3">选择处理方式</p>
+            <p className="text-[11px] font-semibold text-gray-400 mb-3">{t('chooseAction')}</p>
             <div className="flex gap-2">
               {actions.map((act) => (
                 <div
@@ -889,7 +895,7 @@ function FileItem({
 
             {r.action === 'rename' && (
               <div className="mt-3">
-                <label className="block text-[11px] text-gray-400 font-medium mb-1.5">新 Slug（需全局唯一）</label>
+                <label className="block text-[11px] text-gray-400 font-medium mb-1.5">{t('newSlugLabel')}</label>
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
@@ -907,7 +913,7 @@ function FileItem({
                     onClick={() => onAutoSlug(file.slug)}
                     className="shrink-0 text-xs text-gray-400 hover:text-gray-600 px-3 py-2 border border-gray-200 rounded-xl hover:border-gray-300"
                   >
-                    自动
+                    {t('auto')}
                   </button>
                 </div>
                 {!renameCheck.valid && (
@@ -915,7 +921,7 @@ function FileItem({
                     <i className="fas fa-exclamation-circle text-xs" /> {renameCheck.msg}
                   </p>
                 )}
-                <p className="mt-1 text-[11px] text-gray-400">重命名后将创建一条新工作流，原工作流不受影响</p>
+                <p className="mt-1 text-[11px] text-gray-400">{t('renameNote')}</p>
               </div>
             )}
           </div>

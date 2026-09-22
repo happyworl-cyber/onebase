@@ -442,7 +442,7 @@ export const projectProvisionAPI = {
 
 ### 8.3 收尾验证
 
-- ✅ `cargo build --bin onebase` 干净（只剩 pre-existing warnings）
+- ✅ `cargo build --bin planeos` 干净（只剩 pre-existing warnings）
 - ✅ `tsc --noEmit` 干净（只剩 pre-existing TableEditor downlevelIteration 错误）
 - ✅ `bash -n tests/m2_provisioning_test.sh` 语法干净
 - ⏸️ `bash tests/m2_provisioning_test.sh` 需要在 live server + 可连通的 PG 上跑一次确认（本地未执行，待用户在 staging 触发）

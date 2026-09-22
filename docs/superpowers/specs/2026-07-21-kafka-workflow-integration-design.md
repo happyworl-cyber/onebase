@@ -184,7 +184,7 @@ frontend-nextjs/components/workflow/
 |---|---|---|
 | `connection_id` | 必填 | Kafka 连接 |
 | `topic` | 必填 | 订阅 topic |
-| `group_id` | `onebase-wf-{workflow_id}` | 允许自定义；同 group 多副本靠分区再平衡 |
+| `group_id` | `planeos-wf-{workflow_id}` | 允许自定义；同 group 多副本靠分区再平衡 |
 | `auto_offset_reset` | `latest` | 或 `earliest` |
 | `value_format` | `json` | `json`：解析进 `payload`，失败则 `payload=null` 保留 raw；`text`：`payload` 为字符串 |
 

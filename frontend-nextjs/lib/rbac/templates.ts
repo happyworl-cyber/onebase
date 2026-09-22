@@ -14,10 +14,10 @@ import type { RowCondition } from '@/lib/api'
 
 export interface PermissionTemplate {
   id: string
-  /** 短标签（按钮显示） */
-  label: string
-  /** 一句话解释，drawer 内 tooltip / 提示框 */
-  hint: string
+  /** 短标签 key（按钮显示） */
+  labelKey: string
+  /** 一句话解释 key，drawer 内 tooltip / 提示框 */
+  hintKey: string
   /** 模板适用的 action 建议（默认全部） */
   suggestedActions?: string[]
   /** 生成行级条件 */
@@ -33,8 +33,8 @@ export interface PermissionTemplate {
 export const PERMISSION_TEMPLATES: PermissionTemplate[] = [
   {
     id: 'only_self',
-    label: '仅自己',
-    hint: '用户只能访问自己创建的数据。要求表有 author_id 或 user_id 字段。',
+    labelKey: 'tplOnlySelf',
+    hintKey: 'hintOnlySelf',
     suggestedActions: ['SELECT', 'UPDATE', 'DELETE'],
     buildConditions: () => [
       { field: 'author_id', op: '=', value: '$current_user_id' },
@@ -42,22 +42,22 @@ export const PERMISSION_TEMPLATES: PermissionTemplate[] = [
   },
   {
     id: 'same_department',
-    label: '同部门',
-    hint: '用户能访问同部门数据。要求表有 department_id 字段；如无请改成业务字段。',
+    labelKey: 'tplSameDept',
+    hintKey: 'hintSameDept',
     buildConditions: () => [
       { field: 'department_id', op: '=', value: '$current_user_department_id' },
     ],
   },
   {
     id: 'same_tenant',
-    label: '同租户',
-    hint: '租户内全开放（默认行为）。一般用于覆盖更严的默认策略。',
+    labelKey: 'tplSameTenant',
+    hintKey: 'hintSameTenant',
     buildConditions: () => [],
   },
   {
     id: 'public_readonly',
-    label: '公开只读',
-    hint: '仅暴露已发布且未删除的数据。仅做 SELECT。',
+    labelKey: 'tplPublicRo',
+    hintKey: 'hintPublicRo',
     suggestedActions: ['SELECT'],
     buildConditions: () => [
       { field: 'status', op: '=', value: 'published' },
@@ -66,8 +66,8 @@ export const PERMISSION_TEMPLATES: PermissionTemplate[] = [
   },
   {
     id: 'deny_all',
-    label: '禁止',
-    hint: '完全禁止该资源 × 动作。用恒不成立条件实现。',
+    labelKey: 'tplDeny',
+    hintKey: 'hintDeny',
     buildConditions: () => [
       // 1=2 形式无法走结构化 DSL；用 IsNull 配合一个一定为非空的字段
       // 这里用 id IS NULL 作为永远不命中的过滤（id 是 PK 永不空）
@@ -82,31 +82,26 @@ export function findTemplate(id: string): PermissionTemplate | undefined {
 }
 
 /** 把 RowCondition 渲染成"人话"：用于矩阵 cell + 权限列表的紧凑显示 */
-export function describeCondition(cond: RowCondition): string {
+type CondTranslator = (key: string, params?: any) => string
+
+export function describeCondition(cond: RowCondition, t: CondTranslator): string {
   const v = cond.value
   switch (cond.op) {
     case 'isnull':
-      return `${cond.field} 为空`
+      return t('condIsNull', { field: cond.field })
     case 'isnotnull':
-      return `${cond.field} 非空`
+      return t('condIsNotNull', { field: cond.field })
     case 'in':
-      return `${cond.field} ∈ [${Array.isArray(v) ? v.join(', ') : v}]`
-    case '=':
-    case '!=':
-    case '>':
-    case '>=':
-    case '<':
-    case '<=':
-      return `${cond.field} ${cond.op} ${formatValue(v)}`
+      return t('condIn', { field: cond.field, vals: Array.isArray(v) ? v.join(', ') : String(v) })
     default:
-      return `${cond.field} ${cond.op} ${formatValue(v)}`
+      return t('condOp', { field: cond.field, op: cond.op, val: formatValue(v, t) })
   }
 }
 
-function formatValue(v: unknown): string {
-  if (v === '$current_user_id') return '当前用户'
-  if (v === '$current_user_department_id') return '当前部门'
+function formatValue(v: unknown, t: CondTranslator): string {
+  if (v === '$current_user_id') return t('valCurrentUser')
+  if (v === '$current_user_department_id') return t('valCurrentDept')
   if (typeof v === 'string') return `'${v}'`
-  if (v == null) return '∅'
+  if (v == null) return t('valNull')
   return String(v)
 }

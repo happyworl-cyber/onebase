@@ -85,17 +85,31 @@ pub async fn create_pg_pool(
     require_super_admin(&claims)?;
 
     if req.name.trim().is_empty() {
-        return Err(AppError::InvalidQuery("name 不能为空".to_string()));
+        return Err(AppError::validation(
+            "pgpool_name_required",
+            "name 不能为空",
+            serde_json::json!({}),
+        ));
     }
     if req.db_host.trim().is_empty() {
-        return Err(AppError::InvalidQuery("db_host 不能为空".to_string()));
+        return Err(AppError::validation(
+            "pgpool_db_host_required",
+            "db_host 不能为空",
+            serde_json::json!({}),
+        ));
     }
     if req.admin_user.trim().is_empty() {
-        return Err(AppError::InvalidQuery("admin_user 不能为空".to_string()));
+        return Err(AppError::validation(
+            "pgpool_admin_user_required",
+            "admin_user 不能为空",
+            serde_json::json!({}),
+        ));
     }
     if req.admin_password.is_empty() {
-        return Err(AppError::InvalidQuery(
-            "admin_password 不能为空".to_string(),
+        return Err(AppError::validation(
+            "pgpool_admin_password_required",
+            "admin_password 不能为空",
+            serde_json::json!({}),
         ));
     }
 
@@ -119,7 +133,11 @@ pub async fn create_pg_pool(
     .await
     .map_err(|e| match &e {
         sqlx::Error::Database(db) if db.constraint() == Some("pg_pools_name_key") => {
-            AppError::InvalidQuery(format!("PG 池名称 '{}' 已被占用", req.name))
+            AppError::validation(
+                "pgpool_name_taken",
+                format!("PG 池名称 '{}' 已被占用", req.name),
+                serde_json::json!({ "name": req.name }),
+            )
         }
         _ => AppError::Database(e),
     })?;
@@ -217,7 +235,11 @@ pub async fn delete_pg_pool(
         .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("PG 池 {} 不存在", id)));
+        return Err(AppError::not_found_coded(
+            "pgpool_not_found",
+            format!("PG 池 {} 不存在", id),
+            serde_json::json!({ "id": id }),
+        ));
     }
 
     tracing::info!("超管 {} 停用 PG 池 {}", claims.email, id);
@@ -270,7 +292,7 @@ pub async fn list_available_pg_pools(
     ))
 }
 
-/// GET /api/provision/pg-pools/platform-instance —— 当前 Onebase 平台自身 PG 实例。
+/// GET /api/provision/pg-pools/platform-instance —— 当前 PlaneOS 平台自身 PG 实例。
 pub async fn get_platform_pg_instance(
     State(pool): State<PgPool>,
     Extension(_claims): Extension<Claims>,

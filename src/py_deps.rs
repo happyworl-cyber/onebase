@@ -403,7 +403,7 @@ mod tests {
     async fn ensure_empty_deps_is_idle_without_pip() {
         let _guard = ENV_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join(format!(
-            "onebase_py_deps_test_empty_{}",
+            "planeos_py_deps_test_empty_{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -427,7 +427,7 @@ mod tests {
     async fn ensure_missing_pip_returns_failed_when_install_required() {
         let _guard = ENV_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join(format!(
-            "onebase_py_deps_test_failed_{}",
+            "planeos_py_deps_test_failed_{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { validateFolderRename } from './utils'
 
 interface NewFolderDialogProps {
@@ -24,9 +25,10 @@ export default function NewFolderDialog({
   onConfirm,
   onCancel,
 }: NewFolderDialogProps) {
+  const t = useTranslations('wfList')
   const [error, setError] = useState<string | null>(null)
   const isRename = mode === 'rename'
-  const label = kind === 'department' ? '服务' : '分类'
+  const label = kind === 'department' ? t('kindService') : t('kindCategory')
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -52,19 +54,19 @@ export default function NewFolderDialog({
         }}
       >
         <h3 className="font-semibold text-slate-800 mb-1">
-          {isRename ? `重命名${label}` : `新建${label}`}
+          {isRename ? t('renameLabel', { label }) : t('newLabel', { label })}
         </h3>
         <p className="text-xs text-slate-500 mb-4">
           {isRename
-            ? `将「${initialName}」改为新的${label}名称`
-            : `在「${parentName}」下创建${kind === 'department' ? '服务（一级）' : '分类（二级）'}`}
+            ? t('renameDesc', { name: initialName, label })
+            : t('createDesc', { parent: parentName, sub: kind === 'department' ? t('subServiceL1') : t('subCategoryL2') })}
         </p>
         <input
           name="name"
           autoFocus
           required
           defaultValue={initialName}
-          placeholder={kind === 'department' ? '如：用户服务' : '如：订单同步'}
+          placeholder={kind === 'department' ? t('phService') : t('phCategory')}
           className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200"
           onChange={() => {
             if (error) setError(null)
@@ -72,7 +74,7 @@ export default function NewFolderDialog({
         />
         {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
         {isRename && workflowCount > 0 && (
-          <p className="mt-2 text-xs text-slate-500">将同步更新 {workflowCount} 个工作流的归属</p>
+          <p className="mt-2 text-xs text-slate-500">{t('syncNote', { n: workflowCount })}</p>
         )}
         <div className="flex justify-end gap-2 mt-4">
           <button
@@ -80,13 +82,13 @@ export default function NewFolderDialog({
             onClick={onCancel}
             className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800"
           >
-            取消
+            {t('cancel')}
           </button>
           <button
             type="submit"
             className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium"
           >
-            {isRename ? '保存' : '创建'}
+            {isRename ? t('save') : t('create')}
           </button>
         </div>
       </form>

@@ -218,7 +218,7 @@ mod tests {
 ```bash
 # 临时手工 patch main.rs（之后 Task 5 会正式加）
 # 或者直接 cargo check 看到 missing module 错误也算 fail
-cargo test --bin onebase project_models 2>&1 | tail -20
+cargo test --bin planeos project_models 2>&1 | tail -20
 ```
 Expected: `error[E0432]: unresolved import` 或 `not found in this scope`，因为还没写实现。
 
@@ -344,7 +344,7 @@ mod tests {
 
 Run:
 ```bash
-cargo test --bin onebase project_models -- --nocapture
+cargo test --bin planeos project_models -- --nocapture
 ```
 Expected:
 ```
@@ -391,7 +391,7 @@ mod tests {
 - [ ] **Step 2: 跑测试验证 fail**
 
 ```bash
-cargo test --bin onebase project_middleware 2>&1 | tail -5
+cargo test --bin planeos project_middleware 2>&1 | tail -5
 ```
 Expected: 编译错误（`CurrentProject` 未定义）。
 
@@ -507,7 +507,7 @@ mod tests {
 需要先在 `src/main.rs` 临时加 `mod project_middleware;`（Task 5 正式加）。
 
 ```bash
-cargo test --bin onebase project_middleware -- --nocapture
+cargo test --bin planeos project_middleware -- --nocapture
 ```
 Expected:
 ```
@@ -756,14 +756,14 @@ M1 阶段先**不挂载** `project_context_middleware` 到全局——让 handle
 
 ```bash
 cargo build 2>&1 | tail -10
-cargo test --bin onebase 2>&1 | tail -15
+cargo test --bin planeos 2>&1 | tail -15
 ```
 Expected: build `Finished`；test 至少包含我们刚加的 4 个测试都 ok（其它已有测试不应回归）。
 
 - [ ] **Step 5: 启动服务 smoke 校验**
 
 ```bash
-cargo run --bin onebase 2>&1 | head -30 &
+cargo run --bin planeos 2>&1 | head -30 &
 sleep 5
 curl -sS http://127.0.0.1:3010/health
 kill %1
@@ -1049,7 +1049,7 @@ npm run dev > /tmp/next-dev.log 2>&1 &
 sleep 10
 
 # 在另一个 terminal 启动后端，开 trace 日志
-RUST_LOG=info,onebase=trace cargo run --bin onebase 2>&1 | tee /tmp/backend.log &
+RUST_LOG=info,planeos=trace cargo run --bin planeos 2>&1 | tee /tmp/backend.log &
 sleep 5
 
 # 浏览器访问 http://localhost:3000/workspace/demo（先在 localStorage 设 token）
@@ -1092,7 +1092,7 @@ set -u
 API_BASE="${API_BASE:-http://127.0.0.1:3010}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@example.com}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-Admin123}"
-DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:5432/onebase}"
+DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:5432/planeos}"
 
 PASS=0
 FAIL=0
@@ -1169,7 +1169,7 @@ chmod +x tests/m1_workspace_test.sh
 - [ ] **Step 3: 启动后端 + 跑测试**
 
 ```bash
-cargo run --bin onebase > /tmp/backend.log 2>&1 &
+cargo run --bin planeos > /tmp/backend.log 2>&1 &
 sleep 8
 ./tests/m1_workspace_test.sh
 EXIT=$?
@@ -1183,7 +1183,7 @@ Expected: `PASS=5  FAIL=0`，退出码 0。
 跑现有 shell 测试确保没回归现有 RBAC / 多租户行为：
 
 ```bash
-cargo run --bin onebase > /tmp/backend.log 2>&1 &
+cargo run --bin planeos > /tmp/backend.log 2>&1 &
 sleep 8
 ./tests/integration_test.sh
 EXIT=$?
@@ -1280,9 +1280,9 @@ git commit -m "feat(m1): redirect non-superadmin users with current_project_slug
 依次跑：
 ```bash
 cargo build 2>&1 | tail -3
-cargo test --bin onebase 2>&1 | tail -10
+cargo test --bin planeos 2>&1 | tail -10
 
-cargo run --bin onebase > /tmp/backend.log 2>&1 &
+cargo run --bin planeos > /tmp/backend.log 2>&1 &
 BACKEND_PID=$!
 sleep 8
 
@@ -1332,7 +1332,7 @@ Plan 完成时应满足：
 | 验证项 | 命令 | 期望 |
 |---|---|---|
 | 编译通过 | `cargo build` | `Finished` 无 error |
-| Rust 单测 | `cargo test --bin onebase` | 4 个新增测试全 ok，无回归 |
+| Rust 单测 | `cargo test --bin planeos` | 4 个新增测试全 ok，无回归 |
 | Migration 幂等 | `cargo run --bin migrate`（跑 2 次） | 第 2 次 `errors=0` |
 | 后端 smoke | `curl http://127.0.0.1:3010/health` | 200 |
 | 现有集成 | `./tests/integration_test.sh` | exit 0 |

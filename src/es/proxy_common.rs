@@ -67,7 +67,11 @@ async fn resolve_tenant_id_by_database_slug(
         .await
         .map_err(|e| AppError::Internal(format!("查询 database 失败: {e}")))?;
         return tenant_id.ok_or_else(|| {
-            AppError::NotFound(format!("数据库 '{}' 不存在或未启用", database_slug))
+            AppError::not_found_coded(
+                "es_proxy_database_not_found",
+                format!("数据库 '{}' 不存在或未启用", database_slug),
+                serde_json::json!({ "database_slug": database_slug }),
+            )
         });
     }
 
@@ -82,15 +86,17 @@ async fn resolve_tenant_id_by_database_slug(
     .map_err(|e| AppError::Internal(format!("查询 database slug 失败: {e}")))?;
 
     match tenant_ids.len() {
-        0 => Err(AppError::NotFound(format!(
-            "项目 slug '{}' 不存在或未启用",
-            database_slug
-        ))),
+        0 => Err(AppError::not_found_coded(
+            "es_proxy_slug_not_found",
+            format!("项目 slug '{}' 不存在或未启用", database_slug),
+            serde_json::json!({ "database_slug": database_slug }),
+        )),
         1 => Ok(tenant_ids[0]),
-        _ => Err(AppError::InvalidQuery(format!(
-            "项目 slug '{}' 存在歧义",
-            database_slug
-        ))),
+        _ => Err(AppError::validation(
+            "es_proxy_slug_ambiguous",
+            format!("项目 slug '{}' 存在歧义", database_slug),
+            serde_json::json!({ "database_slug": database_slug }),
+        )),
     }
 }
 
@@ -178,8 +184,10 @@ pub(crate) async fn resolve_token(
     headers: &HeaderMap,
 ) -> Result<ResolvedToken, AppError> {
     let token_plain = es_auth::extract_token(headers).ok_or_else(|| {
-        AppError::Unauthorized(
+        AppError::unauthorized_coded(
+            "es_proxy_token_missing",
             "缺少 ES 代理 token；请用 `Authorization: ApiKey obes_es_xxx`".to_string(),
+            serde_json::json!({}),
         )
     })?;
     let token_hash = es_auth::hash_token(&token_plain);
@@ -235,15 +243,27 @@ pub(crate) async fn resolve_token(
             hash_head,
             token_head,
         );
-        AppError::Unauthorized("ES token 无效".to_string())
+        AppError::unauthorized_coded(
+            "es_proxy_token_invalid",
+            "ES token 无效".to_string(),
+            serde_json::json!({}),
+        )
     })?;
 
     if !row.is_active || row.revoked_at.is_some() {
-        return Err(AppError::Unauthorized("ES token 已停用或撤销".to_string()));
+        return Err(AppError::unauthorized_coded(
+            "es_proxy_token_revoked",
+            "ES token 已停用或撤销".to_string(),
+            serde_json::json!({}),
+        ));
     }
     if let Some(exp) = row.expires_at {
         if exp <= Utc::now() {
-            return Err(AppError::Unauthorized("ES token 已过期".to_string()));
+            return Err(AppError::unauthorized_coded(
+                "es_proxy_token_expired",
+                "ES token 已过期".to_string(),
+                serde_json::json!({}),
+            ));
         }
     }
     if !row.c_is_active {
@@ -284,8 +304,10 @@ pub(crate) async fn resolve_token_for_request(
     let token = resolve_token(pool, headers).await?;
     if let Some(axum::Extension(scope)) = scope {
         if token.connection.tenant_id != scope.tenant_id {
-            return Err(AppError::Forbidden(
+            return Err(AppError::forbidden_coded(
+                "es_proxy_token_tenant_mismatch",
                 "ES 代理 token 与 URL 中的项目 slug 不匹配".to_string(),
+                serde_json::json!({}),
             ));
         }
     }
@@ -310,9 +332,11 @@ pub(crate) fn enforce_full_access(
     match decision {
         es_auth::AccessDecision::Allowed => Ok(()),
         // 用 403 而非 401：token 本身合法但权限不够（与"鉴权失败"区分开，便于客户端 retry）。
-        es_auth::AccessDecision::Denied(reason) => {
-            Err(AppError::Forbidden(format!("ES 代理拒绝请求：{}", reason)))
-        }
+        es_auth::AccessDecision::Denied(reason) => Err(AppError::forbidden_coded(
+            "es_proxy_full_access_denied",
+            format!("ES 代理拒绝请求：{}", reason),
+            serde_json::json!({ "reason": reason }),
+        )),
     }
 }
 
@@ -332,10 +356,14 @@ pub(crate) fn enforce_app_access(
         .iter()
         .any(|m| m.eq_ignore_ascii_case(&method_upper))
     {
-        return Err(AppError::Forbidden(format!(
-            "method {} 不在 token 允许列表 {:?}",
-            method_upper, token.allowed_methods
-        )));
+        return Err(AppError::forbidden_coded(
+            "es_proxy_app_method_forbidden",
+            format!(
+                "method {} 不在 token 允许列表 {:?}",
+                method_upper, token.allowed_methods
+            ),
+            serde_json::json!({ "method": method_upper, "allowed": token.allowed_methods }),
+        ));
     }
 
     // index 形态：禁止逗号 / 通配 / 空 / 以 `_` 开头（系统索引）
@@ -345,10 +373,14 @@ pub(crate) fn enforce_app_access(
         || index.contains('?')
         || index.starts_with('_')
     {
-        return Err(AppError::InvalidQuery(format!(
-            "index `{}` 不合法：高层 API 只接受单个明确的 index 名（不支持逗号、通配或 `_` 开头）",
-            index
-        )));
+        return Err(AppError::validation(
+            "es_proxy_app_index_invalid",
+            format!(
+                "index `{}` 不合法：高层 API 只接受单个明确的 index 名（不支持逗号、通配或 `_` 开头）",
+                index
+            ),
+            serde_json::json!({ "index": index }),
+        ));
     }
 
     // index allowlist（`*` 直接放行）
@@ -358,10 +390,14 @@ pub(crate) fn enforce_app_access(
             .iter()
             .any(|pat| es_auth::glob_match(pat, index));
         if !ok {
-            return Err(AppError::Forbidden(format!(
-                "index `{}` 不在 token 允许列表 {:?}",
-                index, token.index_allowlist
-            )));
+            return Err(AppError::forbidden_coded(
+                "es_proxy_app_index_forbidden",
+                format!(
+                    "index `{}` 不在 token 允许列表 {:?}",
+                    index, token.index_allowlist
+                ),
+                serde_json::json!({ "index": index, "allowed": token.index_allowlist }),
+            ));
         }
     }
     Ok(())

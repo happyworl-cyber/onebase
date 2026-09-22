@@ -3,9 +3,11 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useWorkspaceTabs } from '@/lib/workspaceTabs'
+import { useTranslations } from 'next-intl'
+import ActiveDataSourceBadge from '@/components/workspace/ActiveDataSourceBadge'
 
 /**
- * 工作区多 Tab 栏。放在 ProjectTopbar 与内容区之间，横跨内容区上方。
+ * 工作区多 Tab 栏。位于内容区顶部，横跨内容区上方（通栏顶栏已移除）。
  *
  * 交互：
  *   - 点 Tab   → setActive + router.push（真实导航，URL 同步、前进后退可用）
@@ -27,6 +29,8 @@ interface MenuState {
 }
 
 export default function WorkspaceTabBar({ base }: Props) {
+  const tNav = useTranslations('nav')
+  const t = useTranslations('wsTabBar')
   const router = useRouter()
   const tabs = useWorkspaceTabs((s) => s.tabs)
   const activePath = useWorkspaceTabs((s) => s.activePath)
@@ -73,7 +77,9 @@ export default function WorkspaceTabBar({ base }: Props) {
   const menuTab = menu ? tabs.find((t) => t.path === menu.path) : null
 
   return (
-    <div className="h-9 flex items-stretch bg-gray-50 border-b border-gray-200 overflow-x-auto overflow-y-hidden">
+    <div className="h-9 flex items-stretch bg-gray-50 border-b border-gray-200">
+      {/* Tab 列表单独滚动；右侧徽标必须在滚动容器之外，否则会跟着 Tab 滚走 */}
+      <div className="flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden">
       {tabs.map((tab) => {
         const active = tab.path === activePath
         return (
@@ -90,7 +96,7 @@ export default function WorkspaceTabBar({ base }: Props) {
               e.preventDefault()
               setMenu({ path: tab.path, x: e.clientX, y: e.clientY })
             }}
-            title={tab.title}
+            title={tab.labelKey ? tNav(tab.labelKey) : tab.title}
             className={`group flex items-center gap-1.5 pl-3 pr-2 max-w-[180px] border-r border-gray-200 cursor-pointer select-none text-[13px] whitespace-nowrap ${
               active
                 ? 'bg-white text-blue-600 font-medium border-b-2 border-b-blue-500 -mb-px'
@@ -98,10 +104,10 @@ export default function WorkspaceTabBar({ base }: Props) {
             }`}
           >
             <i className={`${tab.icon} text-[11px] shrink-0 ${active ? 'text-blue-500' : 'text-gray-400'}`} />
-            <span className="truncate">{tab.title}</span>
+            <span className="truncate">{tab.labelKey ? tNav(tab.labelKey) : tab.title}</span>
             <button
               type="button"
-              aria-label="关闭标签"
+              aria-label={t('closeTab')}
               onClick={(e) => {
                 e.stopPropagation()
                 handleClose(tab.path)
@@ -115,6 +121,9 @@ export default function WorkspaceTabBar({ base }: Props) {
           </div>
         )
       })}
+      </div>
+
+      <ActiveDataSourceBadge base={base} />
 
       {menu && menuTab && (
         <div
@@ -131,7 +140,7 @@ export default function WorkspaceTabBar({ base }: Props) {
               setMenu(null)
             }}
           >
-            关闭
+            {t('close')}
           </button>
           <button
             type="button"
@@ -143,7 +152,7 @@ export default function WorkspaceTabBar({ base }: Props) {
               setMenu(null)
             }}
           >
-            关闭其他
+            {t('closeOthers')}
           </button>
           <button
             type="button"
@@ -154,7 +163,7 @@ export default function WorkspaceTabBar({ base }: Props) {
               setMenu(null)
             }}
           >
-            关闭全部
+            {t('closeAll')}
           </button>
         </div>
       )}

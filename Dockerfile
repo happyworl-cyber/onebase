@@ -3,12 +3,12 @@
 # 不包含 PostgreSQL / Redis；通过环境变量连接外部服务。
 #
 # 构建（需要 BuildKit；Jenkins 请设 DOCKER_BUILDKIT=1 或使用 buildx）：
-#   DOCKER_BUILDKIT=1 docker build -t onebase:app .
+#   DOCKER_BUILDKIT=1 docker build -t planeos:app .
 #
 # 缓存策略：
-#   • Rust 依赖编译进镜像层（stub 阶段）。改 src/ 时复用该层，只重编 onebase，避免
+#   • Rust 依赖编译进镜像层（stub 阶段）。改 src/ 时复用该层，只重编 planeos，避免
 #     把 target 只放在 BuildKit cache mount 里——Jenkins cache 一旦丢失会变成全量冷编译。
-#   • 正式构建不再 `cargo clean -p onebase`，以便增量链接本包。
+#   • 正式构建不再 `cargo clean -p planeos`，以便增量链接本包。
 #   • 对象存储用 rusty-s3（非 aws-sdk-s3），避免 aws-lc-sys 拖慢冷依赖层。
 #   • cargo registry/git 与 npm 使用 cache mount，加速 lockfile 变更时的下载。
 #   • syntax 镜像走 DaoCloud，避免每次从 docker.io 拉 dockerfile frontend。
@@ -24,8 +24,8 @@
 
 # 基础镜像源（registry）。默认走 DaoCloud 的 Docker Hub 镜像加速，绕开经常 403/超时的源。
 # 如该源也不可用，构建时可覆盖，例如：
-#   docker build --build-arg REGISTRY=docker.1ms.run/library -t onebase:app .
-#   docker build --build-arg REGISTRY=docker.io/library  -t onebase:app .   # 直连官方
+#   docker build --build-arg REGISTRY=docker.1ms.run/library -t planeos:app .
+#   docker build --build-arg REGISTRY=docker.io/library  -t planeos:app .   # 直连官方
 # 备选可用源（任选其一作为 REGISTRY 值）：
 #   docker.m.daocloud.io/library | docker.1ms.run/library | docker.xuanyuan.me/library | hub.rat.dev/library
 ARG REGISTRY=docker.m.daocloud.io/library
@@ -49,7 +49,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY Cargo.toml Cargo.lock* ./
 # 依赖预热：stub 必须覆盖 Cargo.toml 全部 [[bin]]（缺文件会导致 cargo 直接失败）；
 # 产物写入镜像层。失败必须暴露，禁止 || true 假成功，否则正式编译会变成冷编。
-# 只编 --bin onebase：拉齐主服务依赖即可，不必链接其余 migrate bin。
+# 只编 --bin planeos：拉齐主服务依赖即可，不必链接其余 migrate bin。
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     mkdir src && echo "fn main() {}" > src/main.rs && \
@@ -64,17 +64,17 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     echo "fn main() {}" > src/bin/migrate_passwords.rs && \
     echo "fn main() {}" > src/bin/migrate_scheduled_tasks.rs && \
     echo "fn main() {}" > src/bin/migrate_workflow.rs && \
-    cargo build --release --bin onebase && \
+    cargo build --release --bin planeos && \
     rm -rf src
 
 COPY src/ src/
 COPY skills/ skills/
 COPY migrations/ migrations/
-# 保留 stub 阶段编好的依赖层；直接重编 onebase，避免每次 cargo clean -p 毁掉增量。
-# 若偶发 stub 指纹粘连导致链接旧产物，可临时加回：cargo clean -p onebase --release
+# 保留 stub 阶段编好的依赖层；直接重编 planeos，避免每次 cargo clean -p 毁掉增量。
+# 若偶发 stub 指纹粘连导致链接旧产物，可临时加回：cargo clean -p planeos --release
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
-    cargo build --release --bin onebase
+    cargo build --release --bin planeos
 
 # 工作流 code 节点运行时 shim（JS / Python），随镜像分发；运行阶段拷到 /app 并用
 # WORKFLOW_JS_RUNTIME / WORKFLOW_PY_RUNTIME 指向，避免依赖编译期 CARGO_MANIFEST_DIR。
@@ -131,9 +131,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update && apt-get install -y --no-install-recommends nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /app/bin /app/frontend/.next/static /app/frontend/public /var/log/onebase
+RUN mkdir -p /app/bin /app/frontend/.next/static /app/frontend/public /var/log/planeos
 
-COPY --from=rust-builder /build/target/release/onebase /app/bin/
+COPY --from=rust-builder /build/target/release/planeos /app/bin/
 
 # 工作流 JS / Python code 节点的运行时 shim（供子进程加载）。
 COPY --from=rust-builder /build/js-runtime /app/js-runtime
@@ -144,7 +144,7 @@ COPY --from=frontend-builder /build/frontend/.next/standalone/ /app/frontend/
 COPY --from=frontend-builder /build/frontend/.next/static /app/frontend/.next/static
 COPY --from=frontend-builder /build/frontend/public/ /app/frontend/public/
 
-COPY docker/supervisord.app.conf /etc/supervisor/conf.d/onebase-app.conf
+COPY docker/supervisord.app.conf /etc/supervisor/conf.d/planeos-app.conf
 COPY docker/entrypoint-app.sh /app/docker/entrypoint-app.sh
 RUN chmod +x /app/docker/entrypoint-app.sh
 
@@ -162,8 +162,8 @@ RUN chmod +x /app/docker/entrypoint-app.sh
 #    （编译期 CARGO_MANIFEST_DIR 在运行镜像里不存在，必须显式指向）。
 ENV HOST=0.0.0.0 \
     RUST_ENV=production \
-    WORKFLOW_JS_RUNTIME=/app/js-runtime/onebase-runtime/index.js \
-    WORKFLOW_PY_RUNTIME=/app/py-runtime/onebase_runtime
+    WORKFLOW_JS_RUNTIME=/app/js-runtime/planeos-runtime/index.js \
+    WORKFLOW_PY_RUNTIME=/app/py-runtime/planeos_runtime
 
 EXPOSE 3000 3001
 

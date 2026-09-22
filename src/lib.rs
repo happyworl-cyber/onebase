@@ -1,4 +1,4 @@
-//! Onebase 库入口
+//! PlaneOS 库入口
 //!
 //! 此处只暴露**与多个 bin / 集成测试共享**的工具模块（如迁移脚本切分器）。
 //! 业务逻辑模块（handlers / middleware / models 等）仍由 `src/main.rs`

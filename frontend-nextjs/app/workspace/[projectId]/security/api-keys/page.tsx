@@ -16,6 +16,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { apiKeyAPI, patAPI } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
 import { useNotification } from '@/hooks/useNotification'
@@ -57,6 +58,7 @@ export default function ApiKeysPage() {
   const databaseSlug = connectionForProject?.database_slug || null
   const dbRouteSeg = databaseSlug || null
   const caps = useCurrentProjectCapabilities()
+  const t = useTranslations('wsApiKeys')
   const notify = useNotification()
 
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([])
@@ -105,7 +107,7 @@ export default function ApiKeysPage() {
 
   const handleCreateKey = async () => {
     if (!dbRouteSeg || !newKeyData.name.trim()) {
-      notify.warning('请填写 API Key 名称')
+      notify.warning(t('errName'))
       return
     }
     setCreating(true)
@@ -127,7 +129,7 @@ export default function ApiKeysPage() {
       // 字段，但后端实际接受。
       const response = await apiKeyAPI.create(dbRouteSeg, payload as any)
       setCreatedKey(response.data.api_key)
-      notify.success('API Key 创建成功')
+      notify.success(t('createOk'))
       loadApiKeys()
     } catch (err: any) {
       notify.error(err)
@@ -138,10 +140,10 @@ export default function ApiKeysPage() {
 
   const handleDeleteKey = async (keyId: number, keyName: string) => {
     if (!dbRouteSeg) return
-    if (!confirm(`确定要删除 API Key "${keyName}" 吗？`)) return
+    if (!confirm(t('confirmDelete', { name: keyName }))) return
     try {
       await apiKeyAPI.delete(dbRouteSeg, keyId)
-      notify.success('API Key 已删除')
+      notify.success(t('deleted'))
       loadApiKeys()
     } catch (err: any) {
       notify.error(err)
@@ -152,7 +154,7 @@ export default function ApiKeysPage() {
     if (!dbRouteSeg) return
     try {
       await apiKeyAPI.update(dbRouteSeg, keyId, { is_active: !isActive })
-      notify.success(isActive ? 'API Key 已禁用' : 'API Key 已启用')
+      notify.success(isActive ? t('keyDisabled') : t('keyEnabled'))
       loadApiKeys()
     } catch (err: any) {
       notify.error(err)
@@ -161,19 +163,19 @@ export default function ApiKeysPage() {
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text)
-    notify.success('已复制到剪贴板')
+    notify.success(t('copied'))
   }
 
   if (!caps.canManageSecurity) {
     return (
-      <ForbiddenPlaceholder reason="API Key 管理需要 admin+ 角色（owner / admin / 超管）" />
+      <ForbiddenPlaceholder reason={t('forbidden')} />
     )
   }
 
   if (isNaN(projectId)) {
     return (
       <div className="p-8 text-center text-gray-500">
-        URL 中的 projectId 无效
+        {t('invalidProject')}
       </div>
     )
   }
@@ -185,12 +187,12 @@ export default function ApiKeysPage() {
     return (
       <div className="p-8 text-center text-gray-500 space-y-3">
         <i className="fas fa-plug text-4xl text-gray-300"></i>
-        <p>本项目尚未绑定主数据库连接，无法管理 API Key。</p>
+        <p>{t('noConn')}</p>
         <Link
           href={`/workspace/${projectId}/settings/connections`}
           className="text-blue-600 hover:underline"
         >
-          前往设置 → 数据库连接
+          {t('goConn')}
         </Link>
       </div>
     )
@@ -200,22 +202,19 @@ export default function ApiKeysPage() {
     <div className="p-6 space-y-6">
       {currentProject?.via_organization && (
         <p className="text-sm text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mb-4">
-          你以租户管理员身份管理本项目（尚未加入为项目成员）。数据面写操作仍需项目 member 角色。
+          {t('viaOrgNote')}
         </p>
       )}
       <div className="flex items-end justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">API Key</h1>
           <p className="text-gray-600 mt-1 text-sm">
-            管理本项目（标识={dbRouteSeg || '-'}）的 REST / RPC 访问密钥。
-            REST 端点示例与接口文档请见{' '}
-            <a
-              href={`/workspace/${projectId}/api`}
-              className="text-blue-600 hover:underline"
-            >
-              API 概览页
-            </a>
-            。
+            {t.rich('subtitle', {
+              seg: dbRouteSeg || '-',
+              a: (c) => (
+                <a href={`/workspace/${projectId}/api`} className="text-blue-600 hover:underline">{c}</a>
+              ),
+            })}
           </p>
         </div>
         <button
@@ -226,7 +225,7 @@ export default function ApiKeysPage() {
           className="btn-primary"
         >
           <i className="fas fa-plus mr-2"></i>
-          创建 API Key
+          {t('createKey')}
         </button>
       </div>
 
@@ -238,7 +237,7 @@ export default function ApiKeysPage() {
         ) : apiKeys.length === 0 ? (
           <div className="p-12 text-center text-gray-500">
             <i className="fas fa-key text-4xl mb-4 text-gray-300"></i>
-            <p className="mb-4">暂无 API Key</p>
+            <p className="mb-4">{t('emptyKeys')}</p>
             <button
               onClick={() => {
                 resetForm()
@@ -247,7 +246,7 @@ export default function ApiKeysPage() {
               className="btn-primary"
             >
               <i className="fas fa-plus mr-2"></i>
-              创建第一个 Key
+              {t('createFirst')}
             </button>
           </div>
         ) : (
@@ -279,13 +278,13 @@ export default function ApiKeysPage() {
                     className="text-sm text-gray-500 truncate max-w-[10rem]"
                     title={key.created_by_email || undefined}
                   >
-                    创建人: {key.created_by_name || '未知'}
+                    {t('createdBy', { name: key.created_by_name || t('unknown') })}
                   </div>
                   <div className="text-sm text-gray-500">
                     {key.last_used_at ? (
-                      <span>最后使用: {new Date(key.last_used_at).toLocaleString()}</span>
+                      <span>{t('lastUsed', { time: new Date(key.last_used_at).toLocaleString() })}</span>
                     ) : (
-                      <span>从未使用</span>
+                      <span>{t('neverUsed')}</span>
                     )}
                   </div>
                   <div className="flex items-center space-x-2">
@@ -296,7 +295,7 @@ export default function ApiKeysPage() {
                           : 'bg-gray-100 text-gray-500'
                       }`}
                     >
-                      读
+                      {t('permRead')}
                     </span>
                     <span
                       className={`text-xs px-2 py-1 rounded-full ${
@@ -305,7 +304,7 @@ export default function ApiKeysPage() {
                           : 'bg-gray-100 text-gray-500'
                       }`}
                     >
-                      写
+                      {t('permWrite')}
                     </span>
                     <span
                       className={`text-xs px-2 py-1 rounded-full ${
@@ -314,7 +313,7 @@ export default function ApiKeysPage() {
                           : 'bg-gray-100 text-gray-500'
                       }`}
                     >
-                      删
+                      {t('permDelete')}
                     </span>
                   </div>
                   <div className="flex items-center space-x-2">
@@ -326,13 +325,13 @@ export default function ApiKeysPage() {
                           : 'text-green-700 hover:bg-green-50'
                       }`}
                     >
-                      {key.is_active ? '禁用' : '启用'}
+                      {key.is_active ? t('disable') : t('enable')}
                     </button>
                     <button
                       onClick={() => handleDeleteKey(key.id, key.name)}
                       className="px-3 py-1 text-sm text-red-600 hover:bg-red-50 rounded-lg"
                     >
-                      删除
+                      {t('delete')}
                     </button>
                   </div>
                 </div>
@@ -349,7 +348,7 @@ export default function ApiKeysPage() {
       <Drawer
         isOpen={showCreateDrawer}
         onClose={() => setShowCreateDrawer(false)}
-        title={createdKey ? '保存 API Key' : '创建 API Key'}
+        title={createdKey ? t('drawerSaveTitle') : t('drawerCreateTitle')}
         size="md"
         footer={
           createdKey ? (
@@ -360,7 +359,7 @@ export default function ApiKeysPage() {
               }}
               className="w-full btn-primary"
             >
-              我已保存，关闭
+              {t('savedClose')}
             </button>
           ) : (
             <div className="flex gap-3">
@@ -368,14 +367,14 @@ export default function ApiKeysPage() {
                 onClick={() => setShowCreateDrawer(false)}
                 className="flex-1 h-11 px-5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
               >
-                取消
+                {t('cancel')}
               </button>
               <button
                 onClick={handleCreateKey}
                 disabled={creating || !newKeyData.name.trim()}
                 className="flex-1 btn-primary disabled:opacity-50"
               >
-                {creating ? '创建中...' : '创建'}
+                {creating ? t('creating') : t('create')}
               </button>
             </div>
           )
@@ -386,11 +385,11 @@ export default function ApiKeysPage() {
             <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
               <p className="text-sm text-yellow-800 mb-2">
                 <i className="fas fa-exclamation-triangle mr-2"></i>
-                <strong>重要：</strong>API Key 只会显示一次，请立即保存！
+                {t.rich('importantOnce', { b: (c) => <strong>{c}</strong> })}
               </p>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">您的 API Key</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{t('yourKey')}</label>
               <div className="flex items-center space-x-2">
                 <input
                   type="text"
@@ -411,19 +410,19 @@ export default function ApiKeysPage() {
           <div className="space-y-5">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Key 名称 <span className="text-red-500">*</span>
+                {t('keyNameLabel')} <span className="text-red-500">*</span>
               </label>
               <input
                 type="text"
                 value={newKeyData.name}
                 onChange={(e) => setNewKeyData({ ...newKeyData, name: e.target.value })}
-                placeholder="例如：生产环境"
+                placeholder={t('phEnvExample')}
                 className="w-full input-base"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">权限</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{t('permissions')}</label>
               <div className="flex items-center space-x-4">
                 <label className="flex items-center space-x-2">
                   <input
@@ -437,7 +436,7 @@ export default function ApiKeysPage() {
                     }
                     className="rounded border-gray-300 text-blue-600"
                   />
-                  <span className="text-sm text-gray-700">读取</span>
+                  <span className="text-sm text-gray-700">{t('permReadFull')}</span>
                 </label>
                 <label className="flex items-center space-x-2">
                   <input
@@ -451,7 +450,7 @@ export default function ApiKeysPage() {
                     }
                     className="rounded border-gray-300 text-green-600"
                   />
-                  <span className="text-sm text-gray-700">写入</span>
+                  <span className="text-sm text-gray-700">{t('permWriteFull')}</span>
                 </label>
                 <label className="flex items-center space-x-2">
                   <input
@@ -465,7 +464,7 @@ export default function ApiKeysPage() {
                     }
                     className="rounded border-gray-300 text-red-600"
                   />
-                  <span className="text-sm text-gray-700">删除</span>
+                  <span className="text-sm text-gray-700">{t('permDeleteFull')}</span>
                 </label>
               </div>
             </div>
@@ -482,10 +481,10 @@ export default function ApiKeysPage() {
                   className="rounded border-gray-300 text-blue-600"
                 />
                 <span className="text-sm font-medium text-gray-700">
-                  启用新版细粒度 scope
+                  {t('enableScope')}
                 </span>
                 <span className="text-xs text-gray-500">
-                  （RPC 调用 / 资源白名单必须用这个）
+                  {t('scopeHint')}
                 </span>
               </label>
 
@@ -493,7 +492,7 @@ export default function ApiKeysPage() {
                 <div className="space-y-3 pl-6">
                   <div>
                     <label className="block text-xs font-medium text-gray-700 mb-1.5">
-                      允许的 Actions
+                      {t('allowedActions')}
                     </label>
                     <div className="flex flex-wrap gap-3">
                       {(['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'EXECUTE', 'DDL', 'ALL'] as const).map(
@@ -532,16 +531,13 @@ export default function ApiKeysPage() {
                       )}
                     </div>
                     <p className="mt-1 text-[11px] text-gray-500">
-                      <span className="font-mono">EXECUTE</span> 控制 RPC 函数调用权；
-                      <span className="font-mono">DDL</span> 控制建表 / 改表 / 删表；
-                      <span className="font-mono">ALL</span>/
-                      <span className="font-mono">*</span> 包含所有动作。
+                      {t.rich('actionsHint', { mono: (c) => <span className="font-mono">{c}</span> })}
                     </p>
                   </div>
 
                   <div>
                     <label className="block text-xs font-medium text-gray-700 mb-1.5">
-                      允许的 Resources（逗号或换行分隔，留空 = 不限）
+                      {t('allowedResources')}
                     </label>
                     <textarea
                       value={newKeyData.allowedResources}
@@ -549,13 +545,11 @@ export default function ApiKeysPage() {
                         setNewKeyData({ ...newKeyData, allowedResources: e.target.value })
                       }
                       rows={2}
-                      placeholder="例：public.users, public.console_get_user_projects, audit.*"
+                      placeholder={t('phResources')}
                       className="w-full px-2 py-1.5 text-xs font-mono border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
                     />
                     <p className="mt-1 text-[11px] text-gray-500">
-                      支持精确匹配、<span className="font-mono">schema.*</span> 通配、
-                      <span className="font-mono">*</span> /{' '}
-                      <span className="font-mono">*.*</span> 全开。
+                      {t.rich('resourcesHint', { mono: (c) => <span className="font-mono">{c}</span> })}
                     </p>
                   </div>
                 </div>
@@ -563,7 +557,7 @@ export default function ApiKeysPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">有效期</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{t('validity')}</label>
               <select
                 value={newKeyData.expires_in_days}
                 onChange={(e) =>
@@ -571,11 +565,11 @@ export default function ApiKeysPage() {
                 }
                 className="w-full input-base"
               >
-                <option value={0}>永不过期</option>
-                <option value={7}>7 天</option>
-                <option value={30}>30 天</option>
-                <option value={90}>90 天</option>
-                <option value={365}>1 年</option>
+                <option value={0}>{t('expNever')}</option>
+                <option value={7}>{t('exp7')}</option>
+                <option value={30}>{t('exp30')}</option>
+                <option value={90}>{t('exp90')}</option>
+                <option value={365}>{t('exp365')}</option>
               </select>
             </div>
           </div>
@@ -585,8 +579,42 @@ export default function ApiKeysPage() {
   )
 }
 
+/**
+ * MCP 端点地址。next.config.js 把 `/mcp` 反代到后端，所以用户当前浏览的
+ * origin 就是正确的接入地址（网关域名 / 内网 IP 都自动正确，无需额外配置）。
+ * 仅在用户交互后渲染，不存在 SSR/CSR 不一致问题。
+ */
+function mcpEndpoint(): string {
+  if (typeof window === 'undefined') return '/mcp'
+  return `${window.location.origin}/mcp`
+}
+
+/** 拼好可直接粘贴执行的 Claude Code 接入命令。 */
+function mcpAddCommand(token: string): string {
+  return `claude mcp add --transport http planeos ${mcpEndpoint()} --header "Authorization: Bearer ${token}"`
+}
+
+/**
+ * 复制到剪贴板。明文令牌"只显示一次"，复制失败必须明确告知——否则用户
+ * 以为已复制、关掉横幅，令牌就永久丢失了。
+ * 注意 navigator.clipboard 在非 HTTPS（且非 localhost）环境下是 undefined。
+ */
+async function copyToClipboard(text: string, label: string, tr: (k: string, p?: any) => string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      alert(tr('copiedLabel', { label }))
+    } else {
+      alert(tr('manualCopy', { label }))
+    }
+  } catch {
+    alert(tr('copyFail', { label }))
+  }
+}
+
 /** 个人访问令牌（PAT）管理：MCP 工作流创作的鉴权凭证，绑定当前登录用户（跨项目） */
 function PatSection() {
+  const t = useTranslations('wsApiKeys')
   /** 当前用户的 PAT 列表 */
   const [pats, setPats] = useState<any[]>([])
   const [patLoading, setPatLoading] = useState(true)
@@ -604,23 +632,23 @@ function PatSection() {
       const resp = await patAPI.list()
       setPats(resp.data?.pats || [])
     } catch (err: any) {
-      console.error('加载 PAT 失败:', err)
+      console.error(t('loadPatFailed'), err)
     } finally {
       setPatLoading(false)
     }
   }
 
   const handleCreate = async () => {
-    const name = window.prompt('令牌用途备注（如：本机 Claude Code）')?.trim()
+    const name = window.prompt(t('promptName'))?.trim()
     if (!name) return
-    const daysRaw = window.prompt('有效期天数（留空 = 永不过期，可随时吊销）', '')?.trim()
+    const daysRaw = window.prompt(t('promptDays'), '')?.trim()
     // 非数字输入会 parseInt 成 NaN，经 JSON.stringify 变 null 被后端当"永不过期"——
     // 与用户意图相反，这里显式校验，避免静默生成超出预期的永久令牌。
     let expires_days: number | undefined = undefined
     if (daysRaw) {
       const n = parseInt(daysRaw, 10)
       if (Number.isNaN(n) || n < 1 || n > 3650) {
-        alert('有效期需为 1~3650 之间的整数天数，留空则永不过期')
+        alert(t('errDays'))
         return
       }
       expires_days = n
@@ -631,19 +659,19 @@ function PatSection() {
       setCreatedToken(resp.data?.token || null)
       loadPats()
     } catch (err: any) {
-      alert('生成失败: ' + (err.response?.data?.error || err.message))
+      alert(t('genFailed', { msg: err.response?.data?.error || err.message }))
     } finally {
       setCreating(false)
     }
   }
 
   const handleRevoke = async (id: number, name: string) => {
-    if (!window.confirm(`确认吊销「${name}」？吊销后使用该令牌的 MCP 连接立即失效。`)) return
+    if (!window.confirm(t('confirmRevoke', { name }))) return
     try {
       await patAPI.revoke(id)
       loadPats()
     } catch (err: any) {
-      alert('吊销失败: ' + (err.response?.data?.error || err.message))
+      alert(t('revokeFailed', { msg: err.response?.data?.error || err.message }))
     }
   }
 
@@ -652,13 +680,15 @@ function PatSection() {
       <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
         <div>
           <h2 className="text-base font-semibold text-gray-900">
-            个人访问令牌（PAT）
-            <span className="ml-2 text-xs font-normal text-gray-400">MCP 工作流创作凭证 · 绑定账号，跨项目</span>
+            {t('patTitle')}
+            <span className="ml-2 text-xs font-normal text-gray-400">{t('patSubtitle')}</span>
           </h2>
           <p className="text-xs text-gray-500 mt-1">
-            供 AI 客户端（Claude Code 等）连接 <code className="bg-gray-100 px-1 rounded">/mcp</code> 创作与调试工作流；
-            令牌以 <code className="bg-gray-100 px-1 rounded font-mono">obm_</code> 开头（MCP 专用，区别于平台令牌的 <code className="bg-gray-100 px-1 rounded font-mono">obp_</code>）；
-            生产环境实例仅允许干跑 + 只读查询，启用工作流仍需人工操作。
+            {t.rich('patDesc', {
+              c1: (c) => <code className="bg-gray-100 px-1 rounded">{c}</code>,
+              c2: (c) => <code className="bg-gray-100 px-1 rounded font-mono">{c}</code>,
+              c3: (c) => <code className="bg-gray-100 px-1 rounded font-mono">{c}</code>,
+            })}
           </p>
         </div>
         <button
@@ -668,7 +698,7 @@ function PatSection() {
           className="btn-primary disabled:opacity-50"
         >
           <i className="fas fa-plus mr-2"></i>
-          {creating ? '生成中...' : '生成令牌'}
+          {creating ? t('generating') : t('genToken')}
         </button>
       </div>
 
@@ -676,7 +706,7 @@ function PatSection() {
         <div data-alt="pat-created-token" className="mx-6 mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
           <p className="text-sm text-yellow-800 mb-2">
             <i className="fas fa-exclamation-triangle mr-2"></i>
-            <strong>令牌只显示这一次</strong>，请立即复制保存：
+            {t.rich('tokenOnce', { b: (c) => <strong>{c}</strong> })}
           </p>
           <div className="flex items-center gap-2">
             <code className="flex-1 px-3 py-2 bg-white border border-yellow-300 rounded text-xs font-mono break-all">
@@ -684,35 +714,48 @@ function PatSection() {
             </code>
             <button
               data-alt="pat-copy-button"
-              onClick={async () => {
-                // 令牌"只显示一次"，复制失败必须明确告知，否则用户误以为已复制、关掉横幅即永久丢失。
-                // navigator.clipboard 在非 HTTPS（非 localhost）下为 undefined。
-                try {
-                  if (navigator.clipboard?.writeText) {
-                    await navigator.clipboard.writeText(createdToken)
-                    alert('已复制到剪贴板')
-                  } else {
-                    alert('当前环境（非 HTTPS）不支持自动复制，请手动选中上方令牌复制后再关闭')
-                  }
-                } catch {
-                  alert('复制失败，请手动选中上方令牌复制后再关闭')
-                }
-              }}
+              onClick={() => copyToClipboard(createdToken, t('labelToken'), t)}
               className="px-3 py-2 text-sm text-yellow-800 hover:bg-yellow-100 rounded-lg whitespace-nowrap"
             >
-              <i className="fas fa-copy mr-1"></i>复制
+              <i className="fas fa-copy mr-1"></i>{t('copy')}
             </button>
             <button
               data-alt="pat-token-done-button"
               onClick={() => setCreatedToken(null)}
               className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg whitespace-nowrap"
             >
-              已保存
+              {t('saved')}
             </button>
           </div>
-          <p className="text-xs text-yellow-700 mt-2 font-mono">
-            claude mcp add --transport http planeos {'{BASE_URL}'}/mcp --header "Authorization: Bearer {'{令牌}'}"
-          </p>
+
+          {/* 接入命令直接填好地址与令牌 —— 令牌只显示这一次，这里是用户唯一能
+              一键拿到可用命令的时机。让他自己拼 {BASE_URL} / {令牌} 会显著拉低
+              MCP（付费加购模块）的激活率。
+              地址用 window.location.origin：next.config.js 已把 /mcp 反代到后端，
+              所以用户当前浏览的域名就是正确的 MCP 端点。 */}
+          <div className="mt-3 border-t border-yellow-200 pt-3">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-yellow-800">
+                {t('mcpCmdLabel')}
+              </span>
+              <button
+                data-alt="pat-copy-mcp-command"
+                onClick={() => copyToClipboard(mcpAddCommand(createdToken), t('labelCommand'), t)}
+                className="shrink-0 rounded-lg px-2.5 py-1 text-xs text-yellow-800 hover:bg-yellow-100"
+              >
+                <i className="fas fa-copy mr-1"></i>{t('copyFullCmd')}
+              </button>
+            </div>
+            <code className="block break-all rounded border border-yellow-300 bg-white px-3 py-2 font-mono text-xs text-gray-700">
+              {mcpAddCommand(createdToken)}
+            </code>
+            <p className="mt-1.5 text-[11px] text-yellow-700">
+              {t.rich('otherClients', {
+                endpoint: mcpEndpoint(),
+                mono: (c) => <span className="font-mono">{c}</span>,
+              })}
+            </p>
+          </div>
         </div>
       )}
 
@@ -721,7 +764,7 @@ function PatSection() {
           <i className="fas fa-spinner fa-spin text-xl text-gray-400"></i>
         </div>
       ) : pats.length === 0 ? (
-        <div className="p-8 text-center text-gray-400 text-sm">暂无令牌</div>
+        <div className="p-8 text-center text-gray-400 text-sm">{t('emptyTokens')}</div>
       ) : (
         <div className="divide-y divide-gray-100">
           {pats.map((pat) => (
@@ -736,16 +779,16 @@ function PatSection() {
                   <p className="text-sm font-medium text-gray-900">{pat.name}</p>
                   <p className="text-xs text-gray-400">
                     {pat.scope}
-                    {pat.expires_at ? ` · ${new Date(pat.expires_at).toLocaleDateString()} 过期` : ' · 永不过期'}
+                    {pat.expires_at ? t('expiresSuffix', { date: new Date(pat.expires_at).toLocaleDateString() }) : t('neverExpire')}
                     {pat.last_used_at
-                      ? ` · 最后使用 ${new Date(pat.last_used_at).toLocaleString()}`
-                      : ' · 从未使用'}
+                      ? t('lastUsedSuffix', { time: new Date(pat.last_used_at).toLocaleString() })
+                      : t('neverUsedSuffix')}
                   </p>
                 </div>
               </div>
               <div className="flex items-center space-x-3">
                 {!pat.is_active && (
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">已吊销</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">{t('revoked')}</span>
                 )}
                 {pat.is_active && (
                   <button
@@ -753,7 +796,7 @@ function PatSection() {
                     onClick={() => handleRevoke(pat.id, pat.name)}
                     className="px-3 py-1 text-sm text-red-600 hover:bg-red-50 rounded-lg"
                   >
-                    吊销
+                    {t('revoke')}
                   </button>
                 )}
               </div>

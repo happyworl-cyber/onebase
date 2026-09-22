@@ -11,6 +11,7 @@
  */
 
 import { useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import type { WorkflowNodeDef } from '@/components/workflow/WorkflowCanvas'
 import { copyTextToClipboard } from '@/lib/clipboard'
 
@@ -70,27 +71,27 @@ function looksLikeInternalNotes(value: string): boolean {
   )
 }
 
-function fallbackPurpose(model: Pick<DocModel, 'name' | 'trigger_type'>): string {
-  const name = model.name || '该工作流'
+function fallbackPurpose(model: Pick<DocModel, 'name' | 'trigger_type'>, t: (k: string, p?: any) => string): string {
+  const name = model.name || t('thisWf')
   if (model.trigger_type === 'endpoint') {
-    return `通过接口触发「${name}」，按文档传入参数后返回处理结果。`
+    return t('fpEndpoint', { name })
   }
   if (model.trigger_type === 'hook') {
-    return `监听数据变更并自动执行「${name}」。`
+    return t('fpHook', { name })
   }
   if (model.trigger_type === 'notify') {
-    return `接收 PG NOTIFY 消息并自动执行「${name}」。`
+    return t('fpNotify', { name })
   }
   if (model.trigger_type === 'cron') {
-    return `按定时计划自动执行「${name}」。`
+    return t('fpCron', { name })
   }
   if (model.trigger_type === 'kafka') {
-    return `消费 Kafka Topic 消息并自动执行「${name}」。`
+    return t('fpKafka', { name })
   }
-  return `在工作流面板中手动执行「${name}」。`
+  return t('fpManual', { name })
 }
 
-export function resolveDocPurpose(model: Pick<DocModel, 'name' | 'description' | 'trigger_type'>): {
+export function resolveDocPurpose(model: Pick<DocModel, 'name' | 'description' | 'trigger_type'>, t: (k: string, p?: any) => string): {
   text: string
   source: 'description' | 'generated'
 } {
@@ -100,7 +101,7 @@ export function resolveDocPurpose(model: Pick<DocModel, 'name' | 'description' |
   }
 
   return {
-    text: fallbackPurpose(model),
+    text: fallbackPurpose(model, t),
     source: 'generated',
   }
 }
@@ -194,16 +195,16 @@ function resolveDocInputs(schema: unknown, nodes: WorkflowNodeDef[]): { source: 
   }
 }
 
-function requiredLabel(required: InputRequired): string {
-  if (required === 'yes') return '是'
-  if (required === 'conditional') return '条件必填'
-  return '否'
+function requiredLabel(required: InputRequired, t: (k: string) => string): string {
+  if (required === 'yes') return t('reqYes')
+  if (required === 'conditional') return t('reqConditional')
+  return t('reqNo')
 }
 
-function emptyInputCopy(source: InputSource): string {
+function emptyInputCopy(source: InputSource, t: (k: string, p?: any) => string): string {
   return source === 'schema'
-    ? '本工作流已声明无外部入参，传空 body 即可。'
-    : '未检测到 {{trigger.字段}} 引用——本工作流不依赖外部入参，传空 body 即可。'
+    ? t('emptySchema')
+    : t('emptyScan', { tpl: '{{trigger.field}}' })
 }
 
 /** 登录态：从内存中的工作流定义推导 DocModel（与后端 build_doc_model 等价）。 */
@@ -288,73 +289,74 @@ function curlExample(url: string, fields: DocInputField[], gatewayMode = false):
 }
 
 /** 把整份接口文档拼成 Markdown（供「复制全部」一次性带走喂 AI）。 */
-export function buildDocMarkdown(model: DocModel, apiBase: string, gatewayMode = false): string {
+export function buildDocMarkdown(model: DocModel, apiBase: string, t: (k: string, p?: any) => string, gatewayMode = false): string {
   const isEndpoint = model.trigger_type === 'endpoint'
   const url = endpointUrl(model, apiBase)
   const cfg = model.trigger_config
-  const purpose = resolveDocPurpose(model)
+  const purpose = resolveDocPurpose(model, t)
   const L: string[] = []
-  L.push(`# 接口文档 · ${model.name || '未命名工作流'}`)
-  L.push('', '## 用途说明', purpose.text)
-  L.push('', '## 调用方式')
+  L.push(t('mdDocTitle', { name: model.name || t('unnamed') }))
+  L.push('', t('mdPurposeH'), purpose.text)
+  L.push('', t('mdCallH'))
   if (isEndpoint) {
-    L.push('- 方法：POST / GET', `- 地址：${url}`, '- POST 用 JSON body 传参；GET 用 query string 传参。')
+    L.push(t('mdCallEndpoint1'), t('mdAddr', { url }), t('mdCallEndpoint3'))
   } else if (model.trigger_type === 'hook') {
-    L.push(`数据变更自动触发：监听 ${(cfg.schema as string) || 'public'}.${(cfg.table as string) || '<表>'} 的 INSERT/UPDATE/DELETE，变更行作为 trigger 数据传入。`)
+    L.push(t('mdHook', { res: `${(cfg.schema as string) || 'public'}.${(cfg.table as string) || '<table>'}` }))
   } else if (model.trigger_type === 'notify') {
-    L.push(`PG NOTIFY 自动触发：监听 channel ${(cfg.channel as string) || '<channel>'}，payload 作为 trigger 数据。`)
+    L.push(t('mdNotify', { channel: (cfg.channel as string) || '<channel>' }))
   } else if (model.trigger_type === 'cron') {
-    L.push(`定时触发：Cron \`${(cfg.cron as string) || (cfg.schedule as string) || '<cron>'}\` 自动执行，无外部入参。`)
+    L.push(t('mdCron', { cron: (cfg.cron as string) || (cfg.schedule as string) || '<cron>' }))
   } else if (model.trigger_type === 'kafka') {
     L.push(
-      `Kafka 自动触发：消费 Topic \`${(cfg.topic as string) || '<topic>'}\` 的消息，按 ${(cfg.value_format as string) || 'json'} 解析后作为 trigger 数据。`,
+      t('mdKafka', { topic: (cfg.topic as string) || '<topic>', fmt: (cfg.value_format as string) || 'json' }),
     )
   } else {
-    L.push('手动触发：面板点「运行」，或 POST /api/admin/workflows/<id>/trigger（需管理员 JWT）。')
+    L.push(t('mdManual'))
   }
   if (isEndpoint) {
-    L.push('', '## 鉴权')
+    L.push('', t('mdAuthH'))
     if (gatewayMode) {
-      L.push('请求经网关统一鉴权，无需在调用侧携带 API Key。')
+      L.push(t('mdAuthGateway'))
     } else {
-      L.push('请求头二选一：')
-      L.push('- API Key：`Authorization: Bearer ob_xxx` 或 `apikey: ob_xxx`（须绑定本数据库）')
-      L.push('- 用户 JWT：`Authorization: Bearer <登录 token>`（须有该数据库所属租户权限）')
+      L.push(t('mdAuthPick'))
+      L.push(t('mdAuthApiKey'))
+      L.push(t('mdAuthJwt'))
     }
   }
-  L.push('', '## 请求参数')
+  L.push('', t('mdParamsH'))
   if (model.input_fields.length === 0) {
-    L.push(emptyInputCopy(model.input_source))
+    L.push(emptyInputCopy(model.input_source, t))
   } else if (model.input_source === 'schema') {
-    L.push('以下字段来自工作流入参定义（input_schema）。', '', '| 字段 | 类型 | 必填 | 说明 |', '| --- | --- | --- | --- |')
+    L.push(t('mdParamsSchema'), '', t('mdTableSchema'), '| --- | --- | --- | --- |')
     for (const f of model.input_fields) {
-      L.push(`| ${f.field} | ${f.type || ''} | ${requiredLabel(f.required)} | ${f.description || ''} |`)
+      L.push(`| ${f.field} | ${f.type || ''} | ${requiredLabel(f.required, t)} | ${f.description || ''} |`)
     }
   } else {
-    L.push('以下字段来自节点中 {{trigger.X}} 引用（自动扫描，类型需按业务确认）：', '', '| 字段 | 模板引用 |', '| --- | --- |')
+    L.push(t('mdParamsScan'), '', t('mdTableScan'), '| --- | --- |')
     for (const f of model.input_fields) L.push(`| ${f.field} | ${f.template} |`)
   }
   if (isEndpoint) {
-    L.push('', '## 请求示例', '```bash', curlExample(url, model.input_fields, gatewayMode), '```')
+    L.push('', t('mdExampleH'), '```bash', curlExample(url, model.input_fields, gatewayMode), '```')
   }
-  L.push('', '## 返回值')
+  L.push('', t('mdReturnH'))
   if (model.has_response_node) {
-    L.push(`由 response 节点决定，HTTP 状态码 ${model.status_code}，响应体：`)
+    L.push(t('mdReturnResp', { code: model.status_code }))
     if (model.response_body) {
       L.push('```json', model.response_body, '```')
     } else {
-      L.push('response 节点未配置 body，将返回 { "ok": true }。')
+      L.push(t('mdReturnNoBody'))
     }
-    L.push('注：响应体里的 {{...}} 会在运行时替换成实际值。')
+    L.push(t('mdReturnTplNote'))
   } else {
-    L.push('无 response 节点：返回最后一个成功节点的输出（JSON）。建议加 response 节点固定返回结构。')
+    L.push(t('mdReturnNoResp'))
   }
-  L.push('', `> 超时 ${Math.round((model.timeout_ms || 30000) / 1000)}s（超时强制中止）。`)
+  L.push('', t('mdTimeout', { sec: Math.round((model.timeout_ms || 30000) / 1000) }))
   return L.join('\n')
 }
 
 // 复制按钮：点击把文本写入剪贴板，短暂显示「已复制」。
 export function CopyButton({ text }: { text: string }) {
+  const t = useTranslations('wfDoc')
   const [copied, setCopied] = useState(false)
   return (
     <button
@@ -369,23 +371,24 @@ export function CopyButton({ text }: { text: string }) {
       }}
       className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-500 hover:bg-gray-100 shrink-0"
     >
-      {copied ? '已复制' : '复制'}
+      {copied ? t('copied') : t('copy')}
     </button>
   )
 }
 
 // 「复制全部」按钮：把整份内容拼成 Markdown 一次性复制，便于整段喂给 AI（替代分块复制）。
 export function CopyMarkdownButton({ text }: { text: string }) {
+  const t = useTranslations('wfDoc')
   const [copied, setCopied] = useState(false)
   return (
     <button
       data-alt="copy-all-markdown"
       onClick={() => { navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1800) }) }}
-      title="把整份文档复制为 Markdown，可直接粘贴给 AI"
+      title={t('copyAllTitle')}
       className="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium inline-flex items-center gap-1.5 shrink-0"
     >
       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
-      {copied ? '已复制 ✓' : '复制全部 (Markdown)'}
+      {copied ? t('copiedAll') : t('copyAll')}
     </button>
   )
 }
@@ -400,11 +403,12 @@ export default function WorkflowDocContent({
   apiBase: string
   gatewayMode?: boolean
 }) {
+  const t = useTranslations('wfDoc')
   const isEndpoint = model.trigger_type === 'endpoint'
   const cfg = model.trigger_config
   const url = useMemo(() => endpointUrl(model, apiBase), [model, apiBase])
   const curl = useMemo(() => curlExample(url, model.input_fields, gatewayMode), [url, model.input_fields, gatewayMode])
-  const purpose = useMemo(() => resolveDocPurpose(model), [model])
+  const purpose = useMemo(() => resolveDocPurpose(model, t), [model, t])
   const triggerFields = model.input_fields
 
   return (
@@ -419,9 +423,9 @@ export default function WorkflowDocContent({
           </div>
           <div className="min-w-0 flex-1">
             <div className="mb-1.5 flex items-center gap-2">
-              <h4 className="font-semibold text-gray-900">用途说明</h4>
+              <h4 className="font-semibold text-gray-900">{t('purposeH')}</h4>
               <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-indigo-600 ring-1 ring-indigo-100">
-                {purpose.source === 'description' ? '来自描述' : '自动整理'}
+                {purpose.source === 'description' ? t('fromDesc') : t('autoOrganized')}
               </span>
             </div>
             <p className="text-sm leading-6 text-gray-700">{purpose.text}</p>
@@ -431,7 +435,7 @@ export default function WorkflowDocContent({
 
       {/* 调用方式 */}
       <section>
-        <h4 className="font-semibold text-gray-900 mb-2">调用方式</h4>
+        <h4 className="font-semibold text-gray-900 mb-2">{t('callH')}</h4>
         {isEndpoint ? (
           <div className="space-y-2">
             <div className="flex items-center gap-2 flex-wrap">
@@ -441,40 +445,28 @@ export default function WorkflowDocContent({
               <CopyButton text={url} />
             </div>
             <p className="text-xs text-gray-500 leading-relaxed">
-              外部系统直接请求该地址即可触发。<strong>POST</strong> 用 JSON body 传参；
-              <strong>GET</strong> 用 query string 传参（如 <code className="bg-gray-100 px-1 rounded">?{triggerFields[0]?.field || 'key'}=值</code>）。
+              {t.rich('callEndpointDesc', { field: triggerFields[0]?.field || 'key', b: (c) => <strong>{c}</strong>, code: (c) => <code className="bg-gray-100 px-1 rounded">{c}</code> })}
             </p>
           </div>
         ) : model.trigger_type === 'hook' ? (
           <p className="text-xs text-gray-600 leading-relaxed">
-            <strong>数据变更自动触发</strong>，无需手动调用。监听
-            <code className="bg-gray-100 px-1 rounded mx-1">{(cfg.schema as string) || 'public'}.{(cfg.table as string) || '<表>'}</code>
-            的 INSERT/UPDATE/DELETE，变更的行作为 <code className="bg-gray-100 px-1 rounded">trigger</code> 数据传入。
+            {t.rich('hookDesc', { res: `${(cfg.schema as string) || 'public'}.${(cfg.table as string) || '<table>'}`, b: (c) => <strong>{c}</strong>, code: (c) => <code className="bg-gray-100 px-1 rounded">{c}</code> })}
           </p>
         ) : model.trigger_type === 'notify' ? (
           <p className="text-xs text-gray-600 leading-relaxed">
-            <strong>PG NOTIFY 自动触发</strong>：监听 channel
-            <code className="bg-gray-100 px-1 rounded mx-1">{(cfg.channel as string) || '<channel>'}</code>，
-            NOTIFY 的 payload 作为 <code className="bg-gray-100 px-1 rounded">trigger</code> 数据。
+            {t.rich('notifyDesc', { channel: (cfg.channel as string) || '<channel>', b: (c) => <strong>{c}</strong>, code: (c) => <code className="bg-gray-100 px-1 rounded">{c}</code> })}
           </p>
         ) : model.trigger_type === 'cron' ? (
           <p className="text-xs text-gray-600 leading-relaxed">
-            <strong>定时触发</strong>：按 Cron 表达式
-            <code className="bg-gray-100 px-1 rounded mx-1">{(cfg.cron as string) || (cfg.schedule as string) || '<cron>'}</code>
-            自动执行，无外部入参。
+            {t.rich('cronDesc', { cron: (cfg.cron as string) || (cfg.schedule as string) || '<cron>', b: (c) => <strong>{c}</strong> })}
           </p>
         ) : model.trigger_type === 'kafka' ? (
           <p className="text-xs text-gray-600 leading-relaxed">
-            <strong>Kafka 自动触发</strong>：消费 Topic
-            <code className="bg-gray-100 px-1 rounded mx-1">{(cfg.topic as string) || '<topic>'}</code>
-            的消息，按
-            <code className="bg-gray-100 px-1 rounded mx-1">{(cfg.value_format as string) || 'json'}</code>
-            解析后作为 <code className="bg-gray-100 px-1 rounded">trigger</code> 数据传入。
+            {t.rich('kafkaDesc', { topic: (cfg.topic as string) || '<topic>', fmt: (cfg.value_format as string) || 'json', b: (c) => <strong>{c}</strong>, code: (c) => <code className="bg-gray-100 px-1 rounded">{c}</code> })}
           </p>
         ) : (
           <p className="text-xs text-gray-600 leading-relaxed">
-            <strong>手动触发</strong>：仅在本面板点「运行」执行，或通过
-            <code className="bg-gray-100 px-1 rounded mx-1">POST /api/admin/workflows/&lt;id&gt;/trigger</code> 调用（需管理员 JWT）。
+            {t.rich('manualDesc', { b: (c) => <strong>{c}</strong>, code: (c) => <code className="bg-gray-100 px-1 rounded">{c}</code> })}
           </p>
         )}
       </section>
@@ -482,17 +474,17 @@ export default function WorkflowDocContent({
       {/* 鉴权 */}
       {isEndpoint && (
         <section>
-          <h4 className="font-semibold text-gray-900 mb-2">鉴权</h4>
+          <h4 className="font-semibold text-gray-900 mb-2">{t('authH')}</h4>
           {gatewayMode ? (
             <p className="text-xs text-gray-600 leading-relaxed">
-              请求经网关统一鉴权，无需在调用侧携带 API Key。
+              {t('authGateway')}
             </p>
           ) : (
             <>
-              <p className="text-xs text-gray-600 leading-relaxed mb-1.5">二选一，请求头携带：</p>
+              <p className="text-xs text-gray-600 leading-relaxed mb-1.5">{t('authPick')}</p>
               <ul className="space-y-1 text-xs text-gray-600 list-disc pl-5">
-                <li><strong>API Key</strong>：<code className="bg-gray-100 px-1 rounded">Authorization: Bearer ob_xxx</code> 或 <code className="bg-gray-100 px-1 rounded">apikey: ob_xxx</code>（该 Key 须绑定本数据库）。</li>
-                <li><strong>用户 JWT</strong>：<code className="bg-gray-100 px-1 rounded">Authorization: Bearer &lt;登录 token&gt;</code>（须有该数据库所属租户权限）。</li>
+                <li>{t.rich('authApiKeyLi', { b: (c) => <strong>{c}</strong>, code: (c) => <code className="bg-gray-100 px-1 rounded">{c}</code> })}</li>
+                <li>{t.rich('authJwtLi', { b: (c) => <strong>{c}</strong>, code: (c) => <code className="bg-gray-100 px-1 rounded">{c}</code> })}</li>
               </ul>
             </>
           )}
@@ -501,20 +493,20 @@ export default function WorkflowDocContent({
 
       {/* 请求参数 */}
       <section>
-        <h4 className="font-semibold text-gray-900 mb-2">请求参数</h4>
+        <h4 className="font-semibold text-gray-900 mb-2">{t('paramsH')}</h4>
         {triggerFields.length === 0 ? (
-          <p className="text-xs text-gray-500">{emptyInputCopy(model.input_source)}</p>
+          <p className="text-xs text-gray-500">{emptyInputCopy(model.input_source, t)}</p>
         ) : model.input_source === 'schema' ? (
           <>
-            <p className="text-xs text-gray-500 mb-2">以下字段来自工作流入参定义（input_schema）。</p>
+            <p className="text-xs text-gray-500 mb-2">{t('paramsSchemaHint')}</p>
             <div className="border rounded-lg overflow-hidden">
               <table className="w-full text-xs">
                 <thead className="bg-gray-50 text-gray-500">
                   <tr>
-                    <th className="text-left px-3 py-1.5 font-medium">字段</th>
-                    <th className="text-left px-3 py-1.5 font-medium">类型</th>
-                    <th className="text-left px-3 py-1.5 font-medium">必填</th>
-                    <th className="text-left px-3 py-1.5 font-medium">说明</th>
+                    <th className="text-left px-3 py-1.5 font-medium">{t('thField')}</th>
+                    <th className="text-left px-3 py-1.5 font-medium">{t('thType')}</th>
+                    <th className="text-left px-3 py-1.5 font-medium">{t('thRequired')}</th>
+                    <th className="text-left px-3 py-1.5 font-medium">{t('thDesc')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -522,7 +514,7 @@ export default function WorkflowDocContent({
                     <tr key={f.field} className="border-t">
                       <td className="px-3 py-1.5 font-mono text-gray-700">{f.field}</td>
                       <td className="px-3 py-1.5 font-mono text-gray-500">{f.type || '—'}</td>
-                      <td className="px-3 py-1.5 text-gray-600">{requiredLabel(f.required)}</td>
+                      <td className="px-3 py-1.5 text-gray-600">{requiredLabel(f.required, t)}</td>
                       <td className="px-3 py-1.5 text-gray-600">{f.description || '—'}</td>
                     </tr>
                   ))}
@@ -533,14 +525,14 @@ export default function WorkflowDocContent({
         ) : (
           <>
             <p className="text-xs text-gray-500 mb-2">
-              以下字段来自节点中对 <code className="bg-gray-100 px-1 rounded">{'{{trigger.X}}'}</code> 的引用（自动扫描，仅供参考，类型需按业务确认）：
+              {t.rich('paramsScanHint', { tpl: '{{trigger.X}}', code: (c) => <code className="bg-gray-100 px-1 rounded">{c}</code> })}
             </p>
             <div className="border rounded-lg overflow-hidden">
               <table className="w-full text-xs">
                 <thead className="bg-gray-50 text-gray-500">
                   <tr>
-                    <th className="text-left px-3 py-1.5 font-medium">字段</th>
-                    <th className="text-left px-3 py-1.5 font-medium">模板引用</th>
+                    <th className="text-left px-3 py-1.5 font-medium">{t('thField')}</th>
+                    <th className="text-left px-3 py-1.5 font-medium">{t('thTplRef')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -561,7 +553,7 @@ export default function WorkflowDocContent({
       {isEndpoint && (
         <section>
           <div className="flex items-center justify-between mb-2">
-            <h4 className="font-semibold text-gray-900">请求示例</h4>
+            <h4 className="font-semibold text-gray-900">{t('exampleH')}</h4>
             <CopyButton text={curl} />
           </div>
           <pre className="bg-gray-900 text-gray-100 text-xs rounded-lg p-3 overflow-auto font-mono leading-relaxed">{curl}</pre>
@@ -570,43 +562,41 @@ export default function WorkflowDocContent({
 
       {/* 返回值 */}
       <section>
-        <h4 className="font-semibold text-gray-900 mb-2">返回值</h4>
+        <h4 className="font-semibold text-gray-900 mb-2">{t('returnH')}</h4>
         {model.has_response_node ? (
           <div className="space-y-2">
             <p className="text-xs text-gray-500">
-              由 <code className="bg-gray-100 px-1 rounded">response</code> 节点决定，
-              HTTP 状态码 <code className="bg-gray-100 px-1 rounded">{String(model.status_code)}</code>，响应体：
+              {t.rich('returnRespDesc', { code: model.status_code, c: (c) => <code className="bg-gray-100 px-1 rounded">{c}</code> })}
             </p>
             {model.response_body ? (
               <pre className="bg-gray-50 border text-xs rounded-lg p-3 overflow-auto font-mono leading-relaxed max-h-56">{model.response_body}</pre>
             ) : (
-              <p className="text-xs text-gray-400">response 节点未配置 body，将返回 <code className="bg-gray-100 px-1 rounded">{'{ "ok": true }'}</code>。</p>
+              <p className="text-xs text-gray-400">{t.rich('returnNoBody', { obj: '{ "ok": true }', code: (c) => <code className="bg-gray-100 px-1 rounded">{c}</code> })}</p>
             )}
-            <p className="text-xs text-gray-400">注：响应体里的 <code className="bg-gray-100 px-1 rounded">{'{{...}}'}</code> 会在运行时替换成实际值。</p>
+            <p className="text-xs text-gray-400">{t.rich('returnTplNote', { tpl: '{{...}}', code: (c) => <code className="bg-gray-100 px-1 rounded">{c}</code> })}</p>
           </div>
         ) : (
           <p className="text-xs text-gray-500 leading-relaxed">
-            无 <code className="bg-gray-100 px-1 rounded">response</code> 节点：接口返回<strong>最后一个成功节点的输出</strong>（JSON）；
-            若想固定返回结构，建议加一个 response 节点。
+            {t.rich('returnNoResp', { b: (c) => <strong>{c}</strong>, code: (c) => <code className="bg-gray-100 px-1 rounded">{c}</code> })}
           </p>
         )}
       </section>
 
       {/* 其他 */}
       <section className="text-xs text-gray-400 leading-relaxed border-t pt-3">
-        超时 {Math.round((model.timeout_ms || 30000) / 1000)}s（超时强制中止）。
+        {t('timeoutLine', { sec: Math.round((model.timeout_ms || 30000) / 1000) })}
       </section>
 
       {/* 通用速查（折叠） */}
       <details className="text-xs">
-        <summary className="cursor-pointer text-gray-500 hover:text-gray-700 font-medium">节点类型 &amp; 模板变量速查</summary>
+        <summary className="cursor-pointer text-gray-500 hover:text-gray-700 font-medium">{t('cheatSummary')}</summary>
         <div className="mt-2 space-y-2 text-gray-600">
-          <p><code className="bg-gray-100 px-1 rounded">{'{{trigger.字段}}'}</code> 引用入参；<code className="bg-gray-100 px-1 rounded">{'{{节点ID.字段}}'}</code> 引用上游节点输出，支持 <code className="bg-gray-100 px-1 rounded">{'{{q.rows[0].id}}'}</code> 这样的嵌套/下标。</p>
+          <p>{t.rich('cheatTpl', { a: '{{trigger.field}}', b: '{{nodeId.field}}', c: '{{q.rows[0].id}}', c1: (c) => <code className="bg-gray-100 px-1 rounded">{c}</code>, c2: (c) => <code className="bg-gray-100 px-1 rounded">{c}</code>, c3: (c) => <code className="bg-gray-100 px-1 rounded">{c}</code> })}</p>
           <ul className="list-disc pl-5 space-y-0.5">
-            <li><strong>code</strong> Lua / JavaScript / Python 脚本 · <strong>db_query</strong> 只读 SQL · <strong>db_execute</strong> 写库</li>
-            <li><strong>http_call</strong> 调外部接口 · <strong>email_send</strong> 发邮件 · <strong>sse_publish</strong> 推送</li>
-            <li><strong>redis</strong> Redis 读写 · <strong>kafka</strong> 生产消息 · <strong>object_storage</strong> 对象存储 · <strong>llm</strong> 大模型 · <strong>call_workflow</strong> 调子工作流</li>
-            <li><strong>condition</strong> 条件分支 · <strong>loop</strong> 循环 · <strong>transform</strong> 拼装 · <strong>response</strong> HTTP 返回体</li>
+            <li>{t.rich('cheatNodes1', { b: (c) => <strong>{c}</strong> })}</li>
+            <li>{t.rich('cheatNodes2', { b: (c) => <strong>{c}</strong> })}</li>
+            <li>{t.rich('cheatNodes3', { b: (c) => <strong>{c}</strong> })}</li>
+            <li>{t.rich('cheatNodes4', { b: (c) => <strong>{c}</strong> })}</li>
           </ul>
         </div>
       </details>

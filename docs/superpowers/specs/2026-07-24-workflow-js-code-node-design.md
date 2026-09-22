@@ -60,7 +60,7 @@ DagEngine exec_code_node
          写临时 entry + 注入 ctx JSON
                 │
                 ▼
-         bwrap/nsjail → node --require onebase-runtime entry.js
+         bwrap/nsjail → node --require planeos-runtime entry.js
                 │                    ▲
                 │   IPC (UDS / 帧)   │
                 └────────────────────┘
@@ -87,7 +87,7 @@ src/mcp_tools.rs                # NODE_SPEC 文档
 运行时 JS 包（随服务部署，非用户依赖）：
 
 ```
-js-runtime/onebase-runtime/   # --require 预加载；暴露 env/http/crypto/...
+js-runtime/planeos-runtime/   # --require 预加载；暴露 env/http/crypto/...
 ```
 
 ## 4. 数据模型
@@ -200,7 +200,7 @@ js-runtime/onebase-runtime/   # --require 预加载；暴露 env/http/crypto/...
 1. 确认 `WORKFLOW_JS_CODE_ENABLED` 且本机有 `node`/`npm`。
 2. 确保依赖 `ready`。
 3. 组装 ctx → 临时目录写入 `ctx.json` + `entry.js`（包装用户代码）。
-4. 启动：`node --require <onebase-runtime> entry.js`，`cwd` 为工作流 JS 依赖目录（或显式 `NODE_PATH`）。
+4. 启动：`node --require <planeos-runtime> entry.js`，`cwd` 为工作流 JS 依赖目录（或显式 `NODE_PATH`）。
 5. 沙盒：复用调度器 `ShellExecutor` 的 bwrap/nsjail/direct 策略；超时使用 `WORKFLOW_JS_TIMEOUT_MS`（默认与 Lua 同为 30s），超时杀进程。
 6. 结果：约定从结果文件或 stdout 尾帧读取 JSON `{ "body": ... }`；stderr 进入节点错误/调试日志。
 

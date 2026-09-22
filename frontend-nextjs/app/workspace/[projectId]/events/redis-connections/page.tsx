@@ -16,6 +16,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useParams } from 'next/navigation'
 import {
   redisAPI,
@@ -31,13 +32,15 @@ import ForbiddenPlaceholder from '@/components/shared/ForbiddenPlaceholder'
 import { closeOnBackdropPress } from '@/lib/utils'
 
 export default function RedisConnectionsPage() {
+  const t = useTranslations('wsRedisConn')
+  const tc = useTranslations('connCommon')
   const params = useParams<{ projectId: string }>()
   const projectId = parseInt(params.projectId, 10)
   const caps = useCurrentProjectCapabilities()
 
   if (!caps.canManageEvents) {
     return (
-      <ForbiddenPlaceholder reason="Redis 数据源管理需要 admin+ 角色（owner / admin / 超管）" />
+      <ForbiddenPlaceholder reason={t('forbidden')} />
     )
   }
 
@@ -45,7 +48,7 @@ export default function RedisConnectionsPage() {
     return (
       <div className="text-center py-12 text-gray-400">
         <i className="fas fa-spinner fa-spin text-2xl"></i>
-        <p className="text-sm mt-2">正在加载项目上下文…</p>
+        <p className="text-sm mt-2">{tc('loadingCtx')}</p>
       </div>
     )
   }
@@ -56,6 +59,8 @@ export default function RedisConnectionsPage() {
 // ── 内部组件 ──────────────────────────────────────────────────────────
 
 function RedisConnectionsManager({ tenantId }: { tenantId: number }) {
+  const t = useTranslations('wsRedisConn')
+  const tc = useTranslations('connCommon')
   const notify = useNotification()
   const [connections, setConnections] = useState<RedisConnection[]>([])
   const [loading, setLoading] = useState(true)
@@ -97,15 +102,14 @@ function RedisConnectionsManager({ tenantId }: { tenantId: number }) {
         <div>
           <h1 className="text-2xl font-semibold">
             <i className="fas fa-database mr-2 text-red-600"></i>
-            Redis 数据源
+            {t('title')}
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            登记租户已有的 Redis 实例；平台保管地址 / 密码，业务经数据 API 与工作流
-            redis 节点统一读写，无需散落连接串。
+            {t('subtitle')}
           </p>
         </div>
         <button type="button" onClick={() => setShowCreate(true)} className="btn-primary">
-          <i className="fas fa-plus mr-2"></i>新建连接
+          <i className="fas fa-plus mr-2"></i>{t('newConn')}
         </button>
       </div>
 
@@ -118,13 +122,13 @@ function RedisConnectionsManager({ tenantId }: { tenantId: number }) {
           ) : connections.length === 0 ? (
             <div className="text-center py-12 bg-gray-50 border border-dashed border-gray-300 rounded">
               <i className="fas fa-database text-3xl text-gray-300 mb-2"></i>
-              <p className="text-sm text-gray-500">还没有 Redis 连接</p>
+              <p className="text-sm text-gray-500">{t('empty')}</p>
               <button
                 type="button"
                 onClick={() => setShowCreate(true)}
                 className="mt-3 text-sm text-blue-600 hover:underline"
               >
-                立即创建第一个
+                {t('createFirst')}
               </button>
             </div>
           ) : (
@@ -149,7 +153,7 @@ function RedisConnectionsManager({ tenantId }: { tenantId: number }) {
             />
           ) : (
             <div className="bg-gray-50 border border-dashed border-gray-300 rounded p-12 text-center text-sm text-gray-400">
-              请从左侧选择一个连接，或新建一个
+              {t('selectOrNew')}
             </div>
           )}
         </div>
@@ -163,7 +167,7 @@ function RedisConnectionsManager({ tenantId }: { tenantId: number }) {
             setShowCreate(false)
             setActiveId(id)
             loadConnections()
-            notify.success('Redis 连接已创建')
+            notify.success(t('created'))
           }}
         />
       )}
@@ -182,6 +186,8 @@ function ConnectionListItem({
   active: boolean
   onClick: () => void
 }) {
+  const t = useTranslations('wsRedisConn')
+  const tc = useTranslations('connCommon')
   return (
     <button
       type="button"
@@ -193,7 +199,7 @@ function ConnectionListItem({
       <div className="flex items-center justify-between">
         <div className="font-medium text-sm truncate">{connection.connection_name}</div>
         {!connection.is_active && (
-          <span className="text-xs bg-gray-200 text-gray-700 px-1.5 py-0.5 rounded">已停用</span>
+          <span className="text-xs bg-gray-200 text-gray-700 px-1.5 py-0.5 rounded">{t('deleted') && tc('disabled')}</span>
         )}
       </div>
       <div className="text-xs text-gray-500 mt-1 truncate font-mono">
@@ -201,12 +207,12 @@ function ConnectionListItem({
       </div>
       <div className="flex items-center text-xs text-gray-400 mt-1 space-x-2">
         {connection.use_tls && (
-          <span className="text-emerald-600" title="TLS 连接">
+          <span className="text-emerald-600" title={t('tlsTitle')}>
             <i className="fas fa-lock"></i> TLS
           </span>
         )}
         {connection.username && (
-          <span title="ACL 用户">
+          <span title={t('aclTitle')}>
             <i className="fas fa-user mr-1"></i>
             {connection.username}
           </span>
@@ -227,19 +233,21 @@ function ConnectionDetail({
   onChanged: () => void
   onDeleted: () => void
 }) {
+  const tr = useTranslations('wsRedisConn')
+  const tc = useTranslations('connCommon')
   const notify = useNotification()
   const [tab, setTab] = useState<'console' | 'usage' | 'settings'>('console')
 
   const handleDelete = async () => {
     if (
       !window.confirm(
-        `确认删除连接「${connection.connection_name}」？删除后引用它的数据 API / 工作流节点会立即失败。`,
+        tr('confirmDelete', { name: connection.connection_name }),
       )
     )
       return
     try {
       await redisAPI.deleteConnection(connection.id)
-      notify.success('连接已删除')
+      notify.success(tr('deleted'))
       onDeleted()
     } catch {
       /* noop */
@@ -260,7 +268,7 @@ function ConnectionDetail({
           type="button"
           onClick={handleDelete}
           className="text-sm text-red-600 hover:text-red-700"
-          title="删除连接"
+          title={tr('deleteTitle')}
         >
           <i className="fas fa-trash"></i>
         </button>
@@ -268,9 +276,9 @@ function ConnectionDetail({
 
       <div className="border-b flex text-sm">
         {[
-          { id: 'console', label: '数据控制台', icon: 'fa-terminal' },
-          { id: 'usage', label: '接入指南', icon: 'fa-book' },
-          { id: 'settings', label: '连接设置', icon: 'fa-cog' },
+          { id: 'console', label: tr('tabConsole'), icon: 'fa-terminal' },
+          { id: 'usage', label: tr('tabUsage'), icon: 'fa-book' },
+          { id: 'settings', label: tr('tabSettings'), icon: 'fa-cog' },
         ].map((t) => (
           <button
             key={t.id}
@@ -328,6 +336,8 @@ function splitList(s: string): string[] {
 }
 
 function ConsoleTab({ connection }: { connection: RedisConnection }) {
+  const t = useTranslations('wsRedisConn')
+  const tc = useTranslations('connCommon')
   const notify = useNotification()
   const [op, setOp] = useState<RedisOp>('get')
   const [f, setF] = useState({
@@ -351,7 +361,7 @@ function ConsoleTab({ connection }: { connection: RedisConnection }) {
 
   const run = async () => {
     if (fields.includes('key') && !f.key.trim()) {
-      notify.error('请填写 key')
+      notify.error(t('fillKey'))
       return
     }
     const args: Record<string, unknown> = {}
@@ -374,7 +384,7 @@ function ConsoleTab({ connection }: { connection: RedisConnection }) {
       const res = await redisAPI.exec(connection.id, { op, args })
       setResult(res.data.result)
     } catch (err: any) {
-      setError(err?.response?.data?.error || err?.message || '执行失败')
+      setError(err?.response?.data?.error || err?.message || t('execFailed'))
     } finally {
       setRunning(false)
     }
@@ -384,13 +394,13 @@ function ConsoleTab({ connection }: { connection: RedisConnection }) {
     <div className="space-y-3 text-sm">
       {!connection.is_active && (
         <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded p-2 text-xs">
-          <i className="fas fa-exclamation-triangle mr-1"></i>连接已停用，执行会失败。
+          <i className="fas fa-exclamation-triangle mr-1"></i>{t('disabledWarn')}
         </div>
       )}
 
       <div className="flex items-end gap-2">
         <div className="w-40">
-          <label className="block text-xs font-medium text-gray-700 mb-1">操作</label>
+          <label className="block text-xs font-medium text-gray-700 mb-1">{t('opLabel')}</label>
           <select
             value={op}
             onChange={(e) => {
@@ -410,11 +420,11 @@ function ConsoleTab({ connection }: { connection: RedisConnection }) {
         <button type="button" onClick={run} disabled={running} className="btn-primary">
           {running ? (
             <>
-              <i className="fas fa-spinner fa-spin mr-2"></i>执行中…
+              <i className="fas fa-spinner fa-spin mr-2"></i>{t('executing')}
             </>
           ) : (
             <>
-              <i className="fas fa-play mr-2"></i>执行
+              <i className="fas fa-play mr-2"></i>{t('execute')}
             </>
           )}
         </button>
@@ -432,22 +442,22 @@ function ConsoleTab({ connection }: { connection: RedisConnection }) {
           </FormRow>
         )}
         {fields.includes('value') && (
-          <FormRow label="value" hint="按字符串存储">
+          <FormRow label="value" hint={t('valueHint')}>
             <input value={f.value} onChange={(e) => setF({ ...f, value: e.target.value })} className="input-base w-full font-mono" />
           </FormRow>
         )}
         {fields.includes('ttl') && (
-          <FormRow label="TTL（秒）" hint={op === 'set' ? '留空 = 不过期' : undefined}>
+          <FormRow label={t('ttlLabel')} hint={op === 'set' ? t('ttlHint') : undefined}>
             <input type="number" value={f.ttl} onChange={(e) => setF({ ...f, ttl: e.target.value })} className="input-base w-full" />
           </FormRow>
         )}
         {fields.includes('pattern') && (
-          <FormRow label="pattern" hint="SCAN MATCH，如 user:*">
+          <FormRow label="pattern" hint={t('patternHint')}>
             <input value={f.pattern} onChange={(e) => setF({ ...f, pattern: e.target.value })} className="input-base w-full font-mono" />
           </FormRow>
         )}
         {fields.includes('count') && (
-          <FormRow label="上限" hint="最多返回条数（≤10000）">
+          <FormRow label={t('limitLabel')} hint={t('limitHint')}>
             <input type="number" value={f.count} onChange={(e) => setF({ ...f, count: e.target.value })} className="input-base w-full" />
           </FormRow>
         )}
@@ -457,17 +467,17 @@ function ConsoleTab({ connection }: { connection: RedisConnection }) {
           </FormRow>
         )}
         {fields.includes('stop') && (
-          <FormRow label="stop" hint="-1 = 末尾">
+          <FormRow label="stop" hint={t('stopHint')}>
             <input type="number" value={f.stop} onChange={(e) => setF({ ...f, stop: e.target.value })} className="input-base w-full" />
           </FormRow>
         )}
         {fields.includes('members') && (
-          <FormRow label="members" hint="逗号或换行分隔">
+          <FormRow label="members" hint={t('membersHint')}>
             <textarea value={f.members} onChange={(e) => setF({ ...f, members: e.target.value })} className="input-base w-full font-mono" rows={2} />
           </FormRow>
         )}
         {fields.includes('values') && (
-          <FormRow label="values" hint="逗号或换行分隔，可多个">
+          <FormRow label="values" hint={t('valuesHint')}>
             <textarea value={f.values} onChange={(e) => setF({ ...f, values: e.target.value })} className="input-base w-full font-mono" rows={2} />
           </FormRow>
         )}
@@ -476,7 +486,7 @@ function ConsoleTab({ connection }: { connection: RedisConnection }) {
       {fields.includes('nx') && (
         <label className="flex items-center space-x-2 text-sm">
           <input type="checkbox" checked={f.nx} onChange={(e) => setF({ ...f, nx: e.target.checked })} />
-          <span>NX（仅当 key 不存在时写入）</span>
+          <span>{t('nxHint')}</span>
         </label>
       )}
 
@@ -488,7 +498,7 @@ function ConsoleTab({ connection }: { connection: RedisConnection }) {
       )}
       {result !== null && (
         <div>
-          <div className="text-xs font-medium text-gray-700 mb-1">结果</div>
+          <div className="text-xs font-medium text-gray-700 mb-1">{t('resultLabel')}</div>
           <pre className="bg-gray-900 text-emerald-300 text-xs p-3 rounded overflow-x-auto whitespace-pre-wrap break-all">
             {JSON.stringify(result, null, 2)}
           </pre>
@@ -501,6 +511,8 @@ function ConsoleTab({ connection }: { connection: RedisConnection }) {
 // ── 接入指南 ──────────────────────────────────────────────────────────
 
 function UsageTab({ connection }: { connection: RedisConnection }) {
+  const t = useTranslations('wsRedisConn')
+  const tc = useTranslations('connCommon')
   const notify = useNotification()
   const origin =
     typeof window !== 'undefined' ? window.location.origin : 'https://platform.example.com'
@@ -509,67 +521,63 @@ function UsageTab({ connection }: { connection: RedisConnection }) {
   const copy = async (text: string, label: string) => {
     try {
       await navigator.clipboard.writeText(text)
-      notify.success(`已复制：${label}`)
+      notify.success(t('copied', { label }))
     } catch {
-      notify.error('复制失败，请手动选择文本')
+      notify.error(t('copyFail'))
     }
   }
 
-  const curlSet = `# 写入（需 owner/admin/member；带上登录后的 JWT）
+  const curlSet = `${t('curlSet')}
 curl -X POST "${execUrl}" \\
   -H "Authorization: Bearer <your_jwt>" \\
   -H "Content-Type: application/json" \\
   -d '{"op":"set","args":{"key":"greeting","value":"hello","ttl":60}}'`
 
-  const curlGet = `# 读取（任意租户成员）
+  const curlGet = `${t('curlGet')}
 curl -X POST "${execUrl}" \\
   -H "Authorization: Bearer <your_jwt>" \\
   -H "Content-Type: application/json" \\
   -d '{"op":"get","args":{"key":"greeting"}}'
 # → {"op":"get","result":{"value":"hello"}}`
 
-  const workflowNote = `工作流里新增 redis 节点即可读写本连接：
-  · 连接：选择「${connection.connection_name}」
-  · 操作：get / set / del / incr / hget / ...
-  · 参数：key / value / ttl 等，支持 {{nodeId.field}} 模板占位符
-写操作在 dry_run / 生产只读调试下返回 mock，不落库。`
+  const workflowNote = t('wfNote', { name: connection.connection_name })
 
   return (
     <div className="space-y-3 text-sm">
       <div className="bg-blue-50 border border-blue-200 text-blue-900 rounded p-3 text-xs space-y-1">
         <div className="font-semibold">
-          <i className="fas fa-lightbulb mr-1"></i>三种用法
+          <i className="fas fa-lightbulb mr-1"></i>{t('usageTitle')}
         </div>
         <ul className="list-disc list-inside space-y-0.5">
-          <li>本页「数据控制台」：直接点选命令读写，快速验证。</li>
-          <li>数据 API：<code className="bg-white px-1 rounded">POST /api/redis-connections/{connection.id}/exec</code>，JWT 鉴权。</li>
-          <li>工作流 <code className="bg-white px-1 rounded">redis</code> 节点：在自动化里编排读写。</li>
+          <li>{t('usage1')}</li>
+          <li>{t('usage2Pre')}<code className="bg-white px-1 rounded">POST /api/redis-connections/{connection.id}/exec</code>{t('usage2Post')}</li>
+          <li>{t('usage3Pre')}<code className="bg-white px-1 rounded">redis</code>{t('usage3Mid')}</li>
         </ul>
       </div>
-      <CodeBlock label="exec 地址" code={execUrl} onCopy={() => copy(execUrl, 'exec 地址')} />
-      <CodeBlock label="写入（SET）" code={curlSet} onCopy={() => copy(curlSet, '写入示例')} />
-      <CodeBlock label="读取（GET）" code={curlGet} onCopy={() => copy(curlGet, '读取示例')} />
+      <CodeBlock label={t('execAddr')} code={execUrl} onCopy={() => copy(execUrl, t('execAddr'))} />
+      <CodeBlock label={t('writeSet')} code={curlSet} onCopy={() => copy(curlSet, t('writeExample'))} />
+      <CodeBlock label={t('readGet')} code={curlGet} onCopy={() => copy(curlGet, t('readExample'))} />
       <div className="bg-gray-50 border border-gray-200 text-gray-700 rounded p-3 text-xs whitespace-pre-wrap">
         <div className="font-semibold mb-1">
-          <i className="fas fa-diagram-project mr-1"></i>工作流中使用
+          <i className="fas fa-diagram-project mr-1"></i>{t('wfTitle')}
         </div>
         {workflowNote}
       </div>
       <div className="text-xs text-gray-500 pt-2 border-t">
-        支持的命令：<span className="font-mono">{REDIS_OPS.join(' / ')}</span>。危险 / 阻塞命令
-        （FLUSHALL / CONFIG / KEYS *）不在集合内。
+        {t('supportedCmds')}<span className="font-mono">{REDIS_OPS.join(' / ')}</span>{t('dangerCmds')}
       </div>
     </div>
   )
 }
 
 function CodeBlock({ label, code, onCopy }: { label: string; code: string; onCopy: () => void }) {
+  const tc = useTranslations('connCommon')
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
         <span className="text-xs font-medium text-gray-700">{label}</span>
         <button type="button" onClick={onCopy} className="text-xs text-blue-600 hover:underline">
-          <i className="fas fa-copy mr-1"></i>复制
+          <i className="fas fa-copy mr-1"></i>{tc('copy')}
         </button>
       </div>
       <pre className="bg-gray-900 text-gray-100 text-xs p-3 rounded overflow-x-auto whitespace-pre-wrap break-all">
@@ -588,6 +596,8 @@ function SettingsTab({
   connection: RedisConnection
   onUpdated: () => void
 }) {
+  const t = useTranslations('wsRedisConn')
+  const tc = useTranslations('connCommon')
   const notify = useNotification()
   const [form, setForm] = useState({
     connection_name: connection.connection_name,
@@ -627,7 +637,7 @@ function SettingsTab({
         payload.password = form.password
       }
       await redisAPI.updateConnection(connection.id, payload)
-      notify.success('连接已更新')
+      notify.success(t('updated'))
       setForm({ ...form, password: '' })
       onUpdated()
     } catch {
@@ -644,12 +654,12 @@ function SettingsTab({
       const res = await redisAPI.healthCheck(connection.id)
       setHealthResult(res.data)
       if (res.data.ok) {
-        notify.success('Redis 可达')
+        notify.success(t('reachable'))
       } else {
-        notify.warning('探活失败')
+        notify.warning(tc('testFail'))
       }
     } catch (err: any) {
-      setHealthResult({ ok: false, error: err?.response?.data?.error || err?.message || '探活失败' })
+      setHealthResult({ ok: false, error: err?.response?.data?.error || err?.message || tc('testFail') })
     } finally {
       setHealthChecking(false)
     }
@@ -657,7 +667,7 @@ function SettingsTab({
 
   return (
     <div className="space-y-3 text-sm">
-      <FormRow label="连接名称">
+      <FormRow label={t('connName')}>
         <input
           value={form.connection_name}
           onChange={(e) => setForm({ ...form, connection_name: e.target.value })}
@@ -680,7 +690,7 @@ function SettingsTab({
             className="input-base w-full"
           />
         </FormRow>
-        <FormRow label="db 编号">
+        <FormRow label={t('dbNum')}>
           <input
             type="number"
             min={0}
@@ -692,14 +702,14 @@ function SettingsTab({
         </FormRow>
       </div>
       <div className="grid grid-cols-2 gap-3">
-        <FormRow label="用户名（ACL）" hint="留空 = 传统 AUTH 密码模式">
+        <FormRow label={t('aclUser')} hint={t('aclHintSettings')}>
           <input
             value={form.username}
             onChange={(e) => setForm({ ...form, username: e.target.value })}
             className="input-base w-full font-mono"
           />
         </FormRow>
-        <FormRow label="超时（秒）">
+        <FormRow label={t('timeout')}>
           <input
             type="number"
             min={1}
@@ -712,12 +722,12 @@ function SettingsTab({
           />
         </FormRow>
       </div>
-      <FormRow label="密码" hint="留空 = 保留原密码。新输入会替换并加密入库。">
+      <FormRow label={t('password')} hint={t('pwHintSettings')}>
         <input
           type="password"
           value={form.password}
           onChange={(e) => setForm({ ...form, password: e.target.value })}
-          placeholder="••••••••（输入新值以替换）"
+          placeholder={t('pwPlaceholder')}
           className="input-base w-full font-mono"
         />
       </FormRow>
@@ -736,7 +746,7 @@ function SettingsTab({
             checked={form.is_active}
             onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
           />
-          <span>连接启用中</span>
+          <span>{t('connEnabledSettings')}</span>
         </label>
       </div>
 
@@ -744,11 +754,11 @@ function SettingsTab({
         <button type="button" onClick={save} disabled={saving} className="btn-primary">
           {saving ? (
             <>
-              <i className="fas fa-spinner fa-spin mr-2"></i>保存中…
+              <i className="fas fa-spinner fa-spin mr-2"></i>{tc('saving')}
             </>
           ) : (
             <>
-              <i className="fas fa-save mr-2"></i>保存
+              <i className="fas fa-save mr-2"></i>{tc('save')}
             </>
           )}
         </button>
@@ -757,15 +767,15 @@ function SettingsTab({
           onClick={probe}
           disabled={healthChecking}
           className="btn-default"
-          title="PING + INFO 探活"
+          title={t('pingTitle')}
         >
           {healthChecking ? (
             <>
-              <i className="fas fa-spinner fa-spin mr-2"></i>探活中…
+              <i className="fas fa-spinner fa-spin mr-2"></i>{tc('testing')}
             </>
           ) : (
             <>
-              <i className="fas fa-heartbeat mr-2"></i>测试连接
+              <i className="fas fa-heartbeat mr-2"></i>{t('pingTest')}
             </>
           )}
         </button>
@@ -791,7 +801,7 @@ function SettingsTab({
           ) : (
             <div>
               <i className="fas fa-times-circle mr-1"></i>
-              {healthResult.error || '探活失败'}
+              {healthResult.error || tc('testFail')}
             </div>
           )}
         </div>
@@ -811,6 +821,8 @@ function CreateConnectionDialog({
   onClose: () => void
   onCreated: (id: number) => void
 }) {
+  const t = useTranslations('wsRedisConn')
+  const tc = useTranslations('connCommon')
   const notify = useNotification()
   const [form, setForm] = useState({
     connection_name: '',
@@ -826,11 +838,11 @@ function CreateConnectionDialog({
 
   const submit = async () => {
     if (!form.connection_name.trim()) {
-      notify.error('请填写连接名称')
+      notify.error(t('fillName'))
       return
     }
     if (!form.host.trim()) {
-      notify.error('请填写 host')
+      notify.error(t('fillHost'))
       return
     }
     setSaving(true)
@@ -856,9 +868,9 @@ function CreateConnectionDialog({
   }
 
   return (
-    <Dialog title="新建 Redis 连接" onClose={onClose} widthClass="max-w-lg">
+    <Dialog title={t('createTitle')} onClose={onClose} widthClass="max-w-lg">
       <div className="space-y-3 text-sm">
-        <FormRow label="连接名称 *" hint="同租户内不可重名">
+        <FormRow label={t('connNameReq')} hint={t('connNameHint')}>
           <input
             autoFocus
             value={form.connection_name}
@@ -884,7 +896,7 @@ function CreateConnectionDialog({
               className="input-base w-full"
             />
           </FormRow>
-          <FormRow label="db 编号">
+          <FormRow label={t('dbNum')}>
             <input
               type="number"
               min={0}
@@ -896,14 +908,14 @@ function CreateConnectionDialog({
           </FormRow>
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <FormRow label="用户名（ACL）" hint="Redis 6+；留空用传统密码">
+          <FormRow label={t('aclUser')} hint={t('aclHintCreate')}>
             <input
               value={form.username}
               onChange={(e) => setForm({ ...form, username: e.target.value })}
               className="input-base w-full font-mono"
             />
           </FormRow>
-          <FormRow label="超时（秒）">
+          <FormRow label={t('timeout')}>
             <input
               type="number"
               min={1}
@@ -916,7 +928,7 @@ function CreateConnectionDialog({
             />
           </FormRow>
         </div>
-        <FormRow label="密码" hint="无密码实例可留空；后端加密入库">
+        <FormRow label={t('password')} hint={t('pwHintCreate')}>
           <input
             type="password"
             value={form.password}
@@ -931,23 +943,23 @@ function CreateConnectionDialog({
             onChange={(e) => setForm({ ...form, use_tls: e.target.checked })}
           />
           <span>
-            使用 TLS（rediss://）
-            <span className="text-xs text-gray-400 ml-1">（托管 Redis 常需开启）</span>
+            {t('useTls')}
+            <span className="text-xs text-gray-400 ml-1">{t('tlsManaged')}</span>
           </span>
         </label>
       </div>
       <div className="flex justify-end space-x-2 pt-4 border-t mt-4">
         <button type="button" onClick={onClose} className="btn-default">
-          取消
+          {tc('cancel')}
         </button>
         <button type="button" onClick={submit} disabled={saving} className="btn-primary">
           {saving ? (
             <>
-              <i className="fas fa-spinner fa-spin mr-2"></i>创建中…
+              <i className="fas fa-spinner fa-spin mr-2"></i>{t('creating')}
             </>
           ) : (
             <>
-              <i className="fas fa-plus mr-2"></i>创建
+              <i className="fas fa-plus mr-2"></i>{t('create')}
             </>
           )}
         </button>

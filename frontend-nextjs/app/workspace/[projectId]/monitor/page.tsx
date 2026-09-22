@@ -8,6 +8,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useTranslations, useMessages } from 'next-intl'
 import api, { queryPerfAPI, QueryPerfExtensionStatus } from '@/lib/api'
 import { TenantPoolSettingsForm } from '@/components/TenantPoolSettings'
 
@@ -114,6 +115,9 @@ interface PoolHealth {
     level: 'ok' | 'warn' | 'critical'
     summary: string
     hints: string[]
+    summary_code: string
+    summary_params?: Record<string, unknown>
+    hints_coded?: { code: string; params?: Record<string, unknown> }[]
   }
 }
 
@@ -128,6 +132,9 @@ const MAX_SAMPLES = 60
 type Tab = 'diagnose' | 'app_pool' | 'connections' | 'slow' | 'tables'
 
 export default function MonitorPage() {
+  const tr = useTranslations('wsMonitor')
+  const tV = useTranslations('monitorVerdict')
+  const msgs = useMessages() as any
   const [health, setHealth] = useState<PoolHealth | null>(null)
   const [stats, setStats] = useState<DbStats | null>(null)
   const [tables, setTables] = useState<TableSize[]>([])
@@ -178,12 +185,12 @@ export default function MonitorPage() {
       } else {
         setPgSlowQueries([])
         const reason = pgSlowRes.reason as { response?: { data?: { error?: string } }; message?: string }
-        setPgSlowError(reason?.response?.data?.error || reason?.message || '读取 pg_stat_statements 失败')
+        setPgSlowError(reason?.response?.data?.error || reason?.message || tr('errPgSlow'))
       }
       if (connRes.status === 'fulfilled') setConnections(connRes.value.data || [])
       if (extRes.status === 'fulfilled') setPgStatStatus(extRes.value.data)
     } catch (err) {
-      console.error('加载监控数据失败:', err)
+      console.error(tr('loadFailedLog'), err)
     } finally {
       setLoading(false)
     }
@@ -203,11 +210,11 @@ export default function MonitorPage() {
     setResetMsg(null)
     try {
       await api.post('/api/monitor/pool-reset', null, { params: { reload: true } })
-      setResetMsg('连接池已重置并预热，正在刷新指标…')
+      setResetMsg(tr('resetOk'))
       await loadAll()
     } catch (err) {
-      console.error('重置连接池失败:', err)
-      setResetMsg('重置失败，请稍后重试或检查权限')
+      console.error(tr('resetFailedLog'), err)
+      setResetMsg(tr('resetFailed'))
     } finally {
       setResettingPool(false)
     }
@@ -217,9 +224,9 @@ export default function MonitorPage() {
     const d = Math.floor(s / 86400)
     const h = Math.floor((s % 86400) / 3600)
     const m = Math.floor((s % 3600) / 60)
-    if (d > 0) return `${d}天 ${h}小时`
-    if (h > 0) return `${h}小时 ${m}分钟`
-    return `${m}分钟`
+    if (d > 0) return tr('uptimeDH').replace('{d}', String(d)).replace('{h}', String(h))
+    if (h > 0) return tr('uptimeHM').replace('{h}', String(h)).replace('{m}', String(m))
+    return tr('uptimeM').replace('{m}', String(m))
   }
 
   const formatTime = (iso: string | null) => {
@@ -247,9 +254,9 @@ export default function MonitorPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">连接池与数据库监控</h1>
+          <h1 className="text-2xl font-semibold text-gray-900">{tr('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            优先诊断 PlaneOS 应用侧连接池；PG 服务端指标作对照
+            {tr('subtitle')}
           </p>
         </div>
         <div className="flex items-center space-x-3">
@@ -260,10 +267,10 @@ export default function MonitorPage() {
               onChange={(e) => setAutoRefresh(e.target.checked)}
               className="w-4 h-4 text-blue-600 rounded"
             />
-            <span className="text-sm text-gray-600">每 5s 自动刷新</span>
+            <span className="text-sm text-gray-600">{tr('autoRefresh')}</span>
           </label>
           <button onClick={loadAll} className="btn-default text-sm">
-            <i className={`fas fa-sync-alt mr-1 ${loading ? 'fa-spin' : ''}`}></i>刷新
+            <i className={`fas fa-sync-alt mr-1 ${loading ? 'fa-spin' : ''}`}></i>{tr('refresh')}
           </button>
         </div>
       </div>
@@ -275,7 +282,11 @@ export default function MonitorPage() {
             <i className={`fas ${verdictIcon(health.verdict.level)} text-2xl mt-0.5`}></i>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <p className="text-base font-semibold leading-snug">{health.verdict.summary}</p>
+                <p className="text-base font-semibold leading-snug">
+                  {msgs?.monitorVerdict?.[health.verdict.summary_code]
+                    ? tV(health.verdict.summary_code, (health.verdict.summary_params ?? {}) as any)
+                    : health.verdict.summary}
+                </p>
                 {(health.verdict.level === 'critical' ||
                   (health.app_pool.loaded &&
                     health.app_pool.idle === 0 &&
@@ -287,18 +298,25 @@ export default function MonitorPage() {
                     className="shrink-0 rounded-md border border-red-400 bg-white px-3 py-1.5 text-sm font-medium text-red-800 hover:bg-red-50 disabled:opacity-60"
                   >
                     <i className={`fas fa-redo-alt mr-1 ${resettingPool ? 'fa-spin' : ''}`}></i>
-                    {resettingPool ? '重置中…' : '重置连接池'}
+                    {resettingPool ? tr('resetting') : tr('resetPool')}
                   </button>
                 )}
               </div>
               {health.verdict.hints.length > 0 && (
                 <ul className="mt-2 space-y-1 text-sm opacity-90">
-                  {health.verdict.hints.map((h, i) => (
-                    <li key={i} className="flex gap-2">
-                      <span className="opacity-60">•</span>
-                      <span>{h}</span>
-                    </li>
-                  ))}
+                  {health.verdict.hints.map((h, i) => {
+                    const coded = health.verdict.hints_coded?.[i]
+                    const text =
+                      coded && msgs?.monitorVerdict?.[coded.code]
+                        ? tV(coded.code, (coded.params ?? {}) as any)
+                        : h
+                    return (
+                      <li key={i} className="flex gap-2">
+                        <span className="opacity-60">•</span>
+                        <span>{text}</span>
+                      </li>
+                    )
+                  })}
                 </ul>
               )}
               {resetMsg && (
@@ -306,13 +324,13 @@ export default function MonitorPage() {
               )}
               {health.pg.sampled === false && (
                 <p className="mt-2 text-xs opacity-75">
-                  PG 会话指标未采样（应用池饱和或短超时），以应用池水位为准
+                  {tr('pgNotSampled')}
                 </p>
               )}
               {health.verdict.level !== 'ok' && !autoRefresh && (
                 <p className="mt-3 text-xs opacity-75">
                   <i className="fas fa-lightbulb mr-1"></i>
-                  建议开启「每 5s 自动刷新」观察趋势是否在恶化
+                  {tr('suggestAutoRefresh')}
                 </p>
               )}
             </div>
@@ -324,16 +342,16 @@ export default function MonitorPage() {
       {health && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <WaterCard
-            label="应用连接池"
+            label={tr('cardAppPool')}
             value={
               health.app_pool.loaded
                 ? `${health.app_pool.in_use} / ${health.app_pool.max}`
-                : '未加载'
+                : tr('notLoaded')
             }
             sub={
               health.app_pool.loaded
-                ? `占用 ${health.app_pool.usage_percent}% · idle ${health.app_pool.idle}`
-                : '尚无请求命中该库'
+                ? tr('appPoolSub', { p: health.app_pool.usage_percent, idle: health.app_pool.idle })
+                : tr('noRequestHit')
             }
             percent={health.app_pool.loaded ? health.app_pool.usage_percent : 0}
             tone={
@@ -347,9 +365,9 @@ export default function MonitorPage() {
             }
           />
           <WaterCard
-            label="LISTEN 独立连接"
+            label={tr('cardListen')}
             value={String(health.listeners.dedicated_connections)}
-            sub={`连接 · 兴趣 SSE ${health.listeners.sse_bridges} · notify ${health.listeners.notify_workflows}`}
+            sub={tr('listenSub', { sse: health.listeners.sse_bridges, notify: health.listeners.notify_workflows })}
             tone={
               health.listeners.dedicated_connections > 1
                 ? 'yellow'
@@ -359,19 +377,19 @@ export default function MonitorPage() {
             }
           />
           <WaterCard
-            label="Acquire 超时（近似）"
+            label={tr('cardAcquireTimeout')}
             value={String(health.acquire_failures.for_this_database)}
             sub={
               health.acquire_failures.last_at
-                ? `最近 ${formatTime(health.acquire_failures.last_at)}`
-                : '进程启动以来无记录'
+                ? tr('lastAt', { time: formatTime(health.acquire_failures.last_at) })
+                : tr('noRecordSinceStart')
             }
             tone={health.acquire_failures.for_this_database > 0 ? 'red' : 'green'}
           />
           <WaterCard
-            label="PG 实例连接"
+            label={tr('cardPgInstance')}
             value={`${health.pg.instance_backends} / ${health.pg.max_connections}`}
-            sub={`本库 ${health.pg.database_backends} · active ${health.pg.active}`}
+            sub={tr('pgSub', { n: health.pg.database_backends, active: health.pg.active })}
             percent={
               health.pg.max_connections > 0
                 ? Math.round((health.pg.instance_backends / health.pg.max_connections) * 100)
@@ -394,18 +412,18 @@ export default function MonitorPage() {
       {samples.length >= 2 && (
         <div className="card p-4">
           <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-semibold text-gray-700">短期趋势（本地采样，刷新页面清空）</h3>
-            <span className="text-xs text-gray-400">{samples.length} / {MAX_SAMPLES} 点</span>
+            <h3 className="text-sm font-semibold text-gray-700">{tr('shortTrend')}</h3>
+            <span className="text-xs text-gray-400">{tr('samplePoints', { n: samples.length, max: MAX_SAMPLES })}</span>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Sparkline
-              label="应用池占用 %"
+              label={tr('trendAppPool')}
               values={samples.map((s) => s.appUsage)}
               color="#dc2626"
               maxHint={100}
             />
             <Sparkline
-              label="PG 实例连接数"
+              label={tr('trendPgConn')}
               values={samples.map((s) => s.pgBackends)}
               color="#2563eb"
             />
@@ -417,11 +435,11 @@ export default function MonitorPage() {
       <div className="flex flex-wrap gap-1 bg-gray-100 p-1 rounded-lg w-fit">
         {(
           [
-            ['diagnose', '诊断', 'fa-stethoscope'],
-            ['app_pool', '应用连接池', 'fa-water'],
-            ['connections', 'PG 会话', 'fa-plug'],
-            ['slow', '慢查询', 'fa-clock'],
-            ['tables', '表统计', 'fa-table'],
+            ['diagnose', tr('tabDiagnose'), 'fa-stethoscope'],
+            ['app_pool', tr('tabAppPool'), 'fa-water'],
+            ['connections', tr('tabConnections'), 'fa-plug'],
+            ['slow', tr('tabSlow'), 'fa-clock'],
+            ['tables', tr('tabTables'), 'fa-table'],
           ] as [Tab, string, string][]
         ).map(([key, label, icon]) => (
           <button
@@ -440,16 +458,16 @@ export default function MonitorPage() {
       {tab === 'diagnose' && health && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="card p-6 space-y-4">
-            <h3 className="text-sm font-semibold text-gray-700">应用池详情</h3>
+            <h3 className="text-sm font-semibold text-gray-700">{tr('appPoolDetail')}</h3>
             <Kv label="database_id" value={String(health.app_pool.database_id)} />
-            <Kv label="loaded" value={health.app_pool.loaded ? '是' : '否'} />
+            <Kv label="loaded" value={health.app_pool.loaded ? tr('yes') : tr('no')} />
             <Kv
-              label="水位"
+              label={tr('water')}
               value={`${health.app_pool.in_use} in_use / ${health.app_pool.size} size / ${health.app_pool.max} max`}
             />
             <Kv label="min_connections" value={String(health.app_pool.min)} />
             <div className="pt-2 border-t">
-              <h4 className="text-sm font-medium text-gray-800 mb-3">调整连接池</h4>
+              <h4 className="text-sm font-medium text-gray-800 mb-3">{tr('adjustPool')}</h4>
               <TenantPoolSettingsForm
                 databaseId={health.app_pool.database_id}
                 databaseSlug={health.app_pool.database_id}
@@ -465,7 +483,7 @@ export default function MonitorPage() {
             </div>
           </div>
           <div className="card p-6 space-y-4">
-            <h3 className="text-sm font-semibold text-gray-700">PG 会话摘要</h3>
+            <h3 className="text-sm font-semibold text-gray-700">{tr('pgSessionSummary')}</h3>
             <Kv label="active" value={String(health.pg.active)} />
             <Kv label="idle" value={String(health.pg.idle)} />
             <Kv label="idle in transaction" value={String(health.pg.idle_in_transaction)} />
@@ -473,10 +491,10 @@ export default function MonitorPage() {
               label="idle in transaction (aborted)"
               value={String(health.pg.idle_in_transaction_aborted)}
             />
-            <Kv label="LISTEN 会话（本库）" value={String(health.pg.listen_sessions)} />
-            <Kv label="等锁" value={String(health.pg.waiting_on_locks)} />
+            <Kv label={tr('listenSessions')} value={String(health.pg.listen_sessions)} />
+            <Kv label={tr('waitingLocks')} value={String(health.pg.waiting_on_locks)} />
             <Kv
-              label="最长 active"
+              label={tr('longestActive')}
               value={
                 health.pg.longest_active_seconds != null
                   ? `${health.pg.longest_active_seconds.toFixed(1)}s`
@@ -484,7 +502,7 @@ export default function MonitorPage() {
               }
             />
             <Kv
-              label="最长 idle in xact"
+              label={tr('longestIdleXact')}
               value={
                 health.pg.longest_idle_in_transaction_seconds != null
                   ? `${health.pg.longest_idle_in_transaction_seconds.toFixed(1)}s`
@@ -495,13 +513,13 @@ export default function MonitorPage() {
           {health.acquire_failures.recent.length > 0 && (
             <div className="card p-6 lg:col-span-2">
               <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                最近 acquire 超时（近似，重启清零）
+                {tr('recentAcquireTimeout')}
               </h3>
               <table className="w-full text-sm">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-3 py-2 text-left text-xs text-gray-500">时间</th>
-                    <th className="px-3 py-2 text-left text-xs text-gray-500">来源</th>
+                    <th className="px-3 py-2 text-left text-xs text-gray-500">{tr('thTime')}</th>
+                    <th className="px-3 py-2 text-left text-xs text-gray-500">{tr('thSource')}</th>
                     <th className="px-3 py-2 text-left text-xs text-gray-500">database_id</th>
                   </tr>
                 </thead>
@@ -511,7 +529,7 @@ export default function MonitorPage() {
                       <td className="px-3 py-2 text-xs font-mono">{formatTime(e.at)}</td>
                       <td className="px-3 py-2 text-xs">{e.source}</td>
                       <td className="px-3 py-2 text-xs font-mono">
-                        {e.database_id ?? '（HTTP 兜底）'}
+                        {e.database_id ?? tr('httpFallback')}
                       </td>
                     </tr>
                   ))}
@@ -521,12 +539,12 @@ export default function MonitorPage() {
           )}
           {stats && (
             <div className="card p-6 lg:col-span-2">
-              <h3 className="text-sm font-semibold text-gray-700 mb-3">PG 概览</h3>
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">{tr('pgOverview')}</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <MiniStat label="数据库大小" value={stats.database_size} />
-                <MiniStat label="表数量" value={String(stats.table_count)} />
-                <MiniStat label="缓存命中率" value={`${stats.cache_hit_ratio.toFixed(1)}%`} />
-                <MiniStat label="运行时间" value={formatUptime(stats.uptime_seconds)} />
+                <MiniStat label={tr('dbSize')} value={stats.database_size} />
+                <MiniStat label={tr('tableCountLabel')} value={String(stats.table_count)} />
+                <MiniStat label={tr('cacheHit')} value={`${stats.cache_hit_ratio.toFixed(1)}%`} />
+                <MiniStat label={tr('uptime')} value={formatUptime(stats.uptime_seconds)} />
               </div>
             </div>
           )}
@@ -536,7 +554,7 @@ export default function MonitorPage() {
       {tab === 'app_pool' && health && (
         <div className="space-y-4">
           <div className="card p-6">
-            <h3 className="text-sm font-semibold text-gray-700 mb-4">主池水位</h3>
+            <h3 className="text-sm font-semibold text-gray-700 mb-4">{tr('mainPoolWater')}</h3>
             <div className="mb-3">
               <div className="flex justify-between text-xs text-gray-500 mb-1">
                 <span>
@@ -565,7 +583,7 @@ export default function MonitorPage() {
             </div>
           </div>
           <div className="card p-6">
-            <h3 className="text-sm font-semibold text-gray-700 mb-3">调整连接池</h3>
+            <h3 className="text-sm font-semibold text-gray-700 mb-3">{tr('adjustPool')}</h3>
             <TenantPoolSettingsForm
               databaseId={health.app_pool.database_id}
               databaseSlug={health.app_pool.database_id}
@@ -596,7 +614,7 @@ export default function MonitorPage() {
                   {health.app_pool.replicas.map((r) => (
                     <tr key={r.replica_id}>
                       <td className="px-4 py-3 font-mono text-xs">{r.replica_id}</td>
-                      <td className="px-4 py-3 text-xs">{r.bypassed ? '是' : '否'}</td>
+                      <td className="px-4 py-3 text-xs">{r.bypassed ? tr('yes') : tr('no')}</td>
                       <td className="px-4 py-3 text-right text-xs">{r.watermark.in_use}</td>
                       <td className="px-4 py-3 text-right text-xs">{r.watermark.idle}</td>
                       <td className="px-4 py-3 text-right text-xs">{r.watermark.size}</td>
@@ -608,14 +626,14 @@ export default function MonitorPage() {
             </div>
           )}
           <div className="card p-6">
-            <h3 className="text-sm font-semibold text-gray-700 mb-3">LISTEN 独立连接（不占业务池）</h3>
+            <h3 className="text-sm font-semibold text-gray-700 mb-3">{tr('listenDedicated')}</h3>
             <div className="grid grid-cols-3 gap-3">
-              <MiniStat label="连接" value={String(health.listeners.dedicated_connections)} />
-              <MiniStat label="SSE 兴趣" value={String(health.listeners.sse_bridges)} />
-              <MiniStat label="notify 兴趣" value={String(health.listeners.notify_workflows)} />
+              <MiniStat label={tr('connLabel')} value={String(health.listeners.dedicated_connections)} />
+              <MiniStat label={tr('sseInterest')} value={String(health.listeners.sse_bridges)} />
+              <MiniStat label={tr('notifyInterest')} value={String(health.listeners.notify_workflows)} />
             </div>
             <p className="text-xs text-gray-400 mt-3">
-              连接数是本库实际 LISTEN 连接（同库多 channel 共用一条）。SSE / notify 是登记的兴趣数。
+              {tr('listenNote')}
             </p>
           </div>
         </div>
@@ -627,20 +645,20 @@ export default function MonitorPage() {
             <thead className="bg-gray-50">
               <tr>
                 <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">PID</th>
-                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">状态</th>
-                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">标记</th>
-                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">用户</th>
-                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">应用</th>
+                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">{tr('thStatus')}</th>
+                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">{tr('thFlag')}</th>
+                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">{tr('thUser')}</th>
+                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">{tr('thApp')}</th>
                 <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">SQL</th>
-                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">耗时</th>
-                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">事务</th>
+                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">{tr('thDuration')}</th>
+                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">{tr('thTxn')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
               {connections.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="text-center py-8 text-gray-400">
-                    当前无会话
+                    {tr('noSessions')}
                   </td>
                 </tr>
               ) : (
@@ -701,17 +719,17 @@ export default function MonitorPage() {
             <thead className="bg-gray-50">
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">SQL</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">调用</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">平均</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">最大</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">总耗时</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{tr('thCalls')}</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{tr('thAvg')}</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{tr('thMax')}</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{tr('thTotalTime')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
               {pgSlowQueries.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="text-center py-6 text-gray-400 text-xs">
-                    {slowQueryEmptyMessage(pgSlowError, pgStatStatus)}
+                    {slowQueryEmptyMessage(pgSlowError, pgStatStatus, tr)}
                   </td>
                 </tr>
               ) : (
@@ -756,17 +774,17 @@ export default function MonitorPage() {
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Schema</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Table</th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">行数</th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">总大小</th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">表大小</th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">索引大小</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">{tr('thRows')}</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">{tr('thTotalSize')}</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">{tr('thTableSize')}</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">{tr('thIndexSize')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
               {tables.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="text-center py-6 text-gray-400 text-xs">
-                    暂无数据
+                    {tr('emptyData')}
                   </td>
                 </tr>
               ) : (
@@ -798,13 +816,14 @@ export default function MonitorPage() {
 function slowQueryEmptyMessage(
   error: string | null,
   status: QueryPerfExtensionStatus | null,
+  tr: (k: string) => string,
 ): string {
   if (error) return error
   if (status?.install_hint) return status.install_hint
   if (status?.installed) {
-    return '暂无查询统计（扩展已启用；若刚装上，需要有新的 SQL 执行后才会出现）'
+    return tr('emptySlowInstalled')
   }
-  return '暂无数据（需启用 pg_stat_statements 扩展）'
+  return tr('emptySlowNotInstalled')
 }
 
 function WaterCard({

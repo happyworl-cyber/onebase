@@ -12,7 +12,7 @@ export const REPLAY_SPECIAL_META: Record<string, { label: string; glyph: string;
   kafka: { label: 'Kafka', glyph: '', color: '#10b981' },
   sse_publish: { label: 'SSE', glyph: '', color: '#6366f1' },
   http_call: { label: 'HTTP', glyph: '', color: '#0ea5e9' },
-  call_workflow: { label: '子流程', glyph: '', color: '#a855f7' },
+  call_workflow: { label: 'Subflow', glyph: '', color: '#a855f7' },
 }
 
 /**
@@ -20,11 +20,11 @@ export const REPLAY_SPECIAL_META: Record<string, { label: string; glyph: string;
  * key 集合与 REPLAY_SPECIAL_META 一致。
  */
 export const REPLAY_SPECIAL_DESCRIPTION: Record<string, string> = {
-  redis: 'Redis 缓存读写操作',
-  kafka: 'Kafka 消息发送',
-  sse_publish: 'SSE 前端实时推送',
-  http_call: 'HTTP 外部接口调用',
-  call_workflow: '调用子工作流',
+  redis: 'Redis cache read/write',
+  kafka: 'Kafka message send',
+  sse_publish: 'SSE real-time push to frontend',
+  http_call: 'HTTP external API call',
+  call_workflow: 'Call sub-workflow',
 }
 
 /** 节点执行状态 → 描边/填充色，与 WorkflowsManager 的 STATUS_COLORS 语义对齐（success/failed/failed_allowed/skipped）。 */
@@ -60,28 +60,28 @@ export function isEmptyValue(v: unknown): boolean {
 const EMPTY_RESPONSE_RULES: Record<string, (output: any) => string | null> = {
   // http_call 输出 { status, headers, body }：204 无内容，或响应体为空
   http_call: (o) => {
-    if (o?.status === 204) return 'HTTP 响应状态码 204（无内容）'
-    if (isEmptyValue(o?.body)) return `HTTP 响应状态码 ${o?.status ?? '?'}，但响应体为空`
+    if (o?.status === 204) return 'HTTP status 204 (no content)'
+    if (isEmptyValue(o?.body)) return `HTTP status ${o?.status ?? '?'} but the response body is empty`
     return null
   },
   // db_query 输出 { rows, count }：查询命中 0 行
-  db_query: (o) => (o?.count === 0 ? '查询命中 0 行' : null),
+  db_query: (o) => (o?.count === 0 ? 'Query matched 0 rows' : null),
   // db_execute 输出 { rows_affected }：写入未影响任何行（如 WHERE 条件未匹配到记录）
-  db_execute: (o) => (o?.rows_affected === 0 ? '写入未影响任何行（rows_affected=0）' : null),
+  db_execute: (o) => (o?.rows_affected === 0 ? 'Write affected no rows (rows_affected=0)' : null),
   // db_transaction/foreach 同为批量写库节点，输出同样带 rows_affected
-  db_transaction: (o) => (o?.rows_affected === 0 ? '写入未影响任何行（rows_affected=0）' : null),
-  foreach: (o) => (o?.rows_affected === 0 ? '写入未影响任何行（rows_affected=0）' : null),
+  db_transaction: (o) => (o?.rows_affected === 0 ? 'Write affected no rows (rows_affected=0)' : null),
+  foreach: (o) => (o?.rows_affected === 0 ? 'Write affected no rows (rows_affected=0)' : null),
   // call_workflow 输出为子流程 response 节点的 { status_code, body, headers }；
   // 子流程没有任何 response 被执行到时会退化成 { nodes: {...} } 兜底形态，此时不判空（语义不同）。
   call_workflow: (o) =>
     o != null && typeof o === 'object' && 'body' in o && isEmptyValue((o as any).body)
-      ? '子工作流返回的 body 为空'
+      ? 'The sub-workflow returned an empty body'
       : null,
   // kafka/redis 输出 { op, result }：result 为空即视为没有 ack/返回值（含 dry_run 场景本就未真正投递）
-  kafka: (o) => (o?.result == null ? 'Kafka 命令未返回 result（无 ack）' : null),
-  redis: (o) => (o?.result == null ? 'Redis 命令未返回 result' : null),
+  kafka: (o) => (o?.result == null ? 'Kafka command returned no result (no ack)' : null),
+  redis: (o) => (o?.result == null ? 'Redis command returned no result' : null),
   // sse_publish 输出 { topic, event, delivered }：投递数为 0，没有任何订阅端收到
-  sse_publish: (o) => (o?.delivered === 0 ? '推送 delivered=0，没有订阅端收到' : null),
+  sse_publish: (o) => (o?.delivered === 0 ? 'Push delivered=0; no subscriber received it' : null),
 }
 
 /**
@@ -99,7 +99,7 @@ export function emptyResponseReason(nodeType: string | null | undefined, status:
       return null // 规则函数访问了非预期结构，视为未命中而不是让判定崩掉
     }
   }
-  return isEmptyValue(output) ? '输出为空（null / 空对象 / 空数组 / 空串）' : null
+  return isEmptyValue(output) ? 'Output is empty (null / empty object / empty array / empty string)' : null
 }
 
 /** 判定「连接通、不报错、但没拿到数据」的静默空响应——判据见 emptyResponseReason。 */
@@ -206,8 +206,8 @@ export function nodeConfigHighlights(nodeType: string, config: unknown): ConfigH
   }
   switch (nodeType) {
     case 'redis':
-      push('操作', c.op)
-      push('连接', c.connection_id)
+      push('Operation', c.op)
+      push('Connection', c.connection_id)
       push('Key', c.key)
       push('Field', c.field)
       push('Value', c.value ?? c.values ?? c.members)
@@ -217,59 +217,59 @@ export function nodeConfigHighlights(nodeType: string, config: unknown): ConfigH
       push('Topic', c.topic)
       push('Key', c.key)
       push('Value', c.value)
-      push('连接', c.connection_id)
+      push('Connection', c.connection_id)
       break
     case 'http_call':
-      push('请求', c.method && c.url ? `${c.method} ${c.url}` : c.url)
+      push('Request', c.method && c.url ? `${c.method} ${c.url}` : c.url)
       push('Headers', c.headers)
       push('Body', c.body)
       break
     case 'call_workflow':
-      push('目标工作流', c.workflow)
+      push('Target workflow', c.workflow)
       push('Input', c.input)
-      push('失败可容错', c.allow_failure === true ? '是' : c.allow_failure === false ? '否' : null)
+      push('Fault tolerant', c.allow_failure === true ? 'Yes' : c.allow_failure === false ? 'No' : null)
       break
     case 'db_query':
     case 'db_execute':
       push('SQL', c.sql)
-      push('参数', c.params)
-      push('数据源', c.datasource_id)
+      push('Parameters', c.params)
+      push('Data source', c.datasource_id)
       break
     case 'db_transaction':
     case 'foreach':
       push('SQL', Array.isArray(c.statements) ? c.statements.map((s: any) => s?.sql).filter(Boolean).join(' ; ') : null)
-      push('数据源', c.datasource_id)
+      push('Data source', c.datasource_id)
       break
     case 'condition':
       push(
-        '分支条件',
+        'Branch conditions',
         Array.isArray(c.conditions)
           ? c.conditions.map((cond: any) => `${cond?.branch}: ${cond?.expression}`).join(' / ')
           : null,
       )
-      push('默认分支', c.default_branch)
+      push('Default branch', c.default_branch)
       break
     case 'response':
-      push('状态码', c.status_code)
+      push('Status code', c.status_code)
       push('Body', c.body)
       break
     case 'sse_publish':
       push('Topic', c.topic)
-      push('事件', c.event)
+      push('Event', c.event)
       break
     case 'email_send':
-      push('收件人', c.to)
-      push('主题', c.subject)
+      push('Recipients', c.to)
+      push('Subject', c.subject)
       break
     case 'code':
-      push('语言', c.language || 'lua')
+      push('Language', c.language || 'lua')
       break
     case 'loop':
-      push('模式', c.loop_mode)
-      push('表达式/次数/数组', c.expression ?? c.count ?? c.items)
+      push('Mode', c.loop_mode)
+      push('Expression / count / array', c.expression ?? c.count ?? c.items)
       break
     case 'object_storage':
-      push('操作', c.op)
+      push('Operation', c.op)
       push('Key', c.key ?? c.prefix)
       break
     default:

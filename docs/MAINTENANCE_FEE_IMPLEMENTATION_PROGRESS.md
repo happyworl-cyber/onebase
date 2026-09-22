@@ -4,7 +4,7 @@
 
 ### 1. 策略与设计文档
 
-#### 📄 ONEBASE_PRICING_STRATEGY.md
+#### 📄 PLANEOS_PRICING_STRATEGY.md
 - **竞品调研**：Supabase、Retool、Appsmith、Budibase、NocoDB
 - **推荐定价方案**：
   - Trial: 免费
@@ -491,7 +491,7 @@ curl http://localhost:3010/api/partner/maintenance/renewals
 #### 步骤 3：部署上线
 ```bash
 # 1. 生产环境运行迁移
-# 2. 配置环境变量（ONEBASE_LICENSE_PRIVATE_KEY）
+# 2. 配置环境变量（PLANEOS_LICENSE_PRIVATE_KEY）
 # 3. 启动定时任务
 # 4. 监控日志
 ```
@@ -560,7 +560,7 @@ curl http://localhost:3010/api/partner/maintenance/renewals
 
 如果在实施过程中遇到问题，可以参考：
 
-1. **定价策略文档**：`docs/ONEBASE_PRICING_STRATEGY.md`
+1. **定价策略文档**：`docs/PLANEOS_PRICING_STRATEGY.md`
 2. **实施总结**：`docs/PRICING_IMPLEMENTATION_SUMMARY.md`
 3. **数据库迁移**：`migrations/064_add_maintenance_fee_support.sql`
 4. **代码实现**：

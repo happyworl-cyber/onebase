@@ -1,6 +1,7 @@
 'use client'
 
 import type { RefObject } from 'react'
+import { useTranslations } from 'next-intl'
 
 interface WorkflowBatchBannerProps {
   visible: boolean
@@ -21,6 +22,7 @@ export default function WorkflowBatchBanner({
   onClear,
   bannerCheckboxRef,
 }: WorkflowBatchBannerProps) {
+  const t = useTranslations('wfList')
   return (
     <div className={`workflow-batch-banner ${visible ? 'show' : ''}`}>
       <input
@@ -29,15 +31,15 @@ export default function WorkflowBatchBanner({
         className="workflow-batch-banner-check"
         checked={allPageSelected}
         onChange={onTogglePageAll}
-        aria-label="全选当页"
+        aria-label={t('selectAllPage')}
       />
-      <span className="text-[11.5px] font-semibold text-indigo-700">已选 {selectedCount} 个</span>
+      <span className="text-[11.5px] font-semibold text-indigo-700">{t('selectedN', { n: selectedCount })}</span>
       <button
         type="button"
         onClick={onTogglePageAll}
         className="text-[11px] text-indigo-600 underline font-medium bg-transparent border-none cursor-pointer hover:text-indigo-800"
       >
-        {allPageSelected ? '取消当页全选' : `全选当页 ${pageCount} 个`}
+        {allPageSelected ? t('cancelSelectAll') : t('selectAllPageN', { n: pageCount })}
       </button>
       <div className="flex-1" />
       <button
@@ -45,7 +47,7 @@ export default function WorkflowBatchBanner({
         onClick={onClear}
         className="text-[11px] text-slate-500 font-semibold bg-transparent border-none cursor-pointer hover:text-slate-700"
       >
-        取消选择
+        {t('clearSelection')}
       </button>
     </div>
   )

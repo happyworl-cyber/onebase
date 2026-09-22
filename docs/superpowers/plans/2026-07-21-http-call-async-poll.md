@@ -195,7 +195,7 @@ mod http_async_poll;
 Run:
 
 ```bash
-cargo test -p onebase --lib http_async_poll::tests -- --nocapture
+cargo test -p planeos --lib http_async_poll::tests -- --nocapture
 ```
 
 (If the package name differs, use `cargo test http_async_poll:: -- --nocapture`.)

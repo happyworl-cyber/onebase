@@ -3,7 +3,7 @@
 //! 等价于 `migrate_management` + 把现有 admin 用户置为 super_admin。
 //! 运行方式: `cargo run --bin setup_multi_tenant`
 
-use onebase::migrate::run_sql_script;
+use planeos::migrate::run_sql_script;
 use sqlx::{postgres::PgPoolOptions, Row};
 use std::env;
 
@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 开始配置多租户系统...\n");
 
     let database_url = env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgresql://postgres:123456@localhost/onebase".to_string());
+        .unwrap_or_else(|_| "postgresql://postgres:123456@localhost/planeos".to_string());
 
     println!("📦 连接数据库: {}", database_url);
 

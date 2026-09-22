@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ToastProvider } from '@/components/Toast'
 import PlatformSidebar from '@/components/PlatformSidebar'
+import { useTranslations } from 'next-intl'
 
 /**
  * /platform/* 路径仅平台超级管理员可见。
@@ -19,6 +20,7 @@ export default function PlatformLayout({
 }: {
   children: React.ReactNode
 }) {
+  const tc = useTranslations('common')
   const router = useRouter()
   const [authorized, setAuthorized] = useState(false)
 
@@ -60,7 +62,7 @@ export default function PlatformLayout({
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
           <i className="fas fa-spinner fa-spin text-2xl text-gray-400 mb-2"></i>
-          <p className="text-sm text-gray-500">加载中...</p>
+          <p className="text-sm text-gray-500">{tc('loading')}</p>
         </div>
       </div>
     )

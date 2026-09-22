@@ -1,9 +1,9 @@
 """PlaneOS Python workflow host API.
 
 IPC is newline-delimited JSON over the Unix-domain socket named by
-``ONEBASE_HOST_SOCK``. Each request is ``{id, op, args}`` and receives exactly
+``PLANEOS_HOST_SOCK``. Each request is ``{id, op, args}`` and receives exactly
 one ``{id, ok, result|error}`` response line. This mirrors the JavaScript host
-runtime (``js-runtime/onebase-runtime/index.js``) so both languages share the
+runtime (``js-runtime/planeos-runtime/index.js``) so both languages share the
 same Rust ``js_host_bridge`` and therefore the same secret / SSRF policy.
 
 Python has a synchronous Unix-socket client, so unlike the Node runtime no
@@ -20,9 +20,9 @@ _next_id = 0
 
 def _call(op, args=None):
     global _next_id
-    sock_path = _os.environ.get("ONEBASE_HOST_SOCK")
+    sock_path = _os.environ.get("PLANEOS_HOST_SOCK")
     if not sock_path:
-        raise RuntimeError("ONEBASE_HOST_SOCK is not configured")
+        raise RuntimeError("PLANEOS_HOST_SOCK is not configured")
     _next_id += 1
     request = {"id": str(_next_id), "op": op, "args": args or {}}
     conn = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)

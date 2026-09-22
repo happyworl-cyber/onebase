@@ -5,7 +5,7 @@
 //! 因为这样会让 `assert_project_access` 这类业务护栏被客户端自我授权绕开。
 //!
 //! 但少数项目（如 acme）有上游可信 BFF/网关：网关已经把 way 用户身份 +
-//! 该用户当前可访问的 project_ids 验证完，再把结果通过私有头投到 onebase。
+//! 该用户当前可访问的 project_ids 验证完，再把结果通过私有头投到 planeos。
 //! 这种情况下需要一个"明确 opt-in"的通道，让这把 API Key（而且只有这把 key）
 //! 允许从指定 header 取值写到指定 GUC。
 //!

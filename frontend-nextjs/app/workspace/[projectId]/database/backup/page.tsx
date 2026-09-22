@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { queryAPI } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
 import { formatDateTime } from '@/lib/utils'
@@ -25,6 +26,7 @@ interface DatabaseInfo {
 }
 
 export default function BackupPage() {
+  const t = useTranslations('wsBackup')
   const { currentSchema, currentConnection } = useAppStore()
   const notify = useNotification()
   const [dbInfo, setDbInfo] = useState<DatabaseInfo | null>(null)
@@ -55,7 +57,7 @@ export default function BackupPage() {
         setDbInfo(result.data.data[0])
       }
     } catch (err: any) {
-      console.error('加载数据库信息失败:', err)
+      console.error(t('loadDbFailed'), err)
     }
   }
 
@@ -251,7 +253,7 @@ export default function BackupPage() {
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
       
-      notify.success('备份已生成并下载')
+      notify.success(t('backupDone'))
       setShowBackupDialog(false)
     } catch (err: any) {
       notify.error(err)
@@ -266,9 +268,7 @@ export default function BackupPage() {
     if (!file) return
     
     const confirmed = window.confirm(
-      '⚠️ 警告：恢复操作可能会覆盖现有数据！\n\n' +
-      '请确保您已备份当前数据。\n\n' +
-      '确定要继续吗？'
+      t('confirmRestore')
     )
     if (!confirmed) return
     
@@ -298,7 +298,7 @@ export default function BackupPage() {
         }
       }
       
-      notify.success(`恢复完成：${successCount} 条语句成功，${failCount} 条失败`)
+      notify.success(t('restoreDone', { ok: successCount, fail: failCount }))
       setShowRestoreDialog(false)
     } catch (err: any) {
       notify.error(err)
@@ -314,9 +314,9 @@ export default function BackupPage() {
       {/* 页面头部 */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-800">数据库备份与恢复</h1>
+          <h1 className="text-2xl font-semibold text-gray-800">{t('title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            创建数据库备份或从备份文件恢复
+            {t('subtitle')}
           </p>
         </div>
         
@@ -326,14 +326,14 @@ export default function BackupPage() {
             className="btn-default"
           >
             <i className="fas fa-upload mr-2"></i>
-            恢复
+            {t('restore')}
           </button>
           <button
             onClick={() => setShowBackupDialog(true)}
             className="btn-primary"
           >
             <i className="fas fa-download mr-2"></i>
-            创建备份
+            {t('createBackup')}
           </button>
         </div>
       </div>
@@ -347,7 +347,7 @@ export default function BackupPage() {
               <i className="fas fa-database text-blue-600 text-xl"></i>
             </div>
             <div>
-              <p className="text-sm text-gray-500">当前数据库</p>
+              <p className="text-sm text-gray-500">{t('currentDb')}</p>
               <p className="text-xl font-semibold text-gray-900">
                 {dbInfo?.database_name || '-'}
               </p>
@@ -361,7 +361,7 @@ export default function BackupPage() {
               <i className="fas fa-hdd text-green-600 text-xl"></i>
             </div>
             <div>
-              <p className="text-sm text-gray-500">数据库大小</p>
+              <p className="text-sm text-gray-500">{t('dbSize')}</p>
               <p className="text-xl font-semibold text-gray-900">
                 {dbInfo?.database_size || '-'}
               </p>
@@ -375,7 +375,7 @@ export default function BackupPage() {
               <i className="fas fa-table text-purple-600 text-xl"></i>
             </div>
             <div>
-              <p className="text-sm text-gray-500">{currentSchema} 中的表</p>
+              <p className="text-sm text-gray-500">{t('tablesIn', { schema: currentSchema })}</p>
               <p className="text-xl font-semibold text-gray-900">
                 {dbInfo?.table_count || 0}
               </p>
@@ -387,18 +387,18 @@ export default function BackupPage() {
       {/* 备份历史 */}
       <div className="card">
         <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-gray-700">备份历史</h3>
+          <h3 className="text-sm font-semibold text-gray-700">{t('backupHistory')}</h3>
           {backups.length > 0 && (
             <button
               onClick={() => {
-                if (window.confirm('确定要清空备份历史吗？')) {
+                if (window.confirm(t('confirmClearHistory'))) {
                   saveBackups([])
                 }
               }}
               className="text-xs text-red-600 hover:text-red-700"
             >
               <i className="fas fa-trash mr-1"></i>
-              清空历史
+              {t('clearHistory')}
             </button>
           )}
         </div>
@@ -406,8 +406,8 @@ export default function BackupPage() {
         {backups.length === 0 ? (
           <div className="p-8 text-center">
             <i className="fas fa-archive text-4xl text-gray-300 mb-3"></i>
-            <p className="text-gray-500">暂无备份记录</p>
-            <p className="text-sm text-gray-400 mt-1">点击"创建备份"开始您的第一次备份</p>
+            <p className="text-gray-500">{t('noBackup')}</p>
+            <p className="text-sm text-gray-400 mt-1">{t('noBackupHint')}</p>
           </div>
         ) : (
           <div className="divide-y divide-gray-100">
@@ -434,8 +434,7 @@ export default function BackupPage() {
                           backup.type === 'schema' ? 'bg-blue-100 text-blue-700' :
                           'bg-gray-100 text-gray-700'
                         }`}>
-                          {backup.type === 'full' ? '完整备份' :
-                           backup.type === 'schema' ? 'Schema 备份' : '表备份'}
+                          {backup.type === 'full' ? t('typeFull') : backup.type === 'schema' ? t('typeSchema') : t('typeTable')}
                         </span>
                         {backup.size && <span>{backup.size}</span>}
                         <span>{formatDateTime(backup.createdAt)}</span>
@@ -449,9 +448,7 @@ export default function BackupPage() {
                       backup.status === 'failed' ? 'bg-red-100 text-red-700' :
                       'bg-yellow-100 text-yellow-700'
                     }`}>
-                      {backup.status === 'completed' ? '已完成' :
-                       backup.status === 'failed' ? '失败' :
-                       backup.status === 'running' ? '进行中' : '等待中'}
+                      {backup.status === 'completed' ? t('statusCompleted') : backup.status === 'failed' ? t('statusFailed') : backup.status === 'running' ? t('statusRunning') : t('statusPending')}
                     </span>
                   </div>
                 </div>
@@ -468,7 +465,7 @@ export default function BackupPage() {
       <Drawer
         isOpen={showBackupDialog}
         onClose={() => setShowBackupDialog(false)}
-        title="创建备份"
+        title={t('createTitle')}
         size="md"
         footer={
           <div className="flex gap-3">
@@ -476,7 +473,7 @@ export default function BackupPage() {
               onClick={() => setShowBackupDialog(false)}
               className="flex-1 h-11 px-5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-all duration-200"
             >
-              取消
+              {t('cancel')}
             </button>
             <button
               onClick={generateBackupSQL}
@@ -486,12 +483,12 @@ export default function BackupPage() {
               {loading ? (
                 <>
                   <i className="fas fa-spinner fa-spin mr-2"></i>
-                  生成中...
+                  {t('generating')}
                 </>
               ) : (
                 <>
                   <i className="fas fa-download mr-2"></i>
-                  生成备份
+                  {t('generate')}
                 </>
               )}
             </button>
@@ -500,7 +497,7 @@ export default function BackupPage() {
       >
         <div className="space-y-5">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-3">备份类型</label>
+            <label className="block text-sm font-medium text-gray-700 mb-3">{t('backupType')}</label>
             <div className="grid grid-cols-2 gap-3">
               {(['schema', 'table'] as const).map(type => (
                 <button
@@ -516,10 +513,10 @@ export default function BackupPage() {
                     type === 'schema' ? 'fa-layer-group' : 'fa-table'
                   } text-xl mb-2`}></i>
                   <p className="text-sm font-medium">
-                    {type === 'schema' ? 'Schema 备份' : '单表备份'}
+                    {type === 'schema' ? t('schemaBackup') : t('tableBackup')}
                   </p>
                   <p className="text-xs text-gray-500 mt-1">
-                    {type === 'schema' ? '备份整个 Schema' : '备份指定表'}
+                    {type === 'schema' ? t('descSchema') : t('descTable')}
                   </p>
                 </button>
               ))}
@@ -528,19 +525,19 @@ export default function BackupPage() {
           
           {backupOptions.type === 'table' && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">选择表</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{t('selectTable')}</label>
               <input
                 type="text"
                 value={backupOptions.tableName}
                 onChange={(e) => setBackupOptions({ ...backupOptions, tableName: e.target.value })}
-                placeholder="输入表名..."
+                placeholder={t('tablePlaceholder')}
                 className="w-full input-base"
               />
             </div>
           )}
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-3">备份内容</label>
+            <label className="block text-sm font-medium text-gray-700 mb-3">{t('backupContent')}</label>
             <div className="space-y-2">
               <label className="flex items-center space-x-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer">
                 <input
@@ -550,8 +547,8 @@ export default function BackupPage() {
                   className="rounded border-gray-300 text-blue-600 w-4 h-4"
                 />
                 <div>
-                  <span className="text-sm font-medium text-gray-900">包含表结构</span>
-                  <p className="text-xs text-gray-500">CREATE TABLE 语句</p>
+                  <span className="text-sm font-medium text-gray-900">{t('includeStruct')}</span>
+                  <p className="text-xs text-gray-500">{t('createTableStmt')}</p>
                 </div>
               </label>
               <label className="flex items-center space-x-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer">
@@ -562,8 +559,8 @@ export default function BackupPage() {
                   className="rounded border-gray-300 text-blue-600 w-4 h-4"
                 />
                 <div>
-                  <span className="text-sm font-medium text-gray-900">包含数据</span>
-                  <p className="text-xs text-gray-500">INSERT 语句</p>
+                  <span className="text-sm font-medium text-gray-900">{t('includeData')}</span>
+                  <p className="text-xs text-gray-500">{t('insertStmt')}</p>
                 </div>
               </label>
             </div>
@@ -572,7 +569,7 @@ export default function BackupPage() {
           <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
             <p className="text-sm text-yellow-700">
               <i className="fas fa-info-circle mr-2"></i>
-              备份将生成 SQL 文件并自动下载。大型数据库可能需要较长时间。
+              {t('backupNote')}
             </p>
           </div>
         </div>
@@ -582,14 +579,14 @@ export default function BackupPage() {
       <Drawer
         isOpen={showRestoreDialog}
         onClose={() => setShowRestoreDialog(false)}
-        title="恢复数据库"
+        title={t('restoreTitle')}
         size="md"
         footer={
           <button
             onClick={() => setShowRestoreDialog(false)}
             className="w-full h-11 px-5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-all duration-200"
           >
-            关闭
+            {t('close')}
           </button>
         }
       >
@@ -597,15 +594,15 @@ export default function BackupPage() {
           <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
             <p className="text-sm text-red-700 font-medium">
               <i className="fas fa-exclamation-triangle mr-2"></i>
-              警告
+              {t('warning')}
             </p>
             <p className="text-sm text-red-600 mt-1">
-              恢复操作可能会覆盖现有数据。请确保您已备份当前数据，并且选择了正确的备份文件。
+              {t('restoreWarn')}
             </p>
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-3">选择备份文件</label>
+            <label className="block text-sm font-medium text-gray-700 mb-3">{t('selectBackupFile')}</label>
             <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-400 transition-colors">
               <input
                 type="file"
@@ -617,8 +614,8 @@ export default function BackupPage() {
               />
               <label htmlFor="restore-file" className="cursor-pointer block">
                 <i className="fas fa-upload text-4xl text-gray-400 mb-3 block"></i>
-                <p className="text-gray-600">点击或拖拽 SQL 文件到此处</p>
-                <p className="text-sm text-gray-400 mt-1">支持 .sql 格式</p>
+                <p className="text-gray-600">{t('dropSql')}</p>
+                <p className="text-sm text-gray-400 mt-1">{t('supportSql')}</p>
               </label>
             </div>
           </div>
@@ -626,7 +623,7 @@ export default function BackupPage() {
           {loading && (
             <div className="text-center py-4">
               <i className="fas fa-spinner fa-spin text-2xl text-blue-500 mb-2"></i>
-              <p className="text-gray-600">正在恢复...</p>
+              <p className="text-gray-600">{t('restoring')}</p>
             </div>
           )}
         </div>

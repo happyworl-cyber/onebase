@@ -2,7 +2,7 @@
 //!
 //! 运行方式: `cargo run --bin migrate_management`
 
-use onebase::migrate::run_sql_script;
+use planeos::migrate::run_sql_script;
 use sqlx::{postgres::PgPoolOptions, Row};
 use std::env;
 

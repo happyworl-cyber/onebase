@@ -31,7 +31,7 @@
 
 ```bash
 git clone <your-repo-url>
-cd onebase
+cd planeos
 ```
 
 ### 2. 配置数据库
@@ -46,15 +46,15 @@ sudo -u postgres psql
 
 # 创建用户和数据库（让用户成为数据库 owner，
 # 这样在 PostgreSQL 15+ 上才能直接在 public schema 建表，迁移工具也能建 management schema）
-CREATE USER onebase_user WITH ENCRYPTED PASSWORD 'your_password';
-CREATE DATABASE onebase_db OWNER onebase_user;
-GRANT ALL PRIVILEGES ON DATABASE onebase_db TO onebase_user;
+CREATE USER planeos_user WITH ENCRYPTED PASSWORD 'your_password';
+CREATE DATABASE planeos_db OWNER planeos_user;
+GRANT ALL PRIVILEGES ON DATABASE planeos_db TO planeos_user;
 
 # 退出 psql
 \q
 
 # 验证可登录
-psql -U onebase_user -h 127.0.0.1 -d onebase_db -c "SELECT current_user, current_database();"
+psql -U planeos_user -h 127.0.0.1 -d planeos_db -c "SELECT current_user, current_database();"
 ```
 
 ### 3. 配置环境变量
@@ -69,12 +69,12 @@ JWT_SECRET=$(openssl rand -base64 48)
 ENCRYPTION_KEY=$(openssl rand -base64 32)
 
 # ── 必填：管理库连接串 ──
-DATABASE_URL=postgresql://onebase_user:your_password@localhost:5432/onebase_db
+DATABASE_URL=postgresql://planeos_user:your_password@localhost:5432/planeos_db
 
 # ── 可选：监听地址 / 端口 / 日志 / 缓存 ──
 HOST=127.0.0.1
 PORT=3000
-RUST_LOG=info,onebase=debug
+RUST_LOG=info,planeos=debug
 REDIS_URL=redis://127.0.0.1:6379
 
 # ── 可选：CORS 白名单，生产环境务必改为实际域名 ──
@@ -129,7 +129,7 @@ cargo run --bin create_admin
 | `cargo run --bin migrate_sso` | SSO Provider 表 |
 | `cargo run --bin migrate_examples` | 示例业务表（categories/products/orders，演示 ER 图用） |
 
-> 验证迁移成功：`psql -U onebase_user -d onebase_db -c "\dt management.*"`，应能看到一组 `tenants / tenant_databases / roles / permissions / sso_providers / webhooks / audit_logs / api_keys / ...`。
+> 验证迁移成功：`psql -U planeos_user -d planeos_db -c "\dt management.*"`，应能看到一组 `tenants / tenant_databases / roles / permissions / sso_providers / webhooks / audit_logs / api_keys / ...`。
 
 ### 5. 运行项目
 
@@ -139,11 +139,11 @@ cargo run
 
 # 或者先编译再运行
 cargo build
-./target/debug/onebase
+./target/debug/planeos
 
 # 生产模式（优化编译）
 cargo build --release
-./target/release/onebase
+./target/release/planeos
 ```
 
 你应该看到：
@@ -223,7 +223,7 @@ Error: database connection failed
 **解决方案**:
 1. 检查 PostgreSQL 是否运行：`sudo systemctl status postgresql`
 2. 验证 `.env` 中的数据库 URL 是否正确
-3. 测试数据库连接：`psql -U onebase_user -d onebase_db`
+3. 测试数据库连接：`psql -U planeos_user -d planeos_db`
 
 ### 问题 1.5: 登录返回 500 / "邮箱或密码错误"
 
@@ -239,8 +239,8 @@ Error: database connection failed
 cargo run --bin migrate_all
 
 # 或单独执行
-psql -U onebase_user -d onebase_db -f migrations/011_seed_default_permissions.sql
-psql -U onebase_user -d onebase_db -f migrations/012_jwt_sessions.sql
+psql -U planeos_user -d planeos_db -f migrations/011_seed_default_permissions.sql
+psql -U planeos_user -d planeos_db -f migrations/012_jwt_sessions.sql
 
 # 想顺手重置超管密码
 cargo run --bin create_admin
@@ -249,7 +249,7 @@ cargo run --bin create_admin
 ### 问题 2: 编译错误
 
 ```
-error: could not compile `onebase`
+error: could not compile `planeos`
 ```
 
 **解决方案**:
@@ -298,9 +298,9 @@ RUN cargo build --release
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y libssl3 ca-certificates
-COPY --from=builder /app/target/release/onebase /usr/local/bin/
+COPY --from=builder /app/target/release/planeos /usr/local/bin/
 EXPOSE 3000
-CMD ["onebase"]
+CMD ["planeos"]
 ```
 
 创建 `docker-compose.yml`:
@@ -312,8 +312,8 @@ services:
   db:
     image: postgres:14
     environment:
-      POSTGRES_DB: onebase_db
-      POSTGRES_USER: onebase_user
+      POSTGRES_DB: planeos_db
+      POSTGRES_USER: planeos_user
       POSTGRES_PASSWORD: your_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -325,7 +325,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      DATABASE_URL: postgresql://onebase_user:your_password@db:5432/onebase_db
+      DATABASE_URL: postgresql://planeos_user:your_password@db:5432/planeos_db
       HOST: 0.0.0.0
       PORT: 3000
     depends_on:
@@ -343,7 +343,7 @@ docker-compose up -d
 
 ### 使用 Systemd（Linux）
 
-创建服务文件 `/etc/systemd/system/onebase.service`:
+创建服务文件 `/etc/systemd/system/planeos.service`:
 
 ```ini
 [Unit]
@@ -353,11 +353,11 @@ After=network.target postgresql.service
 [Service]
 Type=simple
 User=www-data
-WorkingDirectory=/opt/onebase
-Environment="DATABASE_URL=postgresql://onebase_user:password@localhost/onebase_db"
+WorkingDirectory=/opt/planeos
+Environment="DATABASE_URL=postgresql://planeos_user:password@localhost/planeos_db"
 Environment="HOST=0.0.0.0"
 Environment="PORT=3000"
-ExecStart=/opt/onebase/target/release/onebase
+ExecStart=/opt/planeos/target/release/planeos
 Restart=always
 
 [Install]
@@ -368,9 +368,9 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable onebase
-sudo systemctl start onebase
-sudo systemctl status onebase
+sudo systemctl enable planeos
+sudo systemctl start planeos
+sudo systemctl status planeos
 ```
 
 ### 使用 Nginx 反向代理
@@ -402,9 +402,9 @@ server {
 2. **数据库权限**：
    ```sql
    -- 只授予必要的权限
-   REVOKE ALL ON DATABASE onebase_db FROM onebase_user;
-   GRANT CONNECT ON DATABASE onebase_db TO onebase_user;
-   GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO onebase_user;
+   REVOKE ALL ON DATABASE planeos_db FROM planeos_user;
+   GRANT CONNECT ON DATABASE planeos_db TO planeos_user;
+   GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO planeos_user;
    ```
 
 3. **环境变量**：
@@ -430,13 +430,13 @@ server {
 3. **日志级别**：
    ```env
    # 生产环境使用 info 或 warn
-   RUST_LOG=warn,onebase=info
+   RUST_LOG=warn,planeos=info
    ```
 
 ## 🆘 获取帮助
 
 - 查看日志：`RUST_LOG=debug cargo run`
-- 测试数据库连接：`psql -U onebase_user -d onebase_db`
+- 测试数据库连接：`psql -U planeos_user -d planeos_db`
 - 检查端口：`netstat -tuln | grep 3000`
 
 祝你使用愉快！🎉

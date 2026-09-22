@@ -119,8 +119,8 @@ BEGIN
           AND column_name = 'organization_id'
     ) THEN
         INSERT INTO management.tenants (name, slug, contact_email) VALUES
-            ('示例公司A', 'company-a', 'admin@company-a.com'),
-            ('示例公司B', 'company-b', 'admin@company-b.com')
+            ('示例项目A', 'company-a', 'admin@company-a.com'),
+            ('示例项目B', 'company-b', 'admin@company-b.com')
         ON CONFLICT (slug) DO NOTHING;
     END IF;
 END $$;

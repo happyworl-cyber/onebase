@@ -1,10 +1,12 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { useAppStore } from '@/lib/store'
 import { schemaAPI } from '@/lib/api'
 
 export default function SchemaSelector() {
+  const t = useTranslations('schemaSelector')
   const { currentSchema, setCurrentSchema } = useAppStore()
   const [schemas, setSchemas] = useState<any[]>([])
   const [showMenu, setShowMenu] = useState(false)
@@ -50,7 +52,7 @@ export default function SchemaSelector() {
         setCurrentSchema(data[0].schema_name)
       }
     } catch (err) {
-      console.error('加载 schemas 失败:', err)
+      console.error(t('loadFailed'), err)
       setSchemas([])
     } finally {
       setLoading(false)
@@ -81,7 +83,7 @@ export default function SchemaSelector() {
         window.dispatchEvent(new Event('schema-changed'))
       }
     } catch (err: any) {
-      alert(err?.response?.data?.error || '创建 Schema 失败')
+      alert(err?.response?.data?.error || t('createFailed'))
     } finally {
       setCreating(false)
     }
@@ -92,7 +94,7 @@ export default function SchemaSelector() {
       <div className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-200">
         <div className="flex items-center space-x-2">
           <i className="fas fa-layer-group text-gray-400 text-xs"></i>
-          <span className="text-xs text-gray-700">加载中...</span>
+          <span className="text-xs text-gray-700">{t('loading')}</span>
         </div>
       </div>
     )
@@ -110,7 +112,7 @@ export default function SchemaSelector() {
             <div className="flex-1 min-w-0 text-left">
               <p className="text-[10px] text-gray-500 uppercase">Schema</p>
               <p className="text-xs font-medium text-gray-700 truncate">
-                {currentSchema || '选择 Schema'}
+                {currentSchema || t('selectSchema')}
               </p>
             </div>
           </div>
@@ -137,7 +139,7 @@ export default function SchemaSelector() {
                     type="text"
                     value={newSchemaName}
                     onChange={(e) => setNewSchemaName(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
-                    placeholder="输入 schema 名称"
+                    placeholder={t('phName')}
                     className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
                     autoFocus
                     onKeyDown={(e) => {
@@ -148,14 +150,14 @@ export default function SchemaSelector() {
                       }
                     }}
                   />
-                  <p className="text-[10px] text-gray-500 mt-1">只允许小写字母、数字和下划线</p>
+                  <p className="text-[10px] text-gray-500 mt-1">{t('nameHint')}</p>
                   <div className="flex gap-1 mt-2">
                     <button
                       onClick={handleCreateSchema}
                       disabled={!newSchemaName.trim() || creating}
                       className="flex-1 px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
                     >
-                      {creating ? '创建中...' : '创建'}
+                      {creating ? t('creating') : t('create')}
                     </button>
                     <button
                       onClick={() => {
@@ -164,7 +166,7 @@ export default function SchemaSelector() {
                       }}
                       className="px-2 py-1 text-xs text-gray-600 hover:bg-gray-200 rounded"
                     >
-                      取消
+                      {t('cancel')}
                     </button>
                   </div>
                 </div>
@@ -174,7 +176,7 @@ export default function SchemaSelector() {
                   className="w-full px-3 py-2 mb-2 text-xs text-blue-600 hover:bg-blue-50 rounded-md flex items-center space-x-2 transition-colors"
                 >
                   <i className="fas fa-plus"></i>
-                  <span>新建 Schema</span>
+                  <span>{t('newSchema')}</span>
                 </button>
               )}
 
@@ -182,11 +184,11 @@ export default function SchemaSelector() {
                 {loading ? (
                   <div className="px-3 py-4 text-center">
                     <i className="fas fa-spinner fa-spin text-gray-400"></i>
-                    <p className="text-xs text-gray-500 mt-1">加载中...</p>
+                    <p className="text-xs text-gray-500 mt-1">{t('loading')}</p>
                   </div>
                 ) : schemas.length === 0 ? (
                   <div className="px-3 py-4 text-center">
-                    <p className="text-xs text-gray-500">暂无 Schema</p>
+                    <p className="text-xs text-gray-500">{t('empty')}</p>
                   </div>
                 ) : (
                   <div className="space-y-0.5">
@@ -214,7 +216,7 @@ export default function SchemaSelector() {
                                 {schema.schema_name}
                               </p>
                               <p className="text-[10px] text-gray-500">
-                                {schema.table_count} 张表
+                                {t('tableCount', { n: schema.table_count })}
                               </p>
                             </div>
                           </div>

@@ -9,7 +9,7 @@
 //! [`crate::pat_handlers::verify_pat`]。
 //!
 //! 客户端接入（Claude Code）：
-//! `claude mcp add --transport http onebase <BASE_URL>/mcp --header "Authorization: Bearer obm_xxx"`
+//! `claude mcp add --transport http planeos <BASE_URL>/mcp --header "Authorization: Bearer obm_xxx"`
 
 use axum::{
     extract::State,
@@ -95,7 +95,7 @@ pub async fn mcp_endpoint(
                     "protocolVersion": version,
                     "capabilities": { "tools": {} },
                     "serverInfo": {
-                        "name": "onebase-workflow-mcp",
+                        "name": "planeos-workflow-mcp",
                         "version": env!("CARGO_PKG_VERSION")
                     },
                     "instructions": "PlaneOS 工作流创作工作台：先 list_skills 看有没有匹配能力，命中则 get_skill 按正文执行。编写工作流：node_spec → create_workflow（创建即启用）→ debug_workflow（默认干跑）→ workflow_api_doc；检测/审查走 workflow-qa。已启用工作流的启停由人在页面操作。"

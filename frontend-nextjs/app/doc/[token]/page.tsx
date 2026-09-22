@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useParams } from 'next/navigation'
 import WorkflowDocContent, {
   buildDocMarkdown,
@@ -25,6 +26,7 @@ type LoadState =
   | { status: 'error'; message: string }
 
 export default function PublicWorkflowDocPage() {
+  const t = useTranslations('docPage')
   const params = useParams<{ token: string }>()
   const token = params?.token
   const [state, setState] = useState<LoadState>({ status: 'loading' })
@@ -43,13 +45,13 @@ export default function PublicWorkflowDocPage() {
           return
         }
         if (!res.ok) {
-          setState({ status: 'error', message: `加载失败（${res.status}）` })
+          setState({ status: 'error', message: t('loadFailedStatus', { status: res.status }) })
           return
         }
         const model = (await res.json()) as DocModel
         if (!cancelled) setState({ status: 'ok', model })
       } catch {
-        if (!cancelled) setState({ status: 'error', message: '网络异常，无法加载文档' })
+        if (!cancelled) setState({ status: 'error', message: t('networkError') })
       }
     })()
     return () => {
@@ -62,21 +64,21 @@ export default function PublicWorkflowDocPage() {
       <div className="mx-auto w-full max-w-3xl">
         {state.status === 'loading' && (
           <div className="bg-white rounded-xl shadow-sm p-8 text-center text-sm text-gray-400">
-            加载中…
+            {t('loading')}
           </div>
         )}
 
         {state.status === 'notfound' && (
           <div className="bg-white rounded-xl shadow-sm p-10 text-center">
             <div className="text-4xl mb-3">🔗</div>
-            <h1 className="text-lg font-semibold text-gray-800 mb-1">链接不存在或已失效</h1>
-            <p className="text-sm text-gray-500">该分享链接可能已被作者关闭，或从未存在。</p>
+            <h1 className="text-lg font-semibold text-gray-800 mb-1">{t('linkGone')}</h1>
+            <p className="text-sm text-gray-500">{t('linkGoneDesc')}</p>
           </div>
         )}
 
         {state.status === 'error' && (
           <div className="bg-white rounded-xl shadow-sm p-10 text-center">
-            <h1 className="text-lg font-semibold text-gray-800 mb-1">加载失败</h1>
+            <h1 className="text-lg font-semibold text-gray-800 mb-1">{t('loadFailed')}</h1>
             <p className="text-sm text-gray-500">{state.message}</p>
           </div>
         )}
@@ -86,7 +88,7 @@ export default function PublicWorkflowDocPage() {
             <div className="px-6 py-4 border-b flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <h1 className="font-semibold text-gray-800 truncate">
-                  接口文档 · {state.model.name || '未命名工作流'}
+                  {t('docTitle', { name: state.model.name || t('unnamed') })}
                 </h1>
                 {state.model.description && (
                   <p className="text-xs text-gray-400 mt-0.5 truncate">{state.model.description}</p>
@@ -96,6 +98,7 @@ export default function PublicWorkflowDocPage() {
                 text={buildDocMarkdown(
                   state.model,
                   resolvePublicApiBase(state.model.api_base_url),
+                  t,
                   !!state.model.gateway_mode,
                 )}
               />
@@ -108,7 +111,7 @@ export default function PublicWorkflowDocPage() {
               />
             </div>
             <div className="px-6 py-3 border-t text-center text-[11px] text-gray-300">
-              PlaneOS · 工作流接口文档
+              {t('footer')}
             </div>
           </div>
         )}

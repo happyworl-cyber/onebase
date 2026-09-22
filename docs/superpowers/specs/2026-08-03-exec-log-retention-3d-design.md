@@ -27,7 +27,7 @@
 
 **方案 A：仅改生产环境变量 + 一次性 SQL 清存量。**
 
-1. 在 onebase 进程环境增加（或覆盖）：
+1. 在 planeos 进程环境增加（或覆盖）：
    ```
    EXEC_INDEX_RETENTION_DAYS=3
    EXEC_RUNS_RETENTION_DAYS=3
@@ -39,7 +39,7 @@
 
 ## 生产一次性清理 SQL
 
-在管理库（与 onebase 使用的 Postgres 同一库）执行。**不要**在租户业务库 / `gamesq` 下执行。
+在管理库（与 planeos 使用的 Postgres 同一库）执行。**不要**在租户业务库 / `gamesq` 下执行。
 
 建议先预览、再分批删；大表可把 `LIMIT` 调小、循环多跑几次。
 
@@ -106,6 +106,6 @@ FROM management.scheduled_task_runs;
 
 ## 验收
 
-- 生产 env 中上述两个变量为 `3`，onebase 日志出现「执行日志清理任务已启动」且 `index_retention_days=3`、`runs_retention_days=3`。
+- 生产 env 中上述两个变量为 `3`，planeos 日志出现「执行日志清理任务已启动」且 `index_retention_days=3`、`runs_retention_days=3`。
 - 执行日志页看不到 3 天前记录；预览 SQL 的 `to_delete` 为 0（或仅剩边界附近少量待下一轮清理）。
 - 点击 3 天内失败/成功记录的详情仍能回查到对应 run。

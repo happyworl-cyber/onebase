@@ -95,7 +95,7 @@ pub async fn license_middleware(req: Request, next: Next) -> Result<Response>
 **配置方式**：
 ```bash
 # docker-compose.yml 或 .env
-ONEBASE_LICENSE_ENFORCE=enforce
+PLANEOS_LICENSE_ENFORCE=enforce
 ```
 
 **维护成本**：💰 **极低**
@@ -115,11 +115,11 @@ ONEBASE_LICENSE_ENFORCE=enforce
 **配置方式**：
 ```sql
 -- 部署时执行一次
-REVOKE ALL ON management.* FROM onebase_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON management.* TO onebase_app;
+REVOKE ALL ON management.* FROM planeos_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON management.* TO planeos_app;
 
 -- 禁止应用账号创建表、修改结构
-REVOKE CREATE, ALTER, DROP ON DATABASE onebase FROM onebase_app;
+REVOKE CREATE, ALTER, DROP ON DATABASE planeos FROM planeos_app;
 ```
 
 **维护成本**：💰 **极低**
@@ -139,8 +139,8 @@ REVOKE CREATE, ALTER, DROP ON DATABASE onebase FROM onebase_app;
 **配置方式**：
 ```bash
 # 部署脚本中添加
-chmod 400 /etc/onebase/license.lic  # 只读
-chown root:root /etc/onebase/license.lic  # 应用进程无法修改
+chmod 400 /etc/planeos/license.lic  # 只读
+chown root:root /etc/planeos/license.lic  # 应用进程无法修改
 ```
 
 **维护成本**：💰 **极低**
@@ -166,11 +166,11 @@ chown root:root /etc/onebase/license.lic  # 应用进程无法修改
 # docker-compose.yml
 version: '3.8'
 services:
-  onebase:
+  planeos:
     environment:
-      - ONEBASE_LICENSE_ENFORCE=enforce  # 👈 一行搞定
+      - PLANEOS_LICENSE_ENFORCE=enforce  # 👈 一行搞定
     volumes:
-      - ./license.lic:/etc/onebase/license.lic:ro  # 👈 只读挂载
+      - ./license.lic:/etc/planeos/license.lic:ro  # 👈 只读挂载
 ```
 
 **结论**：强烈推荐，几乎零维护成本，大幅提升安全性。
@@ -248,16 +248,16 @@ FOR EACH ROW EXECUTE FUNCTION check_tenant_account_limit();
 codesign --sign "Developer ID Application: YourCompany" \
          --timestamp \
          --options runtime \
-         ./target/release/onebase
+         ./target/release/planeos
 
 # Windows
 signtool sign /f certificate.pfx \
               /p password \
               /t http://timestamp.digicert.com \
-              onebase.exe
+              planeos.exe
 
 # Linux (AppImage)
-appimagetool --sign ./onebase.AppDir
+appimagetool --sign ./planeos.AppDir
 ```
 
 **维护成本**：💰💰 **中等**
@@ -351,7 +351,7 @@ fn verify_binary_integrity() -> Result<(), String> {
 // 定期联网验证
 async fn verify_with_server() {
     let response = reqwest::get(
-        format!("https://license.onebase.com/verify/{}", license_id)
+        format!("https://license.planeos.com/verify/{}", license_id)
     ).await?;
 
     if !response.is_valid {
@@ -389,7 +389,7 @@ async fn verify_with_server() {
 **实施方式**：
 ```bash
 # 使用混淆工具
-upx --best onebase  # 压缩 + 简单混淆
+upx --best planeos  # 压缩 + 简单混淆
 ```
 
 **维护成本**：💰💰💰 **高**
@@ -481,18 +481,18 @@ upx --best onebase  # 压缩 + 简单混淆
 version: '3.8'
 
 services:
-  onebase:
-    image: onebase/onebase:latest
+  planeos:
+    image: planeos/planeos:latest
     environment:
       # ✅ L1.1 强制 License 检查
-      - ONEBASE_LICENSE_ENFORCE=enforce
+      - PLANEOS_LICENSE_ENFORCE=enforce
 
       # ✅ 数据库配置
-      - DATABASE_URL=postgresql://onebase_app:password@db:5432/onebase
+      - DATABASE_URL=postgresql://planeos_app:password@db:5432/planeos
 
     volumes:
       # ✅ L1.3 只读挂载 License 文件
-      - ./license.lic:/etc/onebase/license.lic:ro
+      - ./license.lic:/etc/planeos/license.lic:ro
 
     depends_on:
       - db
@@ -502,7 +502,7 @@ services:
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=admin_password
-      - POSTGRES_DB=onebase
+      - POSTGRES_DB=planeos
     volumes:
       # ✅ L1.2 数据库初始化脚本（设置权限）
       - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
@@ -514,15 +514,15 @@ services:
 -- init-db.sql
 
 -- 创建应用账号
-CREATE USER onebase_app WITH PASSWORD 'app_password';
+CREATE USER planeos_app WITH PASSWORD 'app_password';
 
 -- ✅ L1.2 最小权限配置
-GRANT CONNECT ON DATABASE onebase TO onebase_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO onebase_app;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO onebase_app;
+GRANT CONNECT ON DATABASE planeos TO planeos_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO planeos_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO planeos_app;
 
 -- 禁止 DDL 操作
-REVOKE CREATE ON SCHEMA public FROM onebase_app;
+REVOKE CREATE ON SCHEMA public FROM planeos_app;
 ```
 
 **维护成本**：💰 **0** - 客户只需 `docker-compose up`
@@ -563,7 +563,7 @@ REVOKE CREATE ON SCHEMA public FROM onebase_app;
 ```yaml
 # docker-compose.yml
 environment:
-  - ONEBASE_LICENSE_ENFORCE=warn  # 仅告警，不拦截
+  - PLANEOS_LICENSE_ENFORCE=warn  # 仅告警，不拦截
 ```
 ````
 

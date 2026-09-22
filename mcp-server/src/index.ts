@@ -13,7 +13,7 @@
  *   - PLANEOS_BASE_URL   后端基址，如 http://10.0.5.11:31088
  *   - PLANEOS_TOKEN      平台令牌明文，obp_ 开头
  *
- * 兼容环境变量：ONEBASE_BASE_URL、ONEBASE_TOKEN
+ * 兼容环境变量：PLANEOS_BASE_URL、PLANEOS_TOKEN
  *
  * 运行（stdio）：node dist/index.js
  */
@@ -23,10 +23,10 @@ import { z } from "zod";
 
 const BASE_URL = (
   process.env.PLANEOS_BASE_URL ||
-  process.env.ONEBASE_BASE_URL ||
+  process.env.PLANEOS_BASE_URL ||
   ""
 ).replace(/\/+$/, "");
-const TOKEN = process.env.PLANEOS_TOKEN || process.env.ONEBASE_TOKEN || "";
+const TOKEN = process.env.PLANEOS_TOKEN || process.env.PLANEOS_TOKEN || "";
 
 if (!BASE_URL) {
   console.error("[planeos-mcp] 缺少环境变量 PLANEOS_BASE_URL");

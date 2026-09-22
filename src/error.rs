@@ -40,6 +40,78 @@ pub enum AppError {
 
     #[error("服务不可用: {0}")]
     ServiceUnavailable(String),
+
+    /// 带稳定子码 + 结构化参数的用户可见错误。
+    ///
+    /// 前端按 `code` 映射 i18n 文案（用 `params` 插值），`message` 是中文兜底——
+    /// 前端没有对应词条时直接显示它。用 `AppError::validation` /
+    /// `AppError::not_found_coded` / `AppError::forbidden_coded` 等构造，逐步替换
+    /// 原来直接塞中文 message 的 `InvalidQuery("中文")` 等调用点。
+    #[error("{message}")]
+    Coded {
+        status: StatusCode,
+        code: &'static str,
+        message: String,
+        params: serde_json::Value,
+    },
+}
+
+impl AppError {
+    /// 通用构造：显式指定 HTTP 状态、稳定 code、中文兜底 message、结构化 params。
+    pub fn coded(
+        status: StatusCode,
+        code: &'static str,
+        message: impl Into<String>,
+        params: serde_json::Value,
+    ) -> Self {
+        AppError::Coded {
+            status,
+            code,
+            message: message.into(),
+            params,
+        }
+    }
+
+    /// 400 校验类。
+    pub fn validation(code: &'static str, message: impl Into<String>, params: serde_json::Value) -> Self {
+        AppError::coded(StatusCode::BAD_REQUEST, code, message, params)
+    }
+
+    /// 404 资源未找到。
+    pub fn not_found_coded(
+        code: &'static str,
+        message: impl Into<String>,
+        params: serde_json::Value,
+    ) -> Self {
+        AppError::coded(StatusCode::NOT_FOUND, code, message, params)
+    }
+
+    /// 403 禁止访问。
+    pub fn forbidden_coded(
+        code: &'static str,
+        message: impl Into<String>,
+        params: serde_json::Value,
+    ) -> Self {
+        AppError::coded(StatusCode::FORBIDDEN, code, message, params)
+    }
+
+    /// 401 未授权。
+    pub fn unauthorized_coded(
+        code: &'static str,
+        message: impl Into<String>,
+        params: serde_json::Value,
+    ) -> Self {
+        AppError::coded(StatusCode::UNAUTHORIZED, code, message, params)
+    }
+
+    /// 409 冲突。
+    pub fn conflict_coded(
+        code: &'static str,
+        message: impl Into<String>,
+        params: serde_json::Value,
+    ) -> Self {
+        AppError::coded(StatusCode::CONFLICT, code, message, params)
+    }
 }
 
 /// 客户端可读的错误码——稳定字符串，用于前端分支判断 / 监控告警分组。
@@ -80,7 +152,19 @@ const RAISE_MESSAGE_MAX: usize = 200;
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        // Coded 携带结构化 params；其余错误无参数（params 为 null，不写进响应体）。
+        let params = if let AppError::Coded { ref params, .. } = self {
+            params.clone()
+        } else {
+            serde_json::Value::Null
+        };
         let (status, error_message, code) = match self {
+            AppError::Coded {
+                status,
+                code,
+                message,
+                ..
+            } => (status, message, code),
             AppError::Database(ref e) => classify_db_error(e),
             AppError::InvalidQuery(ref msg) => {
                 (StatusCode::BAD_REQUEST, msg.clone(), CODE_VALIDATION)
@@ -127,10 +211,18 @@ impl IntoResponse for AppError {
             }
         };
 
-        let body = Json(json!({
-            "error": error_message,
-            "code": code,
-        }));
+        let body = if params.is_null() {
+            Json(json!({
+                "error": error_message,
+                "code": code,
+            }))
+        } else {
+            Json(json!({
+                "error": error_message,
+                "code": code,
+                "params": params,
+            }))
+        };
 
         (status, body).into_response()
     }
@@ -146,7 +238,7 @@ impl IntoResponse for AppError {
 /// - **不向客户端泄露表名 / 列名 / SQL**：响应只回固定文案 + 稳定 code，
 ///   schema 信息只在服务端日志里出现。
 /// - **结构化字段优先**：`error.kind` / `sqlstate` / `table` / `constraint` 走
-///   `tracing` 的 structured field，被 `OnebaseJsonFormatter` 平铺到 JSON
+///   `tracing` 的 structured field，被 `PlaneOSJsonFormatter` 平铺到 JSON
 ///   根字段，ELK 上能直接 `error.kind:db_error AND sqlstate:23505`。
 fn classify_db_error(e: &sqlx::Error) -> (StatusCode, String, &'static str) {
     match e {
