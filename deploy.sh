@@ -6,8 +6,10 @@
 # 前端全部跑在一个容器里。适合单机 / 演示 / POC。
 #
 # 用法：
-#   ./deploy.sh              # = up：生成/校验 .env，构建并启动，等健康，打印入口
-#   ./deploy.sh up           # 同上
+#   ./deploy.sh              # = up：本机构建并启动（内存够时用）
+#   ./deploy.sh up           # 同上（在本机 build）
+#   ./deploy.sh load <包>    # 加载本地打好的镜像包（planeos-aio.tar.gz），配合 start
+#   ./deploy.sh start        # 用已加载的预构建镜像启动（不在本机编译，适合小内存服务器）
 #   ./deploy.sh rebuild      # 改了代码/前端词条/迁移后：重新构建镜像并启动
 #   ./deploy.sh restart      # 重启容器（不重建镜像）
 #   ./deploy.sh stop         # 停止并移除容器（保留数据卷）
@@ -118,6 +120,28 @@ cmd_rebuild(){
   print_access
 }
 
+cmd_load(){
+  local f="${1:-}"
+  [ -n "$f" ] || die "用法：./deploy.sh load <planeos-aio.tar.gz>"
+  [ -f "$f" ] || die "文件不存在：$f"
+  info "加载镜像：$f …"
+  case "$f" in
+    *.gz|*.tgz) gunzip -c "$f" | docker load ;;
+    *)          docker load -i "$f" ;;
+  esac
+  ok "镜像已加载。用 './deploy.sh start' 启动（不构建）。"
+}
+
+cmd_start(){   # 用已加载的预构建镜像启动，不在本机编译
+  docker image inspect planeos:aio >/dev/null 2>&1 || die "本机没有 planeos:aio 镜像，请先 './deploy.sh load <包>' 加载。"
+  ensure_env
+  info "用预构建镜像 planeos:aio 启动（不构建）…"
+  $DC up -d --no-build
+  wait_healthy || true
+  $DC ps
+  print_access
+}
+
 cmd_restart(){ info "重启容器…"; $DC restart; wait_healthy || true; $DC ps; }
 cmd_stop(){    info "停止并移除容器（数据卷保留）…"; $DC down; ok "已停止。数据仍在（pgdata/redisdata/logs 卷）。"; }
 cmd_logs(){    info "跟随日志（Ctrl-C 退出）…"; $DC logs -f --tail=200; }
@@ -140,7 +164,9 @@ cmd_destroy(){
 usage(){ awk 'NR>1{ if(/^#/){sub(/^# ?/,"");print} else exit }' "$0"; }
 
 case "${1:-up}" in
-  up|start)      cmd_up ;;
+  up)            cmd_up ;;
+  load)          cmd_load "${2:-}" ;;
+  start)         cmd_start ;;
   rebuild|build) cmd_rebuild ;;
   restart)       cmd_restart ;;
   stop|down)     cmd_stop ;;

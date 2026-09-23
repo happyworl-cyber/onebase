@@ -34,6 +34,32 @@ admin@example.com / Admin123
 
 ---
 
+## 一·B、本地打包 → 服务器直接加载（**小内存服务器推荐**）
+
+服务器内存小（如 4GB）时，在本机/构建机编译 Rust 容易慢或 OOM。改成**本地打包镜像、上传、服务器只加载不编译**：
+
+```bash
+# 本机（装了 Docker Desktop / buildx，在仓库根目录）
+./build-image.sh                       # 构建 linux/amd64 一体机镜像 → planeos-aio.tar.gz
+                                       # M 芯片走模拟偏慢但不 OOM，只需一次
+
+# 上传到服务器
+scp planeos-aio.tar.gz root@<服务器IP>:/data/code/onebase/
+
+# 服务器（已 git clone 过本仓库）
+cd /data/code/onebase
+git pull                               # 确保脚本/compose 最新
+./deploy.sh load planeos-aio.tar.gz    # 加载镜像
+./deploy.sh start                      # 用预构建镜像启动（不编译）
+sudo ./proxy.sh <域名> <邮箱>          # 上 HTTPS（可选）
+```
+
+- 目标架构默认 `linux/amd64`（阿里云 ECS 基本是 x86_64）；ARM 服务器：`PLATFORM=linux/arm64 ./build-image.sh`。
+- 镜像名固定 `planeos:aio`（与 `docker-compose.yml` 的 `image:` 对应），`start` 会用它、跳过构建。
+- 更新版本：本机重跑 `./build-image.sh` → 传新包 → 服务器 `./deploy.sh load 新包 && ./deploy.sh restart`。
+
+---
+
 ## 二、`deploy.sh` 子命令
 
 | 命令 | 作用 |
