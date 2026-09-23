@@ -382,6 +382,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "076 sso drop mind provider",
         include_str!("../migrations/076_sso_drop_mind_provider.sql"),
     ),
+    (
+        "077 operation log summary code",
+        include_str!("../migrations/077_operation_log_summary_code.sql"),
+    ),
 ];
 
 /// API Keys 表（内联 SQL，历史上由独立的 migrate_api_keys 维护，这里随主序列一起跑）。

@@ -4954,7 +4954,9 @@
     "noCliToken": "No CLI Token yet",
     "auditH": "Audit log",
     "auditDesc": "Records control-plane write operations such as route, asset, plugin, host access and CLI Token.",
-    "noAuditLogs": "No audit logs yet"
+    "noAuditLogs": "No audit logs yet",
+    "cpUnavailableTitle": "Gateway policy is unavailable",
+    "cpUnavailableDesc": "Gateway policy relies on a separate gateway control plane (an enterprise infrastructure component). It is not deployed or enabled in this environment, so the feature is currently unavailable. Once the control plane is deployed and reachable, this page will automatically restore full functionality."
   },
   "helpGettingStarted": {
     "whatIsThis": "What is this",

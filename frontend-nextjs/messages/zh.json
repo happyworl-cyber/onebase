@@ -4954,7 +4954,9 @@
     "noCliToken": "暂无 CLI Token",
     "auditH": "审计日志",
     "auditDesc": "记录 route、资产、插件、域名接入、CLI Token 等控制面写操作。",
-    "noAuditLogs": "暂无审计日志"
+    "noAuditLogs": "暂无审计日志",
+    "cpUnavailableTitle": "网关策略暂不可用",
+    "cpUnavailableDesc": "网关策略依赖独立的网关控制面（企业版基础设施组件）。当前环境尚未部署或未启用该控制面，因此暂不可用。待控制面部署并可达后，本页面会自动恢复完整功能。"
   },
   "helpGettingStarted": {
     "whatIsThis": "这是什么",
